@@ -132,7 +132,7 @@ describe("DesktopMessagingRuntime", () => {
       telegram: {
         channel: "telegram" as const,
         botToken: "telegram-token",
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
       },
     }));
     const bridge = createBackendBridge();
@@ -333,12 +333,12 @@ describe("DesktopMessagingRuntime", () => {
         discord: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -389,12 +389,12 @@ describe("DesktopMessagingRuntime", () => {
         discord: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -556,12 +556,12 @@ describe("DesktopMessagingRuntime", () => {
         discord: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -613,12 +613,12 @@ describe("DesktopMessagingRuntime", () => {
         discord: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -711,7 +711,7 @@ describe("DesktopMessagingRuntime", () => {
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -752,7 +752,7 @@ describe("DesktopMessagingRuntime", () => {
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -804,7 +804,7 @@ describe("DesktopMessagingRuntime", () => {
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -853,7 +853,7 @@ describe("DesktopMessagingRuntime", () => {
         discord: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -1040,13 +1040,13 @@ describe("DesktopMessagingRuntime", () => {
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
         discord: {
           channel: "discord",
           botToken: "discord-token",
           applicationId: "app-1",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -1101,7 +1101,7 @@ describe("DesktopMessagingRuntime", () => {
         telegram: {
           channel: "telegram",
           botToken: "telegram-token",
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
         },
       },
     });
@@ -1136,7 +1136,7 @@ async function createRuntimeHarness(): Promise<{
       telegram: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
       },
     },
   });

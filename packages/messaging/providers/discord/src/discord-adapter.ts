@@ -323,7 +323,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   get authorizedActorIds(): readonly string[] {
-    return this.options.config.authorizedActorIds;
+    return this.options.config.authorizedActorIds.map((contact) => contact.id);
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
@@ -1030,7 +1030,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       }
       return false;
     }
-    if (!this.authorizedActorIds.includes(message.author.id)) {
+    if (!this.isAuthorizedActor(message.author.id)) {
       if (!message.guild_id || options.actionable) {
         this.options.logger?.warn?.("discord inbound ignored unauthorized actor", {
           actorId: message.author.id,
@@ -1058,7 +1058,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       }));
       return false;
     }
-    if (!this.authorizedActorIds.includes(actor.id)) {
+    if (!this.isAuthorizedActor(actor.id)) {
       this.options.logger?.warn?.("discord interaction ignored unauthorized actor", {
         actorId: actor.id,
         channelId: interaction.channel_id,
@@ -1073,6 +1073,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return true;
   }
 
+  private isAuthorizedActor(actorId: string): boolean {
+    return this.options.config.authorizedActorIds.some(
+      (contact) => contact.id === actorId,
+    );
+  }
+
   private isAuthorizedGuild(
     guildId: string | undefined,
     surface: "interaction" | "message",
@@ -1081,7 +1087,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return true;
     }
     const authorized = this.options.config.authorizedGuildIds ?? [];
-    if (authorized.length === 0 || authorized.includes(guildId)) {
+    if (
+      authorized.length === 0
+      || authorized.some((contact) => contact.id === guildId)
+    ) {
       return true;
     }
     if (!this.unauthorizedGuildLogKeys.has(guildId)) {

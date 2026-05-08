@@ -2632,6 +2632,39 @@ textarea,
   flex: 0 0 auto;
 }
 
+.settings-authorized-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-authorized-list__row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-authorized-list__id,
+.settings-authorized-list__name {
+  min-width: 0;
+}
+
+.settings-authorized-list__remove,
+.settings-authorized-list__add {
+  width: max-content;
+}
+
+.settings-authorized-list__add {
+  align-self: flex-start;
+}
+
+@media (max-width: 760px) {
+  .settings-authorized-list__row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Segmented control — chip-pill chiclets that fit the design's
    restrained register. Buttons keep `role="radio"` (existing test
    contract). */

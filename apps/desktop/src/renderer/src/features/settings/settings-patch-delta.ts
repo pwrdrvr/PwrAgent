@@ -1,4 +1,5 @@
 import type {
+  DesktopAuthorizedContact,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
@@ -35,7 +36,7 @@ export function buildTelegramPatchDelta(
     patch.streamingResponses = candidate.streamingResponses.value;
   }
   if (
-    !stringArrayEqual(
+    !authorizedContactArrayEqual(
       snapshot.authorizedUserIds.value,
       candidate.authorizedUserIds.value,
     )
@@ -43,7 +44,7 @@ export function buildTelegramPatchDelta(
     patch.authorizedUserIds = candidate.authorizedUserIds.value;
   }
   if (
-    !stringArrayEqual(
+    !authorizedContactArrayEqual(
       snapshot.authorizedSupergroups.value,
       candidate.authorizedSupergroups.value,
     )
@@ -72,7 +73,7 @@ export function buildDiscordPatchDelta(
     patch.applicationId = candidate.applicationId.value;
   }
   if (
-    !stringArrayEqual(
+    !authorizedContactArrayEqual(
       snapshot.authorizedUserIds.value,
       candidate.authorizedUserIds.value,
     )
@@ -80,7 +81,7 @@ export function buildDiscordPatchDelta(
     patch.authorizedUserIds = candidate.authorizedUserIds.value;
   }
   if (
-    !stringArrayEqual(
+    !authorizedContactArrayEqual(
       snapshot.authorizedGuilds.value,
       candidate.authorizedGuilds.value,
     )
@@ -120,7 +121,7 @@ export function buildMattermostPatchDelta(
     patch.registerSlashCommands = candidate.registerSlashCommands.value;
   }
   if (
-    !stringArrayEqual(
+    !authorizedContactArrayEqual(
       snapshot.authorizedUserIds.value,
       candidate.authorizedUserIds.value,
     )
@@ -131,10 +132,15 @@ export function buildMattermostPatchDelta(
   return Object.keys(patch).length === 0 ? undefined : patch;
 }
 
-function stringArrayEqual(a: readonly string[], b: readonly string[]): boolean {
+function authorizedContactArrayEqual(
+  a: readonly DesktopAuthorizedContact[],
+  b: readonly DesktopAuthorizedContact[],
+): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false;
+    if (a[i]?.id !== b[i]?.id || a[i]?.displayName !== b[i]?.displayName) {
+      return false;
+    }
   }
   return true;
 }

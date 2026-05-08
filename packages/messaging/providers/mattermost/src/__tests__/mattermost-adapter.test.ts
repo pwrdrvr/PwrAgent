@@ -26,7 +26,7 @@ const baseConfig = {
   serverUrl: "https://chat.example.com",
   callbackBaseUrl: "https://callback.example.com/cb",
   callbackHmacSecret: "test-secret",
-  authorizedActorIds: ["user-1"],
+  authorizedActorIds: [{ id: "user-1", displayName: "" }],
 };
 
 /**
@@ -157,7 +157,7 @@ describe("MattermostAdapter — capability profile", () => {
   it("exposes the configured authorized actor IDs", () => {
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,
-      config: { ...baseConfig, authorizedActorIds: ["alice", "bob"] },
+      config: { ...baseConfig, authorizedActorIds: [{ id: "alice", displayName: "" }, { id: "bob", displayName: "" }] },
       logger: silentLogger,
       websocketClient: fakeWebSocketClient(),
     });
@@ -524,7 +524,7 @@ describe("MattermostAdapter — slash command response_url", () => {
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
         client: fakeClient4(spies),
-        config: { ...baseConfig, authorizedActorIds: ["harold-user-id"] },
+        config: { ...baseConfig, authorizedActorIds: [{ id: "harold-user-id", displayName: "" }] },
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(),
         callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
@@ -746,7 +746,7 @@ describe("MattermostAdapter — response_url echo dedup", () => {
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
         client: fakeClient4(spies),
-        config: { ...baseConfig, authorizedActorIds: ["harold-user-id"] },
+        config: { ...baseConfig, authorizedActorIds: [{ id: "harold-user-id", displayName: "" }] },
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(undefined, wsHooks),
         callbackServer: {

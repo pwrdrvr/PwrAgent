@@ -1,5 +1,6 @@
 import type {
   DesktopChatReplyComposer,
+  DesktopAuthorizedContact,
   DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -609,13 +610,13 @@ export class DesktopSettingsService {
   }
 
   private resolveList(
-    configValue: string[] | undefined,
+    configValue: DesktopAuthorizedContact[] | undefined,
     envKey: string,
-  ): DesktopSettingsValue<string[]> {
+  ): DesktopSettingsValue<DesktopAuthorizedContact[]> {
     const envValue = readEnvList(this.env, envKey);
     if (envValue !== undefined) {
       return {
-        value: envValue,
+        value: envValue.map((id) => ({ id, displayName: "" })),
         source: "env",
         overriddenByEnv: configValue !== undefined,
       };

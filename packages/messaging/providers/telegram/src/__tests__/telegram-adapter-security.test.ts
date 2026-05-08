@@ -9,8 +9,8 @@ describe("TelegramAdapter inbound security boundary", () => {
     const adapter = new TelegramAdapter({
       bot: fakeBot(),
       config: {
-        authorizedActorIds: ["42"],
-        authorizedSupergroupIds: ["-1001234567890"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001234567890", displayName: "" }],
         botToken: "token",
         channel: "telegram",
       },
@@ -69,7 +69,7 @@ describe("TelegramAdapter inbound security boundary", () => {
     const adapter = new TelegramAdapter({
       bot,
       config: {
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         botToken: "token",
         channel: "telegram",
       },
@@ -120,7 +120,7 @@ describe("TelegramAdapter inbound security boundary", () => {
     const adapter = new TelegramAdapter({
       bot,
       config: {
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         botToken: "token",
         channel: "telegram",
       },

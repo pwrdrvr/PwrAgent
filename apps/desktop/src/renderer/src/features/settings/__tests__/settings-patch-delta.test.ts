@@ -78,20 +78,35 @@ describe("buildTelegramPatchDelta", () => {
 
   it("compares string arrays element-wise", () => {
     const snapshot = telegramSnapshot({
-      authorizedUserIds: { value: ["111", "222"], source: "config" },
+      authorizedUserIds: {
+        value: [
+          { id: "111", displayName: "" },
+          { id: "222", displayName: "Harold" },
+        ],
+        source: "config",
+      },
     });
     const same: Telegram = {
       ...snapshot,
-      authorizedUserIds: { ...snapshot.authorizedUserIds, value: ["111", "222"] },
+      authorizedUserIds: {
+        ...snapshot.authorizedUserIds,
+        value: [
+          { id: "111", displayName: "" },
+          { id: "222", displayName: "Harold" },
+        ],
+      },
     };
     expect(buildTelegramPatchDelta(snapshot, same)).toBeUndefined();
 
     const different: Telegram = {
       ...snapshot,
-      authorizedUserIds: { ...snapshot.authorizedUserIds, value: ["333"] },
+      authorizedUserIds: {
+        ...snapshot.authorizedUserIds,
+        value: [{ id: "333", displayName: "" }],
+      },
     };
     expect(buildTelegramPatchDelta(snapshot, different)).toEqual({
-      authorizedUserIds: ["333"],
+      authorizedUserIds: [{ id: "333", displayName: "" }],
     });
   });
 });

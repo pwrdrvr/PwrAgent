@@ -1,4 +1,7 @@
-import type { DesktopSettingsValue } from "@pwragent/shared";
+import type {
+  DesktopAuthorizedContact,
+  DesktopSettingsValue,
+} from "@pwragent/shared";
 
 export function formatSourceLabel(source: string, overriddenByEnv?: boolean): string {
   if (source === "env") {
@@ -39,7 +42,7 @@ export function optionalStringSourceBadge(
 }
 
 export function optionalListSourceBadge(
-  setting: DesktopSettingsValue<string[]>,
+  setting: DesktopSettingsValue<string[] | DesktopAuthorizedContact[]>,
 ): string {
   if (setting.source === "default" && setting.value.length === 0) {
     return "unset";

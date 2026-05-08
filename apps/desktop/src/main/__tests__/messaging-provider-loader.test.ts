@@ -49,13 +49,13 @@ describe("messaging provider loader", () => {
     const store = createStore();
     const config: DesktopMessagingConfig = {
       discord: {
-        authorizedActorIds: ["discord-user"],
+        authorizedActorIds: [{ id: "discord-user", displayName: "" }],
         botToken: "discord-token",
         channel: "discord",
         enabled: false,
       },
       telegram: {
-        authorizedActorIds: ["telegram-user"],
+        authorizedActorIds: [{ id: "telegram-user", displayName: "" }],
         botToken: "telegram-token",
         channel: "telegram",
       },
@@ -85,12 +85,12 @@ describe("messaging provider loader", () => {
     });
     const config: DesktopMessagingConfig = {
       discord: {
-        authorizedActorIds: ["discord-user"],
+        authorizedActorIds: [{ id: "discord-user", displayName: "" }],
         botToken: "discord-token",
         channel: "discord",
       },
       telegram: {
-        authorizedActorIds: ["telegram-user"],
+        authorizedActorIds: [{ id: "telegram-user", displayName: "" }],
         botToken: "telegram-token",
         channel: "telegram",
       },

@@ -434,7 +434,8 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Authorization defaults closed/)).toBeInTheDocument();
     expect(screen.getByText(/Rejected Telegram DMs show the peer ID/)).toBeInTheDocument();
 
-    const telegramUserIds = screen.getAllByLabelText("Authorized User IDs")[0]!;
+    fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
+    const telegramUserIds = screen.getByLabelText("Authorized User IDs ID 1");
     fireEvent.change(telegramUserIds, { target: { value: "@huntharo" } });
     fireEvent.blur(telegramUserIds);
 
@@ -443,17 +444,27 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(telegramUserIds).toHaveAttribute("aria-invalid", "true");
     expect(settings.writeConfig).not.toHaveBeenCalledWith({
-      messaging: { telegram: { authorizedUserIds: ["@huntharo"] } },
+      messaging: {
+        telegram: {
+          authorizedUserIds: [{ id: "@huntharo", displayName: "" }],
+        },
+      },
     });
 
     fireEvent.change(telegramUserIds, { target: { value: "8460800771" } });
+    fireEvent.change(
+      screen.getByLabelText("Authorized User IDs display name 1"),
+      { target: { value: "Harold (@huntharo)" } },
+    );
     fireEvent.blur(telegramUserIds);
 
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           telegram: {
-            authorizedUserIds: ["8460800771"],
+            authorizedUserIds: [
+              { id: "8460800771", displayName: "Harold (@huntharo)" },
+            ],
           },
         },
       });
@@ -469,7 +480,10 @@ describe("SettingsScreen", () => {
         telegram: {
           ...snapshot.messaging.telegram,
           authorizedUserIds: {
-            value: ["@huntharo", "8460800771"],
+            value: [
+              { id: "@huntharo", displayName: "Wrong person" },
+              { id: "8460800771", displayName: "Harold" },
+            ],
             source: "config",
           },
         },
@@ -486,13 +500,17 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("@huntharo")).toBeInTheDocument();
     expect(screen.getByText(/That looks like a Telegram username/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Remove Authorized User IDs row 1",
+      }),
+    );
 
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           telegram: {
-            authorizedUserIds: ["8460800771"],
+            authorizedUserIds: [{ id: "8460800771", displayName: "Harold" }],
           },
         },
       });

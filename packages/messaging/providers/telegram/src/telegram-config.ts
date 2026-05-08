@@ -1,6 +1,11 @@
+export type TelegramAuthorizedContact = {
+  id: string;
+  displayName: string;
+};
+
 export type TelegramMessagingConfig = {
-  authorizedActorIds: string[];
-  authorizedSupergroupIds?: string[];
+  authorizedActorIds: TelegramAuthorizedContact[];
+  authorizedSupergroupIds?: TelegramAuthorizedContact[];
   botToken: string;
   channel: "telegram";
   enabled?: boolean;

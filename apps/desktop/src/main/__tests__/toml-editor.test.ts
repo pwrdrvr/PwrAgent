@@ -221,6 +221,25 @@ describe("applyTomlEdits", () => {
     expect(result).toMatch(/]\n?$/);
   });
 
+  it("emits array-of-tables blocks", () => {
+    const result = applyTomlEdits("[messaging.telegram]\n", [
+      {
+        op: "setTableArray",
+        path: ["messaging", "telegram", "authorized_users"],
+        value: [
+          { id: "8460800771", display_name: "Harold" },
+          { id: "1234567890", display_name: "" },
+        ],
+      },
+    ]);
+
+    expect(result).toContain("[messaging.telegram]");
+    expect(result).toContain("[[messaging.telegram.authorized_users]]");
+    expect(result).toContain('id = "8460800771"');
+    expect(result).toContain('display_name = "Harold"');
+    expect(result).toContain('id = "1234567890"');
+  });
+
   it("replaces a multi-line inline-table-array value across lines", () => {
     const source = [
       "[messaging.mattermost]",
@@ -416,6 +435,29 @@ describe("parseTomlTables", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("parses array-of-tables into the parent table key", () => {
+    const tables = parseTomlTables(
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        "",
+        "[[messaging.telegram.authorized_users]]",
+        'id = "8460800771"',
+        'display_name = "Harold"',
+        "",
+        "[[messaging.telegram.authorized_users]]",
+        'id = "1234567890"',
+        'display_name = ""',
+      ].join("\n"),
+      "/x",
+    );
+
+    expect(tables["messaging.telegram"].authorized_users).toEqual([
+      { id: "8460800771", display_name: "Harold" },
+      { id: "1234567890", display_name: "" },
+    ]);
   });
 
   it("still throws on malformed TOML lines", () => {

@@ -1,5 +1,10 @@
+export type MattermostAuthorizedContact = {
+  id: string;
+  displayName: string;
+};
+
 export type MattermostMessagingConfig = {
-  authorizedActorIds: string[];
+  authorizedActorIds: MattermostAuthorizedContact[];
   /**
    * Bot access token from Mattermost (System Console → Integrations → Bot Accounts).
    * Personal access tokens also work but a bot account is the canonical identity.

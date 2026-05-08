@@ -4,6 +4,7 @@ import {
   validateMattermostId,
   validateTelegramPositiveId,
   validateTelegramSupergroupId,
+  type DesktopAuthorizedContact,
   type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
@@ -22,10 +23,8 @@ import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import {
   formatSourceLabel,
-  joinListValue,
   optionalListSourceBadge,
   optionalStringSourceBadge,
-  parseListValue,
   sourceBadge,
 } from "./settings-fields";
 
@@ -167,10 +166,10 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ListField
+          <AuthorizedListField
             disabled={props.saving}
             label="Authorized User IDs"
-            sub="Comma-separated Telegram user IDs that can DM the bot."
+            sub="Telegram user IDs that can DM the bot."
             help="Numeric peer ID, e.g. 8460800771. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
             source={optionalListSourceBadge(telegram.authorizedUserIds)}
             validateEntry={validateTelegramUserIdEntry}
@@ -185,10 +184,10 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ListField
+          <AuthorizedListField
             disabled={props.saving}
             label="Authorized SuperGroups"
-            sub="Comma-separated Telegram supergroup IDs that may host bound threads."
+            sub="Telegram supergroup IDs that may host bound threads."
             help="Negative ID starting with -100, e.g. -1003841603622. Rejected group messages show the supergroup ID in Messaging Activity."
             source={optionalListSourceBadge(telegram.authorizedSupergroups)}
             validateEntry={validateTelegramSupergroupEntry}
@@ -281,10 +280,10 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ListField
+          <AuthorizedListField
             disabled={props.saving}
             label="Authorized User IDs"
-            sub="Comma-separated Discord user IDs that can DM the bot."
+            sub="Discord user IDs that can DM the bot."
             help="Snowflake (17-19 digit number), e.g. 1177378744822943744. Rejected Discord messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(discord.authorizedUserIds)}
             validateEntry={validateDiscordUserIdEntry}
@@ -299,10 +298,10 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ListField
+          <AuthorizedListField
             disabled={props.saving}
             label="Authorized Guilds"
-            sub="Comma-separated Discord guild (server) IDs that may host bound threads."
+            sub="Discord guild (server) IDs that may host bound threads."
             help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity."
             source={optionalListSourceBadge(discord.authorizedGuilds)}
             validateEntry={validateDiscordGuildIdEntry}
@@ -479,10 +478,10 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <ListField
+          <AuthorizedListField
             disabled={props.saving}
             label="Authorized User IDs"
-            sub="Comma-separated Mattermost user IDs that can DM the bot."
+            sub="Mattermost user IDs that can DM the bot."
             help="26-character lowercase a-z0-9 ID. Rejected Mattermost messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(mattermost.authorizedUserIds)}
             validateEntry={validateMattermostUserIdEntry}
@@ -689,26 +688,31 @@ function NumberField(props: {
   );
 }
 
-function ListField(props: {
+function AuthorizedListField(props: {
   disabled?: boolean;
   help?: ReactNode;
   label: string;
   sub?: ReactNode;
   source: string;
   validateEntry?: (value: string) => string | undefined;
-  value: string[];
-  onSave: (value: string[]) => void;
+  value: DesktopAuthorizedContact[];
+  onSave: (value: DesktopAuthorizedContact[]) => void;
 }) {
   const inputId = useId();
   const descriptionId = `${inputId}-validation`;
-  const [value, setValue] = useState(joinListValue(props.value));
-  const entries = parseListValue(value);
+  const [rows, setRows] = useState<DesktopAuthorizedContact[]>(props.value);
+  const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
-    ? entries
-        .map((entry, index) => ({
-          entry,
+    ? normalizedRows
+        .map((row, index) => ({
+          entry: row.id,
           index,
-          message: props.validateEntry?.(entry),
+          message:
+            row.id.length > 0
+              ? props.validateEntry?.(row.id)
+              : row.displayName.length > 0
+                ? "ID cannot be blank when a display name is set."
+                : undefined,
         }))
         .filter(
           (result): result is { entry: string; index: number; message: string } =>
@@ -717,13 +721,36 @@ function ListField(props: {
     : [];
   const hasInvalidEntries = invalidEntries.length > 0;
 
-  const removeEntry = (indexToRemove: number) => {
-    const nextEntries = entries.filter((_, index) => index !== indexToRemove);
-    const nextValue = joinListValue(nextEntries);
-    setValue(nextValue);
-    if (!props.validateEntry || nextEntries.every((entry) => !props.validateEntry!(entry))) {
-      props.onSave(nextEntries);
+  const saveIfValid = (nextRows: DesktopAuthorizedContact[]) => {
+    const normalized = nextRows.map(normalizeAuthorizedContactRow);
+    if (
+      props.validateEntry &&
+      normalized.some(
+        (row) =>
+          (row.id.length > 0 && props.validateEntry?.(row.id))
+          || (row.id.length === 0 && row.displayName.length > 0),
+      )
+    ) {
+      return;
     }
+    props.onSave(normalized.filter((row) => row.id.length > 0));
+  };
+
+  const updateRow = (
+    indexToUpdate: number,
+    patch: Partial<DesktopAuthorizedContact>,
+  ) => {
+    setRows((current) =>
+      current.map((row, index) =>
+        index === indexToUpdate ? { ...row, ...patch } : row,
+      ),
+    );
+  };
+
+  const removeEntry = (indexToRemove: number) => {
+    const nextRows = rows.filter((_, index) => index !== indexToRemove);
+    setRows(nextRows);
+    saveIfValid(nextRows);
   };
 
   return (
@@ -739,25 +766,87 @@ function ListField(props: {
       }
       control={
         <>
-          <input
-            aria-describedby={hasInvalidEntries ? descriptionId : undefined}
-            aria-invalid={hasInvalidEntries ? "true" : undefined}
-            aria-label={props.label}
-            className={`settings-input${hasInvalidEntries ? " settings-input--invalid" : ""}`}
-            disabled={props.disabled}
-            value={value}
-            onBlur={() => {
-              const nextEntries = parseListValue(value);
-              if (
-                props.validateEntry &&
-                nextEntries.some((entry) => props.validateEntry?.(entry))
-              ) {
-                return;
+          <div className="settings-authorized-list">
+            {rows.map((row, index) => {
+              const normalized = normalizedRows[index] ?? {
+                id: "",
+                displayName: "",
+              };
+              const invalid = invalidEntries.find(
+                (entry) => entry.index === index,
+              );
+              return (
+                <div
+                  key={index}
+                  className="settings-authorized-list__row"
+                >
+                  <input
+                    aria-describedby={invalid ? descriptionId : undefined}
+                    aria-invalid={invalid ? "true" : undefined}
+                    aria-label={`${props.label} ID ${index + 1}`}
+                    className={`settings-input settings-authorized-list__id${
+                      invalid ? " settings-input--invalid" : ""
+                    }`}
+                    disabled={props.disabled}
+                    placeholder="ID"
+                    value={row.id}
+                    onBlur={() => {
+                      const nextRows = rows.map((current, rowIndex) =>
+                        rowIndex === index ? normalized : current,
+                      );
+                      setRows(nextRows);
+                      saveIfValid(nextRows);
+                    }}
+                    onChange={(event) =>
+                      updateRow(index, { id: event.currentTarget.value })
+                    }
+                  />
+                  <input
+                    aria-label={`${props.label} display name ${index + 1}`}
+                    className="settings-input settings-authorized-list__name"
+                    disabled={props.disabled}
+                    maxLength={64}
+                    placeholder="Display name"
+                    value={row.displayName}
+                    onBlur={() => {
+                      const nextRows = rows.map((current, rowIndex) =>
+                        rowIndex === index ? normalized : current,
+                      );
+                      setRows(nextRows);
+                      saveIfValid(nextRows);
+                    }}
+                    onChange={(event) =>
+                      updateRow(index, {
+                        displayName: event.currentTarget.value,
+                      })
+                    }
+                  />
+                  <button
+                    aria-label={`Remove ${props.label} row ${index + 1}`}
+                    className="button button--ghost settings-authorized-list__remove"
+                    disabled={props.disabled}
+                    type="button"
+                    onClick={() => removeEntry(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              className="button button--secondary settings-authorized-list__add"
+              disabled={props.disabled}
+              type="button"
+              onClick={() =>
+                setRows((current) => [
+                  ...current,
+                  { id: "", displayName: "" },
+                ])
               }
-              props.onSave(nextEntries);
-            }}
-            onChange={(event) => setValue(event.currentTarget.value)}
-          />
+            >
+              Add
+            </button>
+          </div>
           {hasInvalidEntries ? (
             <div
               id={descriptionId}
@@ -770,7 +859,7 @@ function ListField(props: {
                   className="settings-list-validation__item"
                 >
                   <span className="settings-list-validation__message">
-                    <code>{invalid.entry}</code>
+                    <code>{invalid.entry || "(blank)"}</code>
                     {" — "}
                     {invalid.message}
                   </span>
@@ -790,6 +879,19 @@ function ListField(props: {
       }
     />
   );
+}
+
+function normalizeAuthorizedContactRow(
+  contact: DesktopAuthorizedContact,
+): DesktopAuthorizedContact {
+  return {
+    id: contact.id.trim(),
+    displayName: contact.displayName
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 64),
+  };
 }
 
 function validateTelegramUserIdEntry(value: string): string | undefined {

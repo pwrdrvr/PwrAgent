@@ -75,7 +75,7 @@ describe("DiscordAdapter", () => {
         applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
     });
@@ -111,7 +111,7 @@ describe("DiscordAdapter", () => {
         applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
     });
@@ -143,7 +143,7 @@ describe("DiscordAdapter", () => {
         applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
     });
@@ -170,7 +170,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway,
       now: () => 1000,
@@ -348,7 +348,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -396,7 +396,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
         streamingResponses: true,
       },
       gateway: createGateway(),
@@ -631,7 +631,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -693,7 +693,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -759,7 +759,7 @@ describe("DiscordAdapter", () => {
         config: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: [DISCORD_USER_ID],
+          authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
         },
         gateway: createGateway(),
         now: () => 1000,
@@ -829,7 +829,7 @@ describe("DiscordAdapter", () => {
         config: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: [DISCORD_USER_ID],
+          authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
         },
         gateway: createGateway(),
         now: () => 1000,
@@ -1027,7 +1027,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway,
     });
@@ -1081,7 +1081,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       gateway,
     });
@@ -1115,7 +1115,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: [DISCORD_USER_ID],
+        authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
       },
       now: () => 1000,
     });
@@ -1203,7 +1203,7 @@ async function createControllerHarness(options: {
       applicationId: options.applicationId,
       channel: "discord",
       botToken: "discord-token",
-      authorizedActorIds: [DISCORD_USER_ID],
+      authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
     },
     gateway,
     now: () => 1000,
