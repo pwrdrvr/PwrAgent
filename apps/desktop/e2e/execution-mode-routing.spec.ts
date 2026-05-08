@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("routes turn to the correct backend instance after execution mode toggle", async () => {
+test("applies the correct per-turn permission policy after execution mode toggle", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -37,14 +37,12 @@ test("routes turn to the correct backend instance after execution mode toggle", 
     ).toBeVisible();
 
     await expect
-      .poll(
-        async () => await app.getLastStartTurn({ executionMode: "default" })
-      )
-      .toMatchObject({ threadId: "thread-mode-route" });
-
-    expect(
-      await app.getLastStartTurn({ executionMode: "full-access" })
-    ).toBeUndefined();
+      .poll(async () => await app.getLastStartTurn())
+      .toMatchObject({
+        threadId: "thread-mode-route",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      });
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
@@ -59,18 +57,19 @@ test("routes turn to the correct backend instance after execution mode toggle", 
 
     await app.window
       .getByLabel("Reply")
-      .fill("Second turn must route to full-access instance");
+      .fill("Second turn must use full-access policy");
     await expect(
       app.window.getByRole("button", { name: "Send" })
     ).toBeEnabled();
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect
-      .poll(
-        async () =>
-          await app.getLastStartTurn({ executionMode: "full-access" })
-      )
-      .toMatchObject({ threadId: "thread-mode-route" });
+      .poll(async () => await app.getLastStartTurn())
+      .toMatchObject({
+        threadId: "thread-mode-route",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
   } finally {
     await app.close();
   }

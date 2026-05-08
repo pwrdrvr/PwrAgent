@@ -43,6 +43,8 @@ export class ReplayClient {
     input: AppServerTurnInputItem[];
     cwd?: string;
     model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -144,6 +146,8 @@ export class ReplayClient {
     input: AppServerTurnInputItem[];
     cwd?: string;
     model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -232,6 +236,8 @@ export class ReplayClient {
         input: AppServerTurnInputItem[];
         cwd?: string;
         model?: string;
+        approvalPolicy?: string;
+        sandbox?: string;
         collaborationMode?: AppServerCollaborationModeRequest;
         serviceTier?: string;
         reasoningEffort?: string;

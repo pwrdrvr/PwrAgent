@@ -113,36 +113,38 @@ test("dismisses the pending approval UI after approval", async () => {
   }
 });
 
-test("stops the active turn on its original execution mode after access mode changes", async () => {
+test("stops the active turn after a queued access-mode change", async () => {
   const app = await openApprovalPendingReplay();
 
   try {
     await expect
-      .poll(async () => await app.getLastStartTurn({ executionMode: "default" }))
+      .poll(async () => await app.getLastStartTurn())
       .toMatchObject({
         threadId: "thread-approval-pending",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
       });
-    expect(await app.getLastStartTurn({ executionMode: "full-access" })).toBeUndefined();
 
     const accessMode = app.window.getByLabel("Access mode");
     await expect(accessMode).toHaveAttribute("data-value", "default");
     await accessMode.click();
     await app.window.getByRole("option", { name: "Full Access" }).click();
-    await expect(accessMode).toHaveAttribute("data-value", "full-access");
+
+    // Toggling access mode mid-turn queues the change at the resume
+    // boundary instead of flipping immediately. The applied executionMode
+    // (and dropdown value) stays at "default" until the queue flushes.
+    await expect(accessMode).toHaveAttribute("data-value", "default");
 
     await app.window.getByRole("button", { name: "Stop" }).click();
 
     await expect
-      .poll(async () => await app.getInterruptTurnCalls({ executionMode: "default" }))
+      .poll(async () => await app.getInterruptTurnCalls())
       .toEqual([
         {
           threadId: "thread-approval-pending",
           turnId: "turn-approval-2",
         },
       ]);
-    await expect
-      .poll(async () => await app.getInterruptTurnCalls({ executionMode: "full-access" }))
-      .toEqual([]);
   } finally {
     await app.close();
   }
