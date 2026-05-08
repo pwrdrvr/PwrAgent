@@ -4,6 +4,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingChannelRef,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import type { Client4, WebSocketClient } from "@mattermost/client";
@@ -171,6 +172,64 @@ describe("MattermostAdapter — capability profile", () => {
       websocketClient: fakeWebSocketClient(),
     });
     expect(adapter.channel).toBe("mattermost");
+  });
+
+  it("emits rejected activity for unauthorized actionable posts", async () => {
+    const wsHooks: WebSocketHooks = {
+      fireMessage: () => {},
+      fireClose: () => {},
+    };
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({
+        createdPosts: [],
+        patchedPosts: [],
+      }),
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(undefined, wsHooks),
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+        signContext: () => ({ hmac: "x", issuedAt: 0 }),
+      } as never,
+      now: () => 1_700_000_000_000,
+    });
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    await adapter.start(async () => {});
+
+    wsHooks.fireMessage({
+      event: "posted",
+      data: {
+        channel_type: "O",
+        channel_display_name: "Development",
+        sender_name: "mallory",
+        post: JSON.stringify({
+          id: "postpostabcdefghijklmn1234",
+          channel_id: "channelabcdefghijklmn12345",
+          user_id: "otheruserabcdefghijklmn123",
+          message: "/status",
+        }),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({ platformUserId: "otheruserabcdefghijklmn123" }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "channelabcdefghijklmn12345",
+            kind: "channel",
+          }),
+        }),
+        kind: "command",
+        reason: "unauthorized-actor",
+      }),
+    ]);
   });
 });
 

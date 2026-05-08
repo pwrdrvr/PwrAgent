@@ -24,7 +24,9 @@ import type {
   MessagingConversationKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -140,6 +142,7 @@ export type MattermostProviderAdapter = {
    * `<img>` icon, which is structurally insulated from `currentColor`).
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(request: {
     actor?: MessagingActorIdentity;
     channel: MessagingChannelRef;
@@ -324,6 +327,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private readonly responseUrlPostIds = new Set<string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
+  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
    * re-reconcile passes (e.g. on team-membership change).
@@ -598,6 +602,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
+  onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
+    this.inboundRejectedListeners.add(listener);
+    return () => {
+      this.inboundRejectedListeners.delete(listener);
+    };
+  }
+
   async setConversationTitle(request: {
     actor?: MessagingActorIdentity;
     channel: MessagingChannelRef;
@@ -862,6 +873,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     post: NonNullable<ReturnType<typeof parseEmbeddedPost>>,
     data: {
       channel_type?: string;
+      sender_name?: string;
+      channel_display_name?: string;
     },
   ): void {
     const messageText = post.message ?? "";
@@ -883,6 +896,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       eventId: post.id,
       actionable,
       conversationKind: isDm ? "dm" : "channel",
+    });
+    this.emitInboundRejected({
+      id: `mattermost:post:${post.id}:rejected`,
+      kind: actionable ? "command" : "text",
+      actor: {
+        platformUserId: post.user_id,
+        displayName: data.sender_name,
+        username: data.sender_name,
+        isBot: false,
+      },
+      channel: this.channelRefForPost(post, data),
+      receivedAt: this.now(),
+      reason: "unauthorized-actor",
     });
   }
 
@@ -914,6 +940,26 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       this.logger.warn("mattermost ignored unauthorized callback actor", {
         actorId: body.user_id,
         channelId: body.channel_id,
+      });
+      this.emitInboundRejected({
+        id: this.newEventId("callback-rejected"),
+        kind: "callback",
+        actor: {
+          platformUserId: body.user_id,
+          displayName: body.user_name,
+          username: body.user_name,
+          isBot: false,
+        },
+        channel: {
+          channel: this.channel,
+          conversation: {
+            id: body.channel_id,
+            kind: "channel",
+            ...(body.channel_name ? { title: body.channel_name } : {}),
+          },
+        },
+        receivedAt: this.now(),
+        reason: "unauthorized-actor",
       });
       return;
     }
@@ -1196,6 +1242,27 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         actorId: body.user_id,
         command: body.command,
         channelId: body.channel_id,
+      });
+      this.emitInboundRejected({
+        id: this.newEventId("slashcmd-rejected"),
+        kind: "command",
+        actor: {
+          platformUserId: body.user_id,
+          displayName: body.user_name,
+          username: body.user_name,
+          isBot: false,
+        },
+        channel: {
+          channel: this.channel,
+          conversation: {
+            id: body.channel_id,
+            kind: body.root_id ? "thread" : "channel",
+            ...(body.root_id ? { parentId: body.root_id } : {}),
+            ...(body.channel_name ? { title: body.channel_name } : {}),
+          },
+        },
+        receivedAt: this.now(),
+        reason: "unauthorized-actor",
       });
       return undefined;
     }
@@ -2159,6 +2226,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   private newEventId(prefix: string): string {
     return `mattermost-${prefix}-${this.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
+    for (const listener of this.inboundRejectedListeners) {
+      void listener(event);
+    }
   }
 }
 

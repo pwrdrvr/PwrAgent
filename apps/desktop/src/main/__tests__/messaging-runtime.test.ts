@@ -11,6 +11,8 @@ import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingInboundRejectedListener,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
@@ -825,6 +827,86 @@ describe("DesktopMessagingRuntime", () => {
       expect.objectContaining({
         kind: "activity",
         platform: "telegram",
+      }),
+    );
+  });
+
+  it("logs adapter-level rejected inbound IDs before provider dispatch", async () => {
+    await prepareRuntimeStore();
+    let rejectedListener: MessagingInboundRejectedListener | undefined;
+    const adapter = createAdapter("discord", {
+      onInboundRejected: (listener: MessagingInboundRejectedListener) => {
+        rejectedListener = listener;
+        return () => {
+          rejectedListener = undefined;
+        };
+      },
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    const rejectedEvent: MessagingRejectedInboundEvent = {
+      id: "discord:message:msg-1:rejected",
+      kind: "command",
+      actor: {
+        platformUserId: "1177378744822943744",
+        displayName: "Other User",
+        username: "other",
+      },
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "1480554271907905000",
+          kind: "channel",
+          parentId: "1480554271907905731",
+        },
+      },
+      receivedAt: 1234,
+      reason: "unauthorized-conversation",
+    };
+    await rejectedListener?.(rejectedEvent);
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT actor_id, conversation_id, payload
+         FROM messaging_activity_log
+         WHERE kind = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("inbound-rejected") as
+        | { actor_id: string; conversation_id: string; payload: string }
+        | undefined;
+
+    expect(row).toMatchObject({
+      actor_id: "1177378744822943744",
+      conversation_id: "1480554271907905000",
+    });
+    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+      conversationParentId: "1480554271907905731",
+      rejectionReason: "unauthorized-conversation",
+    });
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      "messaging event rejected before dispatch",
+      expect.objectContaining({
+        actorId: "1177378744822943744",
+        conversationId: "1480554271907905000",
+        reason: "unauthorized-conversation",
       }),
     );
   });

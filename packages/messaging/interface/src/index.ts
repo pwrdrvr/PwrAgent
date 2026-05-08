@@ -595,6 +595,24 @@ export type MessagingInboundBaseEvent = {
   routingState?: MessagingAdapterState;
 };
 
+export type MessagingInboundRejectionReason =
+  | "unauthorized-actor"
+  | "unauthorized-conversation";
+
+export type MessagingRejectedInboundEvent = {
+  id: string;
+  kind: MessagingInboundEventKind;
+  actor: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  receivedAt: number;
+  reason: MessagingInboundRejectionReason;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingInboundRejectedListener = (
+  event: MessagingRejectedInboundEvent,
+) => Promise<void> | void;
+
 export type MessagingInboundTextEvent = MessagingInboundBaseEvent & {
   kind: "text";
   text: string;
