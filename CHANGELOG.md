@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-alpha.7 - 2026-05-08
+
+- Fixed GitHub CLI discovery for desktop sessions launched from Finder or the Dock by probing common install locations, supporting configured `gh` paths, and exposing validation controls in Settings.
+- Added inline validation for Telegram, Discord, and Mattermost authorization IDs, plus copyable rejected actor and conversation IDs in Messaging Activity.
+- Preserved queued mid-turn composer replies when navigating away from a thread and returning before the queued reply is sent or cleared.
+- Streamlined release operations with reconstructed early changelog entries, direct maintainer release-metadata pushes, and post-build GitHub Release note updates.
+
 ## v1.0.0-alpha.6 - 2026-05-08
 
 - Advanced the desktop v2 interface with new status tokens and iconography, redesigned settings screens, sticky directory headers, PR chips, thread reactions, and project-directory picker affordances.
