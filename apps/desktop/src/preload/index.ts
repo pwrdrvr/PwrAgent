@@ -13,6 +13,7 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   QueueThreadExecutionModeRequest,
@@ -94,6 +95,8 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenDesktopPwrAgentProfileRequest,
+  OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -171,6 +174,8 @@ import {
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   PRELOAD_LOG_CHANNEL,
+  PROFILES_LIST_CHANNEL,
+  PROFILES_OPEN_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
@@ -216,6 +221,12 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
   checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
+  listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
+    await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
+  openPwrAgentProfile: async (
+    request: OpenDesktopPwrAgentProfileRequest,
+  ): Promise<OpenDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_OPEN_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

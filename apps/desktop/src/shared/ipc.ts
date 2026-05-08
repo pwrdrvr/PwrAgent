@@ -136,3 +136,5 @@ export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
+export const PROFILES_LIST_CHANNEL = "profiles:list";
+export const PROFILES_OPEN_CHANNEL = "profiles:open";

@@ -399,6 +399,28 @@ export type DesktopSettingsWriteResponse = {
   snapshot: DesktopSettingsSnapshot;
 };
 
+export type DesktopPwrAgentProfileSummary = {
+  name: string;
+  displayName?: string;
+  lastUsed?: string;
+  active: boolean;
+};
+
+export type ListDesktopPwrAgentProfilesResponse = {
+  activeProfile: string;
+  profiles: DesktopPwrAgentProfileSummary[];
+};
+
+export type OpenDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type OpenDesktopPwrAgentProfileResponse = {
+  opened: boolean;
+  profile: string;
+  reason?: "active";
+};
+
 export type OpenDesktopApplicationRequest = {
   applicationId: string;
   kind: DesktopApplicationKind;

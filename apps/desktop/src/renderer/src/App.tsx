@@ -14,6 +14,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
+import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
@@ -68,6 +69,7 @@ function DesktopAppShell(props: {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
   const settings = props.settings;
+  const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
@@ -125,6 +127,8 @@ function DesktopAppShell(props: {
         archiveThreadError={navigation.archiveThreadError}
         renameThreadError={navigation.renameThreadError}
         runtimeIdentity={runtimeIdentity}
+        activeProfile={profiles.activeProfile}
+        profiles={profiles.profiles}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         approvalRequestThreadKeys={session.approvalRequestThreadKeys}
@@ -142,6 +146,7 @@ function DesktopAppShell(props: {
           setSettingsInitialSection(undefined);
           setMainView("settings");
         }}
+        onOpenProfile={profiles.openProfile}
         onSelectThread={(thread) => {
           setMainView("thread");
           navigation.selectThread(thread);

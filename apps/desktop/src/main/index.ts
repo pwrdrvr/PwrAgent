@@ -26,6 +26,10 @@ import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
+import {
+  disposeProfilesIpcHandlers,
+  registerProfilesIpcHandlers,
+} from "./ipc/profiles";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import {
   disposeRuntimeIdentityIpcHandlers,
@@ -105,6 +109,7 @@ export function bootstrapApp(): void {
     registerAppUpdateIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
+    registerProfilesIpcHandlers();
     registerRendererErrorIpcHandlers();
     registerSettingsIpcHandlers();
     if (isDevelopment) {
@@ -164,6 +169,7 @@ export function bootstrapApp(): void {
     disposeAppUpdateIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
+    disposeProfilesIpcHandlers();
     disposeSettingsIpcHandlers();
     if (isDevelopment) {
       disposeRuntimeIdentityIpcHandlers();
