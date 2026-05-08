@@ -13,7 +13,10 @@ import type {
 // Re-export shared messaging primitives so consumers can pick either
 // import path without seeing two parallel declarations.
 export {
+  MESSAGING_CONTACT_LABEL_MAX_LENGTH,
   MESSAGING_TOOL_UPDATE_MODES,
+  sanitizeMessagingContactHandle,
+  sanitizeMessagingContactLabel,
   validateDiscordSnowflake,
   validateMattermostId,
   validateTelegramChatId,

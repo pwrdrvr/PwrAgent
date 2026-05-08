@@ -9,7 +9,10 @@ import type {
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { isDesktopWorktreeStorageLocation } from "@pwragent/shared";
+import {
+  isDesktopWorktreeStorageLocation,
+  sanitizeMessagingContactLabel,
+} from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import {
   applyTomlEdits,
@@ -90,7 +93,6 @@ export type DesktopSettingsConfig = {
 
 type TomlScalar = TomlValue;
 
-const AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH = 64;
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_AUTHORIZED_CONTACT_MARKER = "pwragent-legacy-settings";
 
@@ -657,17 +659,9 @@ function normalizeAuthorizedContacts(
   return contacts
     .map((contact) => ({
       id: contact.id.trim(),
-      displayName: sanitizeAuthorizedContactDisplayName(contact.displayName),
+      displayName: sanitizeMessagingContactLabel(contact.displayName),
     }))
     .filter((contact) => contact.id.length > 0);
-}
-
-function sanitizeAuthorizedContactDisplayName(value: string): string {
-  return value
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH);
 }
 
 function legacyAuthorizedContactComment(key: string): string {

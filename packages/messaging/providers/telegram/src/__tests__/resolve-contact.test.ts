@@ -30,6 +30,31 @@ describe("Telegram resolveContact", () => {
     expect(bot.api.getChat).toHaveBeenCalledExactlyOnceWith("8460800771");
   });
 
+  it("sanitizes provider-controlled names from getChat", async () => {
+    const bot = {
+      api: {
+        getChat: vi.fn(async () => ({
+          first_name: "<script>alert(1)</script>Harold",
+          last_name: "Hunt\u202e",
+          type: "private",
+          username: "hunt<haro>",
+        })),
+      },
+    };
+
+    const result = await resolveContact(
+      { botToken: "12345:abcdef" },
+      { id: "8460800771", kind: "user" },
+      { bot },
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      displayName: "Harold Hunt (@hunt)",
+      handle: "@hunt",
+    });
+  });
+
   it("returns unset without a bot token", async () => {
     const result = await resolveContact(
       { botToken: "" },

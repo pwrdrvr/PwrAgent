@@ -76,4 +76,24 @@ describe("Discord resolveContact", () => {
       "/guilds/1480554271907905731",
     );
   });
+
+  it("sanitizes provider-controlled user names from the REST API", async () => {
+    getMock.mockResolvedValue({
+      id: "1177378744822943744",
+      username: "hun<tharo>",
+      global_name: "<img src=x onerror=alert(1)>Harold\u202e",
+      discriminator: "0",
+    });
+
+    const result = await resolveContact(
+      { botToken: "BotTokenABC" },
+      { id: "1177378744822943744", kind: "user" },
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      displayName: "Harold (@hun)",
+      handle: "@hun",
+    });
+  });
 });

@@ -8,6 +8,7 @@ import {
 import {
   validateDiscordSnowflake,
   validateMattermostId,
+  sanitizeMessagingContactLabel,
   validateTelegramPositiveId,
   validateTelegramSupergroupId,
   type DesktopAuthorizedContact,
@@ -1071,11 +1072,7 @@ function normalizeAuthorizedContactRow(
 ): DesktopAuthorizedContact {
   return {
     id: contact.id.trim(),
-    displayName: contact.displayName
-      .replace(/[\u0000-\u001f\u007f]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 64),
+    displayName: sanitizeMessagingContactLabel(contact.displayName),
   };
 }
 

@@ -528,6 +528,44 @@ describe("SettingsScreen", () => {
     ).toHaveValue("Harold (@huntharo)");
   });
 
+  it("sanitizes manually entered messaging display names before saving", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
+    fireEvent.change(screen.getByLabelText("Authorized User IDs ID 1"), {
+      target: { value: "8460800771" },
+    });
+    fireEvent.change(
+      screen.getByLabelText("Authorized User IDs display name 1"),
+      {
+        target: {
+          value: "<script>alert(1)</script>Harold\u202e",
+        },
+      },
+    );
+    fireEvent.blur(screen.getByLabelText("Authorized User IDs display name 1"));
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedUserIds: [
+              { id: "8460800771", displayName: "Harold" },
+            ],
+          },
+        },
+      });
+    });
+  });
+
   it("ignores stale lookup results after an authorized ID is removed", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({

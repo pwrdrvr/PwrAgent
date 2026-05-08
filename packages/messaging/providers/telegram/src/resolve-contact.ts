@@ -1,6 +1,8 @@
 import { Bot } from "grammy";
 import {
   clipMessagingValidationError,
+  sanitizeMessagingContactHandle,
+  sanitizeMessagingContactLabel,
   type MessagingContactLookupRequest,
   type MessagingContactLookupResult,
 } from "@pwragent/messaging-interface";
@@ -43,11 +45,12 @@ export async function resolveContact(
   try {
     const bot = options.bot ?? new Bot(config.botToken);
     const chat = await bot.api.getChat(request.id);
+    const handle = formatContactHandle(chat.username);
     return {
       status: "ok",
       id: request.id,
       displayName: formatTelegramDisplayName(chat),
-      handle: chat.username ? `@${chat.username}` : undefined,
+      handle,
       detail: chat.type,
     };
   } catch (error) {
@@ -56,13 +59,26 @@ export async function resolveContact(
 }
 
 function formatTelegramDisplayName(chat: TelegramLookupChat): string | undefined {
+  const handle = formatContactHandle(chat.username);
   const name =
-    [chat.first_name, chat.last_name].filter(Boolean).join(" ")
-    || chat.title
+    [
+      sanitizeOptionalContactLabel(chat.first_name),
+      sanitizeOptionalContactLabel(chat.last_name),
+    ].filter(Boolean).join(" ")
+    || sanitizeOptionalContactLabel(chat.title)
     || undefined;
-  const handle = chat.username ? `@${chat.username}` : undefined;
   if (name && handle) return `${name} (${handle})`;
   return name ?? handle;
+}
+
+function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+  const sanitized = sanitizeMessagingContactLabel(value);
+  return sanitized || undefined;
+}
+
+function formatContactHandle(value: string | undefined): string | undefined {
+  const sanitized = sanitizeMessagingContactHandle(value);
+  return sanitized ? `@${sanitized}` : undefined;
 }
 
 function lookupFailure(id: string, error: unknown): MessagingContactLookupResult {

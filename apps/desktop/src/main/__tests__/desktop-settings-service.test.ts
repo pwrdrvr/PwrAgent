@@ -165,6 +165,33 @@ describe("DesktopSettingsService", () => {
     ]);
   });
 
+  it("sanitizes authorized contact display names read from config", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const unsafeDisplayName = "<script>alert(1)</script>Harold\u202e";
+    fs.writeFileSync(
+      configPath,
+      [
+        "[[messaging.telegram.authorized_users]]",
+        'id = "111111111"',
+        `display_name = "${unsafeDisplayName}"`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
+      { id: "111111111", displayName: "Harold" },
+    ]);
+  });
+
   it("migrates legacy authorized user arrays when the list is next saved", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
