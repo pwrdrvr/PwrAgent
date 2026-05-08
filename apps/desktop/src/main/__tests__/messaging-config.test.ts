@@ -11,6 +11,7 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  normalizeMattermostUrl,
   redactDesktopMessagingConfig,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -209,3 +210,97 @@ function createTempRoot(): string {
   tempRoots.push(root);
   return root;
 }
+
+describe("normalizeMattermostUrl", () => {
+  it("strips a single trailing slash so /api/v4/websocket concatenation is safe", () => {
+    expect(normalizeMattermostUrl("http://127.0.0.1:8065/", "serverUrl")).toBe(
+      "http://127.0.0.1:8065",
+    );
+    expect(
+      normalizeMattermostUrl("https://chat.example.com/", "serverUrl"),
+    ).toBe("https://chat.example.com");
+  });
+
+  it("preserves URLs without a trailing slash unchanged in shape", () => {
+    expect(
+      normalizeMattermostUrl("https://chat.example.com", "serverUrl"),
+    ).toBe("https://chat.example.com");
+    expect(
+      normalizeMattermostUrl("http://localhost:47821", "callbackBaseUrl"),
+    ).toBe("http://localhost:47821");
+  });
+
+  it("trims surrounding whitespace before validating", () => {
+    expect(
+      normalizeMattermostUrl("  https://chat.example.com  ", "serverUrl"),
+    ).toBe("https://chat.example.com");
+  });
+
+  it("preserves a non-root path but strips its trailing slash", () => {
+    expect(
+      normalizeMattermostUrl(
+        "https://pwragent.example.com/messaging/mattermost/callback/",
+        "callbackBaseUrl",
+      ),
+    ).toBe("https://pwragent.example.com/messaging/mattermost/callback");
+  });
+
+  it("returns undefined for empty / whitespace input", () => {
+    expect(normalizeMattermostUrl(undefined, "serverUrl")).toBeUndefined();
+    expect(normalizeMattermostUrl("", "serverUrl")).toBeUndefined();
+    expect(normalizeMattermostUrl("   ", "serverUrl")).toBeUndefined();
+  });
+
+  it("rejects non-http(s) schemes (file:, ftp:, ws:, ...) so the channel fails closed", () => {
+    const warns: Array<{ msg: string; data?: Record<string, unknown> }> = [];
+    const log = {
+      warn: (msg: string, data?: Record<string, unknown>) =>
+        warns.push({ msg, data }),
+    };
+    expect(
+      normalizeMattermostUrl(
+        "ftp://chat.example.com",
+        "serverUrl",
+        log,
+      ),
+    ).toBeUndefined();
+    expect(
+      normalizeMattermostUrl(
+        "ws://chat.example.com/",
+        "serverUrl",
+        log,
+      ),
+    ).toBeUndefined();
+    expect(warns).toHaveLength(2);
+    expect(warns[0]?.msg).toContain("unsupported protocol");
+  });
+
+  it("rejects unparseable garbage so the channel fails closed", () => {
+    const warns: Array<{ msg: string; data?: Record<string, unknown> }> = [];
+    const log = {
+      warn: (msg: string, data?: Record<string, unknown>) =>
+        warns.push({ msg, data }),
+    };
+    expect(
+      normalizeMattermostUrl("not a url at all", "serverUrl", log),
+    ).toBeUndefined();
+    expect(warns[0]?.msg).toContain("not a valid URL");
+    expect(warns[0]?.data).toMatchObject({ field: "serverUrl" });
+  });
+
+  it("preserves the URL's port — used by the adapter to derive the local bind port", () => {
+    // The Mattermost adapter parses callbackBaseUrl.port to decide
+    // where to bind the local HTTP listener. If normalization ever
+    // dropped explicit ports, the bind would silently move to 47821
+    // and Mattermost callbacks would fail. This locks the contract.
+    expect(
+      normalizeMattermostUrl(
+        "http://host.docker.internal:47821/",
+        "callbackBaseUrl",
+      ),
+    ).toBe("http://host.docker.internal:47821");
+    expect(
+      normalizeMattermostUrl("http://localhost:8000/cb", "callbackBaseUrl"),
+    ).toBe("http://localhost:8000/cb");
+  });
+});

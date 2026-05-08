@@ -4,7 +4,12 @@ import type {
   MessagingPlatformHealth,
   MessagingPlatformStatus,
 } from "@pwragent/shared";
-import { DiscordIcon, TelegramIcon, type IconProps } from "../../icons";
+import {
+  DiscordIcon,
+  MattermostIcon,
+  TelegramIcon,
+  type IconProps,
+} from "../../icons";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -13,6 +18,11 @@ const ICONS: Partial<
 > = {
   telegram: TelegramIcon,
   discord: DiscordIcon,
+  // Mattermost ships as an `<img>` (brand guidelines require the
+  // official asset, unaltered), so `IconProps` doesn't fully apply —
+  // we forward `size` and let MattermostIcon pick its default variant
+  // (white, for the dark-themed desktop UI).
+  mattermost: ({ size }) => <MattermostIcon size={size} />,
 };
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {

@@ -68,6 +68,10 @@ function getCredentialTester(
         resolveService().resolveTelegramBotTokenSync(),
       resolveDiscordBotToken: () =>
         resolveService().resolveDiscordBotTokenSync(),
+      resolveMattermostBotToken: () =>
+        resolveService().resolveMattermostBotTokenSync(),
+      resolveMattermostServerUrl: () =>
+        resolveService().resolveMattermostServerUrlSync(),
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
         const snapshot = await resolveService().readSettings();

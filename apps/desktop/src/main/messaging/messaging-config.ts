@@ -1,4 +1,5 @@
 import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
 import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
@@ -10,6 +11,15 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  MATTERMOST_ENABLED_ENV,
+  MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
+  MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -29,6 +39,15 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  MATTERMOST_ENABLED_ENV,
+  MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
+  MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -43,13 +62,18 @@ export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
   inputDebounceMs?: number;
+  mattermost?: MattermostMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
 
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
-  "readSettings" | "resolveDiscordBotTokenSync" | "resolveTelegramBotTokenSync"
+  | "readSettings"
+  | "resolveDiscordBotTokenSync"
+  | "resolveTelegramBotTokenSync"
+  | "resolveMattermostBotTokenSync"
+  | "resolveMattermostHmacSecretSync"
 >;
 
 export type DesktopMessagingConfigLoadOptions = {
@@ -63,6 +87,24 @@ export function loadDesktopMessagingConfig(
   const telegramAuthorizedActorIds = parseList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
   const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
   const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
+  const mattermostBotToken = readEnv(env, MATTERMOST_BOT_TOKEN_ENV);
+  const mattermostServerUrl = readEnv(env, MATTERMOST_SERVER_URL_ENV);
+  const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
+  const mattermostAuthorizedActorIds = parseList(
+    env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
+  );
+  const mattermostCallbackHmacSecret = readEnv(
+    env,
+    MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  );
+  const mattermostSlashCommandPrefix = readEnv(
+    env,
+    MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
+  );
+  const mattermostRegisterSlashCommandsEnv = readEnvBoolean(
+    env,
+    MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  ).value;
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
@@ -98,6 +140,34 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
+    ...(mattermostBotToken
+      && mattermostServerUrl
+      && mattermostCallbackBaseUrl
+      && mattermostAuthorizedActorIds.length > 0
+      ? {
+          mattermost: {
+            channel: "mattermost" as const,
+            enabled: true,
+            botToken: mattermostBotToken,
+            serverUrl: mattermostServerUrl,
+            callbackBaseUrl: mattermostCallbackBaseUrl,
+            ...(mattermostCallbackHmacSecret
+              ? { callbackHmacSecret: mattermostCallbackHmacSecret }
+              : {}),
+            ...(mattermostSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: mattermostSlashCommandPrefix }
+              : {}),
+            ...(mattermostRegisterSlashCommandsEnv !== undefined
+              ? { registerSlashCommands: mattermostRegisterSlashCommandsEnv }
+              : {}),
+            streamingResponses: readEnvBoolean(
+              env,
+              MATTERMOST_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
+            authorizedActorIds: mattermostAuthorizedActorIds,
+          },
+        }
+      : {}),
   };
 }
 
@@ -113,12 +183,44 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
   const discordBotToken =
     envConfig.discord?.botToken ?? settings.resolveDiscordBotTokenSync();
+  const mattermostBotToken =
+    envConfig.mattermost?.botToken ?? settings.resolveMattermostBotTokenSync();
+  const mattermostHmacSecret =
+    envConfig.mattermost?.callbackHmacSecret
+    ?? settings.resolveMattermostHmacSecretSync();
   const telegramAuthorizedActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
   const discordAuthorizedActorIds =
     envConfig.discord?.authorizedActorIds
     ?? snapshot.messaging.discord.authorizedUserIds.value;
+  const mattermostAuthorizedActorIds =
+    envConfig.mattermost?.authorizedActorIds
+    ?? snapshot.messaging.mattermost.authorizedUserIds.value;
+  const mattermostServerUrlRaw =
+    envConfig.mattermost?.serverUrl
+    || snapshot.messaging.mattermost.serverUrl.value
+    || undefined;
+  const mattermostCallbackBaseUrlRaw =
+    envConfig.mattermost?.callbackBaseUrl
+    || snapshot.messaging.mattermost.callbackBaseUrl.value
+    || undefined;
+  const mattermostServerUrl = normalizeMattermostUrl(
+    mattermostServerUrlRaw,
+    "serverUrl",
+    log,
+  );
+  const mattermostCallbackBaseUrl = normalizeMattermostUrl(
+    mattermostCallbackBaseUrlRaw,
+    "callbackBaseUrl",
+    log,
+  );
+  const mattermostSlashCommandPrefix =
+    envConfig.mattermost?.slashCommandPrefix
+    ?? snapshot.messaging.mattermost.slashCommandPrefix.value;
+  const mattermostRegisterSlashCommands =
+    envConfig.mattermost?.registerSlashCommands
+    ?? snapshot.messaging.mattermost.registerSlashCommands.value;
   const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
     imageProfile: snapshot.messaging.attachments.imageProfile.value,
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
@@ -137,6 +239,12 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.discord,
     env,
     DISCORD_ENABLED_ENV,
+  );
+  const mattermostEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.mattermost.enabled.value,
+    envConfig.mattermost,
+    env,
+    MATTERMOST_ENABLED_ENV,
   );
 
   const telegramConfig = buildChannelConfig({
@@ -181,12 +289,45 @@ export async function loadDesktopMessagingConfigFromSettings(
       }
     : {};
 
+  const mattermostConfig =
+    buildChannelConfig({
+      log,
+      channel: "mattermost",
+      enabled: mattermostEnabled,
+      hasToken: Boolean(mattermostBotToken),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: mattermostAuthorizedActorIds.length,
+    })
+    && mattermostServerUrl
+    && mattermostCallbackBaseUrl
+      ? {
+          mattermost: {
+            channel: "mattermost" as const,
+            enabled: true,
+            botToken: mattermostBotToken!,
+            serverUrl: mattermostServerUrl,
+            callbackBaseUrl: mattermostCallbackBaseUrl,
+            ...(mattermostHmacSecret
+              ? { callbackHmacSecret: mattermostHmacSecret }
+              : {}),
+            ...(mattermostSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: mattermostSlashCommandPrefix }
+              : {}),
+            registerSlashCommands: mattermostRegisterSlashCommands,
+            streamingResponses:
+              snapshot.messaging.mattermost.streamingResponses.value,
+            authorizedActorIds: mattermostAuthorizedActorIds,
+          },
+        }
+      : {};
+
   return {
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
     ...telegramConfig,
     ...discordConfig,
+    ...mattermostConfig,
   };
 }
 
@@ -269,6 +410,23 @@ export function redactDesktopMessagingConfig(
           authorizedActorCount: config.discord.authorizedActorIds.length,
         }
       : undefined,
+    mattermost: config.mattermost
+      ? {
+          channel: config.mattermost.channel,
+          enabled: config.mattermost.enabled !== false,
+          serverUrl: config.mattermost.serverUrl,
+          callbackBaseUrl: config.mattermost.callbackBaseUrl,
+          botToken: "[REDACTED]",
+          callbackHmacSecret: config.mattermost.callbackHmacSecret
+            ? "[REDACTED]"
+            : "[GENERATED]",
+          slashCommandPrefix: config.mattermost.slashCommandPrefix ?? "[default]",
+          registerSlashCommands:
+            config.mattermost.registerSlashCommands ?? false,
+          streamingResponses: config.mattermost.streamingResponses ?? false,
+          authorizedActorCount: config.mattermost.authorizedActorIds.length,
+        }
+      : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
 }
@@ -315,6 +473,61 @@ function readAttachmentPolicyFromEnv(
     ...(maxAttachmentCount !== undefined ? { maxAttachmentCount } : {}),
   };
   return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+/**
+ * Normalize a Mattermost URL coming from settings or env vars.
+ *
+ * - Trims surrounding whitespace.
+ * - Validates that it parses as a `http:` or `https:` URL — anything
+ *   else (file:, ftp:, garbage strings) is rejected as invalid.
+ * - Strips trailing slashes from the path so concatenation with API
+ *   paths like `/api/v4/websocket` doesn't produce double slashes.
+ *   The Mattermost websocket client builds its URL by string-appending
+ *   `/api/v4/websocket` to the server URL; a single trailing slash on
+ *   the input produces `ws://host:port//api/v4/websocket`, which the
+ *   server rejects with a 1006 close. Normalize once at the boundary
+ *   instead of trying to remember to strip on every concatenation.
+ *
+ * Returns `undefined` for empty / unparseable / non-http(s) input. The
+ * adapter-startup gate already requires a non-undefined URL, so an
+ * invalid URL fails closed (the adapter doesn't start) rather than
+ * starting with broken state.
+ */
+export function normalizeMattermostUrl(
+  input: string | undefined,
+  fieldName: "serverUrl" | "callbackBaseUrl",
+  log?: { warn: (msg: string, data?: Record<string, unknown>) => void },
+): string | undefined {
+  if (input === undefined) return undefined;
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    log?.warn("mattermost url is not a valid URL — disabling channel", {
+      field: fieldName,
+      value: trimmed,
+    });
+    return undefined;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    log?.warn("mattermost url has unsupported protocol — disabling channel", {
+      field: fieldName,
+      protocol: parsed.protocol,
+    });
+    return undefined;
+  }
+
+  // Reconstruct via the URL object so we get a single canonical form
+  // (collapsed slashes, default-port stripping, etc.), then strip a
+  // single trailing slash from the path so consumers can safely
+  // string-concatenate `/api/v4/...`.
+  const canonical = parsed.toString();
+  return canonical.endsWith("/") ? canonical.slice(0, -1) : canonical;
 }
 
 function shouldEnableSettingsChannel<TConfig>(

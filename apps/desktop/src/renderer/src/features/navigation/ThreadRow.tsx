@@ -12,7 +12,13 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { DiscordIcon, SmileyIcon, TelegramIcon, type IconProps } from "../../icons";
+import {
+  DiscordIcon,
+  MattermostIcon,
+  SmileyIcon,
+  TelegramIcon,
+  type IconProps,
+} from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
@@ -24,6 +30,7 @@ const PLATFORM_ICONS: Partial<
 > = {
   telegram: TelegramIcon,
   discord: DiscordIcon,
+  mattermost: ({ size }) => <MattermostIcon size={size} />,
 };
 
 const HOVER_PREFETCH_DELAY_MS = 750;

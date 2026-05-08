@@ -133,11 +133,19 @@ function createRegistry(
           config.telegram ? createAdapter("telegram") : undefined,
       })),
     },
+    mattermost: {
+      load: vi.fn(async () => ({
+        createAdapter: ({ config }: { config: DesktopMessagingConfig }) =>
+          config.mattermost ? createAdapter("mattermost") : undefined,
+      })),
+    },
     ...overrides,
   };
 }
 
-function createAdapter(channel: "telegram" | "discord"): DesktopMessagingAdapter {
+function createAdapter(
+  channel: "telegram" | "discord" | "mattermost",
+): DesktopMessagingAdapter {
   return {
     authorizedActorIds: [`${channel}-user`],
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,

@@ -6,7 +6,7 @@ import type { DesktopMessagingAdapter } from "./messaging-runtime";
 
 export type DesktopMessagingProviderId = Extract<
   MessagingChannelKind,
-  "telegram" | "discord"
+  "telegram" | "discord" | "mattermost"
 >;
 
 export type DesktopMessagingProviderModule = {
@@ -68,6 +68,9 @@ export function configuredMessagingProviderIds(
       ? (["telegram"] as const)
       : []),
     ...(config.discord && config.discord.enabled !== false ? (["discord"] as const) : []),
+    ...(config.mattermost && config.mattermost.enabled !== false
+      ? (["mattermost"] as const)
+      : []),
   ];
 }
 
@@ -109,6 +112,18 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
         createAdapter({ config, logger, store }) {
           return config.telegram
             ? module.createTelegramAdapter(config.telegram, store, logger)
+            : undefined;
+        },
+      };
+    },
+  },
+  mattermost: {
+    async load() {
+      const module = await import("@pwragent/messaging-provider-mattermost");
+      return {
+        createAdapter({ config, logger, store }) {
+          return config.mattermost
+            ? module.createMattermostAdapter(config.mattermost, store, logger)
             : undefined;
         },
       };

@@ -38,6 +38,9 @@ importers:
       '@pwragent/messaging-provider-discord':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/discord
+      '@pwragent/messaging-provider-mattermost':
+        specifier: workspace:*
+        version: link:../../packages/messaging/providers/mattermost
       '@pwragent/messaging-provider-telegram':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/telegram
@@ -155,6 +158,19 @@ importers:
       discord.js:
         specifier: ^14.25.1
         version: 14.26.3
+    devDependencies:
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@29.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
+
+  packages/messaging/providers/mattermost:
+    dependencies:
+      '@mattermost/client':
+        specifier: ^11.4.0
+        version: 11.6.0(@mattermost/types@11.6.0(typescript@6.0.2))(typescript@6.0.2)
+      '@pwragent/messaging-interface':
+        specifier: workspace:*
+        version: link:../../interface
     devDependencies:
       vitest:
         specifier: ^4.1.4
@@ -805,6 +821,23 @@ packages:
   '@malept/flatpak-bundler@0.4.0':
     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
     engines: {node: '>= 10.0.0'}
+
+  '@mattermost/client@11.6.0':
+    resolution: {integrity: sha512-2su6eOr8Vj7xeeb9tKaLgpg3a8u2vgmBfK82d61sjKTjKZt7ySy15xhbFFsnLo8fXePQG0zUZP8YtY+/NutD0Q==}
+    peerDependencies:
+      '@mattermost/types': 11.6.0
+      typescript: ^4.3.0 || ^5.0.0
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
+  '@mattermost/types@11.6.0':
+    resolution: {integrity: sha512-0sBZaN1QYB+P0qo7ByiMU8Ja2VTepFWfgqFcx7KA9/TT6+dWiemOQav6SHK1fP4oAlWdh2nikaD01I8VPg4ZRQ==}
+    peerDependencies:
+      typescript: ^4.3.0 || ^5.0.0
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   '@napi-rs/wasm-runtime@1.1.4':
     resolution: {integrity: sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow==}
@@ -4123,6 +4156,16 @@ snapshots:
       tmp-promise: 3.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@mattermost/client@11.6.0(@mattermost/types@11.6.0(typescript@6.0.2))(typescript@6.0.2)':
+    dependencies:
+      '@mattermost/types': 11.6.0(typescript@6.0.2)
+    optionalDependencies:
+      typescript: 6.0.2
+
+  '@mattermost/types@11.6.0(typescript@6.0.2)':
+    optionalDependencies:
+      typescript: 6.0.2
 
   '@napi-rs/wasm-runtime@1.1.4(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
     dependencies:

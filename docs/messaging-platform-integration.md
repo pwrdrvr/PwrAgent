@@ -1,10 +1,10 @@
 # Messaging Platform Integration
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram or Discord user can choose a thread, bind the current
-conversation, and send free-form text into that thread. The workflow logic is
-shared; Telegram and Discord only own transport, formatting, callback handles,
-and platform limits.
+allowlisted Telegram, Discord, or Mattermost user can choose a thread, bind
+the current conversation, and send free-form text into that thread. The
+workflow logic is shared; the providers only own transport, formatting,
+callback handles, and platform limits.
 
 ## Commands
 
@@ -334,6 +334,310 @@ Discord:
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal
 messages until those adapter capabilities are added.
+
+## Mattermost Setup
+
+Mattermost is supported as a third provider alongside Telegram and Discord.
+Unlike the other two, Mattermost delivers interactive button clicks
+**out-of-band** via HTTP POST to a callback URL the bot must host. PwrAgent
+binds the callback listener to `127.0.0.1` only; production deployments
+front it with a tunnel (Cloudflare Tunnel or Tailscale Funnel) which
+terminates TLS and forwards to localhost.
+
+### 1. Create a bot account
+
+In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Account.
+
+- Display name: anything (e.g., `PwrAgent`).
+- Permissions: needs to post in target channels, read posts, upload/download
+  files, edit its own posts, and update channel headers if you want
+  conversation-title updates. **Also grant `manage_slash_commands`** if you
+  want PwrAgent to register `/resume`, `/status`, `/detach` as native
+  Mattermost slash commands with autocomplete (recommended). Without it,
+  the adapter will log a permission warning at startup and fall back to
+  text-mention parsing (`@pwragent resume`).
+- Copy the access token. Either paste it into the desktop Settings UI
+  (Settings → Messaging → Mattermost → Bot Token — stored in the system
+  keychain via Electron `safeStorage`) or set
+  `PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN` in the environment. Env vars
+  override Settings UI values when both are set; the snapshot flags
+  `overriddenByEnv` so the UI surfaces this.
+
+Add the bot to the channels where you want PwrAgent to be addressable.
+Without explicit channel membership, Mattermost does not deliver `posted`
+events to the bot — outgoing posts will fail with `403`.
+
+Slash commands are scoped per-team in Mattermost. PwrAgent reconciles its
+canonical command set (`/resume`, `/status`, `/detach`) against every team
+the bot is a member of on adapter startup — newly-joined teams are picked
+up by restarting the adapter (a team-membership webhook listener that
+re-reconciles mid-session is a future improvement). Reconciliation is
+idempotent and uses the same callback URL as interactive buttons (the
+listener routes by Content-Type, so a single tunnel mapping covers both).
+
+### 2. Choose a tunnel for the callback URL
+
+Pick one. Both work; trade-offs differ.
+
+#### Option A — Cloudflare Tunnel + Zero Trust (recommended)
+
+Cloudflare Tunnel runs a `cloudflared` daemon on the PwrAgent host. The
+daemon dials out to Cloudflare's edge; Cloudflare publishes a hostname
+(`https://pwragent.example.com`) that proxies to `127.0.0.1:<port>` on
+your host. No inbound port opening on your network.
+
+Steps:
+
+1. Create a tunnel on `dash.cloudflare.com` → Zero Trust → Networks → Tunnels.
+2. Run `cloudflared tunnel run <tunnel-id>` on the PwrAgent host (typically
+   as a launchd / systemd service).
+3. Configure the public hostname route to forward to
+   `http://localhost:47821` (the default bind port — change it by
+   embedding a different port in `callbackBaseUrl`, e.g.
+   `http://localhost:8000/`, which the adapter parses to derive the
+   listener port).
+
+**Recommended hardening (defense in depth on top of PwrAgent's HMAC):**
+
+- **IP allowlist:** restrict the public hostname to Mattermost's outbound IP
+  range. Self-hosted Mattermost: the operator's egress IPs. Mattermost
+  Cloud: their published egress ranges.
+- **Cloudflare Access policies:** add an Access policy on the route so only
+  requests from the allowlisted IP range reach `cloudflared`.
+- **Custom security header (optional):** configure Mattermost (or a
+  Cloudflare Worker / Page Rule) to add a header like
+  `X-PwrAgent-Mattermost-Tunnel: <secret>` and verify in the listener.
+  Tracked as a follow-up — the in-process HMAC over `(intentId,
+  actionId, issuedAt)` already authenticates the payload.
+
+#### Option B — Tailscale Funnel (free-ish)
+
+Tailscale Funnel publishes a `https://<host>.tail<id>.ts.net` URL that
+forwards to a localhost port on your tailnet device. Free for personal
+use up to a quota.
+
+Steps:
+
+1. Install Tailscale on the PwrAgent host. Sign in.
+2. Enable Funnel for the device:
+   `tailscale funnel 47821` (forwards `https://<host>.tail<id>.ts.net/`
+   to `localhost:47821`).
+3. Set `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL` to that
+   `https://<host>.tail<id>.ts.net/` URL.
+
+Funnel does not provide a built-in IP allowlist. Rely on PwrAgent's HMAC
+verification (which you'd want anyway) and consider rotating the
+generated HMAC secret if you suspect leakage. Restart the adapter
+regenerates the secret automatically.
+
+#### Option C — `ngrok` (development only)
+
+`ngrok http 47821` for a quick disposable HTTPS URL. Free tier rotates
+the URL each restart. Don't use for production — there's no IP
+allowlist and the URL is publicly enumerable. Useful for the live
+smoke test in development.
+
+### 3. Configure PwrAgent
+
+Two paths — pick whichever fits your deployment. The settings landed in [PR #199](https://github.com/pwrdrvr/PwrAgent/pull/199); see that PR for the full integration if you're adding a new provider.
+
+**Path A — Desktop Settings UI (recommended for desktop users).** Open Settings → Messaging → Mattermost. Fill in the bot token (Keychain), server URL, callback base URL, callback port, authorized user IDs, and the optional slash-command toggles. The `Test` button on the Bot Token row hits `<serverUrl>/api/v4/users/me` with the token to confirm both pieces. Slash commands are off by default — see "Slash command registration" below.
+
+**Path B — Environment variables (headless / CI / Docker).** Set the variables before launching. Env vars override Settings UI values when both are present; the UI surfaces this with a `overriddenByEnv` badge per field.
+
+```bash
+PWRAGENT_MESSAGING_MATTERMOST_ENABLED=true
+PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN=<bot access token>
+PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL=https://chat.example.com
+PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL=https://pwragent.example.com/messaging/mattermost/callback
+PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS=<mattermost user id>,<another id>
+PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true       # optional; default false
+PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX=pwragent_     # optional; default pwragent_
+PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET=<hex secret>  # optional; regenerated per-restart if unset
+```
+
+The local HTTP listener binds to the port embedded in `CALLBACK_BASE_URL` if one is present (e.g., `http://localhost:47821/` → 47821), otherwise to the default port 47821. There is no separate port setting — the URL is the single source of truth so the bind port and the URL Mattermost dials cannot disagree.
+
+### 3a. Slash command registration
+
+`registerSlashCommands` is **off by default**. Mattermost 10.x and earlier omit `root_id` from the slash-command request body, so a slash response cannot be threaded — it lands in the parent channel even when the user invoked the command from inside a thread. The recommended primary entry point is `@<bot> help` text-mention parsing, which works on every Mattermost version and preserves thread context.
+
+If you operate Mattermost 11.0+ (which adds `root_id` to slash-command bodies) or you accept the v10.x channel-reply tradeoff, opt in via the Settings UI toggle or `PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true`. With the toggle on, PwrAgent reconciles its canonical command set against every team the bot is a member of on adapter startup. The `slashCommandPrefix` field controls the namespace (default `pwragent_` → `/pwragent_help`, `/pwragent_status`, `/pwragent_resume`, `/pwragent_detach`); set it blank to register bare triggers and accept the collision risk with built-in commands like `/status`, `/away`, `/leave`.
+
+Authorize on stable Mattermost user IDs (UUIDs visible via Settings →
+Profile → Account Settings → Display → Username, then
+`/api/v4/users/username/<name>` returns the `id`). Mutable usernames
+are not authorization-safe.
+
+`PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX` controls the
+namespace prepended to every registered slash-command trigger.
+Default: `pwragent_`, which gives `/pwragent_resume`, `/pwragent_status`,
+`/pwragent_detach` — chosen to avoid collisions with built-in
+Mattermost commands (`/status`, `/away`, `/leave`). Set to an empty
+string to register bare triggers and accept the collision risk.
+Allowed chars: `[A-Za-z0-9_./-]`; full trigger length 1–128 chars per
+Mattermost server validation. Invalid prefixes are logged and replaced
+with the default at startup.
+
+`PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` is **strongly
+recommended** when running with env-var configuration. If unset, the
+adapter mints a fresh random secret each time the process starts —
+every interactive button rendered in a previous session immediately
+fails HMAC verification and silently no-ops on click. Setting an
+explicit value pins the keyring across restarts, so existing buttons
+continue to work.
+
+Generate a 32-byte random hex string and store it however you store
+other secrets (1Password, env file, etc.):
+
+```bash
+openssl rand -hex 32
+```
+
+Pin the same value across desktop instances if you ever run multiple
+clients pointed at the same Mattermost workspace; otherwise each
+client's buttons only validate against its own keyring.
+
+> **Note for future-you:** When the Settings UI lands, the desktop
+> will mint and persist the HMAC in macOS Keychain on first run.
+> Until then, env-var pinning is the only stable path. Without it,
+> "buttons stop working after restart" is the most common confused
+> bug report against this adapter.
+
+### 4. Validate (smoke test checklist)
+
+After the bot is bound, the tunnel is up, and the env vars (including
+the pinned HMAC) are loaded, walk this checklist in order. Each step
+should succeed before moving to the next:
+
+**Cold-start sanity:**
+
+1. Launch PwrAgent. Look for `mattermost: adapter started successfully`
+   and `mattermost callback listener bound port=47821 host=127.0.0.1`
+   in the dev console. No `failed to start adapter` warnings.
+1a. Confirm slash-command reconciliation: a `mattermost slash commands
+   reconciled` log line per team the bot is in, with `tokenCount=3`
+   (or however many entries are in `DESIRED_MATTERMOST_COMMANDS`). If
+   you see `getMyTeams failed` or per-command `create failed`, the bot
+   lacks `manage_slash_commands` — text-mention invocation still works
+   but the `/` autocomplete won't appear.
+
+**Slash command UX:**
+
+1b. In any channel the bot belongs to, type `/pwragent` in the
+    message composer (or whatever prefix you've configured). The
+    namespaced commands (`/pwragent_resume`, `/pwragent_status`,
+    `/pwragent_detach` by default) should appear in the autocomplete
+    menu with their descriptions and hints. Note the namespacing —
+    unprefixed `/status` would collide with Mattermost's built-in
+    user-status command, which is why we register under a namespace
+    by default.
+1c. Type `/pwragent_resume` and submit. The bot replies with the
+    navigator (thread picker), same as clicking `Resume` on a
+    binding prompt.
+1c-thread. Send `/pwragent_resume` from inside a channel **thread
+    reply**. The picker should render in the same thread (not in
+    the parent channel), and the resulting binding should be
+    `kind: "thread"` with the channel as `parentTitle` on the chip.
+
+    Implementation note: Mattermost server v10.x (and earlier)
+    does NOT include `root_id` in the slash-command webhook body —
+    fixed in v11.0+ but not backported. The adapter routes the
+    first delivery via Mattermost's `response_url` endpoint, which
+    posts our payload with `RootId = args.RootId` server-side
+    (Mattermost knows the thread context internally; v10.x just
+    didn't propagate it via the webhook body). Subsequent renders
+    use `createPost` with the recovered `root_id`. See `mattermost
+    response_url outbound` log lines to verify the path fired.
+
+1c-mention. **Recommended for threads on any version**: send
+    `@pwragent resume` (or `@pwragent status` / `@pwragent help`)
+    from inside a thread reply. Text mentions go through the WS
+    `posted` event which always carries full thread context
+    (`post.root_id`), so this path works without the response_url
+    workaround. On any provider where slash commands are
+    namespaced (Mattermost: `/pwragent_*`), text mention is
+    typically the more discoverable invocation in threads where
+    the slash menu may be cluttered.
+
+1c-help. Send `@pwragent help` (or `/pwragent_help`) anywhere the
+    bot can see. The bot replies with the canonical command list
+    and notes both invocation styles.
+1d. From a separate browser/account that is NOT in
+    `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run
+    `/pwragent_resume`. The command executes (Mattermost has no
+    per-user permission gating on bot commands) but PwrAgent
+    rejects the actor and returns the ephemeral text "You are not
+    authorized to use this command." — visible only to the invoker.
+
+**DM bind flow:**
+
+2. Open a Direct Message to the bot in Mattermost. Send a naked
+   message: `You there?`
+3. The bot replies with a `Choose a thread` post containing a `Resume`
+   button.
+4. Click `Resume`. The bot replies with the navigator: a thread picker
+   with `Next`, `Projects`, `New`, `Cancel` buttons. The console shows
+   `mattermost callback HMAC verification failed` only if the env-var
+   HMAC isn't set; if it is, the click round-trips cleanly.
+5. Click each navigator button in turn — `Next` advances the page,
+   `Projects` switches to projects, `New` starts a fresh thread, and
+   `Cancel` dismisses without binding.
+
+**Bind to a thread:**
+
+6. From the picker, select an existing thread. The status card
+   appears, pinned to the channel header.
+7. The status card shows binding details (model, reasoning, branch,
+   directory) and the standard buttons (`Model`, `Reasoning`,
+   `Tools`, `Permissions`, `Stop`, `Refresh`, `Detach`).
+8. The desktop app's binding chip for that thread now shows the
+   Mattermost icon and the DM peer's username (e.g. `harold`).
+
+**Round-trip a turn:**
+
+9. In the same DM, send `Who are you?`
+10. The bot enters typing state; the desktop app shows the message
+    arriving in the bound thread.
+11. The agent responds. The response appears in both the Mattermost
+    DM and the desktop app.
+12. The status card updates to reflect the completed turn.
+
+**Status surface buttons:**
+
+13. Click `Refresh` on the status card. The card re-renders with
+    fresh values; no buttons are stripped.
+14. Click `Tools`, then `Permissions`. Each click cycles the value
+    and the card updates inline. The desktop app's UI mirrors the
+    change (cross-surface state bus).
+
+**Detach:**
+
+15. Click `Detach` on the status card. The bot posts `Thread detached`
+    and removes the status card's buttons. The desktop app's binding
+    chip disappears for that thread.
+16. Send another message in the DM. The bot does not respond
+    (binding gone), but the offered `Resume` button on the
+    `Choose a thread` reply still works to re-bind.
+
+**Cross-restart persistence (with env-var HMAC pinned):**
+
+17. Quit and relaunch PwrAgent.
+18. Click a button on a status card from a still-bound thread that
+    was rendered before the restart. The click round-trips and the
+    status updates. Without the env-var HMAC pinned, this step fails
+    silently — the canary that says "you forgot to set the HMAC env
+    var."
+
+**Failure modes (don't block on these — verify they fail cleanly):**
+
+19. Tear down the tunnel temporarily and click a button. The click
+    silently fails (no client-visible error in Mattermost; no
+    dispatch in PwrAgent). Restore the tunnel.
+20. With dev-tools open, send a button click with a tampered
+    `integration.context.hmac` value. PwrAgent logs
+    `mattermost callback HMAC verification failed` and responds 200
+    (no info leak). No dispatch happens.
 
 ## Chat SDK Decision
 

@@ -72,6 +72,25 @@ describe("desktop settings contracts", () => {
           authorizedUserIds: { value: [], source: "default" },
           authorizedGuilds: { value: [], source: "default" },
         },
+        mattermost: {
+          enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
+          botToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
+          hmacSecret: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
+          serverUrl: { value: "", source: "default" },
+          callbackBaseUrl: { value: "", source: "default" },
+          slashCommandPrefix: { value: "pwragent_", source: "default" },
+          registerSlashCommands: { value: false, source: "default" },
+          authorizedUserIds: { value: [], source: "default" },
+        },
       },
       models: {
         codex: {

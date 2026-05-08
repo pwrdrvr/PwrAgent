@@ -401,6 +401,144 @@ describe("DesktopSettingsService", () => {
     expect(fs.readFileSync(configPath, "utf8")).toContain("enabled = true");
   });
 
+  it("round-trips Mattermost settings through TOML and exposes them in the snapshot", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const secretStore = new MemoryDesktopSecretStore();
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+      now: () => 1,
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        mattermost: {
+          enabled: true,
+          streamingResponses: true,
+          serverUrl: "https://chat.example.com",
+          callbackBaseUrl: "https://tunnel.example.com/mm",
+          slashCommandPrefix: "agent_",
+          registerSlashCommands: true,
+          authorizedUserIds: ["userA", "userB"],
+        },
+      },
+    });
+
+    await service.replaceSecret("mattermostBotToken", "token-abc");
+    await service.replaceSecret("mattermostHmacSecret", "hmac-secret");
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("[messaging.mattermost]");
+    expect(contents).toContain('server_url = "https://chat.example.com"');
+    expect(contents).toContain("register_slash_commands = true");
+    expect(contents).not.toContain("callback_port");
+    expect(contents).toContain('slash_command_prefix = "agent_"');
+    expect(contents).toContain('authorized_user_ids = ["userA", "userB"]');
+    // Bot token + HMAC secret never written to TOML
+    expect(contents).not.toContain("token-abc");
+    expect(contents).not.toContain("hmac-secret");
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.mattermost.enabled).toMatchObject({
+      value: true,
+      source: "config",
+    });
+    expect(snapshot.messaging.mattermost.streamingResponses).toMatchObject({
+      value: true,
+      source: "config",
+    });
+    expect(snapshot.messaging.mattermost.serverUrl.value).toBe(
+      "https://chat.example.com",
+    );
+    expect(snapshot.messaging.mattermost.callbackBaseUrl.value).toBe(
+      "https://tunnel.example.com/mm",
+    );
+    expect(snapshot.messaging.mattermost.slashCommandPrefix.value).toBe(
+      "agent_",
+    );
+    expect(snapshot.messaging.mattermost.registerSlashCommands.value).toBe(
+      true,
+    );
+    expect(snapshot.messaging.mattermost.authorizedUserIds.value).toEqual([
+      "userA",
+      "userB",
+    ]);
+    expect(snapshot.messaging.mattermost.botToken).toMatchObject({
+      configured: true,
+      source: "keychain",
+      writable: true,
+    });
+    expect(snapshot.messaging.mattermost.hmacSecret).toMatchObject({
+      configured: true,
+      source: "keychain",
+      writable: true,
+    });
+
+    expect(service.resolveMattermostBotTokenSync()).toBe("token-abc");
+    expect(service.resolveMattermostHmacSecretSync()).toBe("hmac-secret");
+    expect(service.resolveMattermostServerUrlSync()).toBe(
+      "https://chat.example.com",
+    );
+  });
+
+  it("reports unset Mattermost defaults and uses pwragent_ as the slash prefix default", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.mattermost.enabled).toMatchObject({
+      value: false,
+      source: "default",
+    });
+    expect(snapshot.messaging.mattermost.slashCommandPrefix).toMatchObject({
+      value: "pwragent_",
+      source: "default",
+    });
+    expect(snapshot.messaging.mattermost.registerSlashCommands).toMatchObject({
+      value: false,
+      source: "default",
+    });
+    expect(snapshot.messaging.mattermost.botToken.configured).toBe(false);
+    expect(snapshot.messaging.mattermost.hmacSecret.configured).toBe(false);
+  });
+
+  it("env Mattermost overrides flag overriddenByEnv on the snapshot", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {
+        PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN: "env-token",
+        PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL: "https://env.example.com",
+        PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS: "true",
+      },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.mattermost.botToken).toMatchObject({
+      configured: true,
+      source: "env",
+      writable: false,
+      overriddenByEnv: true,
+    });
+    expect(snapshot.messaging.mattermost.serverUrl).toMatchObject({
+      value: "https://env.example.com",
+      source: "env",
+    });
+    expect(snapshot.messaging.mattermost.registerSlashCommands).toMatchObject({
+      value: true,
+      source: "env",
+    });
+    expect(service.resolveMattermostBotTokenSync()).toBe("env-token");
+    expect(service.resolveMattermostServerUrlSync()).toBe(
+      "https://env.example.com",
+    );
+  });
+
   it("reports unavailable secret storage and blocks secret writes", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

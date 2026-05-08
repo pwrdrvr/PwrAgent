@@ -17,6 +17,7 @@ describe("messaging docs links", () => {
     expect(new Set(links)).toEqual(
       new Set([
         "docs/messaging-architecture.md",
+        "docs/messaging-adding-a-provider.md",
         "docs/messaging-platform-integration.md",
         "docs/messaging-adapter-contract.md",
       ]),

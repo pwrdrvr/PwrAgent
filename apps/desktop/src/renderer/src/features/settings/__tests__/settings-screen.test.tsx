@@ -53,6 +53,17 @@ function createSnapshot(
         authorizedUserIds: { value: [], source: "default" },
         authorizedGuilds: { value: [], source: "default" },
       },
+      mattermost: {
+        enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
+        botToken: { configured: false, source: "unset", writable: true },
+        hmacSecret: { configured: false, source: "unset", writable: true },
+        serverUrl: { value: "", source: "default" },
+        callbackBaseUrl: { value: "", source: "default" },
+        slashCommandPrefix: { value: "pwragent_", source: "default" },
+        registerSlashCommands: { value: false, source: "default" },
+        authorizedUserIds: { value: [], source: "default" },
+      },
       attachments: {
         imageProfile: { value: "medium", source: "default" },
         maxAttachmentBytes: { value: 10485760, source: "default" },
@@ -294,6 +305,64 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
+  });
+
+  it("renders the Mattermost section and saves edits via writeConfig", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    const sections = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Mattermost" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Server URL")).toBeInTheDocument();
+    expect(screen.getByText("Callback Base URL")).toBeInTheDocument();
+    expect(screen.getByText("Register slash commands")).toBeInTheDocument();
+    // The slash command prefix field should be disabled while
+    // registerSlashCommands is off.
+    const prefixInput = screen.getByLabelText("Slash command prefix");
+    expect(prefixInput).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Server URL"), {
+      target: { value: "https://chat.example.com" },
+    });
+    fireEvent.blur(screen.getByLabelText("Server URL"));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          mattermost: {
+            authorizedUserIds: [],
+            callbackBaseUrl: "",
+            enabled: false,
+            registerSlashCommands: false,
+            serverUrl: "https://chat.example.com",
+            slashCommandPrefix: "pwragent_",
+            streamingResponses: false,
+          },
+        },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Register slash commands" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          mattermost: {
+            authorizedUserIds: [],
+            callbackBaseUrl: "",
+            enabled: false,
+            registerSlashCommands: true,
+            serverUrl: "",
+            slashCommandPrefix: "pwragent_",
+            streamingResponses: false,
+          },
+        },
+      });
+    });
   });
 
   it("returns to the previous app surface", () => {

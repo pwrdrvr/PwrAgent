@@ -271,6 +271,21 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onSaveMattermost={async (mattermost) => {
+          await props.settings.writeConfig({
+            messaging: {
+              mattermost: {
+                authorizedUserIds: mattermost.authorizedUserIds.value,
+                callbackBaseUrl: mattermost.callbackBaseUrl.value,
+                enabled: mattermost.enabled.value,
+                registerSlashCommands: mattermost.registerSlashCommands.value,
+                serverUrl: mattermost.serverUrl.value,
+                slashCommandPrefix: mattermost.slashCommandPrefix.value,
+                streamingResponses: mattermost.streamingResponses.value,
+              },
+            },
+          });
+        }}
       />
     );
   }

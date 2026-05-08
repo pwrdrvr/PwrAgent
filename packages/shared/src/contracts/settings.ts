@@ -40,7 +40,9 @@ export type DesktopSettingsValue<T> = {
 export type DesktopSettingsSecretName =
   | "telegramBotToken"
   | "discordBotToken"
-  | "grokApiKey";
+  | "grokApiKey"
+  | "mattermostBotToken"
+  | "mattermostHmacSecret";
 
 export type DesktopSettingsSecretState = {
   configured: boolean;
@@ -159,6 +161,17 @@ export type DesktopSettingsSnapshot = {
       authorizedUserIds: DesktopSettingsValue<string[]>;
       authorizedGuilds: DesktopSettingsValue<string[]>;
     };
+    mattermost: {
+      enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
+      botToken: DesktopSettingsSecretState;
+      hmacSecret: DesktopSettingsSecretState;
+      serverUrl: DesktopSettingsValue<string>;
+      callbackBaseUrl: DesktopSettingsValue<string>;
+      slashCommandPrefix: DesktopSettingsValue<string>;
+      registerSlashCommands: DesktopSettingsValue<boolean>;
+      authorizedUserIds: DesktopSettingsValue<string[]>;
+    };
   };
   models: {
     codex: {
@@ -205,6 +218,15 @@ export type DesktopSettingsConfigPatch = {
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
+    };
+    mattermost?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      serverUrl?: string;
+      callbackBaseUrl?: string;
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: string[];
     };
   };
   models?: {
@@ -285,12 +307,14 @@ export function isDesktopWorktreeStorageLocation(
  * - `discord`   → HTTP GET https://discord.com/api/v10/users/@me
  * - `grok`      → HTTP GET https://api.x.ai/v1/models
  * - `codex`     → spawn `<resolved-path> --version`
+ * - `mattermost` → GET <serverUrl>/api/v4/users/me with bot token
  */
 export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "telegram",
   "discord",
   "grok",
   "codex",
+  "mattermost",
 ] as const;
 
 export type SettingsCredentialTestKind =

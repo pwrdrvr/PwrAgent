@@ -46,6 +46,15 @@ export type DesktopSettingsConfig = {
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
     };
+    mattermost?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      serverUrl?: string;
+      callbackBaseUrl?: string;
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: string[];
+    };
   };
   models?: {
     codex?: {
@@ -137,6 +146,10 @@ export function mergeDesktopSettingsConfig(
       discord: {
         ...current.messaging?.discord,
         ...patch.messaging?.discord,
+      },
+      mattermost: {
+        ...current.messaging?.mattermost,
+        ...patch.messaging?.mattermost,
       },
     },
     models: {
@@ -312,6 +325,39 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
+  const mattermost = config.messaging?.mattermost;
+  if (mattermost && hasDefinedValue(mattermost)) {
+    sections.push(
+      [
+        "[messaging.mattermost]",
+        formatOptionalTomlEntry("enabled", mattermost.enabled),
+        formatOptionalTomlEntry(
+          "streaming_responses",
+          mattermost.streamingResponses,
+        ),
+        formatOptionalTomlEntry("server_url", mattermost.serverUrl),
+        formatOptionalTomlEntry(
+          "callback_base_url",
+          mattermost.callbackBaseUrl,
+        ),
+        formatOptionalTomlEntry(
+          "slash_command_prefix",
+          mattermost.slashCommandPrefix,
+        ),
+        formatOptionalTomlEntry(
+          "register_slash_commands",
+          mattermost.registerSlashCommands,
+        ),
+        formatOptionalTomlEntry(
+          "authorized_user_ids",
+          mattermost.authorizedUserIds,
+        ),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
   const codex = config.models?.codex;
   if (codex?.path !== undefined) {
     sections.push(
@@ -360,6 +406,7 @@ function normalizeDesktopConfig(
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
   const discord = tables["messaging.discord"];
+  const mattermost = tables["messaging.mattermost"];
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -394,6 +441,15 @@ function normalizeDesktopConfig(
         authorizedUserIds: readStringArray(discord?.authorized_user_ids),
         authorizedGuilds: readStringArray(discord?.authorized_guilds),
       },
+      mattermost: {
+        enabled: readBoolean(mattermost?.enabled),
+        streamingResponses: readBoolean(mattermost?.streaming_responses),
+        serverUrl: readString(mattermost?.server_url),
+        callbackBaseUrl: readString(mattermost?.callback_base_url),
+        slashCommandPrefix: readString(mattermost?.slash_command_prefix),
+        registerSlashCommands: readBoolean(mattermost?.register_slash_commands),
+        authorizedUserIds: readStringArray(mattermost?.authorized_user_ids),
+      },
     },
     models: {
       codex: {
@@ -424,6 +480,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
+  const mattermost = config.messaging?.mattermost;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
@@ -432,6 +489,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
+    || (mattermost && hasDefinedValue(mattermost))
   ) {
     pruned.messaging = {};
     if (inputDebounceMs !== undefined) {
@@ -448,6 +506,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (discord && hasDefinedValue(discord)) {
       pruned.messaging.discord = discord;
+    }
+    if (mattermost && hasDefinedValue(mattermost)) {
+      pruned.messaging.mattermost = mattermost;
     }
   }
 

@@ -32,6 +32,15 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  MATTERMOST_ENABLED_ENV,
+  MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
+  MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -99,6 +108,16 @@ export class DesktopSettingsService {
     const discordBotToken = await this.readSecretState(
       "discordBotToken",
       DISCORD_BOT_TOKEN_ENV,
+      secretStorage.available,
+    );
+    const mattermostBotToken = await this.readSecretState(
+      "mattermostBotToken",
+      MATTERMOST_BOT_TOKEN_ENV,
+      secretStorage.available,
+    );
+    const mattermostHmacSecret = await this.readSecretState(
+      "mattermostHmacSecret",
+      MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
       secretStorage.available,
     );
     const grokApiKey = await this.readSecretState(
@@ -219,6 +238,42 @@ export class DesktopSettingsService {
             DISCORD_AUTHORIZED_GUILDS_ENV,
           ),
         },
+        mattermost: {
+          enabled: this.resolveBoolean(
+            config.messaging?.mattermost?.enabled,
+            false,
+            MATTERMOST_ENABLED_ENV,
+          ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.mattermost?.streamingResponses,
+            false,
+            MATTERMOST_STREAMING_RESPONSES_ENV,
+          ),
+          botToken: mattermostBotToken,
+          hmacSecret: mattermostHmacSecret,
+          serverUrl: this.resolveString(
+            config.messaging?.mattermost?.serverUrl,
+            MATTERMOST_SERVER_URL_ENV,
+          ),
+          callbackBaseUrl: this.resolveString(
+            config.messaging?.mattermost?.callbackBaseUrl,
+            MATTERMOST_CALLBACK_BASE_URL_ENV,
+          ),
+          slashCommandPrefix: this.resolveStringWithDefault(
+            config.messaging?.mattermost?.slashCommandPrefix,
+            "pwragent_",
+            MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
+          ),
+          registerSlashCommands: this.resolveBoolean(
+            config.messaging?.mattermost?.registerSlashCommands,
+            false,
+            MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+          ),
+          authorizedUserIds: this.resolveList(
+            config.messaging?.mattermost?.authorizedUserIds,
+            MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+          ),
+        },
       },
       models: {
         codex: {
@@ -284,6 +339,28 @@ export class DesktopSettingsService {
 
   resolveDiscordBotTokenSync(): string | undefined {
     return this.resolveSecretSync("discordBotToken", DISCORD_BOT_TOKEN_ENV);
+  }
+
+  resolveMattermostBotTokenSync(): string | undefined {
+    return this.resolveSecretSync(
+      "mattermostBotToken",
+      MATTERMOST_BOT_TOKEN_ENV,
+    );
+  }
+
+  resolveMattermostHmacSecretSync(): string | undefined {
+    return this.resolveSecretSync(
+      "mattermostHmacSecret",
+      MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+    );
+  }
+
+  resolveMattermostServerUrlSync(): string | undefined {
+    return (
+      readEnvString(this.env, MATTERMOST_SERVER_URL_ENV)
+      ?? this.readConfig().config.messaging?.mattermost?.serverUrl
+      ?? undefined
+    );
   }
 
   resolveGrokApiKeySync(): string | undefined {
@@ -447,6 +524,26 @@ export class DesktopSettingsService {
 
     return {
       value: configValue ?? "",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveStringWithDefault(
+    configValue: string | undefined,
+    defaultValue: string,
+    envKey: string,
+  ): DesktopSettingsValue<string> {
+    const envValue = readEnvString(this.env, envKey);
+    if (envValue !== undefined) {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
     };
   }

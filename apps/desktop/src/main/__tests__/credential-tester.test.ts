@@ -20,6 +20,8 @@ type TesterOptions = {
   fetch?: typeof fetch;
   resolveTelegramBotToken?: () => string | undefined;
   resolveDiscordBotToken?: () => string | undefined;
+  resolveMattermostBotToken?: () => string | undefined;
+  resolveMattermostServerUrl?: () => string | undefined;
   resolveGrokApiKey?: () => Promise<string | undefined>;
   resolveCodexCommand?: () => Promise<string | undefined>;
   runCodexVersion?: (
@@ -49,6 +51,11 @@ function buildTester(options: TesterOptions = {}) {
   const tester = new CredentialTester({
     resolveTelegramBotToken: options.resolveTelegramBotToken ?? (() => "telegram-token"),
     resolveDiscordBotToken: options.resolveDiscordBotToken ?? (() => "discord-token"),
+    resolveMattermostBotToken:
+      options.resolveMattermostBotToken ?? (() => "mattermost-token"),
+    resolveMattermostServerUrl:
+      options.resolveMattermostServerUrl
+      ?? (() => "https://mm.example.com"),
     resolveGrokApiKey: options.resolveGrokApiKey ?? (async () => "grok-key"),
     resolveCodexCommand: options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
     validateMessagingCredentials,
@@ -149,6 +156,60 @@ describe("CredentialTester", () => {
         validateMessagingCredentials,
       });
       const result = await tester.test("discord");
+      expect(result.status).toBe("unset");
+      expect(validateMessagingCredentials).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("mattermost", () => {
+    it("dispatches the bot token + server URL through the runtime", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 33,
+        testedAt: Date.now(),
+        account: "pwragent",
+        detail: "mm.example.com",
+      }));
+      const { tester } = buildTester({ validateMessagingCredentials });
+      const result = await tester.test("mattermost");
+      expect(validateMessagingCredentials).toHaveBeenCalledWith({
+        channel: "mattermost",
+        credential: {
+          botToken: "mattermost-token",
+          serverUrl: "https://mm.example.com",
+        },
+      });
+      expect(result.status).toBe("ok");
+      expect(result.account).toBe("pwragent");
+      expect(result.detail).toBe("mm.example.com");
+    });
+
+    it("returns unset when bot token is missing — no provider load", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 1,
+        testedAt: Date.now(),
+      }));
+      const { tester } = buildTester({
+        resolveMattermostBotToken: () => undefined,
+        validateMessagingCredentials,
+      });
+      const result = await tester.test("mattermost");
+      expect(result.status).toBe("unset");
+      expect(validateMessagingCredentials).not.toHaveBeenCalled();
+    });
+
+    it("returns unset when server URL is missing — no provider load", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 1,
+        testedAt: Date.now(),
+      }));
+      const { tester } = buildTester({
+        resolveMattermostServerUrl: () => undefined,
+        validateMessagingCredentials,
+      });
+      const result = await tester.test("mattermost");
       expect(result.status).toBe("unset");
       expect(validateMessagingCredentials).not.toHaveBeenCalled();
     });

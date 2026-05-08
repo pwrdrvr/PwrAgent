@@ -4,7 +4,7 @@ import type {
   DesktopSettingsSnapshot,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -40,9 +40,13 @@ export function MessagingSettings(props: {
   onSaveTelegram: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["telegram"]>,
   ) => Promise<void>;
+  onSaveMattermost: (
+    patch: NonNullable<DesktopSettingsSnapshot["messaging"]["mattermost"]>,
+  ) => Promise<void>;
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
+  const mattermost = props.snapshot.messaging.mattermost;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const runtimeMessaging = props.snapshot.runtime.messaging;
@@ -299,6 +303,183 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
+        title="Mattermost"
+        chip={chipLabelForBotToken(mattermost.botToken)}
+        chipKind={chipKindForBotToken(mattermost.botToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={mattermost.enabled.value}
+            disabled={props.saving}
+            label="Enabled"
+            sub="Turn the Mattermost adapter on or off independently of the global messaging switch."
+            source={sourceBadge(mattermost.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                enabled: { ...mattermost.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !mattermost.botToken.writable}
+            label="Bot Token"
+            sub="Stored in the system keychain. Generate from System Console → Integrations → Bot Accounts."
+            secret="mattermostBotToken"
+            state={mattermost.botToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Server URL"
+            sub="PwrAgent calls this URL. For small installations it can live on the same machine, or in Docker on the same machine."
+            help={
+              <>
+                Examples:
+                <br />
+                <code>http://127.0.0.1:8065/</code> (local, Docker on same host)
+                <br />
+                <code>https://chat.example.com</code> (Cloudflare Tunnel / Tailscale Funnel)
+              </>
+            }
+            source={optionalStringSourceBadge(mattermost.serverUrl)}
+            value={mattermost.serverUrl.value}
+            onSave={(serverUrl) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                serverUrl: { ...mattermost.serverUrl, value: serverUrl },
+              });
+            }}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates the bot token via /api/v4/users/me on your Mattermost server."
+            control={
+              <SettingsTestBlock
+                kind="mattermost"
+                desktopApi={props.desktopApi}
+                icon={<MattermostIcon size={14} />}
+                defaultName="Your bot"
+                defaultSub="api/v4/users/me"
+              />
+            }
+          />
+          <ToggleField
+            checked={mattermost.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses"
+            sub="Send partial assistant tokens as Mattermost message edits."
+            source={sourceBadge(mattermost.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                streamingResponses: {
+                  ...mattermost.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Callback Base URL"
+            sub="Mattermost calls PwrAgent at this URL when a user clicks a button. It must be reachable from the Mattermost server: a public URL (Cloudflare Tunnel / Tailscale Funnel) for hosted Mattermost, a name on the local network, or an address Mattermost-in-Docker can use to reach the PwrAgent process on the host. The local listener binds to the URL's port if present, otherwise to 47821."
+            help={
+              <>
+                Examples:
+                <br />
+                <code>https://mm-callback.example.com/</code> (Cloudflare Tunnel / Tailscale Funnel)
+                <br />
+                <code>http://localhost:47821/</code> (local)
+                <br />
+                <code>http://host.docker.internal:47821/</code> (Mattermost in Docker on the same host)
+              </>
+            }
+            source={optionalStringSourceBadge(mattermost.callbackBaseUrl)}
+            value={mattermost.callbackBaseUrl.value}
+            onSave={(callbackBaseUrl) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                callbackBaseUrl: {
+                  ...mattermost.callbackBaseUrl,
+                  value: callbackBaseUrl,
+                },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !mattermost.hmacSecret.writable}
+            label="Callback HMAC Secret"
+            sub="Optional. Stored in the system keychain. Leave unset to regenerate per restart (acts as automatic TTL on outstanding callback URLs)."
+            help={
+              <>
+                Click <strong>Generate</strong> to fill the field with a fresh
+                256-bit secret (then click Replace to save), <em>or</em> run
+                this in a terminal if you'd rather generate it yourself:
+                <br />
+                <code>openssl rand -hex 32</code>
+              </>
+            }
+            secret="mattermostHmacSecret"
+            state={mattermost.hmacSecret}
+            onGenerate={generateHmacSecretHex}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={mattermost.registerSlashCommands.value}
+            disabled={props.saving}
+            label="Register slash commands"
+            sub="Off by default. Mattermost 10.x slash-command bodies omit thread context, so responses land in the channel — use @bot help mentions instead. Mattermost 11.0+ supports threaded slash replies."
+            source={sourceBadge(mattermost.registerSlashCommands)}
+            onChange={(registerSlashCommands) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                registerSlashCommands: {
+                  ...mattermost.registerSlashCommands,
+                  value: registerSlashCommands,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving || !mattermost.registerSlashCommands.value}
+            label="Slash command prefix"
+            sub="Prefix prepended to every registered command (default pwragent_ → /pwragent_help). Set blank to register bare triggers and accept collision risk with built-in Mattermost commands."
+            source={optionalStringSourceBadge(mattermost.slashCommandPrefix)}
+            value={mattermost.slashCommandPrefix.value}
+            onSave={(slashCommandPrefix) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                slashCommandPrefix: {
+                  ...mattermost.slashCommandPrefix,
+                  value: slashCommandPrefix,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized User IDs"
+            sub="Comma-separated Mattermost user IDs that can DM the bot."
+            source={optionalListSourceBadge(mattermost.authorizedUserIds)}
+            value={mattermost.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                authorizedUserIds: {
+                  ...mattermost.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
     </section>
   );
 }
@@ -400,6 +581,7 @@ function TextField(props: {
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
+  help?: ReactNode;
   source: string;
   value: string;
   onSave: (value: string) => void;
@@ -410,6 +592,7 @@ function TextField(props: {
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={props.source}
       control={
         <input
@@ -515,8 +698,16 @@ function SecretField(props: {
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
+  help?: ReactNode;
   secret: DesktopSettingsSecretName;
   state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
+  /**
+   * Optional generator. When provided, a "Generate" button appears
+   * that fills the input with the produced value (the user still has
+   * to click Replace to commit). Used by the Mattermost HMAC field
+   * so users don't have to leave the app to run openssl.
+   */
+  onGenerate?: () => string;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
@@ -531,6 +722,7 @@ function SecretField(props: {
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={`${status} · ${source}`}
       error={props.state.unavailableReason}
       control={
@@ -544,6 +736,18 @@ function SecretField(props: {
             value={value}
             onChange={(event) => setValue(event.currentTarget.value)}
           />
+          {props.onGenerate ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={() => {
+                setValue(props.onGenerate!());
+              }}
+            >
+              Generate
+            </button>
+          ) : null}
           <button
             className="button button--secondary"
             disabled={props.disabled || !value.trim()}
@@ -573,4 +777,16 @@ function SecretField(props: {
       }
     />
   );
+}
+
+/**
+ * Generate a 32-byte (256-bit) hex secret using the renderer's Web
+ * Crypto API. Equivalent strength to `openssl rand -hex 32`. Browser
+ * `crypto.getRandomValues` is a CSPRNG in Electron just like in
+ * Chrome, so we don't need to bounce through the main process.
+ */
+function generateHmacSecretHex(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

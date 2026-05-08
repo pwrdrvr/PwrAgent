@@ -1,0 +1,19 @@
+{
+  "name": "@pwragent/messaging-provider-mattermost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwragent/messaging-interface": "workspace:*",
+    "@mattermost/client": "^11.4.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

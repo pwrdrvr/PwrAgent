@@ -125,7 +125,11 @@ export type BindingRevokeAllForThreadResult = {
  */
 export type CredentialValidationRequest =
   | { channel: "telegram"; credential: { botToken: string } }
-  | { channel: "discord"; credential: { botToken: string } };
+  | { channel: "discord"; credential: { botToken: string } }
+  | {
+      channel: "mattermost";
+      credential: { botToken: string; serverUrl: string };
+    };
 
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
@@ -515,6 +519,12 @@ export class DesktopMessagingRuntime {
           "@pwragent/messaging-provider-discord"
         );
         return await discordProvider.validateCredentials(request.credential);
+      }
+      case "mattermost": {
+        const mattermostProvider = await import(
+          "@pwragent/messaging-provider-mattermost"
+        );
+        return await mattermostProvider.validateCredentials(request.credential);
       }
       default: {
         const exhaustive: never = request;
