@@ -17,6 +17,8 @@ const allowedInterpolatedSql = new Set([
   "apps/desktop/src/main/state/migration.ts:534",
 ]);
 
+runSelfTests();
+
 const findings = [];
 
 for (const scanRoot of scanRoots) {
@@ -69,95 +71,166 @@ function inspectFile(filePath) {
 
 function findTemplateLiterals(sourceText) {
   const templates = [];
-  let line = 1;
-  let index = 0;
-  let state = "code";
-  let templateStart = -1;
-  let templateLine = 1;
+  scanCode(0, sourceText.length);
 
-  while (index < sourceText.length) {
-    const char = sourceText[index];
-    const next = sourceText[index + 1];
+  return templates;
 
-    if (char === "\n") {
-      line += 1;
-    }
+  function scanCode(start, end) {
+    let index = start;
+    while (index < end) {
+      const char = sourceText[index];
+      const next = sourceText[index + 1];
 
-    if (state === "code") {
       if (char === "/" && next === "/") {
-        state = "line-comment";
-        index += 2;
+        index = skipLineComment(index + 2, end);
         continue;
       }
       if (char === "/" && next === "*") {
-        state = "block-comment";
-        index += 2;
+        index = skipBlockComment(index + 2, end);
         continue;
       }
-      if (char === "'") {
-        state = "single-string";
-      } else if (char === '"') {
-        state = "double-string";
-      } else if (char === "`") {
-        state = "template";
-        templateStart = index;
-        templateLine = line;
+      if (char === "'" || char === '"') {
+        index = skipQuotedString(index, end, char);
+        continue;
       }
-      index += 1;
-      continue;
-    }
-
-    if (state === "line-comment") {
-      if (char === "\n") {
-        state = "code";
-      }
-      index += 1;
-      continue;
-    }
-
-    if (state === "block-comment") {
-      if (char === "*" && next === "/") {
-        state = "code";
-        index += 2;
+      if (char === "`") {
+        index = readTemplate(index, end);
         continue;
       }
       index += 1;
-      continue;
+    }
+  }
+
+  function readTemplate(start, end) {
+    let index = start + 1;
+    while (index < end) {
+      const char = sourceText[index];
+      const next = sourceText[index + 1];
+
+      if (char === "\\") {
+        index += 2;
+        continue;
+      }
+      if (char === "$" && next === "{") {
+        index = readTemplateExpression(index + 2, end);
+        continue;
+      }
+      if (char === "`") {
+        templates.push({
+          line: lineNumberAt(start),
+          value: sourceText.slice(start, index + 1),
+        });
+        return index + 1;
+      }
+      index += 1;
+    }
+    return end;
+  }
+
+  function readTemplateExpression(start, end) {
+    let index = start;
+    let braceDepth = 1;
+
+    while (index < end) {
+      const char = sourceText[index];
+      const next = sourceText[index + 1];
+
+      if (char === "/" && next === "/") {
+        index = skipLineComment(index + 2, end);
+        continue;
+      }
+      if (char === "/" && next === "*") {
+        index = skipBlockComment(index + 2, end);
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        index = skipQuotedString(index, end, char);
+        continue;
+      }
+      if (char === "`") {
+        index = readTemplate(index, end);
+        continue;
+      }
+      if (char === "{") {
+        braceDepth += 1;
+      } else if (char === "}") {
+        braceDepth -= 1;
+        if (braceDepth === 0) {
+          return index + 1;
+        }
+      }
+      index += 1;
     }
 
-    if (state === "single-string" || state === "double-string") {
-      const quote = state === "single-string" ? "'" : '"';
+    return end;
+  }
+
+  function skipLineComment(start, end) {
+    const newline = sourceText.indexOf("\n", start);
+    return newline === -1 || newline >= end ? end : newline + 1;
+  }
+
+  function skipBlockComment(start, end) {
+    const close = sourceText.indexOf("*/", start);
+    return close === -1 || close >= end ? end : close + 2;
+  }
+
+  function skipQuotedString(start, end, quote) {
+    let index = start + 1;
+    while (index < end) {
+      const char = sourceText[index];
       if (char === "\\") {
         index += 2;
         continue;
       }
       if (char === quote) {
-        state = "code";
+        return index + 1;
       }
       index += 1;
-      continue;
     }
-
-    if (state === "template") {
-      if (char === "\\") {
-        index += 2;
-        continue;
-      }
-      if (char === "`") {
-        templates.push({
-          line: templateLine,
-          value: sourceText.slice(templateStart, index + 1),
-        });
-        state = "code";
-      }
-      index += 1;
-      continue;
-    }
+    return end;
   }
 
-  return templates;
+  function lineNumberAt(position) {
+    let line = 1;
+    for (let index = 0; index < position; index += 1) {
+      if (sourceText[index] === "\n") {
+        line += 1;
+      }
+    }
+    return line;
+  }
 }
 
 function compact(value) {
   return value.replace(/\s+/g, " ").slice(0, 160);
+}
+
+function runSelfTests() {
+  const unsafeNested =
+    "db.prepare(`SELECT * FROM bindings ${cond ? `WHERE binding_id = '${id}'` : \"\"}`);";
+  const unsafeMatches = findTemplateLiterals(unsafeNested).filter(
+    (template) =>
+      template.value.includes("${") && sqlKeywordPattern.test(template.value),
+  );
+  if (
+    !unsafeMatches.some((template) =>
+      template.value.includes("WHERE binding_id"),
+    )
+  ) {
+    throw new Error(
+      "sql template lint self-test failed: nested SQL template interpolation was not detected",
+    );
+  }
+
+  const nonSqlTemplate = "const message = `Inbound from ${name}`;";
+  const falseMatches = findTemplateLiterals(nonSqlTemplate).filter(
+    (template) =>
+      template.value.includes("${") && sqlKeywordPattern.test(template.value),
+  );
+  if (falseMatches.length > 0) {
+    throw new Error(
+      "sql template lint self-test failed: non-SQL interpolation was flagged",
+    );
+  }
 }
