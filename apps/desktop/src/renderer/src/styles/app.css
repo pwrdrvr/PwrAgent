@@ -5825,17 +5825,24 @@ textarea,
   line-height: 1;
 }
 
+/* The popover itself is a fixed-size flex column. The search row +
+   section header are pinned to the top, the "Add directory…" row + any
+   inline error are pinned to the bottom, and only the directories list
+   in the middle scrolls. Critically, the popover height does NOT shrink
+   when the user filters down to fewer matches — the list region just
+   leaves blank space. Resizing the popover on every keystroke shifts
+   the action row vertically and is hard to use. */
 .project-picker__pop {
   position: absolute;
   z-index: 30;
   bottom: calc(100% + 8px);
   left: 0;
-  min-width: 360px;
-  max-width: min(440px, calc(100vw - 32px));
-  max-height: min(420px, calc(100dvh - 128px));
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  height: 420px;
+  max-height: calc(100dvh - 128px);
   padding: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -5846,6 +5853,7 @@ textarea,
 }
 
 .project-picker__search {
+  flex: 0 0 auto;
   padding: 4px 6px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -5866,6 +5874,7 @@ textarea,
 }
 
 .project-picker__section {
+  flex: 0 0 auto;
   padding: 6px 10px 4px;
   font-size: 11px;
   color: var(--text-muted);
@@ -5874,6 +5883,13 @@ textarea,
 }
 
 .project-picker__list {
+  flex: 1 1 0;
+  /* `min-height: 0` is required for a flex child whose content overflows
+     to actually scroll — without it the list grows past its parent and
+     the popover scroll is taken over by the wrong region. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -5933,6 +5949,10 @@ textarea,
 }
 
 .project-picker__row--action {
+  /* Pinned to the bottom of the popover — the directories list above
+     is the only flex-grow child, so this row sits at the bottom edge
+     regardless of how short the (filtered) list becomes. */
+  flex: 0 0 auto;
   color: var(--accent-bright);
 }
 
@@ -5944,6 +5964,7 @@ textarea,
 }
 
 .project-picker__separator {
+  flex: 0 0 auto;
   height: 1px;
   margin: 4px 2px;
   background: var(--border-subtle);
@@ -5956,6 +5977,7 @@ textarea,
 }
 
 .project-picker__error {
+  flex: 0 0 auto;
   margin: 4px 8px 6px;
   padding: 6px 8px;
   border-radius: 6px;
