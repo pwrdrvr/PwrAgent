@@ -42,6 +42,38 @@ export type DesktopAuthorizedContact = {
   displayName: string;
 };
 
+export type DesktopMessagingContactLookupPlatform =
+  | "telegram"
+  | "discord"
+  | "mattermost";
+
+export type DesktopMessagingContactLookupKind =
+  | "user"
+  | "supergroup"
+  | "guild";
+
+export type DesktopMessagingContactLookupRequest = {
+  platform: DesktopMessagingContactLookupPlatform;
+  kind: DesktopMessagingContactLookupKind;
+  id: string;
+};
+
+export type DesktopMessagingContactLookupStatus =
+  | "ok"
+  | "failed"
+  | "not_found"
+  | "unset"
+  | "unsupported";
+
+export type DesktopMessagingContactLookupResponse = {
+  status: DesktopMessagingContactLookupStatus;
+  id: string;
+  displayName?: string;
+  handle?: string;
+  detail?: string;
+  errorMessage?: string;
+};
+
 export type DesktopSettingsSecretName =
   | "telegramBotToken"
   | "discordBotToken"

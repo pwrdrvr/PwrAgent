@@ -74,6 +74,8 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
+  DesktopMessagingContactLookupRequest,
+  DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
@@ -154,6 +156,7 @@ import {
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
+  SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
@@ -238,6 +241,13 @@ const desktopApi = Object.freeze({
     request: { kind: SettingsCredentialTestKind },
   ): Promise<SettingsCredentialTestResult | undefined> =>
     await ipcRenderer.invoke(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL, request),
+  resolveMessagingContact: async (
+    request: DesktopMessagingContactLookupRequest,
+  ): Promise<DesktopMessagingContactLookupResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
+      request,
+    ),
   openApplication: async (
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>

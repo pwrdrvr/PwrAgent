@@ -5,6 +5,9 @@ import {
   validateTelegramPositiveId,
   validateTelegramSupergroupId,
   type DesktopAuthorizedContact,
+  type DesktopMessagingContactLookupKind,
+  type DesktopMessagingContactLookupPlatform,
+  type DesktopMessagingContactLookupResponse,
   type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
@@ -168,6 +171,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "telegram",
+              "user",
+            )}
             label="Authorized User IDs"
             sub="Telegram user IDs that can DM the bot."
             help="Numeric peer ID, e.g. 8460800771. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
@@ -186,6 +194,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "telegram",
+              "supergroup",
+            )}
             label="Authorized SuperGroups"
             sub="Telegram supergroup IDs that may host bound threads."
             help="Negative ID starting with -100, e.g. -1003841603622. Rejected group messages show the supergroup ID in Messaging Activity."
@@ -282,6 +295,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "discord",
+              "user",
+            )}
             label="Authorized User IDs"
             sub="Discord user IDs that can DM the bot."
             help="Snowflake (17-19 digit number), e.g. 1177378744822943744. Rejected Discord messages show the user ID in Messaging Activity."
@@ -300,6 +318,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "discord",
+              "guild",
+            )}
             label="Authorized Guilds"
             sub="Discord guild (server) IDs that may host bound threads."
             help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity."
@@ -480,6 +503,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "mattermost",
+              "user",
+            )}
             label="Authorized User IDs"
             sub="Mattermost user IDs that can DM the bot."
             help="26-character lowercase a-z0-9 ID. Rejected Mattermost messages show the user ID in Messaging Activity."
@@ -692,6 +720,7 @@ function AuthorizedListField(props: {
   disabled?: boolean;
   help?: ReactNode;
   label: string;
+  lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
   sub?: ReactNode;
   source: string;
   validateEntry?: (value: string) => string | undefined;
@@ -701,6 +730,9 @@ function AuthorizedListField(props: {
   const inputId = useId();
   const descriptionId = `${inputId}-validation`;
   const [rows, setRows] = useState<DesktopAuthorizedContact[]>(props.value);
+  const [lookupState, setLookupState] = useState<
+    Record<number, { loading?: boolean; message?: string }>
+  >({});
   const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
     ? normalizedRows
@@ -740,6 +772,10 @@ function AuthorizedListField(props: {
     indexToUpdate: number,
     patch: Partial<DesktopAuthorizedContact>,
   ) => {
+    setLookupState((current) => {
+      const { [indexToUpdate]: _discard, ...rest } = current;
+      return rest;
+    });
     setRows((current) =>
       current.map((row, index) =>
         index === indexToUpdate ? { ...row, ...patch } : row,
@@ -751,6 +787,55 @@ function AuthorizedListField(props: {
     const nextRows = rows.filter((_, index) => index !== indexToRemove);
     setRows(nextRows);
     saveIfValid(nextRows);
+  };
+
+  const lookupRow = async (
+    indexToLookup: number,
+    candidateRows: DesktopAuthorizedContact[],
+  ) => {
+    const lookup = props.lookup;
+    if (!lookup) return;
+    const row = normalizeAuthorizedContactRow(candidateRows[indexToLookup] ?? {
+      id: "",
+      displayName: "",
+    });
+    if (!row.id || props.validateEntry?.(row.id)) return;
+
+    setLookupState((current) => ({
+      ...current,
+      [indexToLookup]: { loading: true },
+    }));
+    let result: DesktopMessagingContactLookupResponse;
+    try {
+      result = await lookup(row.id);
+    } catch (error) {
+      result = {
+        status: "failed",
+        id: row.id,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (result.status === "ok" && result.displayName) {
+      const nextRows = candidateRows.map((current, rowIndex) =>
+        rowIndex === indexToLookup
+          ? { id: row.id, displayName: result.displayName ?? "" }
+          : current,
+      );
+      setRows(nextRows);
+      setLookupState((current) => {
+        const { [indexToLookup]: _discard, ...rest } = current;
+        return rest;
+      });
+      saveIfValid(nextRows);
+      return;
+    }
+
+    setLookupState((current) => ({
+      ...current,
+      [indexToLookup]: {
+        message: lookupFailureMessage(result),
+      },
+    }));
   };
 
   return (
@@ -775,6 +860,13 @@ function AuthorizedListField(props: {
               const invalid = invalidEntries.find(
                 (entry) => entry.index === index,
               );
+              const lookup = lookupState[index];
+              const canLookup =
+                Boolean(props.lookup)
+                && normalized.id.length > 0
+                && !invalid
+                && !props.disabled
+                && !lookup?.loading;
               return (
                 <div
                   key={index}
@@ -796,6 +888,9 @@ function AuthorizedListField(props: {
                       );
                       setRows(nextRows);
                       saveIfValid(nextRows);
+                      if (normalized.displayName.length === 0) {
+                        void lookupRow(index, nextRows);
+                      }
                     }}
                     onChange={(event) =>
                       updateRow(index, { id: event.currentTarget.value })
@@ -822,6 +917,17 @@ function AuthorizedListField(props: {
                     }
                   />
                   <button
+                    aria-label={`Lookup ${props.label} row ${index + 1}`}
+                    className="button button--ghost settings-authorized-list__lookup"
+                    disabled={!canLookup}
+                    type="button"
+                    onClick={() => {
+                      void lookupRow(index, rows);
+                    }}
+                  >
+                    {lookup?.loading ? "Looking..." : "Lookup"}
+                  </button>
+                  <button
                     aria-label={`Remove ${props.label} row ${index + 1}`}
                     className="button button--ghost settings-authorized-list__remove"
                     disabled={props.disabled}
@@ -847,6 +953,22 @@ function AuthorizedListField(props: {
               Add
             </button>
           </div>
+          {Object.entries(lookupState).some(([, state]) => state.message) ? (
+            <div className="settings-list-validation" role="status">
+              {Object.entries(lookupState)
+                .filter(([, state]) => state.message)
+                .map(([index, state]) => (
+                  <div
+                    key={`lookup-${index}`}
+                    className="settings-list-validation__item"
+                  >
+                    <span className="settings-list-validation__message">
+                      {state.message}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          ) : null}
           {hasInvalidEntries ? (
             <div
               id={descriptionId}
@@ -879,6 +1001,40 @@ function AuthorizedListField(props: {
       }
     />
   );
+}
+
+function contactLookup(
+  desktopApi: DesktopApi | undefined,
+  platform: DesktopMessagingContactLookupPlatform,
+  kind: DesktopMessagingContactLookupKind,
+): ((id: string) => Promise<DesktopMessagingContactLookupResponse>) | undefined {
+  const lookup = desktopApi?.resolveMessagingContact;
+  if (!lookup) {
+    return undefined;
+  }
+  return async (id: string) =>
+    await lookup({
+      platform,
+      kind,
+      id,
+    });
+}
+
+function lookupFailureMessage(
+  result: DesktopMessagingContactLookupResponse,
+): string {
+  switch (result.status) {
+    case "unset":
+      return "Configure the platform token before looking up names.";
+    case "not_found":
+      return result.errorMessage ?? "No matching platform identity was found.";
+    case "unsupported":
+      return result.errorMessage ?? "Lookup is not supported for this row.";
+    case "ok":
+      return "No display name was returned for this ID.";
+    case "failed":
+      return result.errorMessage ?? "Lookup failed.";
+  }
 }
 
 function normalizeAuthorizedContactRow(

@@ -8,6 +8,11 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
+const providerMocks = vi.hoisted(() => ({
+  resolveTelegramContact: vi.fn(),
+  resolveDiscordContact: vi.fn(),
+  resolveMattermostContact: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -29,6 +34,18 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
 }));
 
+vi.mock("@pwragent/messaging-provider-telegram", () => ({
+  resolveContact: providerMocks.resolveTelegramContact,
+}));
+
+vi.mock("@pwragent/messaging-provider-discord", () => ({
+  resolveContact: providerMocks.resolveDiscordContact,
+}));
+
+vi.mock("@pwragent/messaging-provider-mattermost", () => ({
+  resolveContact: providerMocks.resolveMattermostContact,
+}));
+
 describe("settings ipc", () => {
   afterEach(() => {
     for (const root of tempRoots.splice(0)) {
@@ -39,6 +56,9 @@ describe("settings ipc", () => {
   beforeEach(() => {
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
+    providerMocks.resolveTelegramContact.mockReset();
+    providerMocks.resolveDiscordContact.mockReset();
+    providerMocks.resolveMattermostContact.mockReset();
   });
 
   it("registers redacted read and write handlers", async () => {
@@ -146,5 +166,47 @@ describe("settings ipc", () => {
     );
 
     expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves messaging contacts through provider packages", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "telegram-token");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore,
+      now: () => 20,
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const {
+      SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
+    } = await import("../../shared/ipc");
+    providerMocks.resolveTelegramContact.mockResolvedValue({
+      status: "ok",
+      id: "8460800771",
+      displayName: "Harold (@huntharo)",
+    });
+
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL)?.(
+        {},
+        {
+          platform: "telegram",
+          kind: "user",
+          id: "8460800771",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "ok",
+      displayName: "Harold (@huntharo)",
+    });
+    expect(providerMocks.resolveTelegramContact).toHaveBeenCalledExactlyOnceWith(
+      { botToken: "telegram-token" },
+      { id: "8460800771", kind: "user" },
+    );
   });
 });
