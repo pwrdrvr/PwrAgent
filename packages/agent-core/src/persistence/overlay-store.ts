@@ -67,6 +67,7 @@ export class OverlayStore {
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
             worktreeSnapshots: current?.worktreeSnapshots ?? [],
+            pinnedRank: current?.pinnedRank,
           };
         }
       }
@@ -422,6 +423,54 @@ export class OverlayStore {
       };
       data.threads[threadKey] = nextState;
       return nextState;
+    });
+  }
+
+  async setThreadPin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pinnedRank?: string | null;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const pinnedRank = params.pinnedRank?.trim();
+      const nextState: ThreadOverlayState = {
+        ...current,
+        pinnedRank: pinnedRank || undefined,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async reorderThreadPins(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, string>> {
+    return await this.withData(async (data) => {
+      const pinnedRanks: Record<string, string> = {};
+      params.threadIds.forEach((threadId, index) => {
+        const threadKey = buildThreadIdentityKey(params.backend, threadId);
+        const current = data.threads[threadKey] ?? {
+          backend: params.backend,
+          threadId,
+          executionMode: "default" as const,
+          extraLinkedDirectories: [],
+        };
+        const pinnedRank = String((index + 1) * 1024);
+        pinnedRanks[threadId] = pinnedRank;
+        data.threads[threadKey] = {
+          ...current,
+          pinnedRank,
+        };
+      });
+      return pinnedRanks;
     });
   }
 

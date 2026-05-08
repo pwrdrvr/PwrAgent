@@ -122,7 +122,6 @@ function DesktopAppShell(props: {
         creatingThread={navigation.creatingThread}
         directories={navigation.directories}
         error={navigation.error}
-        inboxThreads={navigation.inboxThreads}
         archiveThreadError={navigation.archiveThreadError}
         renameThreadError={navigation.renameThreadError}
         runtimeIdentity={runtimeIdentity}
@@ -150,6 +149,8 @@ function DesktopAppShell(props: {
         onArchiveThread={navigation.archiveThread}
         onRenameThread={navigation.renameThread}
         onSetThreadReaction={navigation.setThreadReaction}
+        onSetThreadPin={navigation.setThreadPin}
+        onReorderThreadPins={navigation.reorderThreadPins}
         onPrefetchPullRequests={pullRequests.prefetch}
         onUnbindMessagingBinding={async (_thread, binding) => {
           if (!desktopApi?.unbindMessagingThread) return;

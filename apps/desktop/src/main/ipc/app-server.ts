@@ -30,6 +30,10 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
+  ReorderThreadPinsRequest,
+  ReorderThreadPinsResponse,
+  SetThreadPinRequest,
+  SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   ResetDirectoryLaunchpadRequest,
@@ -62,7 +66,9 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
@@ -568,6 +574,76 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadPin(
+    request: SetThreadPinRequest,
+  ): Promise<SetThreadPinResponse> {
+    const backend = request.backend ?? "codex";
+
+    const overlay = await this.getOverlayStore().setThreadPin({
+      backend,
+      threadId: request.threadId,
+      pinnedRank: request.pinnedRank,
+    });
+
+    logDebug("setThreadPin", {
+      backend,
+      threadId: request.threadId,
+      pinnedRank: overlay.pinnedRank ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: overlay.pinnedRank
+        ? {
+            method: "thread/pin/added",
+            params: {
+              threadId: request.threadId,
+              pinnedRank: overlay.pinnedRank,
+            },
+          }
+        : {
+            method: "thread/pin/removed",
+            params: {
+              threadId: request.threadId,
+            },
+          },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      pinnedRank: overlay.pinnedRank,
+    };
+  }
+
+  async reorderThreadPins(
+    request: ReorderThreadPinsRequest,
+  ): Promise<ReorderThreadPinsResponse> {
+    const backend = request.backend ?? "codex";
+
+    const pinnedRanks = await this.getOverlayStore().reorderThreadPins({
+      backend,
+      threadIds: request.threadIds,
+    });
+
+    logDebug("reorderThreadPins", {
+      backend,
+      pinCount: request.threadIds.length,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/pin/reordered",
+        params: {
+          pinnedRanks,
+        },
+      },
+    });
+
+    return { backend, pinnedRanks };
+  }
+
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -849,6 +925,26 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> => {
       return await appServerService.setThreadReaction(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_PIN_CHANNEL,
+    async (
+      _event,
+      request: SetThreadPinRequest,
+    ): Promise<SetThreadPinResponse> => {
+      return await appServerService.setThreadPin(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
+    async (
+      _event,
+      request: ReorderThreadPinsRequest,
+    ): Promise<ReorderThreadPinsResponse> => {
+      return await appServerService.reorderThreadPins(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);

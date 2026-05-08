@@ -34,8 +34,12 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
+  ReorderThreadPinsRequest,
+  ReorderThreadPinsResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadPinRequest,
+  SetThreadPinResponse,
   GetGhStatusRequest,
   GhStatus,
   ListMessagingActivityRequest,
@@ -218,6 +222,12 @@ export type DesktopApi = {
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  setThreadPin?: (
+    request: SetThreadPinRequest
+  ) => Promise<SetThreadPinResponse>;
+  reorderThreadPins?: (
+    request: ReorderThreadPinsRequest
+  ) => Promise<ReorderThreadPinsResponse>;
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;

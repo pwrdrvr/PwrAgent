@@ -4,6 +4,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type DragEvent,
   type ReactElement,
 } from "react";
 import type {
@@ -38,6 +39,7 @@ const HOVER_PREFETCH_DELAY_MS = 750;
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   compact?: boolean;
+  draggable?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   selectedThreadKey?: string;
@@ -63,6 +65,13 @@ type ThreadRowProps = {
     binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onMovePinnedThread?: (
+    thread: NavigationThreadSummary,
+    direction: "up" | "down",
+  ) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -127,8 +136,12 @@ export function ThreadRow(props: ThreadRowProps) {
 
   return (
     <div
-      className="thread-row-shell"
+      className={`thread-row-shell${props.draggable ? " is-draggable" : ""}`}
+      draggable={props.draggable}
       role="listitem"
+      onDragStart={props.onDragStartThread}
+      onDragOver={props.onDragOverThread}
+      onDrop={props.onDropOnThread}
       onContextMenu={(event) => {
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
@@ -143,6 +156,23 @@ export function ThreadRow(props: ThreadRowProps) {
           selected ? " is-selected" : ""
         }`}
         type="button"
+        onKeyDown={(event) => {
+          if (
+            props.onMovePinnedThread &&
+            props.thread.pinnedRank &&
+            event.metaKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.shiftKey &&
+            (event.key === "ArrowUp" || event.key === "ArrowDown")
+          ) {
+            event.preventDefault();
+            props.onMovePinnedThread(
+              props.thread,
+              event.key === "ArrowUp" ? "up" : "down",
+            );
+          }
+        }}
         onClick={() => props.onSelectThread(props.thread)}
       >
         <span className="thread-row__header">
@@ -170,6 +200,12 @@ export function ThreadRow(props: ThreadRowProps) {
             linkedDirectoryMode={props.linkedDirectoryMode}
             thread={props.thread}
           />
+
+          {props.thread.pinnedRank ? (
+            <span className="thread-row__chip thread-row__chip--pin">
+              Pinned
+            </span>
+          ) : null}
 
           {prs.map((pr) => (
             <PrChip

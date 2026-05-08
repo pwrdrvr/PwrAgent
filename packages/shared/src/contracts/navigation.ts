@@ -25,6 +25,8 @@ export type ThreadInboxState = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /** User-curated position in the pinned section. Lower ranks sort first. */
+  pinnedRank?: string;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   /**
    * Pending permission mode change waiting for the active turn to end.
@@ -247,6 +249,30 @@ export type SetThreadReactionResponse = {
   reactions: string[];
 };
 
+export type SetThreadPinRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Rank within the pinned section. Null/undefined removes the pin. */
+  pinnedRank?: string | null;
+};
+
+export type SetThreadPinResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pinnedRank?: string;
+};
+
+export type ReorderThreadPinsRequest = {
+  backend?: AppServerBackendKind;
+  /** Complete pinned order for this backend, first item at the top. */
+  threadIds: ThreadIdentifier[];
+};
+
+export type ReorderThreadPinsResponse = {
+  backend: AppServerBackendKind;
+  pinnedRanks: Record<ThreadIdentifier, string>;
+};
+
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -325,6 +351,8 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /** User-curated position in the pinned section. Undefined means unpinned. */
+  pinnedRank?: string;
   /**
    * GitHub pull requests detected for this thread, persisted across
    * restarts so chips appear instantly on relaunch and so we can

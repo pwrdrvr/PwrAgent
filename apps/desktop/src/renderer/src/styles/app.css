@@ -1025,6 +1025,35 @@ textarea,
   min-width: 0;
 }
 
+.thread-row-shell.is-draggable {
+  cursor: grab;
+}
+
+.thread-row-shell.is-draggable:active {
+  cursor: grabbing;
+}
+
+.recents-pinned-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.recents-pinned-divider::before,
+.recents-pinned-divider::after {
+  content: "";
+  min-width: 16px;
+  height: 1px;
+  flex: 1;
+  background: var(--border-subtle);
+}
+
 .thread-row {
   position: relative;
   display: flex;
@@ -1405,6 +1434,13 @@ textarea,
   background: var(--accent-soft);
   color: var(--text-primary);
   font-weight: 600;
+}
+
+.thread-row__chip--pin {
+  border: 1px solid var(--accent-border);
+  background: var(--bg-panel-elevated);
+  color: var(--accent-bright);
+  font-weight: 700;
 }
 
 .thread-row__chip--approval {

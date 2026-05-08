@@ -14,10 +14,16 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey, shortenDerivedThreadTitle } from "@pwragent/shared";
+import {
+  buildAppendPinRank,
+  buildPinnedRanks,
+  buildThreadIdentityKey,
+  comparePinnedThreads,
+  shortenDerivedThreadTitle,
+} from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
-export type BrowseMode = "inbox" | "recents" | "directories";
+export type BrowseMode = "recents" | "directories";
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
@@ -204,6 +210,7 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    left.pinnedRank === right.pinnedRank &&
     retainedBranchDriftPairsEqual(
       left.retainedBranchDriftPairs,
       right.retainedBranchDriftPairs
@@ -292,6 +299,60 @@ function updateThreadReactionsInSnapshot(
   }
 
   return { ...snapshot, threads };
+}
+
+function updateThreadPinInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pinnedRank?: string;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (thread.pinnedRank === params.pinnedRank) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, pinnedRank: params.pinnedRank };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function updateThreadPinsInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    pinnedRanks: Record<string, string>;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend) {
+      return thread;
+    }
+    const pinnedRank = params.pinnedRanks[thread.id];
+    if (!pinnedRank || thread.pinnedRank === pinnedRank) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, pinnedRank };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function markThreadSeenInSnapshot(
@@ -1025,6 +1086,14 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  setThreadPin: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  reorderThreadPins: (
+    backend: AppServerBackendKind,
+    threadIds: string[],
+  ) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
@@ -1506,6 +1575,51 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             ? { ...current, model, reasoningEffort, serviceTier, fastMode }
             : current
         );
+        return;
+      }
+
+      if (method === "thread/pin/added") {
+        const { threadId, pinnedRank } = event.notification.params as {
+          threadId: string;
+          pinnedRank: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadPinInSnapshot(current.response, {
+            backend: event.backend,
+            threadId,
+            pinnedRank,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "thread/pin/removed") {
+        const { threadId } = event.notification.params as {
+          threadId: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadPinInSnapshot(current.response, {
+            backend: event.backend,
+            threadId,
+            pinnedRank: undefined,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "thread/pin/reordered") {
+        const { pinnedRanks } = event.notification.params as {
+          pinnedRanks: Record<string, string>;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadPinsInSnapshot(current.response, {
+            backend: event.backend,
+            pinnedRanks,
+          }),
+        }));
         return;
       }
 
@@ -2281,6 +2395,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   );
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
+  const setThreadPinRequest = desktopApi?.setThreadPin;
+  const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
   const setThreadReaction = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -2326,6 +2442,90 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
     },
     [setThreadReactionRequest],
+  );
+
+  const setThreadPin = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      pinned: boolean,
+    ): Promise<void> => {
+      if (!setThreadPinRequest) {
+        return;
+      }
+
+      const pinnedRank = pinned
+        ? thread.pinnedRank ?? buildAppendPinRank(
+            (state.response?.threads ?? [])
+              .filter((candidate) => candidate.source === thread.source)
+              .map((candidate) => candidate.pinnedRank),
+          )
+        : undefined;
+
+      setState((current) => ({
+        ...current,
+        response: updateThreadPinInSnapshot(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          pinnedRank,
+        }),
+      }));
+
+      try {
+        const result = await setThreadPinRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          pinnedRank,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateThreadPinInSnapshot(current.response, {
+            backend: result.backend,
+            threadId: result.threadId,
+            pinnedRank: result.pinnedRank,
+          }),
+        }));
+      } catch {
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setThreadPinRequest, state.response?.threads],
+  );
+
+  const reorderThreadPins = useCallback(
+    async (
+      backend: AppServerBackendKind,
+      threadIds: string[],
+    ): Promise<void> => {
+      if (!reorderThreadPinsRequest) {
+        return;
+      }
+
+      const pinnedRanks = buildPinnedRanks(threadIds);
+      setState((current) => ({
+        ...current,
+        response: updateThreadPinsInSnapshot(current.response, {
+          backend,
+          pinnedRanks,
+        }),
+      }));
+
+      try {
+        const result = await reorderThreadPinsRequest({
+          backend,
+          threadIds,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateThreadPinsInSnapshot(current.response, {
+            backend: result.backend,
+            pinnedRanks: result.pinnedRanks,
+          }),
+        }));
+      } catch {
+        await refresh();
+      }
+    },
+    [refresh, reorderThreadPinsRequest],
   );
 
   const updateThreadExecutionMode = useCallback(
@@ -2512,6 +2712,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     handoffThreadWorkspace,
     renameThread,
     setThreadReaction,
+    setThreadPin,
+    reorderThreadPins,
     snapshot: state.response,
     threads,
   };
