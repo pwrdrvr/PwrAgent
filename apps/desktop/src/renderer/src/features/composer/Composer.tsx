@@ -855,7 +855,7 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<ComposerRichInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
-  const activeTurnIdRef = useRef<string | undefined>(undefined);
+  const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
@@ -931,7 +931,9 @@ export function Composer(props: ComposerProps) {
     savedInitialQueuedTurn
   );
   const [pendingSteer, setPendingSteer] = useState<PendingSteerDraft>();
-  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(undefined);
+  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
+    props.activeTurnId
+  );
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(

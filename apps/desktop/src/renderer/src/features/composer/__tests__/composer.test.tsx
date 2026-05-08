@@ -617,6 +617,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Keep this queued reply"
     );
+    expect(startTurn).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
