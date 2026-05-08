@@ -1938,7 +1938,11 @@ textarea,
   display: flex;
   min-height: 0;
   min-width: 0;
-  padding: 0 0 24px 28px;
+  /* Issue #240: composer sits flush against the bottom edge — the
+     previous 24px bottom padding produced a dead band below the
+     composer. Left padding (28px) is the sidebar gutter and stays
+     per the issue's out-of-scope list. */
+  padding: 0 0 0 28px;
   overflow: hidden;
 }
 
@@ -1961,7 +1965,12 @@ textarea,
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 18px;
+  /* Issue #240: header sits flush against the transcript area; the
+     transcript's top-fade overlay handles the visual transition where
+     the header meets scrolled content. The previous 18px gap created
+     a dead band of empty app-bg between the header and the first
+     message that the user couldn't scroll past. */
+  gap: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -3626,17 +3635,19 @@ textarea,
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  /* Bottom is intentionally smaller than top: the composer's
-     `border-top` (issue #240) handles the visual divide, so the
-     wrapper doesn't need to reserve panel-edge breathing room below
-     the scroll area. Items still has its own 24px in-scroll
-     padding-bottom for over-scroll feel above the last message. */
-  padding: 16px 16px 8px;
+  /* No outer padding (issue #240): all internal spacing lives on the
+     items / siblings so the top/bottom fades can overlay the items'
+     visible edges directly without a coupled offset. */
+  padding: 0;
   overflow: hidden;
 }
 
-.transcript-list__load-older {
+.transcript-list__load-older,
+.transcript-list > .transcript-error {
+  /* Restore the lateral / top breathing room the wrapper used to
+     provide for these sibling rows above the items. */
   align-self: flex-start;
+  margin: 12px 16px 0;
 }
 
 .transcript-list__items {
@@ -3648,12 +3659,65 @@ textarea,
   min-height: 0;
   overflow-anchor: none;
   overflow-y: auto;
-  padding-right: 4px;
-  padding-bottom: 24px;
+  /* Internal padding the wrapper used to provide. Right is 12px
+     (instead of 16) so the scrollbar has its own narrow gutter. The
+     bottom 24 keeps the existing over-scroll feel above the last
+     message; the top 16 puts the first message a beat below the
+     transcript-area top edge (the fade overlays this band). */
+  padding: 16px 12px 24px 16px;
 }
 
 .transcript-list__items:has(.transcript-list__pending:last-child) {
   padding-bottom: 4px;
+}
+
+/* Top / bottom scroll-fade overlays (issue #240). Only the items area
+   scrolls, so the fade sits inside the relatively-positioned wrapper
+   directly over the items at top: 0 / bottom: 0. The fade gradient
+   blends scrolled content into the surrounding app surface — same
+   color (`--bg-app`) as the transparent transcript-panel sits on, so
+   there's no visible color boundary, just a smooth dissolve.
+   Visibility is driven by data attributes set from the scroll
+   handler in `TranscriptList.tsx`: `data-fade-top="hidden"` when the
+   list is scrolled to the very top (no content to fade above) and
+   `data-fade-bottom="hidden"` when pinned to the bottom. The default
+   in markup is hidden so we don't flash a fade on first paint before
+   the scroll handler runs. */
+.transcript-list__fade {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* 18px matches the design's `.pa-transcript__fade` band — wide
+     enough to read as a soft blend, narrow enough not to obscure the
+     first / last visible message text. */
+  height: 18px;
+  z-index: 2;
+  opacity: 1;
+  transition: opacity 140ms ease;
+}
+
+.transcript-list__fade--top {
+  top: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--bg-app) 0%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+.transcript-list__fade--bottom {
+  bottom: 0;
+  background: linear-gradient(
+    to top,
+    var(--bg-app) 0%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+.transcript-list[data-fade-top="hidden"] .transcript-list__fade--top,
+.transcript-list[data-fade-bottom="hidden"] .transcript-list__fade--bottom {
+  opacity: 0;
 }
 
 .transcript-list__content {
@@ -3666,7 +3730,9 @@ textarea,
   position: absolute;
   left: 50%;
   bottom: 20px;
-  z-index: 1;
+  /* Above the bottom-fade overlay (z-index: 2) so the chevron button
+     stays clickable. */
+  z-index: 3;
   display: inline-flex;
   width: 42px;
   height: 42px;

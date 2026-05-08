@@ -135,14 +135,24 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps transcript bottom reserve close to the thinking indicator height", () => {
-    expect(css).toMatch(
-      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*24px;[\s\S]*?\}/
+    // The items rule may declare bottom padding either explicitly
+    // (`padding-bottom: 24px`) or via the `padding` shorthand
+    // (`padding: T R 24px L`). Both are equivalent; the lock here is
+    // that the bottom value stays at 24 (the over-scroll feel above
+    // the last message / thinking indicator) and that the pending
+    // override still drops to 4px.
+    const itemsRule = css.match(/\.transcript-list__items\s*\{[\s\S]*?\}/)?.[0];
+    expect(itemsRule).toBeDefined();
+    expect(itemsRule).toMatch(
+      /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
       /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
     );
-    expect(css).not.toMatch(
-      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*(?:[4-9]\d|\d{3,})px;[\s\S]*?\}/
+    // Negative regex stays — guard against accidental large bottom
+    // values (>= 40px) regardless of which form is used.
+    expect(itemsRule).not.toMatch(
+      /padding-bottom:\s*(?:[4-9]\d|\d{3,})px;|padding:\s*\S+\s+\S+\s+(?:[4-9]\d|\d{3,})px(?:\s+\S+)?;/,
     );
   });
 
