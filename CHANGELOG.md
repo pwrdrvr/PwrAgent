@@ -19,3 +19,23 @@
 - Relocated desktop config and state under the PwrAgent home/profile layout backed by SQLite.
 - Added optional streaming responses for hosted messaging providers.
 - Fixed recent desktop regressions around worktree thread deduplication, Tiptap draft preservation, Better SQLite rebuilds, messaging startup logging, and worktree storage controls.
+
+## v1.0.0-alpha.3 - 2026-05-03
+
+- Added the custom desktop titlebar using the macOS `hiddenInset` window style.
+
+## v1.0.0-alpha.2 - 2026-05-03
+
+- Hardened remote messaging thread status flows.
+- Hid the development-only runtime identity indicator in production desktop builds.
+
+## v1.0.0-alpha.1 - 2026-05-03
+
+- Fixed packaged-app startup issues that could leave the desktop window blank or prevent provider loading.
+- Continued hardening the first release pipeline after the initial alpha packaging pass.
+
+## v1.0.0-alpha.0 - 2026-05-03
+
+- Added the first macOS arm64 desktop release pipeline with electron-builder packaging, signing, notarization, GitHub release publishing, and auto-update wiring.
+- Added release runbooks and PwrDrvr LLC product metadata for the signed desktop app.
+- Fixed release-test portability by avoiding a hard dependency on `rg` in the shell-command test path.

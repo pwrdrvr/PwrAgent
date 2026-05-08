@@ -48,11 +48,22 @@ since it is not a secret.
 ## Cutting a release (CI path — preferred)
 
 ```bash
-# 1. Bump the version. Use semver pre-release tags during alpha/beta:
-pnpm --filter @pwragent/desktop version 1.0.0-alpha.1
+# 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
+# Treat apps/desktop/package.json as the release version source.
+RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
 
-# 2. Push the tag (the version command commits and tags automatically).
-git push --follow-tags
+# 2. Commit the release metadata and land it on main.
+# Preferred: direct signed push by a maintainer with branch-protection bypass.
+git add apps/desktop/package.json CHANGELOG.md
+git commit -S -m "chore(release): prepare v1.0.0-alpha.7"
+git push origin HEAD:main
+
+# 3. Tag the exact main commit after the metadata is on main.
+git fetch origin main --tags
+git pull --ff-only
+RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
+git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
+git push origin v1.0.0-alpha.7
 ```
 
 The `Release Desktop (macOS arm64)` workflow on `macos-15` triggers, runs
@@ -70,6 +81,16 @@ typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
    Release on `pwrdrvr/PwrAgent`.
 
 Cycle time target: ≤ 12 minutes.
+
+Do not create the GitHub Release manually before the build succeeds. A manually
+created release appears before signing/notarization finishes. The current flow
+lets electron-builder create or update the release from the successful CI build;
+afterward, edit the release to mark prerelease tags as prereleases and replace
+the generated/empty notes with the matching `CHANGELOG.md` content.
+
+If direct push to `main` is rejected, use the repo-local release skill fallback:
+open a short-lived release PR, wait for checks, squash merge it, then tag the
+merged `main` commit.
 
 ---
 

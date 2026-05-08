@@ -36,6 +36,10 @@ Read these files before changing release metadata:
   `CHANGELOG.md` release heading must match.
 - Do not create or push the tag until the version and changelog are committed
   and present on the repository default branch.
+- Do not create the GitHub Release by hand before the build succeeds. Let
+  electron-builder create or update the release from the signed/notarized CI
+  build, then replace the generated/empty release notes with the changelog
+  entry.
 - Do not use GitHub generated release notes as the final notes.
 - Do not force-push the default branch or rewrite an existing release tag
   without explicit user approval.
@@ -81,7 +85,7 @@ Read these files before changing release metadata:
    pnpm test
    ```
 
-## Commit, Merge, And Tag
+## Commit, Land, And Tag
 
 Commit the version and changelog together. Use a signed commit; this repo's git
 config should already sign commits with SSH.
@@ -91,11 +95,21 @@ git add apps/desktop/package.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 ```
 
-For this repo, `main` is branch-protected. Push the release metadata commit to a
-short-lived release branch, open a PR, wait for required checks, then **squash
-merge** the PR. Do not use rebase merge for release metadata PRs: GitHub may
-rewrite the commit SHA, which makes it too easy to tag the pre-merge commit
-instead of the actual default-branch release commit.
+Preferred fast path: if maintainer direct-push bypass is enabled for `main`,
+push the signed release metadata commit directly. This avoids running PR CI and
+then running the same gates again from the release tag.
+
+```bash
+git push origin HEAD:main
+git fetch origin main --tags
+git pull --ff-only
+```
+
+Fallback path: if direct push to `main` is rejected, push the release metadata
+commit to a short-lived release branch, open a PR, wait for required checks,
+then **squash merge** the PR. Do not use rebase merge for release metadata PRs:
+GitHub may rewrite the commit SHA, which makes it too easy to tag the pre-merge
+commit instead of the actual default-branch release commit.
 
 ```bash
 git switch -c release/v<version>
@@ -110,8 +124,8 @@ git switch main
 git pull --ff-only
 ```
 
-After the squash merge, rerun the metadata gate on `main`, then create exactly
-one tag on the actual default-branch commit.
+After the direct push or squash merge, rerun the metadata gate on `main`, then
+create exactly one tag on the actual default-branch commit.
 
 ```bash
 RELEASE_TAG=v<version> pnpm release:check
@@ -183,6 +197,16 @@ ls .local/release/v<version>
 
 Expect signed/notarized macOS arm64 assets, including DMG/ZIP files and
 `latest-mac.yml`.
+
+Then replace electron-builder's empty/default release notes and mark prerelease
+tags as prereleases:
+
+```bash
+gh release edit v<version> \
+  --title "v<version> - <short release theme>" \
+  --notes-file .local/release/v<version>/RELEASE_NOTES.md \
+  --prerelease
+```
 
 ## Local Fallback
 
