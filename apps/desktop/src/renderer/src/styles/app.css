@@ -1085,9 +1085,11 @@ textarea,
   top: -10000px;
   left: -10000px;
   z-index: -1;
-  border-color: var(--border-subtle);
-  background: var(--bg-app);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  border-color: var(--border-strong);
+  background: var(--bg-panel-elevated);
+  box-shadow:
+    0 0 0 1px rgba(247, 243, 235, 0.08),
+    0 18px 44px rgba(0, 0, 0, 0.58);
   pointer-events: none;
 }
 
