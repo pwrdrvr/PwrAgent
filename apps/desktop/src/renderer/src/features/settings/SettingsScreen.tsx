@@ -12,6 +12,11 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
+import {
+  buildDiscordPatchDelta,
+  buildMattermostPatchDelta,
+  buildTelegramPatchDelta,
+} from "./settings-patch-delta";
 import { useCallback, useEffect, useState } from "react";
 
 export type SettingsSection =
@@ -247,43 +252,33 @@ function SettingsSectionBody(props: {
           });
         }}
         onSaveDiscord={async (discord) => {
+          const delta = buildDiscordPatchDelta(
+            props.snapshot.messaging.discord,
+            discord,
+          );
+          if (delta === undefined) return;
           await props.settings.writeConfig({
-            messaging: {
-              discord: {
-                applicationId: discord.applicationId.value,
-                authorizedGuilds: discord.authorizedGuilds.value,
-                authorizedUserIds: discord.authorizedUserIds.value,
-                enabled: discord.enabled.value,
-                streamingResponses: discord.streamingResponses.value,
-              },
-            },
+            messaging: { discord: delta },
           });
         }}
         onSaveTelegram={async (telegram) => {
+          const delta = buildTelegramPatchDelta(
+            props.snapshot.messaging.telegram,
+            telegram,
+          );
+          if (delta === undefined) return;
           await props.settings.writeConfig({
-            messaging: {
-              telegram: {
-                authorizedSupergroups: telegram.authorizedSupergroups.value,
-                authorizedUserIds: telegram.authorizedUserIds.value,
-                enabled: telegram.enabled.value,
-                streamingResponses: telegram.streamingResponses.value,
-              },
-            },
+            messaging: { telegram: delta },
           });
         }}
         onSaveMattermost={async (mattermost) => {
+          const delta = buildMattermostPatchDelta(
+            props.snapshot.messaging.mattermost,
+            mattermost,
+          );
+          if (delta === undefined) return;
           await props.settings.writeConfig({
-            messaging: {
-              mattermost: {
-                authorizedUserIds: mattermost.authorizedUserIds.value,
-                callbackBaseUrl: mattermost.callbackBaseUrl.value,
-                enabled: mattermost.enabled.value,
-                registerSlashCommands: mattermost.registerSlashCommands.value,
-                serverUrl: mattermost.serverUrl.value,
-                slashCommandPrefix: mattermost.slashCommandPrefix.value,
-                streamingResponses: mattermost.streamingResponses.value,
-              },
-            },
+            messaging: { mattermost: delta },
           });
         }}
       />

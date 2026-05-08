@@ -603,4 +603,111 @@ describe("DesktopSettingsService", () => {
     // enabled stays true because the patch only updated model
     expect(reverted.experimental.diffCondensation.enabled.value).toBe(true);
   });
+
+  it("preserves unknown sections written by other builds when saving a patch", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const original = [
+      "# config edited by hand — comments must survive",
+      "[messaging.telegram]",
+      "enabled = true",
+      "",
+      "# Mattermost block written by a future build the current code doesn't know about",
+      "[messaging.mattermost]",
+      'server_url = "https://chat.example.com"',
+      'callback_base_url = "https://callbacks.example.com"',
+      'authorized_user_ids = ["abc-123", "def-456"]',
+      "",
+      "[unknown.future.section]",
+      'opaque_field = "preserve me"',
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, original, "utf8");
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 0,
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        telegram: { enabled: false },
+      },
+    });
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("# config edited by hand — comments must survive");
+    expect(after).toContain("[messaging.mattermost]");
+    expect(after).toContain('server_url = "https://chat.example.com"');
+    expect(after).toContain('callback_base_url = "https://callbacks.example.com"');
+    expect(after).toContain('authorized_user_ids = ["abc-123", "def-456"]');
+    expect(after).toContain("[unknown.future.section]");
+    expect(after).toContain('opaque_field = "preserve me"');
+    expect(after).toContain("enabled = false");
+  });
+
+  it("reads a config that contains inline-table-array values in unknown sections without erroring", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        "",
+        "# Future schema (unknown to current code) — must parse, not throw.",
+        "[messaging.mattermost]",
+        'server_url = "https://chat.example.com"',
+        "authorized_users = [",
+        '  { id = "-1001234567890", label = "Mom\'s group" },',
+        '  { id = "-1009876543210", label = "Work team" },',
+        "]",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 0,
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.configError).toBeUndefined();
+    expect(snapshot.messaging.telegram.enabled.value).toBe(true);
+  });
+
+  it("leaves the file byte-identical when a patch sets values that already match", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const original = [
+      "[messaging.telegram]",
+      "enabled = true",
+      "streaming_responses = false",
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, original, "utf8");
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 0,
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        telegram: {
+          enabled: true,
+          streamingResponses: false,
+        },
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+  });
 });

@@ -4,11 +4,18 @@ import path from "node:path";
 import type {
   DesktopChatReplyComposer,
   DesktopMessagingImageProfile,
+  DesktopSettingsConfigPatch,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { isDesktopWorktreeStorageLocation } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
+import {
+  applyTomlEdits,
+  parseTomlTables,
+  type TomlEdit,
+  type TomlValue,
+} from "./toml-editor";
 
 type DesktopConfigPathOptions = {
   env?: NodeJS.ProcessEnv;
@@ -74,7 +81,7 @@ export type DesktopSettingsConfig = {
   };
 };
 
-type TomlScalar = string | number | boolean | string[];
+type TomlScalar = TomlValue;
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -107,294 +114,175 @@ export function readDesktopSettingsConfig(
   return parseDesktopSettingsToml(fs.readFileSync(configPath, "utf8"), configPath);
 }
 
-export function writeDesktopSettingsConfig(
+/**
+ * Apply a settings patch to the on-disk config by editing only the keys named
+ * in the patch. Sections, comments, blank lines, and unknown keys outside the
+ * patch are preserved byte-for-byte. The file is never round-tripped through
+ * a typed config, so unknown sections written by other builds survive a save.
+ */
+export function applyDesktopSettingsPatch(
   configPath: string,
-  config: DesktopSettingsConfig,
+  patch: DesktopSettingsConfigPatch,
 ): void {
+  const edits = desktopSettingsPatchToEdits(patch);
+  if (edits.length === 0) {
+    return;
+  }
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const source = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "";
+  const next = applyTomlEdits(source, edits);
+  if (next === source) {
+    return;
+  }
   const temporaryPath = `${configPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporaryPath, stringifyDesktopSettingsToml(config), "utf8");
+  fs.writeFileSync(temporaryPath, next, "utf8");
   fs.renameSync(temporaryPath, configPath);
 }
 
-export function mergeDesktopSettingsConfig(
-  current: DesktopSettingsConfig,
-  patch: DesktopSettingsConfig,
-): DesktopSettingsConfig {
-  return pruneEmptyConfig({
-    experimental: {
-      ...current.experimental,
-      ...patch.experimental,
-      diffCondensation: {
-        ...current.experimental?.diffCondensation,
-        ...patch.experimental?.diffCondensation,
-      },
-    },
-    messaging: {
-      inputDebounceMs:
-        patch.messaging?.inputDebounceMs ?? current.messaging?.inputDebounceMs,
-      toolUpdateMode:
-        patch.messaging?.toolUpdateMode ?? current.messaging?.toolUpdateMode,
-      attachments: {
-        ...current.messaging?.attachments,
-        ...patch.messaging?.attachments,
-      },
-      telegram: {
-        ...current.messaging?.telegram,
-        ...patch.messaging?.telegram,
-      },
-      discord: {
-        ...current.messaging?.discord,
-        ...patch.messaging?.discord,
-      },
-      mattermost: {
-        ...current.messaging?.mattermost,
-        ...patch.messaging?.mattermost,
-      },
-    },
-    models: {
-      codex: {
-        ...current.models?.codex,
-        ...patch.models?.codex,
-      },
-    },
-    applications: {
-      editor: {
-        ...current.applications?.editor,
-        ...patch.applications?.editor,
-      },
-      terminal: {
-        ...current.applications?.terminal,
-        ...patch.applications?.terminal,
-      },
-    },
-    worktrees: {
-      ...current.worktrees,
-      ...patch.worktrees,
-    },
-  });
+export function desktopSettingsPatchToEdits(
+  patch: DesktopSettingsConfigPatch,
+): TomlEdit[] {
+  const edits: TomlEdit[] = [];
+
+  const set = (
+    pathSegments: readonly string[],
+    value: string | number | boolean | readonly string[] | undefined,
+  ): void => {
+    if (value === undefined) return;
+    edits.push({ op: "set", path: pathSegments, value });
+  };
+
+  if (patch.experimental?.chatReplyComposer !== undefined) {
+    set(["experimental", "chat_reply_composer"], patch.experimental.chatReplyComposer);
+  }
+  if (patch.experimental?.diffCondensation?.enabled !== undefined) {
+    set(
+      ["experimental", "diff_condensation", "enabled"],
+      patch.experimental.diffCondensation.enabled,
+    );
+  }
+  if (patch.experimental?.diffCondensation?.model !== undefined) {
+    set(
+      ["experimental", "diff_condensation", "model"],
+      patch.experimental.diffCondensation.model,
+    );
+  }
+
+  if (patch.messaging?.inputDebounceMs !== undefined) {
+    set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
+  }
+  if (patch.messaging?.toolUpdateMode !== undefined) {
+    set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
+  }
+
+  const attachments = patch.messaging?.attachments;
+  if (attachments?.imageProfile !== undefined) {
+    set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+  }
+  if (attachments?.maxAttachmentBytes !== undefined) {
+    set(["messaging", "attachments", "max_attachment_bytes"], attachments.maxAttachmentBytes);
+  }
+  if (attachments?.maxAttachmentCount !== undefined) {
+    set(["messaging", "attachments", "max_attachment_count"], attachments.maxAttachmentCount);
+  }
+
+  const telegram = patch.messaging?.telegram;
+  if (telegram?.enabled !== undefined) {
+    set(["messaging", "telegram", "enabled"], telegram.enabled);
+  }
+  if (telegram?.streamingResponses !== undefined) {
+    set(["messaging", "telegram", "streaming_responses"], telegram.streamingResponses);
+  }
+  if (telegram?.authorizedUserIds !== undefined) {
+    set(["messaging", "telegram", "authorized_user_ids"], telegram.authorizedUserIds);
+  }
+  if (telegram?.authorizedSupergroups !== undefined) {
+    set(
+      ["messaging", "telegram", "authorized_supergroups"],
+      telegram.authorizedSupergroups,
+    );
+  }
+
+  const discord = patch.messaging?.discord;
+  if (discord?.enabled !== undefined) {
+    set(["messaging", "discord", "enabled"], discord.enabled);
+  }
+  if (discord?.streamingResponses !== undefined) {
+    set(["messaging", "discord", "streaming_responses"], discord.streamingResponses);
+  }
+  if (discord?.applicationId !== undefined) {
+    set(["messaging", "discord", "application_id"], discord.applicationId);
+  }
+  if (discord?.authorizedUserIds !== undefined) {
+    set(["messaging", "discord", "authorized_user_ids"], discord.authorizedUserIds);
+  }
+  if (discord?.authorizedGuilds !== undefined) {
+    set(["messaging", "discord", "authorized_guilds"], discord.authorizedGuilds);
+  }
+
+  const mattermost = patch.messaging?.mattermost;
+  if (mattermost?.enabled !== undefined) {
+    set(["messaging", "mattermost", "enabled"], mattermost.enabled);
+  }
+  if (mattermost?.streamingResponses !== undefined) {
+    set(
+      ["messaging", "mattermost", "streaming_responses"],
+      mattermost.streamingResponses,
+    );
+  }
+  if (mattermost?.serverUrl !== undefined) {
+    set(["messaging", "mattermost", "server_url"], mattermost.serverUrl);
+  }
+  if (mattermost?.callbackBaseUrl !== undefined) {
+    set(
+      ["messaging", "mattermost", "callback_base_url"],
+      mattermost.callbackBaseUrl,
+    );
+  }
+  if (mattermost?.slashCommandPrefix !== undefined) {
+    set(
+      ["messaging", "mattermost", "slash_command_prefix"],
+      mattermost.slashCommandPrefix,
+    );
+  }
+  if (mattermost?.registerSlashCommands !== undefined) {
+    set(
+      ["messaging", "mattermost", "register_slash_commands"],
+      mattermost.registerSlashCommands,
+    );
+  }
+  if (mattermost?.authorizedUserIds !== undefined) {
+    set(
+      ["messaging", "mattermost", "authorized_user_ids"],
+      mattermost.authorizedUserIds,
+    );
+  }
+
+  if (patch.models?.codex?.path !== undefined) {
+    set(["models", "codex", "path"], patch.models.codex.path);
+  }
+
+  if (patch.applications?.editor?.preferredId !== undefined) {
+    set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
+  }
+  if (patch.applications?.terminal?.preferredId !== undefined) {
+    set(["applications", "terminal", "preferred_id"], patch.applications.terminal.preferredId);
+  }
+
+  if (patch.worktrees?.storage !== undefined) {
+    set(["worktrees", "storage"], patch.worktrees.storage);
+  }
+
+  return edits;
 }
 
 export function parseDesktopSettingsToml(
   contents: string,
   filePath: string,
 ): DesktopSettingsConfig {
-  const tables: Record<string, Record<string, TomlScalar>> = {};
-  let currentTable = "";
-
-  for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
-    const line = stripInlineComment(rawLine).trim();
-    if (!line) {
-      continue;
-    }
-
-    if (line.startsWith("[") && line.endsWith("]")) {
-      currentTable = line.slice(1, -1).trim();
-      if (!currentTable) {
-        throw new Error(`Invalid TOML table on line ${index + 1} in ${filePath}`);
-      }
-      tables[currentTable] ??= {};
-      continue;
-    }
-
-    const separatorIndex = line.indexOf("=");
-    if (separatorIndex < 1) {
-      throw new Error(`Invalid TOML line ${index + 1} in ${filePath}`);
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const rawValue = line.slice(separatorIndex + 1).trim();
-    if (!key) {
-      throw new Error(`Invalid TOML key on line ${index + 1} in ${filePath}`);
-    }
-
-    tables[currentTable] ??= {};
-    tables[currentTable][key] = parseTomlValue(rawValue, filePath, index + 1);
-  }
-
-  return normalizeDesktopConfig(tables);
-}
-
-export function stringifyDesktopSettingsToml(
-  config: DesktopSettingsConfig,
-): string {
-  const sections: string[] = [];
-
-  if (config.experimental?.chatReplyComposer) {
-    sections.push(
-      [
-        "[experimental]",
-        `chat_reply_composer = ${formatTomlValue(
-          config.experimental.chatReplyComposer,
-        )}`,
-      ].join("\n"),
-    );
-  }
-
-  const diffCondensation = config.experimental?.diffCondensation;
-  if (
-    diffCondensation
-    && (diffCondensation.enabled !== undefined || diffCondensation.model !== undefined)
-  ) {
-    sections.push(
-      [
-        "[experimental.diff_condensation]",
-        formatOptionalTomlEntry("enabled", diffCondensation.enabled),
-        formatOptionalTomlEntry("model", diffCondensation.model),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  if (
-    config.messaging?.toolUpdateMode
-    || config.messaging?.inputDebounceMs !== undefined
-  ) {
-    sections.push(
-      [
-        "[messaging]",
-        formatOptionalTomlEntry(
-          "input_debounce_ms",
-          config.messaging.inputDebounceMs,
-        ),
-        formatOptionalTomlEntry("tool_update_mode", config.messaging.toolUpdateMode),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  const attachments = config.messaging?.attachments;
-  if (attachments && hasDefinedValue(attachments)) {
-    sections.push(
-      [
-        "[messaging.attachments]",
-        formatOptionalTomlEntry("image_profile", attachments.imageProfile),
-        formatOptionalTomlEntry("max_attachment_bytes", attachments.maxAttachmentBytes),
-        formatOptionalTomlEntry("max_attachment_count", attachments.maxAttachmentCount),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  const telegram = config.messaging?.telegram;
-  if (telegram && hasDefinedValue(telegram)) {
-    sections.push(
-      [
-        "[messaging.telegram]",
-        formatOptionalTomlEntry("enabled", telegram.enabled),
-        formatOptionalTomlEntry(
-          "streaming_responses",
-          telegram.streamingResponses,
-        ),
-        formatOptionalTomlEntry(
-          "authorized_user_ids",
-          telegram.authorizedUserIds,
-        ),
-        formatOptionalTomlEntry(
-          "authorized_supergroups",
-          telegram.authorizedSupergroups,
-        ),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  const discord = config.messaging?.discord;
-  if (discord && hasDefinedValue(discord)) {
-    sections.push(
-      [
-        "[messaging.discord]",
-        formatOptionalTomlEntry("enabled", discord.enabled),
-        formatOptionalTomlEntry(
-          "streaming_responses",
-          discord.streamingResponses,
-        ),
-        formatOptionalTomlEntry("application_id", discord.applicationId),
-        formatOptionalTomlEntry(
-          "authorized_user_ids",
-          discord.authorizedUserIds,
-        ),
-        formatOptionalTomlEntry("authorized_guilds", discord.authorizedGuilds),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  const mattermost = config.messaging?.mattermost;
-  if (mattermost && hasDefinedValue(mattermost)) {
-    sections.push(
-      [
-        "[messaging.mattermost]",
-        formatOptionalTomlEntry("enabled", mattermost.enabled),
-        formatOptionalTomlEntry(
-          "streaming_responses",
-          mattermost.streamingResponses,
-        ),
-        formatOptionalTomlEntry("server_url", mattermost.serverUrl),
-        formatOptionalTomlEntry(
-          "callback_base_url",
-          mattermost.callbackBaseUrl,
-        ),
-        formatOptionalTomlEntry(
-          "slash_command_prefix",
-          mattermost.slashCommandPrefix,
-        ),
-        formatOptionalTomlEntry(
-          "register_slash_commands",
-          mattermost.registerSlashCommands,
-        ),
-        formatOptionalTomlEntry(
-          "authorized_user_ids",
-          mattermost.authorizedUserIds,
-        ),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-
-  const codex = config.models?.codex;
-  if (codex?.path !== undefined) {
-    sections.push(
-      ["[models.codex]", `path = ${formatTomlValue(codex.path)}`].join("\n"),
-    );
-  }
-
-  const editor = config.applications?.editor;
-  if (editor?.preferredId !== undefined) {
-    sections.push(
-      [
-        "[applications.editor]",
-        `preferred_id = ${formatTomlValue(editor.preferredId)}`,
-      ].join("\n"),
-    );
-  }
-
-  const terminal = config.applications?.terminal;
-  if (terminal?.preferredId !== undefined) {
-    sections.push(
-      [
-        "[applications.terminal]",
-        `preferred_id = ${formatTomlValue(terminal.preferredId)}`,
-      ].join("\n"),
-    );
-  }
-
-  const worktrees = config.worktrees;
-  if (worktrees?.storage !== undefined) {
-    sections.push(
-      ["[worktrees]", `storage = ${formatTomlValue(worktrees.storage)}`].join(
-        "\n",
-      ),
-    );
-  }
-
-  return sections.join("\n\n").concat(sections.length ? "\n" : "");
+  return normalizeDesktopConfig(parseTomlTables(contents, filePath));
 }
 
 function normalizeDesktopConfig(
@@ -590,7 +478,11 @@ function readString(value: TomlScalar | undefined): string | undefined {
 }
 
 function readStringArray(value: TomlScalar | undefined): string[] | undefined {
-  return Array.isArray(value) ? value.map((item) => item.trim()).filter(Boolean) : undefined;
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((item): item is string => typeof item === "string")) {
+    return undefined;
+  }
+  return value.map((item) => item.trim()).filter(Boolean);
 }
 
 function readNumber(value: TomlScalar | undefined): number | undefined {
@@ -619,175 +511,3 @@ function readWorktreeStorage(
     : undefined;
 }
 
-function parseTomlValue(
-  value: string,
-  filePath: string,
-  lineNumber: number,
-): TomlScalar {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  if (value.startsWith("[") && value.endsWith("]")) {
-    return parseStringArray(value, filePath, lineNumber);
-  }
-  if (value.startsWith("\"") && value.endsWith("\"")) {
-    return unescapeQuotedString(value.slice(1, -1), filePath, lineNumber);
-  }
-  if (/^-?\d+$/.test(value)) {
-    return Number(value);
-  }
-  throw new Error(`Unsupported TOML value on line ${lineNumber} in ${filePath}`);
-}
-
-function parseStringArray(
-  value: string,
-  filePath: string,
-  lineNumber: number,
-): string[] {
-  const inner = value.slice(1, -1).trim();
-  if (!inner) {
-    return [];
-  }
-
-  const values: string[] = [];
-  let current = "";
-  let inQuotedString = false;
-  let escaped = false;
-
-  for (let index = 0; index < inner.length; index += 1) {
-    const character = inner[index];
-    if (escaped) {
-      current += `\\${character}`;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = inQuotedString;
-      if (!inQuotedString) {
-        throw new Error(`Invalid TOML array on line ${lineNumber} in ${filePath}`);
-      }
-      continue;
-    }
-    if (character === "\"") {
-      inQuotedString = !inQuotedString;
-      current += character;
-      continue;
-    }
-    if (character === "," && !inQuotedString) {
-      values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
-      current = "";
-      continue;
-    }
-    current += character;
-  }
-
-  if (inQuotedString) {
-    throw new Error(`Unterminated TOML string on line ${lineNumber} in ${filePath}`);
-  }
-
-  values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
-  return values;
-}
-
-function parseStringArrayItem(
-  value: string,
-  filePath: string,
-  lineNumber: number,
-): string {
-  const parsed = parseTomlValue(value, filePath, lineNumber);
-  if (typeof parsed !== "string") {
-    throw new Error(`Expected TOML string array on line ${lineNumber} in ${filePath}`);
-  }
-  return parsed;
-}
-
-function stripInlineComment(line: string): string {
-  let inQuotedString = false;
-  let escaped = false;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = inQuotedString;
-      continue;
-    }
-    if (character === "\"") {
-      inQuotedString = !inQuotedString;
-      continue;
-    }
-    if (character === "#" && !inQuotedString) {
-      return line.slice(0, index);
-    }
-  }
-
-  return line;
-}
-
-function unescapeQuotedString(
-  value: string,
-  filePath: string,
-  lineNumber: number,
-): string {
-  let result = "";
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (character !== "\\") {
-      result += character;
-      continue;
-    }
-
-    index += 1;
-    const escape = value[index];
-    if (escape === undefined) {
-      throw new Error(`Invalid TOML escape on line ${lineNumber} in ${filePath}`);
-    }
-    if (escape === "\\" || escape === "\"") {
-      result += escape;
-      continue;
-    }
-    if (escape === "n") {
-      result += "\n";
-      continue;
-    }
-    if (escape === "t") {
-      result += "\t";
-      continue;
-    }
-    throw new Error(`Unsupported TOML escape \\${escape} on line ${lineNumber} in ${filePath}`);
-  }
-
-  return result;
-}
-
-function formatOptionalTomlEntry(
-  key: string,
-  value: string | number | boolean | string[] | undefined,
-): string | undefined {
-  return value === undefined ? undefined : `${key} = ${formatTomlValue(value)}`;
-}
-
-function formatTomlValue(value: string | number | boolean | string[]): string {
-  if (typeof value === "boolean") {
-    return String(value);
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => formatTomlValue(item)).join(", ")}]`;
-  }
-
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\t/g, "\\t")
-    .replace(/"/g, '\\"')}"`;
-}
