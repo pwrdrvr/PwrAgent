@@ -95,6 +95,7 @@ mac:
       arch: [arm64]
 
 dmg:
+  icon: build/icon.icns
   background: build/dmg-background.png
   window:
     width: 660
