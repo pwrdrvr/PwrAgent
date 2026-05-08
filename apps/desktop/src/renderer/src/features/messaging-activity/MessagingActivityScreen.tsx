@@ -3,7 +3,7 @@ import type {
   MessagingActivityEntry,
   MessagingActivityKind,
 } from "@pwragent/shared";
-import { DiscordIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const REFRESH_INTERVAL_MS = 5_000;
@@ -147,16 +147,19 @@ function ActivitySection(props: {
 
 function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const { entry } = props;
-  const Icon = entry.platform === "telegram"
-    ? TelegramIcon
-    : entry.platform === "discord"
-      ? DiscordIcon
-      : undefined;
   const tone = KIND_TONE[entry.kind];
   return (
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
-        {Icon ? <Icon size={14} /> : <span>{entry.platform.slice(0, 2)}</span>}
+        {entry.platform === "telegram" ? (
+          <TelegramIcon size={14} />
+        ) : entry.platform === "discord" ? (
+          <DiscordIcon size={14} />
+        ) : entry.platform === "mattermost" ? (
+          <MattermostIcon size={14} />
+        ) : (
+          <span>{entry.platform.slice(0, 2)}</span>
+        )}
       </span>
       <div className="messaging-activity-row__body">
         <div className="messaging-activity-row__line">

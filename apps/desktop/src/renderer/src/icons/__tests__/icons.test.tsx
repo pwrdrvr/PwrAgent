@@ -5,6 +5,7 @@ import {
   BranchIcon,
   DiscordIcon,
   FolderIcon,
+  MattermostIcon,
   NewThreadIcon,
   SettingsIcon,
   SmileyIcon,
@@ -79,6 +80,46 @@ describe("icon library", () => {
       expect(svg).toHaveAttribute("aria-hidden", "true");
     },
   );
+
+  describe("MattermostIcon", () => {
+    // Mattermost is the one icon that does NOT render as a
+    // currentColor SVG — the brand guidelines forbid altering the
+    // mark, so we ship the official asset files verbatim and render
+    // them via <img>. The variant prop selects which of the three
+    // published colorways (white/black/denim) the surface needs.
+    it("renders an <img> at the requested size", () => {
+      const { container } = render(<MattermostIcon />);
+      const img = container.querySelector("img");
+      expect(img).toBeInTheDocument();
+      expect(img).toHaveAttribute("width", "16");
+      expect(img).toHaveAttribute("height", "16");
+      // Vite inlines small SVG assets as data: URLs in tests; just
+      // verify a src is set and that it actually carries SVG payload.
+      const src = img?.getAttribute("src") ?? "";
+      expect(src.length).toBeGreaterThan(0);
+      expect(src).toMatch(/svg|image/i);
+    });
+
+    it("renders distinct sources for each variant", () => {
+      const sources = new Set<string>();
+      for (const variant of ["black", "denim", "white"] as const) {
+        const { container } = render(<MattermostIcon variant={variant} />);
+        const src = container.querySelector("img")?.getAttribute("src") ?? "";
+        expect(src.length).toBeGreaterThan(0);
+        sources.add(src);
+        cleanup();
+      }
+      // Three variants → three distinct asset URLs.
+      expect(sources.size).toBe(3);
+    });
+
+    it("respects size overrides", () => {
+      const { container } = render(<MattermostIcon size={28} />);
+      const img = container.querySelector("img");
+      expect(img).toHaveAttribute("width", "28");
+      expect(img).toHaveAttribute("height", "28");
+    });
+  });
 
   it("flows currentColor through to children via parent CSS", () => {
     const { container } = render(
