@@ -194,6 +194,16 @@ function DesktopAppShell(props: {
           selectedDirectory={navigation.selectedDirectory}
           selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
+          directories={navigation.directories}
+          pickDirectoryError={navigation.pickDirectoryError}
+          pickingDirectory={navigation.pickingDirectory}
+          onSelectDirectoryFromPicker={(directory) => {
+            void navigation.openDirectoryLaunchpad(directory);
+          }}
+          onPickAndRegisterDirectory={() => {
+            void navigation.pickAndRegisterDirectory();
+          }}
+          onClearPickDirectoryError={navigation.clearPickDirectoryError}
           setExecutionModeError={navigation.setThreadExecutionModeError}
           setThreadModelSettingsError={navigation.setThreadModelSettingsError}
           skillError={skills.error}

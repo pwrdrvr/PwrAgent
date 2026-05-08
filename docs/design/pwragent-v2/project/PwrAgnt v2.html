@@ -5,6 +5,7 @@
 <title>PwrAgent — Threads</title>
 <link rel="stylesheet" href="lib/colors_and_type.css">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="newthread.css">
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -17,6 +18,7 @@
 <script type="text/babel" src="sidebar.jsx"></script>
 <script type="text/babel" src="threadview.jsx"></script>
 <script type="text/babel" src="rightrail.jsx"></script>
+<script type="text/babel" src="newthread.jsx"></script>
 <script type="text/babel" src="settings.jsx"></script>
 <script type="text/babel" src="activity.jsx"></script>
 <script type="text/babel" src="tweaks-panel.jsx"></script>
@@ -101,7 +103,7 @@ const PLATFORMS = [
 
 /* -------- defaults / tweaks -------- */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "lens": "Inbox",
+  "lens": "Directories",
   "messagingOn": true,
   "blinkTelegram": false,
   "showRail": false,
@@ -113,10 +115,19 @@ function App() {
   const I = window.PA.Icon;
   const [tweaks, setTweak] = window.useTweaks(TWEAK_DEFAULTS);
 
-  const [screen, setScreen] = useState("main"); // main | settings | activity
+  const [screen, setScreen] = useState("main"); // main | settings | activity | newthread
   const [settingsSection, setSettingsSection] = useState("messaging");
   const [selectedId, setSelectedId] = useState("t1");
   const [data, setData] = useState(SEED);
+  const [recents, setRecents] = useState(() => SEED.map((g, i) => ({
+    dir: g.dir,
+    branch: g.branch,
+    path: `/Users/huntharo/github/${g.dir}`,
+    isRepo: true,
+    threadCount: g.threads.length,
+    lastUsed: Date.now() - i * 60000,
+  })));
+  const [preselectProject, setPreselectProject] = useState(null);
   const [lens, setLens] = useState(tweaks.lens || "Inbox");
   const [messagingOn, setMessagingOn] = useState(!!tweaks.messagingOn);
   const [showRail, setShowRail] = useState(!!tweaks.showRail);
@@ -141,6 +152,9 @@ function App() {
     }
     if (screen === "activity") {
       return [{ label: "Messaging", eyebrow: "Live" }, { label: "Activity" }];
+    }
+    if (screen === "newthread") {
+      return [{ label: "PwrAgent", eyebrow: "App" }, { label: "New thread" }];
     }
     return [
       { label: selected?.dir || "—", eyebrow: "Folder" },
@@ -226,6 +240,7 @@ function App() {
         onOpenActivity={() => setScreen("activity")}
         onOpenSettings={() => setScreen("settings")}
         onToggleRail={() => { const v = !showRail; setShowRail(v); setTweak("showRail", v); }}
+        onNewThread={() => { setPreselectProject(null); setScreen("newthread"); }}
       />
 
       {!messagingOn && (
@@ -238,23 +253,64 @@ function App() {
         </div>
       )}
 
-      {screen === "main" && (
-        <div className={`pa-window ${showRail ? "" : "no-rail"}`}>
+      {(screen === "main" || screen === "newthread") && (
+        <div className={`pa-window ${showRail && screen === "main" ? "" : "no-rail"}`}>
           <window.PA.Sidebar
             showDevContext={tweaks.showDevContext}
             data={data}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
+            selectedId={screen === "newthread" ? null : selectedId}
+            onSelect={(id) => { setSelectedId(id); setScreen("main"); }}
             lens={lens}
             setLens={(v) => { setLens(v); setTweak("lens", v); }}
             contextDir={ctxDir}
             contextBranch={ctxBranch}
+            newThreadActive={screen === "newthread"}
             onAddReaction={addReaction}
             onUnbindPlatform={unbindPlatform}
-            onNewThread={() => alert("New thread")}
+            onNewThread={() => { setPreselectProject(null); setScreen("newthread"); }}
+            onNewThreadInDir={(group) => {
+              const r = recents.find((x) => x.dir === group.dir);
+              setPreselectProject(r || { dir: group.dir, branch: group.branch, path: `/Users/huntharo/github/${group.dir}`, isRepo: true, lastUsed: Date.now() });
+              setScreen("newthread");
+            }}
           />
-          {threadForView && <window.PA.ThreadView thread={threadForView} onSend={sendMessage} />}
-          {showRail && (
+          {screen === "main" && threadForView && <window.PA.ThreadView thread={threadForView} onSend={sendMessage} />}
+          {screen === "newthread" && (
+            <window.PA.NewThread
+              recents={recents}
+              initialProject={preselectProject}
+              onCancel={() => setScreen("main")}
+              onStart={({ project, text, worktreeMode }) => {
+                const now = Date.now();
+                const newThreadObj = {
+                  id: `nt-${now}`,
+                  title: text.length > 60 ? text.slice(0, 60) + "\u2026" : text,
+                  time: "now",
+                  platforms: [],
+                  chips: [{ label: "OpenAI" }, { label: worktreeMode === "worktree" ? "Worktree" : "Local" }],
+                  branch: project.branch || "main",
+                  working: true,
+                };
+                setData((d) => {
+                  const idx = d.findIndex((g) => g.dir === project.dir);
+                  if (idx === -1) return [{ dir: project.dir, branch: project.branch || "main", threads: [newThreadObj] }, ...d];
+                  const next = [...d];
+                  next[idx] = { ...next[idx], threads: [newThreadObj, ...next[idx].threads] };
+                  return next;
+                });
+                setRecents((rs) => {
+                  const idx = rs.findIndex((r) => r.dir === project.dir);
+                  if (idx === -1) return [{ ...project, isNew: false, lastUsed: now, threadCount: 1 }, ...rs];
+                  const next = [...rs];
+                  next[idx] = { ...next[idx], lastUsed: now, threadCount: (next[idx].threadCount || 0) + 1 };
+                  return next;
+                });
+                setSelectedId(newThreadObj.id);
+                setScreen("main");
+              }}
+            />
+          )}
+          {showRail && screen === "main" && (
             <window.PA.RightRail
               thread={selected}
               platforms={PLATFORMS}

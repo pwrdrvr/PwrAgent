@@ -5876,6 +5876,238 @@ textarea,
   background: var(--border-subtle);
 }
 
+/* ===========================================================
+   Project picker (issue #223)
+   ===========================================================
+   Shares the visual language of `.composer-dropdown` so the
+   project pill reads as a peer of the workspace / model / branch
+   pickers in the launchpad row. The dashed border on the empty
+   state mirrors `pa-pick--proj.is-empty` from the v2 design
+   prototype (`docs/design/pwragent-v2/project/newthread.css`).
+*/
+
+.project-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.project-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  max-width: 240px;
+}
+
+.project-picker__trigger:hover:not(:disabled),
+.project-picker__trigger:focus-visible:not(:disabled) {
+  border-color: var(--accent-border);
+  outline: none;
+}
+
+.project-picker__trigger:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.project-picker__trigger.is-empty {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.project-picker__trigger.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.project-picker__label {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-picker__chevron {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* The popover itself is a fixed-size flex column. The search row +
+   section header are pinned to the top, the "Add directory…" row + any
+   inline error are pinned to the bottom, and only the directories list
+   in the middle scrolls. Critically, the popover height does NOT shrink
+   when the user filters down to fewer matches — the list region just
+   leaves blank space. Resizing the popover on every keystroke shifts
+   the action row vertically and is hard to use. */
+.project-picker__pop {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  height: 420px;
+  max-height: calc(100dvh - 128px);
+  padding: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-picker__search {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.project-picker__search-input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.project-picker__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.project-picker__section {
+  flex: 0 0 auto;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.project-picker__list {
+  flex: 1 1 0;
+  /* `min-height: 0` is required for a flex child whose content overflows
+     to actually scroll — without it the list grows past its parent and
+     the popover scroll is taken over by the wrong region. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-picker__row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-picker__row:hover:not(:disabled),
+.project-picker__row:focus-visible:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.project-picker__row.is-active {
+  color: var(--accent-bright);
+}
+
+.project-picker__row:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.project-picker__row-name {
+  flex: 0 0 auto;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.project-picker__row-path {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.project-picker__row--action {
+  /* Pinned to the bottom of the popover — the directories list above
+     is the only flex-grow child, so this row sits at the bottom edge
+     regardless of how short the (filtered) list becomes. */
+  flex: 0 0 auto;
+  color: var(--accent-bright);
+}
+
+.project-picker__plus {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.project-picker__separator {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
+}
+
+.project-picker__empty {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.project-picker__error {
+  flex: 0 0 auto;
+  margin: 4px 8px 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  /* Canonical danger pair — same tokens used by .settings-panel--error
+     and .messaging-status-chip--errored. Don't introduce a new error
+     token name (UI-THEME.md). */
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .workspace-handoff-modal {
   position: fixed;
   z-index: 100;

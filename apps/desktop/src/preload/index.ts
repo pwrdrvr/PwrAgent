@@ -46,6 +46,9 @@ import type {
   ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  PickDirectoryFromDiskResponse,
+  RegisterDirectoryFromDiskRequest,
+  RegisterDirectoryFromDiskResponse,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
@@ -133,7 +136,9 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -357,6 +362,15 @@ const desktopApi = Object.freeze({
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
+  registerDirectoryFromDisk: async (
+    request: RegisterDirectoryFromDiskRequest,
+  ): Promise<RegisterDirectoryFromDiskResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
+      request,
+    ),
   reportRendererError: async (report: RendererErrorReport): Promise<void> => {
     await ipcRenderer.invoke(RENDERER_ERROR_REPORT_CHANNEL, report);
   },

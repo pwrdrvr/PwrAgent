@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type {
   AppServerBackendScope,
@@ -21,8 +21,11 @@ import type {
   HandoffThreadWorkspaceResponse,
   GetGhStatusRequest,
   GhStatus,
+  PickDirectoryFromDiskResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
+  RegisterDirectoryFromDiskRequest,
+  RegisterDirectoryFromDiskResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
@@ -39,6 +42,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
+import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
@@ -60,6 +64,8 @@ import {
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+  NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -523,6 +529,42 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request);
   }
 
+  async pickDirectoryFromDisk(
+    parentWindow?: BrowserWindow,
+  ): Promise<PickDirectoryFromDiskResponse> {
+    // Anchor the dialog to whichever window dispatched the IPC so it
+    // appears as a sheet on macOS (the renderer's expectation) instead
+    // of floating free. `dialog.showOpenDialog` accepts an optional
+    // `BrowserWindow` first arg for exactly this; if the caller didn't
+    // pass one we fall back to the focused window.
+    const window =
+      parentWindow ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const result = window
+      ? await dialog.showOpenDialog(window, {
+          title: "Add directory",
+          buttonLabel: "Add directory",
+          properties: ["openDirectory", "createDirectory"],
+        })
+      : await dialog.showOpenDialog({
+          title: "Add directory",
+          buttonLabel: "Add directory",
+          properties: ["openDirectory", "createDirectory"],
+        });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    return { canceled: false, path: result.filePaths[0] };
+  }
+
+  async registerDirectoryFromDisk(
+    request: RegisterDirectoryFromDiskRequest,
+  ): Promise<RegisterDirectoryFromDiskResponse> {
+    const registry = getDesktopBackendRegistry();
+    return await registerDirectoryFromDisk(request, {
+      ensureDirectoryLaunchpad: (req) => registry.ensureDirectoryLaunchpad(req),
+    });
+  }
+
   async analyzeFocusedDiff(
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> {
@@ -799,6 +841,29 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.resetDirectoryLaunchpad(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+    async (event): Promise<PickDirectoryFromDiskResponse> => {
+      // Find the window that dispatched the IPC so the system "Choose
+      // folder" dialog anchors to it as a sheet on macOS. Falls back to
+      // the focused window inside `pickDirectoryFromDisk`.
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      return await appServerService.pickDirectoryFromDisk(
+        senderWindow ?? undefined,
+      );
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
+    async (
+      _event,
+      request: RegisterDirectoryFromDiskRequest,
+    ): Promise<RegisterDirectoryFromDiskResponse> => {
+      return await appServerService.registerDirectoryFromDisk(request);
+    },
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
@@ -820,6 +885,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
   await appServerService.close();
 }
 

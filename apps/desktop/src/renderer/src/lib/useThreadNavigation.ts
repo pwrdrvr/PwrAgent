@@ -948,6 +948,13 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
+  pickAndRegisterDirectory: (
+    preferredBackend?: AppServerBackendKind,
+  ) => Promise<void>;
+  pickDirectoryError?: string;
+  pickingDirectory: boolean;
+  clearPickDirectoryError: () => void;
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
   selectedDirectory?: NavigationDirectorySummary;
   selectedItemKey?: string;
@@ -1034,6 +1041,13 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     useState<string>();
   const [setThreadModelSettingsError, setSetThreadModelSettingsError] =
     useState<string>();
+  // Project-directory picker (issue #223). `pickAndRegisterDirectory`
+  // bridges the OS dialog → register flow; while it's in flight we
+  // disable the picker's "Add directory…" row, and any validation
+  // failure surfaces inline via `pickDirectoryError`. Both reset on the
+  // next attempt rather than persisting between renders.
+  const [pickDirectoryError, setPickDirectoryError] = useState<string>();
+  const [pickingDirectory, setPickingDirectory] = useState(false);
   const [state, setState] = useState<NavigationState>({
     loading: true,
     refreshing: false,
@@ -1785,6 +1799,65 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [desktopApi]
   );
 
+  const pickAndRegisterDirectory = useCallback(
+    async (preferredBackend?: AppServerBackendKind): Promise<void> => {
+      // Two-step OS-dialog → register-as-launchpad flow (issue #223).
+      // We separate the cancel path (silent — the user closed the
+      // dialog) from the validation-failure path (loud — we surface
+      // the inline error so the picker can render it). The success
+      // path navigates to the new directory's launchpad immediately
+      // so the composer focuses the just-added directory without an
+      // extra click.
+      if (
+        !desktopApi?.pickDirectoryFromDisk ||
+        !desktopApi?.registerDirectoryFromDisk
+      ) {
+        setPickDirectoryError(
+          "Desktop bridge is missing the directory picker.",
+        );
+        return;
+      }
+
+      setPickDirectoryError(undefined);
+      setPickingDirectory(true);
+
+      try {
+        const pick = await desktopApi.pickDirectoryFromDisk();
+        if (pick.canceled) {
+          return;
+        }
+        const result = await desktopApi.registerDirectoryFromDisk({
+          path: pick.path,
+          preferredBackend,
+        });
+        if (!result.ok) {
+          setPickDirectoryError(result.message);
+          return;
+        }
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdate(
+            current.response,
+            result.launchpad,
+            result.defaults,
+          ),
+        }));
+        setSelectedItemKey(buildLaunchpadSelectionKey(result.directoryKey));
+      } catch (error) {
+        setPickDirectoryError(
+          error instanceof Error ? error.message : String(error),
+        );
+      } finally {
+        setPickingDirectory(false);
+      }
+    },
+    [desktopApi],
+  );
+
+  const clearPickDirectoryError = useCallback((): void => {
+    setPickDirectoryError(undefined);
+  }, []);
+
   const updateDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
@@ -2372,6 +2445,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     refresh: async () => await refresh(),
     materializeDirectoryLaunchpad,
     openDirectoryLaunchpad,
+    pickAndRegisterDirectory,
+    pickDirectoryError,
+    pickingDirectory,
+    clearPickDirectoryError,
     resetDirectoryLaunchpad,
     selectedDirectory,
     selectedItemKey,

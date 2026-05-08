@@ -1653,4 +1653,133 @@ describe("useThreadNavigation", () => {
       result.current.selectedThread?.messagingBindings?.[0]?.platform,
     ).toBe("discord");
   });
+
+  describe("pickAndRegisterDirectory (issue #223)", () => {
+    function buildBaseDesktopApi(
+      overrides: Partial<DesktopApi> = {},
+    ): DesktopApi {
+      return {
+        getNavigationSnapshot: vi.fn(async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        })),
+        onAgentEvent: () => () => undefined,
+        ...overrides,
+      };
+    }
+
+    it("seeds the launchpad and focuses it on a successful pick", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/PwrAgent",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/PwrAgent",
+        directoryKey: "directory:/Users/me/repos/PwrAgent",
+        directoryLabel: "PwrAgent",
+        currentBranch: "main",
+        launchpad: {
+          directoryKey: "directory:/Users/me/repos/PwrAgent",
+          directoryKind: "directory" as const,
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/me/repos/PwrAgent",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }));
+
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.pickAndRegisterDirectory();
+      });
+
+      expect(pickDirectoryFromDisk).toHaveBeenCalledOnce();
+      expect(registerDirectoryFromDisk).toHaveBeenCalledExactlyOnceWith({
+        path: "/Users/me/repos/PwrAgent",
+        preferredBackend: undefined,
+      });
+      expect(result.current.pickDirectoryError).toBeUndefined();
+      expect(result.current.pickingDirectory).toBe(false);
+      expect(result.current.selectedItemKey).toBe(
+        "launchpad:directory:/Users/me/repos/PwrAgent",
+      );
+    });
+
+    it("is silent when the user cancels the OS dialog", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: true as const,
+      }));
+      const registerDirectoryFromDisk = vi.fn();
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.pickAndRegisterDirectory();
+      });
+
+      expect(registerDirectoryFromDisk).not.toHaveBeenCalled();
+      expect(result.current.pickDirectoryError).toBeUndefined();
+    });
+
+    it("surfaces an inline error when the chosen path is not a git repo", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/tmp/not-a-repo",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: false as const,
+        reason: "not-a-git-repo" as const,
+        message: "/tmp/not-a-repo is not inside a git repository.",
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.pickAndRegisterDirectory();
+      });
+
+      expect(result.current.pickDirectoryError).toContain("not inside a git");
+      expect(result.current.selectedItemKey).toBeUndefined();
+
+      // clearPickDirectoryError resets the inline error state.
+      act(() => {
+        result.current.clearPickDirectoryError();
+      });
+      expect(result.current.pickDirectoryError).toBeUndefined();
+    });
+  });
 });

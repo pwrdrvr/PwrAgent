@@ -90,13 +90,12 @@ function MessagingBar({ messagingOn, platforms, blinkPlatforms, onToggleMessagin
 }
 
 function TitleBar(props) {
-  const { Icon, screen, breadcrumb, messagingOn, platforms, blinkPlatforms,
-          onToggleMessaging, onOpenActivity, onOpenSettings, onToggleRail, railOpen } = props;
+  const { screen, breadcrumb, messagingOn, platforms, blinkPlatforms,
+          onToggleMessaging, onOpenActivity, onOpenSettings, onToggleRail, railOpen, onNewThread } = props;
   const I = window.PA.Icon;
 
   return (
     <div className="pa-tb">
-      {/* Sidebar zone — aligns with the 320px sidebar gutter */}
       <div className="pa-tb__sb-zone">
         <div className="pa-tb__lights">
           <span className="pa-tb__light r" />
@@ -104,12 +103,16 @@ function TitleBar(props) {
           <span className="pa-tb__light g" />
         </div>
         <I.PwrAgntLogo size={22} />
+        <span style={{ flex: 1 }} />
+        {onNewThread && (
+          <button className="pa-tb__btn" title="New thread (\u2318N)" onClick={onNewThread}>
+            <I.PlusSquare size={15} />
+          </button>
+        )}
       </div>
 
-      {/* Vertical rule lining up with the sidebar/thread split */}
       <div className="pa-tb__divider" />
 
-      {/* Main zone — sits above the thread pane */}
       <div className="pa-tb__main-zone">
         <div className="pa-tb__crumbs">
           {breadcrumb.map((c, i) => (

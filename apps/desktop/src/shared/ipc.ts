@@ -91,6 +91,18 @@ export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:update-directory-launchpad";
 export const NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:reset-directory-launchpad";
+/**
+ * IPC channels backing the project-directory picker (issue #223). The
+ * renderer first asks the main process to open the OS dialog (`pick`)
+ * and, on a confirmed pick, follows up with `register` so the main
+ * process can validate the path and seed a launchpad in one round-trip.
+ * Splitting them keeps the dialog itself uncancelable from the renderer
+ * while letting the picker surface validation errors inline.
+ */
+export const NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL =
+  "navigation:pick-directory-from-disk";
+export const NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL =
+  "navigation:register-directory-from-disk";
 export const RENDERER_ERROR_REPORT_CHANNEL = "renderer:error-report";
 export const IMAGE_UPLOAD_FALLBACK_CHANNEL = "image-upload:fallback";
 export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
