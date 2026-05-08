@@ -428,6 +428,7 @@ export class OverlayStore {
     threadId: string;
     prs: PrSummary[];
     fetchedAt?: number;
+    refreshKey?: string;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -441,6 +442,7 @@ export class OverlayStore {
         ...current,
         prs: params.prs,
         prsFetchedAt: params.fetchedAt ?? Date.now(),
+        prsRefreshKey: params.refreshKey,
       };
       data.threads[threadKey] = nextState;
       return nextState;

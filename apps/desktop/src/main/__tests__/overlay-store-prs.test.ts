@@ -51,14 +51,17 @@ describe("SqliteOverlayStore — thread PRs", () => {
       backend: "codex",
       threadId: "thread-1",
       prs: [prPassing],
+      refreshKey: "codex:thread-1:feat/pr-chip:/repo",
     });
     expect(next.prs).toEqual([prPassing]);
+    expect(next.prsRefreshKey).toBe("codex:thread-1:feat/pr-chip:/repo");
 
     const overlay = await store.getThreadOverlayState({
       backend: "codex",
       threadId: "thread-1",
     });
     expect(overlay?.prs).toEqual([prPassing]);
+    expect(overlay?.prsRefreshKey).toBe("codex:thread-1:feat/pr-chip:/repo");
   });
 
   it("replaces prs (last write wins) so state transitions land", async () => {

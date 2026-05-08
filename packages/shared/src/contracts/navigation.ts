@@ -335,6 +335,12 @@ export type ThreadOverlayState = {
   /** Wall-clock ms when `prs` was last refreshed via gh. */
   prsFetchedAt?: number;
   /**
+   * Stable key for the branch + directory inputs used by the last PR
+   * refresh. Main only reuses a recent `prs` result when the current
+   * request matches this key.
+   */
+  prsRefreshKey?: string;
+  /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize
    * these two fields across app restart. Surfaced on the navigation

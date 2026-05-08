@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { resolveFetchableDirectoryPaths } from "./resolveFetchableDirectoryPaths";
@@ -57,24 +57,38 @@ export function usePullRequestRefresh(params: {
   );
 
   const selected = params.selectedThread;
-  const selectedKey = selected
-    ? buildThreadIdentityKey(selected.source, selected.id)
-    : undefined;
+  const selectedRef = useRef<NavigationThreadSummary | undefined>(selected);
+  const selectedRefreshKey = useMemo(
+    () => selected ? buildRefreshRequestKey(selected) : undefined,
+    [selected],
+  );
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   // Selection trigger + 60s ticker: collapse into a single effect keyed on
-  // the selected thread's identity. Re-running on every snapshot would
-  // burn fetches needlessly — the snapshot mutates on inbox refresh even
-  // when the selected thread is unchanged.
+  // the selected thread's fetchable PR request. Re-running on every
+  // snapshot would burn fetches needlessly — the snapshot mutates during
+  // live agent activity even when the selected thread's branch and
+  // directories are unchanged.
   useEffect(() => {
-    if (!selected) return;
-    refresh(selected);
+    if (!selectedRefreshKey) return;
+    const refreshSelected = (): void => {
+      const currentSelected = selectedRef.current;
+      if (!currentSelected) return;
+      if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey) return;
+      refresh(currentSelected);
+    };
+
+    refreshSelected();
     const intervalId = window.setInterval(() => {
-      refresh(selected);
+      refreshSelected();
     }, SELECTED_REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [selected, selectedKey, refresh]);
+  }, [selectedRefreshKey, refresh]);
 
   // Hover prefetch: dedupe so a flood of mouseenter events for the same
   // thread doesn't trigger a flood of gh subprocesses.
@@ -99,6 +113,20 @@ export function usePullRequestRefresh(params: {
   );
 
   return { prefetch };
+}
+
+function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undefined {
+  const branch = thread.gitBranch?.trim();
+  if (!branch) return undefined;
+
+  const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
+  if (directoryPaths.length === 0) return undefined;
+
+  return JSON.stringify({
+    threadKey: buildThreadIdentityKey(thread.source, thread.id),
+    branch,
+    directoryPaths,
+  });
 }
 
 function prSummariesEqual(

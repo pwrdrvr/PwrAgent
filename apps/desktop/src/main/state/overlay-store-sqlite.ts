@@ -273,6 +273,7 @@ export class SqliteOverlayStore {
     threadId: string;
     prs: PrSummary[];
     fetchedAt?: number;
+    refreshKey?: string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -285,6 +286,7 @@ export class SqliteOverlayStore {
       ...current,
       prs: params.prs,
       prsFetchedAt: params.fetchedAt ?? Date.now(),
+      prsRefreshKey: params.refreshKey,
     };
     this.putThread(threadKey, nextState);
     return nextState;
