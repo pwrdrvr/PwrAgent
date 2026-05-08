@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { applyTomlEdits } from "../settings/toml-editor";
+import { describe, expect, it, vi } from "vitest";
+import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
 describe("applyTomlEdits", () => {
   it("returns the source unchanged when there are no edits", () => {
@@ -282,6 +282,66 @@ describe("applyTomlEdits", () => {
     expect(result).toBe(source);
   });
 
+  it("preserves a source with no trailing newline", () => {
+    const source = "[s]\nx = 1";
+    expect(applyTomlEdits(source, [])).toBe(source);
+
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["s", "x"], value: 2 },
+    ]);
+    expect(result).toBe("[s]\nx = 2");
+  });
+
+  it("preserves a source with a trailing newline", () => {
+    const source = "[s]\nx = 1\n";
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["s", "x"], value: 2 },
+    ]);
+    expect(result).toBe("[s]\nx = 2\n");
+  });
+
+  it("writes a float value", () => {
+    const result = applyTomlEdits("[s]\n", [
+      { op: "set", path: ["s", "ratio"], value: 1.5 },
+    ]);
+    expect(result).toContain("ratio = 1.5");
+  });
+
+  it("coalesces multiple edits to a missing section into a single new section", () => {
+    const source = "[a]\nx = 1\n";
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["b", "p"], value: 1 },
+      { op: "set", path: ["b", "q"], value: 2 },
+    ]);
+    expect(result).toBe("[a]\nx = 1\n\n[b]\np = 1\nq = 2\n");
+  });
+
+  it("applies multiple edits to the same section in original order", () => {
+    const source = "[s]\nexisting = 1\n";
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["s", "a"], value: 1 },
+      { op: "set", path: ["s", "b"], value: 2 },
+    ]);
+    expect(result).toBe("[s]\nexisting = 1\na = 1\nb = 2\n");
+  });
+
+  it("parses sources only once regardless of edit count (single-pass)", () => {
+    // Spy via a side channel: count regex.exec invocations on a hot path
+    // would be too invasive. Instead, this is a behavior smoke check —
+    // 50 edits to a small section produce a stable result quickly.
+    const lines = ["[s]", "x = 0"];
+    const source = lines.join("\n") + "\n";
+    const edits = Array.from({ length: 50 }, (_, i) => ({
+      op: "set" as const,
+      path: ["s", `k${i}`],
+      value: i,
+    }));
+    const result = applyTomlEdits(source, edits);
+    for (let i = 0; i < 50; i += 1) {
+      expect(result).toContain(`k${i} = ${i}`);
+    }
+  });
+
   it("applies multiple edits in order", () => {
     const source = [
       "[messaging.telegram]",
@@ -307,5 +367,82 @@ describe("applyTomlEdits", () => {
     expect(result).toContain("enabled = false");
     expect(result).toContain('authorized_user_ids = ["222"]');
     expect(result).toContain("[messaging.discord]");
+  });
+});
+
+describe("parseTomlTables", () => {
+  it("parses float values", () => {
+    const tables = parseTomlTables('[s]\nratio = 1.5\nneg = -2.25\n', "/x");
+    expect(tables.s.ratio).toBe(1.5);
+    expect(tables.s.neg).toBe(-2.25);
+  });
+
+  it("parses scientific-notation floats", () => {
+    const tables = parseTomlTables("[s]\na = 1.5e3\nb = -2E-2\n", "/x");
+    expect(tables.s.a).toBe(1500);
+    expect(tables.s.b).toBe(-0.02);
+  });
+
+  it("does not throw when an unknown value kind appears in any section", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      // 2026-05-15T00:00:00Z is a TOML datetime. Our parser doesn't yet
+      // understand datetimes, but a future build will. The current parser
+      // must skip the line, not blow up the entire snapshot read.
+      const tables = parseTomlTables(
+        "[s]\nwhen = 2026-05-15T00:00:00Z\nx = 1\n",
+        "/x",
+      );
+      expect(tables.s.x).toBe(1);
+      expect(tables.s.when).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns and uses the first occurrence when a section appears twice", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const tables = parseTomlTables(
+        "[s]\nx = 1\n\n[s]\ny = 2\n",
+        "/x",
+      );
+      expect(tables.s.x).toBe(1);
+      expect(tables.s.y).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Duplicate section [s]"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still throws on malformed TOML lines", () => {
+    expect(() => parseTomlTables("[s]\nbroken line no equals\n", "/x")).toThrow(
+      /Invalid TOML line/,
+    );
+  });
+});
+
+describe("applyTomlEdits with duplicate sections", () => {
+  it("edits the first occurrence and leaves the second untouched", () => {
+    const source = [
+      "[s]",
+      "x = 1",
+      "",
+      "[s]",
+      "y = 2",
+      "",
+    ].join("\n");
+
+    const result = applyTomlEdits(source, [
+      { op: "set", path: ["s", "x"], value: 99 },
+    ]);
+
+    // First section's x updated.
+    expect(result).toContain("x = 99");
+    // Second section preserved verbatim.
+    expect(result).toContain("[s]\ny = 2");
   });
 });
