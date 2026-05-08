@@ -101,4 +101,75 @@ describe("usePullRequestRefresh", () => {
     });
     expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
+
+  it("does not refresh again when the selected thread object is replaced", async () => {
+    const response = buildResponse({ prs: [] });
+    const refreshThreadPullRequests = vi.fn(async () => response);
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { rerender } = renderHook(
+      ({ selectedThread }: { selectedThread: NavigationThreadSummary }) =>
+        usePullRequestRefresh({
+          desktopApi,
+          selectedThread,
+        }),
+      {
+        initialProps: {
+          selectedThread: buildThread({ prs: [] }),
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+    });
+
+    rerender({
+      selectedThread: buildThread({ prs: [], updatedAt: 99 }),
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes again when the selected thread PR request changes", async () => {
+    const response = buildResponse({ prs: [] });
+    const refreshThreadPullRequests = vi.fn(async () => response);
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { rerender } = renderHook(
+      ({ selectedThread }: { selectedThread: NavigationThreadSummary }) =>
+        usePullRequestRefresh({
+          desktopApi,
+          selectedThread,
+        }),
+      {
+        initialProps: {
+          selectedThread: buildThread({ prs: [] }),
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+    });
+
+    rerender({
+      selectedThread: buildThread({ gitBranch: "feat/next", prs: [] }),
+    });
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledTimes(2);
+    });
+    expect(refreshThreadPullRequests).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/next",
+      directoryPaths: ["/repo"],
+    });
+  });
 });

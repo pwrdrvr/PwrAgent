@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type {
+  AppServerBackendKind,
   AppServerBackendScope,
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
@@ -78,6 +79,7 @@ import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const appServerLog = getMainLogger("pwragent:app-server");
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -117,6 +119,18 @@ function getNavigationSnapshotRequestKey(
   });
 }
 
+function getThreadPullRequestsRequestKey(
+  backend: AppServerBackendKind,
+  request: RefreshThreadPullRequestsRequest,
+): string {
+  return JSON.stringify({
+    backend,
+    threadId: request.threadId,
+    branch: request.branch.trim(),
+    directoryPaths: request.directoryPaths,
+  });
+}
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
@@ -125,6 +139,10 @@ class DesktopAppServerService {
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
+  >();
+  private readonly pendingThreadPullRequestRefreshes = new Map<
+    string,
+    Promise<RefreshThreadPullRequestsResponse>
   >();
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
@@ -395,6 +413,30 @@ class DesktopAppServerService {
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> {
     const backend = request.backend ?? "codex";
+    const requestKey = getThreadPullRequestsRequestKey(backend, request);
+    const pending = this.pendingThreadPullRequestRefreshes.get(requestKey);
+    if (pending) {
+      return await pending;
+    }
+
+    const refreshPromise = this.refreshThreadPullRequestsUncached(
+      backend,
+      request,
+      requestKey,
+    );
+    this.pendingThreadPullRequestRefreshes.set(requestKey, refreshPromise);
+    try {
+      return await refreshPromise;
+    } finally {
+      this.pendingThreadPullRequestRefreshes.delete(requestKey);
+    }
+  }
+
+  private async refreshThreadPullRequestsUncached(
+    backend: AppServerBackendKind,
+    request: RefreshThreadPullRequestsRequest,
+    requestKey: string,
+  ): Promise<RefreshThreadPullRequestsResponse> {
     const fetcher = this.getPrFetcher();
     const ghAvailable = await fetcher.isGhAvailable();
     if (!ghAvailable) {
@@ -446,6 +488,20 @@ class DesktopAppServerService {
       };
     }
 
+    const lastFetchedAt = existing?.prsFetchedAt;
+    if (
+      typeof lastFetchedAt === "number" &&
+      Date.now() - lastFetchedAt < THREAD_PR_REFRESH_MIN_INTERVAL_MS &&
+      existing?.prsRefreshKey === requestKey
+    ) {
+      return {
+        backend,
+        threadId: request.threadId,
+        prs: existingPrs,
+        ghAvailable: true,
+      };
+    }
+
     const prs = await detectPullRequestsForThread({
       fetcher,
       branch,
@@ -460,6 +516,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       prs,
+      refreshKey: requestKey,
     });
 
     logDebug("refreshThreadPullRequests", {
