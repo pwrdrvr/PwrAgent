@@ -3735,6 +3735,14 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Issue #240: cap reading width on wide displays. Above the cap the
+     content centers and bg-app shows on either side of the column.
+     The same `--chat-column-max` is applied to the composer's
+     children below so the input column lines up with the messages. */
+  max-width: var(--chat-column-max, 940px);
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .transcript-list__scroll-bottom {
@@ -5637,13 +5645,20 @@ textarea,
      Horizontal padding stays 16 so the input column lines up with the
      transcript message inset. */
   padding: 12px 16px 16px;
+  /* Centering context for the children below (issue #240). The
+     composer's bg-panel band stays edge-to-edge but each direct
+     child caps its width so the input column matches the transcript
+     reading width on wide displays. */
+  align-items: center;
 }
 
-.composer__label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
+/* Cap each composer row at the shared chat reading width so the
+   composer's content column lines up with the transcript's. The
+   composer form itself stays full-width (bg-panel band edge-to-edge)
+   — only the rows inside it center. */
+.composer > * {
+  width: 100%;
+  max-width: var(--chat-column-max, 940px);
 }
 
 .composer__input {
@@ -7087,6 +7102,53 @@ textarea,
   font-family: var(--font-mono);
   font-size: 13px;
   white-space: pre-wrap;
+}
+
+/* ============================================================
+   Wide-display auto-pin (issue #240)
+   ============================================================
+   On displays wide enough to comfortably show sidebar + capped
+   transcript column + the full context rail, the rail is forced
+   into the pinned state via CSS — regardless of the React
+   `contextRailPinned` flag — and the pin/unpin UI hides because
+   it's no longer meaningful (the rail can't auto-hide here). The
+   threshold (1700px) is the minimum where:
+     sidebar (≥280) + transcript max (940) + rail (≤380) + gutters
+   all fit without crowding. Below it, the existing mouseover +
+   pin/unpin behavior remains. */
+@media (min-width: 1700px) {
+  .thread-view__layout {
+    /* Reserve real layout width for the rail so the transcript
+       column doesn't overlap the now-always-visible rail. Same
+       calculation as the React-driven pinned state. */
+    padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 24px);
+  }
+
+  /* Force the rail to render as pinned — visible, claiming layout
+     width, no transform — even when the React `pinned` flag is
+     false. */
+  .context-rail {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    flex: 0 0 min(var(--context-rail-width, 380px), 42vw);
+    width: min(var(--context-rail-width, 380px), 42vw);
+    overflow: hidden;
+    box-shadow: none;
+    transform: translateX(0);
+  }
+
+  /* Hide the auto-hide / pinned status indicator and the pin
+     toggle button — at this width the user can't change pinning,
+     so the controls would be inert. The hamburger spine button
+     is also hidden since "open the rail" is moot when the rail
+     is always open. */
+  .context-rail__menu-button,
+  .context-panel__pin-button,
+  .context-panel__rail-state {
+    display: none;
+  }
 }
 
 @media (max-width: 1100px) {

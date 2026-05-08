@@ -2634,11 +2634,6 @@ export function Composer(props: ComposerProps) {
   const composerPlaceholder = isLaunchpad
     ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
     : "Reply to this thread";
-  const composerLabel = isReviewComposerOpen
-    ? "Review"
-    : isLaunchpad
-      ? "New thread"
-      : "Reply";
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
@@ -2741,12 +2736,15 @@ export function Composer(props: ComposerProps) {
         void submitTurn();
       }}
     >
-      <label
-        className="composer__label"
-        htmlFor={isReviewComposerOpen ? undefined : "thread-composer"}
-      >
-        {composerLabel}
-      </label>
+      {/* Issue #240: removed the visible "Reply" / "New thread" /
+          "Review" eyebrow that used to sit above the composer. The
+          input itself carries the same name through its `aria-label`
+          (the `label` prop on the inner ComposerRichInput /
+          ComposerTiptapInput / ComposerTextareaInput is rendered as
+          the input's `aria-label`), and the placeholder text already
+          conveys the action prompt visually. Stacking another header
+          above an input that already names itself was redundant
+          chrome. */}
 
       {pendingSteer ? (
         <div

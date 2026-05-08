@@ -169,11 +169,12 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
       foreground: app.window.locator(".transcript-message__text").first(),
       label: "transcript body on app shell",
     });
-    await assertReadableText({
-      background: composer,
-      foreground: app.window.locator(".composer__label").first(),
-      label: "composer label on composer panel",
-    });
+    // Issue #240: the "Reply" / "New thread" eyebrow was removed
+    // from the composer. The input's own `aria-label` and placeholder
+    // already convey what the row is for, so there's no longer a
+    // text node sitting directly on the composer's bg-panel surface
+    // to assert contrast against. The textarea / picker children all
+    // carry their own bg-input or button styling.
     await app.window.screenshot({
       path: testInfo.outputPath("tangerine-terminal-wide.png"),
     });
