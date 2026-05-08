@@ -1103,13 +1103,14 @@ export class DesktopBackendRegistry {
     ]);
     const createsLiveCodexClient =
       !options?.codexClient && !replayClients?.codexClient;
-    const settingsService = getDesktopSettingsService();
-    const codexCommand = createsLiveCodexClient
-      ? settingsService.resolveCodexCommandPreference()
+    const settingsService = createsLiveCodexClient
+      ? getDesktopSettingsService()
       : undefined;
-    const codexEnv = createsLiveCodexClient
-      ? settingsService.resolveCodexSpawnEnv()
-      : undefined;
+    const codexCommand = settingsService?.resolveCodexCommandPreference();
+    const codexEnv =
+      typeof settingsService?.resolveCodexSpawnEnv === "function"
+        ? settingsService.resolveCodexSpawnEnv()
+        : undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
       ? resolveGrokApiKeyForLiveClient()
