@@ -1968,7 +1968,7 @@ describe("TelegramAdapter", () => {
     });
   });
 
-  it("rejects matching usernames with different Telegram numeric ids through the controller", async () => {
+  it("drops matching usernames with different Telegram numeric ids before controller dispatch", async () => {
     const harness = await createControllerHarness();
 
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
@@ -1990,9 +1990,7 @@ describe("TelegramAdapter", () => {
     });
 
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
-    expect(harness.api.sendMessage.mock.calls.at(-1)?.[0].text).toContain(
-      "Not authorized",
-    );
+    expect(harness.api.sendMessage).not.toHaveBeenCalled();
   });
 
   it("normalizes inbound media as unsupported without downloading it", async () => {
@@ -2173,7 +2171,7 @@ describe("TelegramAdapter", () => {
     expect(events).toEqual([]);
   });
 
-  it("does not ignore Telegram messages authored by other bots", async () => {
+  it("drops Telegram messages authored by unauthorized bot users", async () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -2207,15 +2205,7 @@ describe("TelegramAdapter", () => {
       },
     });
 
-    expect(events.at(-1)).toMatchObject({
-      actor: {
-        isBot: true,
-        platformUserId: "12345",
-        username: "other_bot",
-      },
-      kind: "text",
-      text: "hello from another bot",
-    });
+    expect(events).toHaveLength(0);
   });
 
   it("sends image message intents through sendPhoto", async () => {

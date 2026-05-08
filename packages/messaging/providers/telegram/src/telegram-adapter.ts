@@ -1207,12 +1207,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private validateMessageIdentifiers(
     updateId: number,
     message: TelegramMessage,
+    options: { requireActor: boolean } = { requireActor: true },
   ): boolean {
     return (
       this.validateIdentifier("update.update_id", updateId, validateTelegramPositiveId)
       && this.validateIdentifier("message.message_id", message.message_id, validateTelegramPositiveId)
       && this.validateIdentifier("chat.id", message.chat.id, validateTelegramChatId)
-      && this.validateIdentifier("user.id", message.from?.id, validateTelegramPositiveId)
+      && (!options.requireActor
+        || this.validateIdentifier("user.id", message.from?.id, validateTelegramPositiveId))
       && (message.message_thread_id === undefined
         || this.validateIdentifier(
           "message.message_thread_id",
@@ -1241,7 +1243,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         validateTelegramCallbackData,
       )
       && (!callbackQuery.message
-        || this.validateMessageIdentifiers(updateId, callbackQuery.message))
+        || this.validateMessageIdentifiers(updateId, callbackQuery.message, {
+          requireActor: false,
+        }))
     );
   }
 
