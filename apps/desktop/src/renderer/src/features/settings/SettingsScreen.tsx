@@ -356,6 +356,13 @@ function SettingsSectionBody(props: {
           },
         });
       }}
+      onSaveCodexProfile={async (profile) => {
+        await props.settings.writeConfig({
+          models: {
+            codex: { profile },
+          },
+        });
+      }}
     />
   );
 }

@@ -127,8 +127,14 @@ describe("desktop settings contracts", () => {
       models: {
         codex: {
           path: { value: "", source: "default" },
+          profile: { value: "", source: "default" },
           discovery: {
             candidates: [],
+          },
+          profiles: {
+            profileRoot: "/home/example/.codex/profiles",
+            effectiveCodexHome: "/home/example/.codex",
+            profiles: [],
           },
         },
         grok: {

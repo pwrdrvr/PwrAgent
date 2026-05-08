@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
@@ -30,6 +31,7 @@ export function ModelsSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onSaveCodexPath: (path: string) => Promise<void>;
+  onSaveCodexProfile: (profile: string) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
@@ -49,6 +51,8 @@ export function ModelsSettings(props: {
   // a duplicate of this same chip; that's gone now.
   const codexSource =
     codex.path.source === "default" ? "auto" : sourceBadge(codex.path);
+  const codexProfileSource =
+    codex.profile.source === "default" ? "default" : sourceBadge(codex.profile);
   const grokConfigured = grok.configured;
   const grokSource = formatSourceLabel(grok.source, grok.overriddenByEnv);
 
@@ -160,6 +164,29 @@ export function ModelsSettings(props: {
             }
           />
           <SettingsField
+            label="Auth profile"
+            sub="Select the Codex home used for auth, config, sessions, skills, and state."
+            source={codexProfileSource}
+            error={codex.profiles.error}
+            control={
+              <div
+                className="settings-paths"
+                aria-label="Codex auth profiles"
+              >
+                {codex.profiles.profiles.map((profile) => (
+                  <CodexProfileRow
+                    key={profile.name || "default"}
+                    profile={profile}
+                    disabled={props.saving}
+                    onUse={(profileName) => {
+                      void props.onSaveCodexProfile(profileName);
+                    }}
+                  />
+                ))}
+              </div>
+            }
+          />
+          <SettingsField
             label="Connection test"
             sub="Spawns the selected Codex binary with --version and validates the version banner."
             control={
@@ -245,6 +272,40 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function CodexProfileRow(props: {
+  profile: DesktopCodexAuthProfileCandidate;
+  disabled?: boolean;
+  onUse: (profile: string) => void;
+}) {
+  const profile = props.profile;
+  const chips: SettingsPathRowChip[] = [
+    { label: profile.source === "default" ? "default" : "profile", tone: "muted" },
+    {
+      label: profile.hasAuthFile ? "auth" : "no auth",
+      tone: profile.hasAuthFile || !profile.name ? "muted" : "err",
+    },
+  ];
+
+  if (profile.hasConfigFile) {
+    chips.push({ label: "config", tone: "muted" });
+  }
+  if (!profile.exists) {
+    chips.push({ label: "missing", tone: "err" });
+  }
+
+  return (
+    <SettingsPathRow
+      title={profile.displayName}
+      path={profile.codexHome}
+      chips={chips}
+      selected={profile.selected}
+      selectedLabel="Using"
+      disabled={props.disabled || !profile.exists}
+      onUse={() => props.onUse(profile.name)}
+    />
   );
 }
 

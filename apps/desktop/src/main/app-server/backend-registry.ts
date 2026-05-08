@@ -1103,8 +1103,12 @@ export class DesktopBackendRegistry {
     ]);
     const createsLiveCodexClient =
       !options?.codexClient && !replayClients?.codexClient;
+    const settingsService = getDesktopSettingsService();
     const codexCommand = createsLiveCodexClient
-      ? getDesktopSettingsService().resolveCodexCommandPreference()
+      ? settingsService.resolveCodexCommandPreference()
+      : undefined;
+    const codexEnv = createsLiveCodexClient
+      ? settingsService.resolveCodexSpawnEnv()
       : undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
@@ -1120,6 +1124,7 @@ export class DesktopBackendRegistry {
         args: buildCodexClientArgs(),
         command: codexCommand,
         connectionObserver: codexObserver,
+        env: codexEnv,
         clientVersion,
       });
     this.grokClient =

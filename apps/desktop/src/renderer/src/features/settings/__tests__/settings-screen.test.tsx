@@ -105,6 +105,7 @@ function createSnapshot(
     models: {
       codex: {
         path: { value: "", source: "default" },
+        profile: { value: "", source: "default" },
         discovery: {
           selectedCommand: "/usr/local/bin/codex",
           selectedSource: "path",
@@ -122,6 +123,32 @@ function createSnapshot(
               selected: false,
               source: "application",
               version: "0.120.0",
+            },
+          ],
+        },
+        profiles: {
+          profileRoot: "/home/example/.codex/profiles",
+          effectiveCodexHome: "/home/example/.codex",
+          profiles: [
+            {
+              name: "",
+              displayName: "System default",
+              codexHome: "/home/example/.codex",
+              source: "default",
+              exists: true,
+              selected: true,
+              hasAuthFile: true,
+              hasConfigFile: true,
+            },
+            {
+              name: "work",
+              displayName: "work",
+              codexHome: "/home/example/.codex/profiles/work",
+              source: "directory",
+              exists: true,
+              selected: false,
+              hasAuthFile: true,
+              hasConfigFile: false,
             },
           ],
         },
@@ -303,13 +330,25 @@ describe("SettingsScreen", () => {
     // `/usr/local/bin/codex`, so the single "Use" here points at
     // `/Applications/Codex.app/Contents/Resources/codex`.
     const useButtons = screen.getAllByRole("button", { name: "Use" });
-    expect(useButtons).toHaveLength(1);
+    expect(useButtons).toHaveLength(2);
     fireEvent.click(useButtons[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
           codex: {
             path: "/Applications/Codex.app/Contents/Resources/codex",
+          },
+        },
+      });
+    });
+    expect(screen.getByText("System default")).toBeInTheDocument();
+    expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
+    fireEvent.click(useButtons[1]!);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            profile: "work",
           },
         },
       });
