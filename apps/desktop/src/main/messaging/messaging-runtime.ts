@@ -40,6 +40,15 @@ export type DesktopMessagingAdapter = {
   channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  /**
+   * Optional subscription for fatal runtime errors that took the
+   * adapter offline after a successful start (e.g. Telegram's 409
+   * Conflict when a second bot instance starts polling). The runtime
+   * subscribes after `start()` and flips the platform health to
+   * `errored` so the renderer status pill turns red. Adapters that
+   * cannot detect post-start failures may simply omit the method.
+   */
+  onRuntimeError?(listener: (reason: string) => void): () => void;
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -122,6 +131,11 @@ export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
   private controllers: MessagingController[] = [];
   private unsubscribeBackendEvents?: () => void;
+  /**
+   * One unsubscribe per running adapter that exposed `onRuntimeError`.
+   * Held so `stop()` can detach before adapters are torn down.
+   */
+  private adapterRuntimeErrorUnsubscribes: Array<() => void> = [];
   private started = false;
   /**
    * Per-platform health snapshot. Keyed by `MessagingChannelKind`. Updated
@@ -241,6 +255,17 @@ export class DesktopMessagingRuntime {
       this.adapters.push(adapter);
       this.controllers.push(controller);
       this.setPlatformHealth(adapter.channel, "enabled");
+
+      const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
+        messagingLog.warn(`${adapter.channel}: adapter runtime error`, {
+          channel: adapter.channel,
+          reason,
+        });
+        this.setPlatformHealth(adapter.channel, "errored", { reason });
+      });
+      if (unsubscribeRuntimeError) {
+        this.adapterRuntimeErrorUnsubscribes.push(unsubscribeRuntimeError);
+      }
     }
 
     this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
@@ -287,6 +312,16 @@ export class DesktopMessagingRuntime {
 
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
+    for (const unsubscribe of this.adapterRuntimeErrorUnsubscribes) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        messagingLog.warn("messaging adapter runtime-error unsubscribe threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.adapterRuntimeErrorUnsubscribes = [];
     this.controllers.forEach((controller) => controller.dispose());
     const stoppedChannels = this.adapters.map((adapter) => adapter.channel);
     await Promise.all(this.adapters.map(async (adapter) => adapter.stop?.()));
