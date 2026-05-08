@@ -104,6 +104,11 @@ function TitleBar(props) {
         </div>
         <I.PwrAgntLogo size={22} />
         <span style={{ flex: 1 }} />
+        {screen === "main" && (
+          <button className="pa-tb__btn" title="Settings" onClick={onOpenSettings}>
+            <I.Settings size={15} />
+          </button>
+        )}
         {onNewThread && (
           <button className="pa-tb__btn" title="New thread (\u2318N)" onClick={onNewThread}>
             <I.PlusSquare size={15} />
@@ -137,14 +142,9 @@ function TitleBar(props) {
         />
 
         {screen === "main" && (
-          <>
-            <button className="pa-tb__btn" title="Settings" onClick={onOpenSettings}>
-              <I.Settings size={15} />
-            </button>
-            <button className={`pa-tb__btn ${railOpen ? "is-active" : ""}`} title="Toggle context" onClick={onToggleRail}>
-              <I.PanelRight size={15} />
-            </button>
-          </>
+          <button className={`pa-tb__btn ${railOpen ? "is-active" : ""}`} title="Toggle context" onClick={onToggleRail}>
+            <I.PanelRight size={15} />
+          </button>
         )}
       </div>
     </div>
