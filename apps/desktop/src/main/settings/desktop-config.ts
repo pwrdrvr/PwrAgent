@@ -15,6 +15,7 @@ import {
   applyTomlEdits,
   parseTomlTables,
   type TomlEdit,
+  type TomlTables,
   type TomlValue,
 } from "./toml-editor";
 
@@ -90,6 +91,8 @@ export type DesktopSettingsConfig = {
 type TomlScalar = TomlValue;
 
 const AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH = 64;
+const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
+const LEGACY_AUTHORIZED_CONTACT_MARKER = "pwragent-legacy-settings";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -132,14 +135,17 @@ export function applyDesktopSettingsPatch(
   configPath: string,
   patch: DesktopSettingsConfigPatch,
 ): void {
-  const edits = desktopSettingsPatchToEdits(patch);
-  if (edits.length === 0) {
-    return;
-  }
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const source = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf8")
     : "";
+  const edits = desktopSettingsPatchToEdits(
+    patch,
+    parseTomlTables(source, configPath),
+  );
+  if (edits.length === 0) {
+    return;
+  }
   const next = applyTomlEdits(source, edits);
   if (next === source) {
     return;
@@ -151,6 +157,7 @@ export function applyDesktopSettingsPatch(
 
 export function desktopSettingsPatchToEdits(
   patch: DesktopSettingsConfigPatch,
+  currentTables: TomlTables = {},
 ): TomlEdit[] {
   const edits: TomlEdit[] = [];
 
@@ -164,19 +171,42 @@ export function desktopSettingsPatchToEdits(
   const setAuthorizedContacts = (
     tablePath: readonly string[],
     legacyKey: string,
-    tableArrayKey: string,
     value: readonly DesktopAuthorizedContact[] | undefined,
+    oldTableArrayKeys: readonly string[] = [],
   ): void => {
     if (value === undefined) return;
+    const tableName = tablePath.join(".");
+    const listKey = `${legacyKey}_list`;
+    const table = currentTables[tableName];
+    const hasLegacyScalar = readStringArray(table?.[legacyKey]) !== undefined;
+    const hasListTable = readAuthorizedContactArray(table?.[listKey]) !== undefined;
+    const tableArrayKey = hasLegacyScalar || hasListTable ? listKey : legacyKey;
     const tableArrayPath = [...tablePath, tableArrayKey];
-    edits.push({ op: "delete", path: [...tablePath, legacyKey] });
-    if (legacyKey !== tableArrayKey) {
-      edits.push({ op: "delete", path: tableArrayPath });
-    }
-    edits.push({ op: "deleteTableArray", path: tableArrayPath });
     const normalizedContacts = normalizeAuthorizedContacts(value);
+
+    for (const staleKey of [legacyKey, listKey, ...oldTableArrayKeys]) {
+      if (staleKey === tableArrayKey) continue;
+      if (staleKey === legacyKey && hasLegacyScalar) continue;
+      edits.push({ op: "delete", path: [...tablePath, staleKey] });
+      edits.push({ op: "deleteTableArray", path: [...tablePath, staleKey] });
+    }
+
+    if (hasLegacyScalar) {
+      edits.push({
+        op: "ensureCommentBefore",
+        path: [...tablePath, legacyKey],
+        marker: LEGACY_AUTHORIZED_CONTACT_MARKER,
+        comment: legacyAuthorizedContactComment(legacyKey),
+      });
+      edits.push({
+        op: "set",
+        path: [...tablePath, legacyKey],
+        value: normalizedContacts.map((contact) => contact.id),
+      });
+    }
+
+    edits.push({ op: "deleteTableArray", path: tableArrayPath });
     if (normalizedContacts.length === 0) {
-      edits.push({ op: "set", path: tableArrayPath, value: [] });
       return;
     }
     edits.push({
@@ -234,14 +264,13 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "telegram"],
       "authorized_user_ids",
-      "authorized_users",
       telegram.authorizedUserIds,
+      ["authorized_users"],
     );
   }
   if (telegram?.authorizedSupergroups !== undefined) {
     setAuthorizedContacts(
       ["messaging", "telegram"],
-      "authorized_supergroups",
       "authorized_supergroups",
       telegram.authorizedSupergroups,
     );
@@ -261,14 +290,13 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "discord"],
       "authorized_user_ids",
-      "authorized_users",
       discord.authorizedUserIds,
+      ["authorized_users"],
     );
   }
   if (discord?.authorizedGuilds !== undefined) {
     setAuthorizedContacts(
       ["messaging", "discord"],
-      "authorized_guilds",
       "authorized_guilds",
       discord.authorizedGuilds,
     );
@@ -309,8 +337,8 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "mattermost"],
       "authorized_user_ids",
-      "authorized_users",
       mattermost.authorizedUserIds,
+      ["authorized_users"],
     );
   }
 
@@ -378,10 +406,12 @@ function normalizeDesktopConfig(
         enabled: readBoolean(telegram?.enabled),
         streamingResponses: readBoolean(telegram?.streaming_responses),
         authorizedUserIds: readAuthorizedContacts(
-          telegram?.authorized_users,
+          telegram?.authorized_user_ids_list,
           telegram?.authorized_user_ids,
+          telegram?.authorized_users,
         ),
         authorizedSupergroups: readAuthorizedContacts(
+          telegram?.authorized_supergroups_list,
           telegram?.authorized_supergroups,
         ),
       },
@@ -390,10 +420,14 @@ function normalizeDesktopConfig(
         streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readAuthorizedContacts(
-          discord?.authorized_users,
+          discord?.authorized_user_ids_list,
           discord?.authorized_user_ids,
+          discord?.authorized_users,
         ),
-        authorizedGuilds: readAuthorizedContacts(discord?.authorized_guilds),
+        authorizedGuilds: readAuthorizedContacts(
+          discord?.authorized_guilds_list,
+          discord?.authorized_guilds,
+        ),
       },
       mattermost: {
         enabled: readBoolean(mattermost?.enabled),
@@ -403,8 +437,9 @@ function normalizeDesktopConfig(
         slashCommandPrefix: readString(mattermost?.slash_command_prefix),
         registerSlashCommands: readBoolean(mattermost?.register_slash_commands),
         authorizedUserIds: readAuthorizedContacts(
-          mattermost?.authorized_users,
+          mattermost?.authorized_user_ids_list,
           mattermost?.authorized_user_ids,
+          mattermost?.authorized_users,
         ),
       },
     },
@@ -563,16 +598,19 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
 }
 
 function readAuthorizedContacts(
-  value: TomlScalar | undefined,
-  legacyValue?: TomlScalar | undefined,
+  ...values: Array<TomlScalar | undefined>
 ): DesktopAuthorizedContact[] | undefined {
-  const contacts = readAuthorizedContactArray(value);
-  if (contacts !== undefined) {
-    return contacts;
+  for (const value of values) {
+    const contacts = readAuthorizedContactArray(value);
+    if (contacts !== undefined) {
+      return contacts;
+    }
   }
-  const legacy = readStringArray(value) ?? readStringArray(legacyValue);
-  if (legacy !== undefined) {
-    return legacy.map((id) => ({ id, displayName: "" }));
+  for (const value of values) {
+    const legacy = readStringArray(value);
+    if (legacy !== undefined) {
+      return legacy.map((id) => ({ id, displayName: "" }));
+    }
   }
   return undefined;
 }
@@ -620,6 +658,17 @@ function sanitizeAuthorizedContactDisplayName(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH);
+}
+
+function legacyAuthorizedContactComment(key: string): string {
+  return [
+    "#",
+    LEGACY_AUTHORIZED_CONTACT_MARKER,
+    `key=${key}`,
+    "shape=string-array",
+    `used_through=${LEGACY_AUTHORIZED_CONTACT_LAST_VERSION}`,
+    "kept_for_older_clients",
+  ].join(" ");
 }
 
 function readNumber(value: TomlScalar | undefined): number | undefined {

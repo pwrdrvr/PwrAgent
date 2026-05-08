@@ -45,6 +45,12 @@ export type TomlEdit =
   | { op: "set"; path: readonly string[]; value: TomlEditValue }
   | { op: "delete"; path: readonly string[] }
   | {
+      op: "ensureCommentBefore";
+      path: readonly string[];
+      comment: string;
+      marker: string;
+    }
+  | {
       op: "setTableArray";
       path: readonly string[];
       value: readonly Record<string, TomlEditScalar>[];
@@ -359,6 +365,20 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
     const { tableName, keyName } = splitPath(edit.path);
     const section = findSection(model, tableName);
 
+    if (edit.op === "ensureCommentBefore") {
+      if (!section) continue;
+      const key = section.keys.find((k) => k.name === keyName);
+      if (!key || markerPrecedesKey(model.lines, key, edit.marker)) {
+        continue;
+      }
+      lineOps.push({
+        kind: "insert",
+        insertionLine: key.startLine,
+        newLines: [edit.comment],
+      });
+      continue;
+    }
+
     if (edit.op === "delete") {
       if (!section) continue;
       const key = section.keys.find((k) => k.name === keyName);
@@ -580,6 +600,29 @@ function sectionLineRange(
     startLine: section.headerLine,
     endLine: Math.max(section.headerLine, sectionEnd - 1),
   };
+}
+
+function markerPrecedesKey(
+  lines: readonly string[],
+  key: KeyLocation,
+  marker: string,
+): boolean {
+  let cursor = key.startLine - 1;
+  while (cursor >= 0) {
+    const trimmed = lines[cursor].trim();
+    if (trimmed.length === 0) {
+      cursor -= 1;
+      continue;
+    }
+    if (!trimmed.startsWith("#")) {
+      return false;
+    }
+    if (trimmed.includes(marker)) {
+      return true;
+    }
+    cursor -= 1;
+  }
+  return false;
 }
 
 function computeKeyInsertionLine(
