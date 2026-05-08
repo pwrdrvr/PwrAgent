@@ -144,11 +144,10 @@ The sidebar is an information surface. It should read like an active operating q
 
 The thread lens switch is:
 
-1. `Inbox`
-2. `Recents`
-3. `Directories`
+1. `Recents`
+2. `Directories`
 
-`Inbox` is the leftmost lens and shows unread chats. It should use the same visual row language as Recents, not a separate mini-app above the browser.
+`Recents` is the default browsing lens and carries a user-curated Pins section at the top of the same scrollable thread list. Unread state is row-local: use the orange cookie marker on any thread row that has updated-since-seen activity instead of a separate Inbox lens.
 
 Do not show a generic Browse header, thread count, or timestamp above the lens switch. Let the rows carry the useful context.
 
