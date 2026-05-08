@@ -22,7 +22,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 describe("GitHub CLI discovery", () => {
-  it("returns checked candidates and selects a Homebrew gh outside PATH", async () => {
+  it("returns usable candidates and selects a Homebrew gh outside PATH", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     accessMock.mockImplementation(async (candidate: string) => {
@@ -56,6 +56,76 @@ describe("GitHub CLI discovery", () => {
 
     expect(snapshot.selectedCommand).toBe("/opt/homebrew/bin/gh");
     expect(snapshot.selectedSource).toBe("homebrew");
+    expect(snapshot.candidates).toEqual([
+      expect.objectContaining({
+        command: "/opt/homebrew/bin/gh",
+        executable: true,
+        selected: true,
+        source: "homebrew",
+        version: "2.88.1",
+      }),
+    ]);
+  });
+
+  it("dedupes PATH and well-known candidates that resolve to the same gh", async () => {
+    accessMock.mockResolvedValue(undefined);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: Record<string, unknown>,
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (command === "/usr/bin/which") {
+          callback(null, { stdout: "/opt/homebrew/bin/gh\n" });
+          return;
+        }
+        callback(null, { stdout: "gh version 2.92.0 (2026-05-01)\n" });
+      },
+    );
+    const { discoverGhCommands } = await import("../settings/gh-discovery");
+
+    const snapshot = await discoverGhCommands({ env: {} });
+
+    expect(
+      snapshot.candidates.filter((candidate) => candidate.command === "/opt/homebrew/bin/gh"),
+    ).toHaveLength(1);
+    expect(snapshot.selectedCommand).toBe("/opt/homebrew/bin/gh");
+    expect(snapshot.candidates[0]).toMatchObject({
+      command: "/opt/homebrew/bin/gh",
+      executable: true,
+      selected: true,
+      source: "homebrew",
+      version: "2.92.0",
+    });
+  });
+
+  it("shows checked well-known paths when no executable gh is found", async () => {
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    accessMock.mockRejectedValue(missingError);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null) => void,
+      ) => {
+        if (command === "/usr/bin/which") {
+          callback(new Error("not on path"));
+          return;
+        }
+        callback(missingError);
+      },
+    );
+    const { discoverGhCommands } = await import("../settings/gh-discovery");
+
+    const snapshot = await discoverGhCommands({ env: {} });
+
+    expect(snapshot.selectedCommand).toBeUndefined();
     expect(snapshot.candidates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -66,13 +136,6 @@ describe("GitHub CLI discovery", () => {
         }),
         expect.objectContaining({
           command: "/opt/homebrew/bin/gh",
-          executable: true,
-          selected: true,
-          source: "homebrew",
-          version: "2.88.1",
-        }),
-        expect.objectContaining({
-          command: "/usr/local/bin/gh",
           executable: false,
           failureReason: "not_found",
           source: "homebrew",

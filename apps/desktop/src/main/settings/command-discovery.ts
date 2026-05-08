@@ -35,7 +35,7 @@ export type DiscoverCommandOptions<Source extends string> = {
   versionArgs?: string[];
   parseVersion: (output: string) => string | undefined;
   compareVersions?: (left?: string, right?: string) => number;
-  includeFailedAutoCandidates?: boolean;
+  includeFailedAutoCandidates?: boolean | "if-none-executable";
 };
 
 export type ResolvedCommandCandidate<Source extends string> = {
@@ -180,18 +180,21 @@ export async function discoverCommands<Source extends string>(
     Boolean(candidate),
   );
 
-  const autoCandidates = (
+  const autoCandidates = dedupeCommandDiscoveryCandidates(
     await Promise.all(
       options.autoCandidates.map((candidate) =>
         buildCommandDiscoveryCandidate(candidate, options),
       ),
     )
-  ).filter((candidate): candidate is CommandDiscoveryCandidate<Source> =>
-    Boolean(candidate),
   );
 
+  const executableAutoCandidates = autoCandidates.filter((candidate) => candidate.executable);
+  const includeFailedAutoCandidates =
+    options.includeFailedAutoCandidates === "if-none-executable"
+      ? executableAutoCandidates.length === 0
+      : options.includeFailedAutoCandidates === true;
   const visibleAutoCandidates = autoCandidates
-    .filter((candidate) => options.includeFailedAutoCandidates || candidate.executable)
+    .filter((candidate) => includeFailedAutoCandidates || candidate.executable)
     .sort((left, right) =>
       options.compareVersions
         ? options.compareVersions(right.version, left.version)
@@ -213,6 +216,71 @@ export async function discoverCommands<Source extends string>(
     selectedSource: selected?.source,
     candidates,
   };
+}
+
+function dedupeCommandDiscoveryCandidates<Source extends string>(
+  candidates: Array<CommandDiscoveryCandidate<Source> | undefined>,
+): Array<CommandDiscoveryCandidate<Source>> {
+  const deduped: Array<CommandDiscoveryCandidate<Source>> = [];
+  const indexByCommand = new Map<string, number>();
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+
+    const key = candidate.command;
+    const existingIndex = indexByCommand.get(key);
+    if (existingIndex === undefined) {
+      indexByCommand.set(key, deduped.length);
+      deduped.push(candidate);
+      continue;
+    }
+
+    const existing = deduped[existingIndex];
+    deduped[existingIndex] = mergeCommandDiscoveryCandidates(existing, candidate);
+  }
+
+  return deduped;
+}
+
+function mergeCommandDiscoveryCandidates<Source extends string>(
+  existing: CommandDiscoveryCandidate<Source>,
+  candidate: CommandDiscoveryCandidate<Source>,
+): CommandDiscoveryCandidate<Source> {
+  const preferred = choosePreferredCommandDiscoveryCandidate(existing, candidate);
+  const fallback = preferred === existing ? candidate : existing;
+  const executable = existing.executable || candidate.executable;
+
+  return {
+    command: preferred.command,
+    source: preferred.source,
+    executable,
+    selected: existing.selected || candidate.selected,
+    version: preferred.version ?? fallback.version,
+    versionFailureReason:
+      preferred.versionFailureReason ?? fallback.versionFailureReason,
+    failureReason: executable
+      ? undefined
+      : (preferred.failureReason ?? fallback.failureReason),
+  };
+}
+
+function choosePreferredCommandDiscoveryCandidate<Source extends string>(
+  left: CommandDiscoveryCandidate<Source>,
+  right: CommandDiscoveryCandidate<Source>,
+): CommandDiscoveryCandidate<Source> {
+  if (right.executable !== left.executable) {
+    return right.executable ? right : left;
+  }
+  if (right.version && !left.version) {
+    return right;
+  }
+  if (left.version && !right.version) {
+    return left;
+  }
+  if (left.source === "path" && right.source !== "path") {
+    return right;
+  }
+  return left;
 }
 
 export async function resolveDiscoveredCommand<Source extends string>(params: {

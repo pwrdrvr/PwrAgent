@@ -68,7 +68,7 @@ export async function discoverGhCommands(params?: {
       ...ghCandidatePaths(env),
     ],
     parseVersion: parseGhVersionOutput,
-    includeFailedAutoCandidates: params?.includeFailedAutoCandidates ?? true,
+    includeFailedAutoCandidates: params?.includeFailedAutoCandidates ?? "if-none-executable",
   }) as Promise<DesktopGhDiscoverySnapshot>;
 }
 

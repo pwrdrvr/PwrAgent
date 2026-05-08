@@ -2670,6 +2670,13 @@ textarea,
   gap: 8px;
 }
 
+.settings-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
 /* Path-row list — canonical row for Codex discovery, Editor / Terminal
    candidates. Replaces .settings-discovery__row + .settings-application. */
 .settings-paths {
@@ -3072,7 +3079,7 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 14px 18px;
+  padding: 0;
 }
 
 .settings-pill {
