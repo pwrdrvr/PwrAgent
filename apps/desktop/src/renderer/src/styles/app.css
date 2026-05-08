@@ -1080,6 +1080,14 @@ textarea,
   background: var(--bg-row-active);
 }
 
+.thread-row--drag-image {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  z-index: -1;
+  pointer-events: none;
+}
+
 .thread-row__overflow-button {
   position: absolute;
   top: 9px;

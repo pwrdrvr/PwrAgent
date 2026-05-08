@@ -139,7 +139,12 @@ export function ThreadRow(props: ThreadRowProps) {
       className={`thread-row-shell${props.draggable ? " is-draggable" : ""}`}
       draggable={props.draggable}
       role="listitem"
-      onDragStart={props.onDragStartThread}
+      onDragStart={(event) => {
+        if (props.draggable) {
+          setThreadRowDragImage(event);
+        }
+        props.onDragStartThread?.(event);
+      }}
       onDragOver={props.onDragOverThread}
       onDrop={props.onDropOnThread}
       onContextMenu={(event) => {
@@ -280,6 +285,28 @@ export function ThreadRow(props: ThreadRowProps) {
       </button>
     </div>
   );
+}
+
+function setThreadRowDragImage(event: DragEvent<HTMLDivElement>): void {
+  const row = event.currentTarget.querySelector(".thread-row");
+  if (!(row instanceof HTMLElement)) {
+    return;
+  }
+
+  const rect = row.getBoundingClientRect();
+  const clone = row.cloneNode(true) as HTMLElement;
+  clone.classList.add("thread-row--drag-image");
+  clone.style.width = `${rect.width}px`;
+  clone.style.height = `${rect.height}px`;
+  document.body.appendChild(clone);
+
+  event.dataTransfer.setDragImage(
+    clone,
+    Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
+    Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
+  );
+
+  window.setTimeout(() => clone.remove(), 0);
 }
 
 function ReactionChip(props: { emoji: string; onToggle: () => void }) {
