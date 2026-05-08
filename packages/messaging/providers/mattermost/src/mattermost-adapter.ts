@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/client";
 
@@ -337,7 +336,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       throw error;
     }
 
-    const wsUrl = `${this.config.serverUrl.replace(/^http/, "ws")}/api/v4/websocket`;
+    // Strip any trailing slash before appending the websocket path —
+    // `http://host:port/` would otherwise become `ws://host:port//api/v4/websocket`
+    // and Mattermost rejects that with a 1006 close. The runtime
+    // config layer normalizes URLs at the boundary, but defend here
+    // too in case a caller constructs the adapter directly.
+    const wsUrl = `${this.config.serverUrl.replace(/^http/, "ws").replace(/\/+$/, "")}/api/v4/websocket`;
     this.websocketClient.addMessageListener((message) => {
       this.handleWebsocketMessage(message).catch((error) => {
         this.logger.error("mattermost websocket message handler crashed", {

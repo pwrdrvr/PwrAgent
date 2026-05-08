@@ -336,7 +336,16 @@ export function MessagingSettings(props: {
           <TextField
             disabled={props.saving}
             label="Server URL"
-            sub="Mattermost server base URL, e.g. https://chat.example.com."
+            sub="PwrAgent calls this URL. For small installations it can live on the same machine, or in Docker on the same machine."
+            help={
+              <>
+                Examples:
+                <br />
+                <code>http://127.0.0.1:8065/</code> (local, Docker on same host)
+                <br />
+                <code>https://chat.example.com</code> (Cloudflare Tunnel / Tailscale Funnel)
+              </>
+            }
             source={optionalStringSourceBadge(mattermost.serverUrl)}
             value={mattermost.serverUrl.value}
             onSave={(serverUrl) => {
@@ -378,7 +387,7 @@ export function MessagingSettings(props: {
           <TextField
             disabled={props.saving}
             label="Callback Base URL"
-            sub="Public URL Mattermost POSTs button clicks to. The local listener binds to the URL's port if present, otherwise to 47821."
+            sub="Mattermost calls PwrAgent at this URL when a user clicks a button. It must be reachable from the Mattermost server: a public URL (Cloudflare Tunnel / Tailscale Funnel) for hosted Mattermost, a name on the local network, or an address Mattermost-in-Docker can use to reach the PwrAgent process on the host. The local listener binds to the URL's port if present, otherwise to 47821."
             help={
               <>
                 Examples:
@@ -406,8 +415,18 @@ export function MessagingSettings(props: {
             disabled={props.saving || !mattermost.hmacSecret.writable}
             label="Callback HMAC Secret"
             sub="Optional. Stored in the system keychain. Leave unset to regenerate per restart (acts as automatic TTL on outstanding callback URLs)."
+            help={
+              <>
+                Click <strong>Generate</strong> to fill the field with a fresh
+                256-bit secret (then click Replace to save), <em>or</em> run
+                this in a terminal if you'd rather generate it yourself:
+                <br />
+                <code>openssl rand -hex 32</code>
+              </>
+            }
             secret="mattermostHmacSecret"
             state={mattermost.hmacSecret}
+            onGenerate={generateHmacSecretHex}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
@@ -679,8 +698,16 @@ function SecretField(props: {
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
+  help?: ReactNode;
   secret: DesktopSettingsSecretName;
   state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
+  /**
+   * Optional generator. When provided, a "Generate" button appears
+   * that fills the input with the produced value (the user still has
+   * to click Replace to commit). Used by the Mattermost HMAC field
+   * so users don't have to leave the app to run openssl.
+   */
+  onGenerate?: () => string;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
@@ -695,6 +722,7 @@ function SecretField(props: {
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={`${status} · ${source}`}
       error={props.state.unavailableReason}
       control={
@@ -708,6 +736,18 @@ function SecretField(props: {
             value={value}
             onChange={(event) => setValue(event.currentTarget.value)}
           />
+          {props.onGenerate ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={() => {
+                setValue(props.onGenerate!());
+              }}
+            >
+              Generate
+            </button>
+          ) : null}
           <button
             className="button button--secondary"
             disabled={props.disabled || !value.trim()}
@@ -737,4 +777,16 @@ function SecretField(props: {
       }
     />
   );
+}
+
+/**
+ * Generate a 32-byte (256-bit) hex secret using the renderer's Web
+ * Crypto API. Equivalent strength to `openssl rand -hex 32`. Browser
+ * `crypto.getRandomValues` is a CSPRNG in Electron just like in
+ * Chrome, so we don't need to bounce through the main process.
+ */
+function generateHmacSecretHex(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

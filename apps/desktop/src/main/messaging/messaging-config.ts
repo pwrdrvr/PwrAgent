@@ -197,14 +197,24 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostAuthorizedActorIds =
     envConfig.mattermost?.authorizedActorIds
     ?? snapshot.messaging.mattermost.authorizedUserIds.value;
-  const mattermostServerUrl =
+  const mattermostServerUrlRaw =
     envConfig.mattermost?.serverUrl
     || snapshot.messaging.mattermost.serverUrl.value
     || undefined;
-  const mattermostCallbackBaseUrl =
+  const mattermostCallbackBaseUrlRaw =
     envConfig.mattermost?.callbackBaseUrl
     || snapshot.messaging.mattermost.callbackBaseUrl.value
     || undefined;
+  const mattermostServerUrl = normalizeMattermostUrl(
+    mattermostServerUrlRaw,
+    "serverUrl",
+    log,
+  );
+  const mattermostCallbackBaseUrl = normalizeMattermostUrl(
+    mattermostCallbackBaseUrlRaw,
+    "callbackBaseUrl",
+    log,
+  );
   const mattermostSlashCommandPrefix =
     envConfig.mattermost?.slashCommandPrefix
     ?? snapshot.messaging.mattermost.slashCommandPrefix.value;
@@ -463,6 +473,61 @@ function readAttachmentPolicyFromEnv(
     ...(maxAttachmentCount !== undefined ? { maxAttachmentCount } : {}),
   };
   return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+/**
+ * Normalize a Mattermost URL coming from settings or env vars.
+ *
+ * - Trims surrounding whitespace.
+ * - Validates that it parses as a `http:` or `https:` URL — anything
+ *   else (file:, ftp:, garbage strings) is rejected as invalid.
+ * - Strips trailing slashes from the path so concatenation with API
+ *   paths like `/api/v4/websocket` doesn't produce double slashes.
+ *   The Mattermost websocket client builds its URL by string-appending
+ *   `/api/v4/websocket` to the server URL; a single trailing slash on
+ *   the input produces `ws://host:port//api/v4/websocket`, which the
+ *   server rejects with a 1006 close. Normalize once at the boundary
+ *   instead of trying to remember to strip on every concatenation.
+ *
+ * Returns `undefined` for empty / unparseable / non-http(s) input. The
+ * adapter-startup gate already requires a non-undefined URL, so an
+ * invalid URL fails closed (the adapter doesn't start) rather than
+ * starting with broken state.
+ */
+export function normalizeMattermostUrl(
+  input: string | undefined,
+  fieldName: "serverUrl" | "callbackBaseUrl",
+  log?: { warn: (msg: string, data?: Record<string, unknown>) => void },
+): string | undefined {
+  if (input === undefined) return undefined;
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    log?.warn("mattermost url is not a valid URL — disabling channel", {
+      field: fieldName,
+      value: trimmed,
+    });
+    return undefined;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    log?.warn("mattermost url has unsupported protocol — disabling channel", {
+      field: fieldName,
+      protocol: parsed.protocol,
+    });
+    return undefined;
+  }
+
+  // Reconstruct via the URL object so we get a single canonical form
+  // (collapsed slashes, default-port stripping, etc.), then strip a
+  // single trailing slash from the path so consumers can safely
+  // string-concatenate `/api/v4/...`.
+  const canonical = parsed.toString();
+  return canonical.endsWith("/") ? canonical.slice(0, -1) : canonical;
 }
 
 function shouldEnableSettingsChannel<TConfig>(
