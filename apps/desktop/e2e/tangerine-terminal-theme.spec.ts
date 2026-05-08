@@ -135,7 +135,14 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
 
     await expect(shell).toHaveCSS("background-color", "rgb(0, 0, 0)");
     await expect(sidebar).toHaveCSS("background-color", "rgb(5, 5, 5)");
-    await expect(transcriptPanel).toHaveCSS("background-color", "rgb(10, 10, 10)");
+    // Issue #240: the transcript pane is now transparent — it rides
+    // the app-shell's `--bg-app` background. Only the composer below
+    // it carries the panel-tinted surface, separated by the
+    // composer's `border-top`.
+    await expect(transcriptPanel).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
     await expect(composer).toHaveCSS("background-color", "rgb(10, 10, 10)");
     await expect(activeLens).toHaveCSS("background-color", "rgb(18, 8, 0)");
     await expect(activeLens).toHaveCSS("color", "rgb(255, 179, 92)");
@@ -152,10 +159,15 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
       foreground: app.window.locator(".thread-row__title").first(),
       label: "thread row title on sidebar",
     });
+    // Issue #240: transcript-panel is transparent now, so its
+    // `background-color` reads as `rgba(0, 0, 0, 0)` and would defeat
+    // the contrast calculation. The actual visible surface behind
+    // transcript text is the app-shell's `--bg-app`. Use that as the
+    // readability reference.
     await assertReadableText({
-      background: transcriptPanel,
+      background: shell,
       foreground: app.window.locator(".transcript-message__text").first(),
-      label: "transcript body on transcript panel",
+      label: "transcript body on app shell",
     });
     await assertReadableText({
       background: composer,
@@ -211,6 +223,7 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     const transcriptPanel = app.window.locator(".transcript-panel");
     const contextRail = app.window.locator(".context-rail");
     const composer = app.window.locator(".composer");
+    const shell = app.window.locator(".app-shell");
     const approval = app.window.getByRole("group", { name: "Pending approval" });
 
     await expect(transcriptPanel).toBeVisible();
@@ -225,10 +238,12 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();
 
+    // Issue #240: transcript-panel is transparent — read against the
+    // app-shell `--bg-app` for the readability calc.
     await assertReadableText({
-      background: transcriptPanel,
+      background: shell,
       foreground: approval.locator(".transcript-request__prompt"),
-      label: "approval prompt on transcript panel",
+      label: "approval prompt on app shell",
     });
 
     const transcriptBox = await transcriptPanel.boundingBox();
