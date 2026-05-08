@@ -1,78 +1,26 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type {
   DesktopCodexCandidateSource,
   DesktopCodexDiscoveryCandidate,
   DesktopCodexDiscoverySnapshot,
 } from "@pwragent/shared";
 import { CODEX_COMMAND_ENV } from "./desktop-settings-env";
-
-const execFile = promisify(execFileCallback);
+import {
+  discoverCommands,
+  pathIsExecutable,
+  type ResolvedCommandCandidate,
+} from "./command-discovery";
 
 export type ResolvedCodexCommandCandidate = {
   command: string;
   source: DesktopCodexCandidateSource;
   version?: string;
 };
+export { pathIsExecutable };
 
-export async function pathIsExecutable(candidate: string): Promise<boolean> {
-  try {
-    await access(candidate, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolvePathCommand(
-  command: string,
-  env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
-  if (command.includes(path.sep)) {
-    return command;
-  }
-
-  try {
-    const result = await execFile("/usr/bin/which", [command], {
-      env,
-      timeout: 2_000,
-    });
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function readCodexVersion(
-  command: string,
-  env: NodeJS.ProcessEnv,
-): Promise<{
-  ran: boolean;
-  version?: string;
-  failureReason?: string;
-}> {
-  try {
-    const result = await execFile(command, ["--version"], {
-      env,
-      timeout: 2_000,
-    });
-    const output = `${result.stdout}\n${result.stderr ?? ""}`;
-    const match = output.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/);
-    return {
-      ran: true,
-      version: match?.[1],
-      failureReason: match ? undefined : "version_not_reported",
-    };
-  } catch (error) {
-    return {
-      ran: false,
-      failureReason: error instanceof Error ? error.message : String(error),
-    };
-  }
+function parseCodexVersionOutput(output: string): string | undefined {
+  return output.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/)?.[1];
 }
 
 function parseVersion(value?: string): {
@@ -167,87 +115,38 @@ function getCodexAppCandidatePaths(): string[] {
   ];
 }
 
-async function buildDiscoveryCandidate(
-  command: string | undefined,
-  source: DesktopCodexCandidateSource,
-  env: NodeJS.ProcessEnv,
-): Promise<DesktopCodexDiscoveryCandidate | undefined> {
-  const trimmedCommand = command?.trim();
-  if (!trimmedCommand) {
-    return undefined;
-  }
-
-  const resolvedCommand =
-    source === "path" || !trimmedCommand.includes(path.sep)
-      ? await resolvePathCommand(trimmedCommand, env)
-      : trimmedCommand;
-  const accessExecutable = resolvedCommand
-    ? await pathIsExecutable(resolvedCommand)
-    : false;
-  const versionResult = resolvedCommand
-    ? await readCodexVersion(resolvedCommand, env)
-    : { ran: false, failureReason: "not_found" };
-  const executable = accessExecutable || versionResult.ran;
-
-  return {
-    command: resolvedCommand || trimmedCommand,
-    source,
-    executable,
-    selected: false,
-    version: versionResult.version,
-    versionFailureReason: executable ? versionResult.failureReason : undefined,
-    failureReason: executable ? undefined : "not_executable",
-  };
-}
-
 export async function discoverCodexCommands(params?: {
   configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): Promise<DesktopCodexDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const envOverride = env[CODEX_COMMAND_ENV]?.trim();
   const configuredCommand = params?.configuredCommand?.trim();
 
-  const fixedCandidates = (
-    await Promise.all([
-      buildDiscoveryCandidate(envOverride, "env", env),
-      buildDiscoveryCandidate(configuredCommand, "config", env),
-    ])
-  ).filter((candidate): candidate is DesktopCodexDiscoveryCandidate => Boolean(candidate));
-
-  const autoCandidates = (
-    await Promise.all([
-      buildDiscoveryCandidate("codex", "path", env),
-      ...getCodexAppCandidatePaths().map((candidatePath) =>
-        buildDiscoveryCandidate(candidatePath, "application", env),
-      ),
-    ])
-  )
-    .filter((candidate): candidate is DesktopCodexDiscoveryCandidate => Boolean(candidate))
-    .filter((candidate) => candidate.executable)
-    .sort((left, right) => compareCodexCliVersions(right.version, left.version));
-
-  const candidates = [...fixedCandidates, ...autoCandidates];
-  const selected =
-    candidates.find((candidate) => candidate.source === "env" && candidate.executable)
-    ?? candidates.find((candidate) => candidate.source === "config" && candidate.executable)
-    ?? autoCandidates.find((candidate) => candidate.executable);
-
-  if (selected) {
-    selected.selected = true;
-  }
-
-  return {
-    selectedCommand: selected?.command,
-    selectedSource: selected?.source,
-    candidates,
-  };
+  return discoverCommands<DesktopCodexCandidateSource>({
+    env,
+    platform: params?.platform,
+    fixedCandidates: [
+      { command: envOverride, source: "env" },
+      { command: configuredCommand, source: "config" },
+    ],
+    autoCandidates: [
+      { command: "codex", source: "path" },
+      ...getCodexAppCandidatePaths().map((candidatePath) => ({
+        command: candidatePath,
+        source: "application" as const,
+      })),
+    ],
+    parseVersion: parseCodexVersionOutput,
+    compareVersions: compareCodexCliVersions,
+  }) as Promise<DesktopCodexDiscoverySnapshot>;
 }
 
 export async function resolveCodexCommand(params: {
   command: string;
   env: NodeJS.ProcessEnv;
-}): Promise<ResolvedCodexCommandCandidate> {
+}): Promise<ResolvedCommandCandidate<DesktopCodexCandidateSource>> {
   const configuredCommand =
     params.command.trim() && params.command.trim() !== "codex"
       ? params.command.trim()

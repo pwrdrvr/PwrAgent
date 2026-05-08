@@ -1,9 +1,10 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 import type {
   ClearDesktopSettingsSecretRequest,
   DesktopSettingsWriteResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
@@ -14,6 +15,7 @@ import type {
 import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
@@ -25,6 +27,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { disposeDesktopBackendRegistry } from "../app-server/backend-registry";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
+import { validateGhCommand } from "../settings/gh-discovery";
 
 function getService(service?: DesktopSettingsService): DesktopSettingsService {
   return service ?? getDesktopSettingsService();
@@ -160,6 +163,51 @@ export function registerSettingsIpcHandlers(
     }),
   );
 
+  ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_PICK_GH_COMMAND_CHANNEL,
+    async (event): Promise<PickGhCommandResponse> => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+        ?? BrowserWindow.getFocusedWindow()
+        ?? undefined;
+      const result = window
+        ? await dialog.showOpenDialog(window, {
+            properties: ["openFile"],
+            title: "Choose gh",
+          })
+        : await dialog.showOpenDialog({
+            properties: ["openFile"],
+            title: "Choose gh",
+          });
+      if (result.canceled || !result.filePaths[0]) {
+        return { canceled: true };
+      }
+
+      const selectedPath = result.filePaths[0];
+      const candidate = await validateGhCommand({
+        command: selectedPath,
+        env: process.env,
+      });
+      if (!candidate.executable || !candidate.version) {
+        return {
+          canceled: false,
+          path: selectedPath,
+          candidate,
+          error:
+            candidate.failureReason
+            ?? candidate.versionFailureReason
+            ?? "Selected file did not respond to gh --version.",
+        };
+      }
+
+      return {
+        canceled: false,
+        path: selectedPath,
+        candidate,
+      };
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.handle(
     SETTINGS_TEST_CREDENTIALS_CHANNEL,
@@ -191,6 +239,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   disposeCredentialTester();

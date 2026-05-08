@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { resolveFetchableDirectoryPaths } from "./resolveFetchableDirectoryPaths";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -24,9 +24,11 @@ const SELECTED_REFRESH_INTERVAL_MS = 60_000;
  */
 export function usePullRequestRefresh(params: {
   desktopApi?: DesktopApi;
+  onRefreshNavigation?: () => Promise<void>;
   selectedThread?: NavigationThreadSummary;
 }): { prefetch: (thread: NavigationThreadSummary) => void } {
   const desktopApi = params.desktopApi;
+  const onRefreshNavigation = params.onRefreshNavigation;
   const refresh = useCallback(
     (thread: NavigationThreadSummary): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
@@ -41,11 +43,17 @@ export function usePullRequestRefresh(params: {
           branch,
           directoryPaths,
         })
+        .then((response) => {
+          if (prSummariesEqual(thread.prs, response.prs)) {
+            return;
+          }
+          void onRefreshNavigation?.();
+        })
         .catch(() => {
           // Logged in main — keep the renderer silent.
         });
     },
-    [desktopApi],
+    [desktopApi, onRefreshNavigation],
   );
 
   const selected = params.selectedThread;
@@ -91,4 +99,25 @@ export function usePullRequestRefresh(params: {
   );
 
   return { prefetch };
+}
+
+function prSummariesEqual(
+  left: NavigationThreadSummary["prs"],
+  right: PrSummary[],
+): boolean {
+  const leftPrs = left ?? [];
+  if (leftPrs.length !== right.length) {
+    return false;
+  }
+
+  return leftPrs.every((pr, index) => {
+    const candidate = right[index];
+    return (
+      candidate?.number === pr.number &&
+      candidate.org === pr.org &&
+      candidate.repo === pr.repo &&
+      candidate.state === pr.state &&
+      candidate.url === pr.url
+    );
+  });
 }

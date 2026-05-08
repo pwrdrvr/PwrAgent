@@ -31,6 +31,7 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  GH_COMMAND_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -60,6 +61,7 @@ import {
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
+import { discoverGhCommands } from "./gh-discovery";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -126,6 +128,10 @@ export class DesktopSettingsService {
     );
     const codexDiscovery = await discoverCodexCommands({
       configuredCommand: config.models?.codex?.path,
+      env: this.env,
+    });
+    const ghDiscovery = await discoverGhCommands({
+      configuredCommand: config.applications?.gh?.path,
       env: this.env,
     });
     const applications = await discoverDesktopApplications({ env: this.env });
@@ -287,6 +293,10 @@ export class DesktopSettingsService {
         ...applications,
         preferredEditorId,
         preferredTerminalId,
+        gh: {
+          path: this.resolveString(config.applications?.gh?.path, GH_COMMAND_ENV),
+          discovery: ghDiscovery,
+        },
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
@@ -367,6 +377,14 @@ export class DesktopSettingsService {
     return (
       readEnvString(this.env, CODEX_COMMAND_ENV)
       || this.readConfig().config.models?.codex?.path
+      || undefined
+    );
+  }
+
+  resolveGhCommandPreference(): string | undefined {
+    return (
+      readEnvString(this.env, GH_COMMAND_ENV)
+      || this.readConfig().config.applications?.gh?.path
       || undefined
     );
   }

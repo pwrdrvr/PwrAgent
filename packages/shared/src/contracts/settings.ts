@@ -91,6 +91,32 @@ export type DesktopCodexDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopGhCandidateSource =
+  | "env"
+  | "config"
+  | "path"
+  | "homebrew"
+  | "macports"
+  | "user"
+  | "windows";
+
+export type DesktopGhDiscoveryCandidate = {
+  command: string;
+  source: DesktopGhCandidateSource;
+  executable: boolean;
+  selected: boolean;
+  version?: string;
+  versionFailureReason?: string;
+  failureReason?: string;
+};
+
+export type DesktopGhDiscoverySnapshot = {
+  selectedCommand?: string;
+  selectedSource?: DesktopGhCandidateSource;
+  candidates: DesktopGhDiscoveryCandidate[];
+  error?: string;
+};
+
 export type DesktopApplicationKind = "editor" | "terminal";
 
 export type DesktopApplicationSource = "application" | "path";
@@ -111,6 +137,10 @@ export type DesktopApplicationsSnapshot = {
   terminals: DesktopApplicationDiscoveryCandidate[];
   preferredEditorId: DesktopSettingsValue<string>;
   preferredTerminalId: DesktopSettingsValue<string>;
+  gh: {
+    path: DesktopSettingsValue<string>;
+    discovery: DesktopGhDiscoverySnapshot;
+  };
 };
 
 export type DesktopSettingsSnapshot = {
@@ -241,6 +271,9 @@ export type DesktopSettingsConfigPatch = {
     terminal?: {
       preferredId?: string;
     };
+    gh?: {
+      path?: string;
+    };
   };
   worktrees?: {
     storage?: DesktopWorktreeStorageLocation;
@@ -267,6 +300,13 @@ export type ClearDesktopSettingsSecretRequest = {
 };
 
 export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
+
+export type PickGhCommandResponse = {
+  canceled: boolean;
+  path?: string;
+  error?: string;
+  candidate?: DesktopGhDiscoveryCandidate;
+};
 
 export type DesktopSettingsWriteResponse = {
   snapshot: DesktopSettingsSnapshot;

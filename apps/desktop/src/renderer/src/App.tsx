@@ -73,6 +73,7 @@ function DesktopAppShell(props: {
   const navigation = useThreadNavigation(desktopApi);
   const pullRequests = usePullRequestRefresh({
     desktopApi,
+    onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
   const composerDraftStore = useComposerDraftStore();

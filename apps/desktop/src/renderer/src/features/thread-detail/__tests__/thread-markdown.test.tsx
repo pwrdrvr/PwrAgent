@@ -45,6 +45,10 @@ describe("ThreadMarkdown", () => {
           terminals: [],
           preferredEditorId: { value: "zed", source: "config" },
           preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
         }}
         desktopApi={{ openApplication }}
         text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}

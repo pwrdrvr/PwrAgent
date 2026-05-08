@@ -279,6 +279,10 @@ export async function discoverDesktopApplications(params?: {
     ),
     preferredEditorId: { value: "", source: "default" },
     preferredTerminalId: { value: "", source: "default" },
+    gh: {
+      path: { value: "", source: "default" },
+      discovery: { candidates: [] },
+    },
   };
 }
 

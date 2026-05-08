@@ -114,6 +114,10 @@ describe("App", () => {
         terminals: [],
         preferredEditorId: { value: "", source: "default" },
         preferredTerminalId: { value: "", source: "default" },
+        gh: {
+          path: { value: "", source: "default" },
+          discovery: { candidates: [] },
+        },
       },
       worktrees: {
         storage: { value: "user-home", source: "default" },

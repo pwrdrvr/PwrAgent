@@ -52,6 +52,9 @@ describe("DesktopSettingsService", () => {
         "",
         "[applications.terminal]",
         'preferred_id = "ghostty"',
+        "",
+        "[applications.gh]",
+        'path = "/opt/homebrew/bin/gh"',
       ].join("\n"),
       "utf8",
     );
@@ -111,6 +114,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.applications.preferredTerminalId).toEqual({
       value: "ghostty",
+      source: "config",
+    });
+    expect(snapshot.applications.gh.path).toEqual({
+      value: "/opt/homebrew/bin/gh",
       source: "config",
     });
     expect(snapshot.worktrees.storage).toEqual({
@@ -223,6 +230,7 @@ describe("DesktopSettingsService", () => {
         PWRAGENT_MESSAGING_TELEGRAM_STREAMING_RESPONSES: "true",
         PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
         PWRAGENT_CODEX_COMMAND: "codex-env",
+        PWRAGENT_GH_COMMAND: "/custom/bin/gh",
         XAI_API_KEY: "xai-env",
       },
       secretStore,
@@ -260,6 +268,10 @@ describe("DesktopSettingsService", () => {
       source: "env",
       overriddenByEnv: true,
     });
+    expect(snapshot.applications.gh.path).toMatchObject({
+      value: "/custom/bin/gh",
+      source: "env",
+    });
     expect(snapshot.models.grok.apiKey).toMatchObject({
       configured: true,
       source: "keychain",
@@ -267,6 +279,7 @@ describe("DesktopSettingsService", () => {
     });
     expect(await service.resolveGrokApiKey()).toBe("xai-keychain");
     expect(service.resolveCodexCommandPreference()).toBe("codex-env");
+    expect(service.resolveGhCommandPreference()).toBe("/custom/bin/gh");
   });
 
   it("writes non-secret patches without writing plaintext secrets to TOML", async () => {
@@ -299,6 +312,9 @@ describe("DesktopSettingsService", () => {
         terminal: {
           preferredId: "ghostty",
         },
+        gh: {
+          path: "/opt/homebrew/bin/gh",
+        },
       },
     });
     await service.replaceSecret("telegramBotToken", "123456789:secret-token");
@@ -314,6 +330,8 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
     expect(contents).toContain("[applications.terminal]");
     expect(contents).toContain('preferred_id = "ghostty"');
+    expect(contents).toContain("[applications.gh]");
+    expect(contents).toContain('path = "/opt/homebrew/bin/gh"');
     expect(contents).not.toContain("123456789:secret-token");
     expect(JSON.stringify(snapshot)).not.toContain("123456789:secret-token");
     expect(snapshot.messaging.telegram.botToken).toMatchObject({

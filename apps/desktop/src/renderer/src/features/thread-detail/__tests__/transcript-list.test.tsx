@@ -266,6 +266,10 @@ describe("TranscriptList", () => {
           terminals: [],
           preferredEditorId: { value: "zed", source: "config" },
           preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
         }}
         desktopApi={{ openApplication }}
         entries={[

@@ -84,6 +84,7 @@ import type {
   OpenDesktopApplicationResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
@@ -189,6 +190,7 @@ export type DesktopApi = {
   refreshCodexDiscovery?: (
     request?: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  pickGhCommand?: () => Promise<PickGhCommandResponse>;
   /** Run the per-credential connection-test probe for a settings panel.
    *  Result contains parsed identity (bot username, model IDs, codex
    *  version) — never the secret itself. */
