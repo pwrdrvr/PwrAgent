@@ -95,6 +95,7 @@ type TomlScalar = TomlValue;
 
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_AUTHORIZED_CONTACT_MARKER = "pwragent-legacy-settings";
+const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -170,6 +171,14 @@ export function desktopSettingsPatchToEdits(
     if (value === undefined) return;
     edits.push({ op: "set", path: pathSegments, value });
   };
+  if (currentTables.experimental?.chat_reply_composer !== undefined) {
+    edits.push({
+      op: "ensureCommentBefore",
+      path: ["experimental", "chat_reply_composer"],
+      marker: LEGACY_AUTHORIZED_CONTACT_MARKER,
+      comment: legacyChatReplyComposerComment(),
+    });
+  }
   const setAuthorizedContacts = (
     tablePath: readonly string[],
     legacyKey: string,
@@ -226,9 +235,9 @@ export function desktopSettingsPatchToEdits(
     });
   };
 
-  if (patch.experimental?.chatReplyComposer !== undefined) {
-    set(["experimental", "chat_reply_composer"], patch.experimental.chatReplyComposer);
-  }
+  // `chat_reply_composer` is obsolete and intentionally ignored by current
+  // clients. Preserve existing values for downgrade compatibility, but do not
+  // write new values.
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
     set(
       ["experimental", "diff_condensation", "enabled"],
@@ -672,6 +681,20 @@ function legacyAuthorizedContactComment(key: string): string {
     "shape=string-array",
     `used_through=${LEGACY_AUTHORIZED_CONTACT_LAST_VERSION}`,
     "kept_for_older_clients",
+  ].join(" ");
+}
+
+function legacyChatReplyComposerComment(): string {
+  return [
+    "#",
+    LEGACY_AUTHORIZED_CONTACT_MARKER,
+    "key=chat_reply_composer",
+    "shape=string-enum",
+    `used_through=${LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION}`,
+    "kept_for_older_clients",
+    "obsolete_no_replacement",
+    "ignored_by_current_clients",
+    "remove_when_convenient",
   ].join(" ");
 }
 

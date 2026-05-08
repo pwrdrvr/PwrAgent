@@ -63,6 +63,7 @@ import {
 import { discoverCodexCommands } from "./codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGhCommands } from "./gh-discovery";
+import { getMainLogger } from "../log";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -79,6 +80,7 @@ type ConfigReadResult = {
 
 const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
+const settingsLog = getMainLogger("pwragent:settings");
 
 function clampInteger(value: number, maxValue: number): number {
   return Math.min(Math.max(value, 0), maxValue);
@@ -89,6 +91,8 @@ export class DesktopSettingsService {
   private readonly argv: readonly string[];
   private readonly configPath: string;
   private readonly now: () => number;
+  private loggedObsoleteComposerConfig = false;
+  private loggedObsoleteComposerEnv = false;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -407,18 +411,24 @@ export class DesktopSettingsService {
     configValue: DesktopChatReplyComposer | undefined,
   ): DesktopSettingsValue<DesktopChatReplyComposer> {
     const envValue = readEnvComposer(this.env);
-    if (envValue.value) {
-      return {
-        value: envValue.value,
-        source: "env",
-        overriddenByEnv: configValue !== undefined,
-      };
+    if (configValue && !this.loggedObsoleteComposerConfig) {
+      this.loggedObsoleteComposerConfig = true;
+      settingsLog.warn(
+        "experimental.chat_reply_composer is obsolete and ignored; remove it from settings when convenient",
+        { configValue },
+      );
+    }
+    if (envValue.value && !this.loggedObsoleteComposerEnv) {
+      this.loggedObsoleteComposerEnv = true;
+      settingsLog.warn(
+        `${CHAT_REPLY_COMPOSER_ENV} is obsolete and ignored; remove it from the launch environment when convenient`,
+        { envValue: envValue.value },
+      );
     }
 
     return {
-      value: configValue ?? DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
-      source: configValue === undefined ? "default" : "config",
-      error: envValue.error,
+      value: DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
+      source: "default",
     };
   }
 

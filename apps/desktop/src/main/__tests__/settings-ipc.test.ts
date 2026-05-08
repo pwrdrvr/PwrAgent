@@ -105,7 +105,9 @@ describe("settings ipc", () => {
       {
         patch: {
           experimental: {
-            chatReplyComposer: "custom-widget-chips",
+            diffCondensation: {
+              enabled: true,
+            },
           },
         },
       },
@@ -121,7 +123,7 @@ describe("settings ipc", () => {
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);
-    expect(encoded).toContain("custom-widget-chips");
+    expect(encoded).toContain("diffCondensation");
     expect(encoded).not.toContain("123456789:secret-token");
     expect(encoded).not.toContain("discord-secret");
 
