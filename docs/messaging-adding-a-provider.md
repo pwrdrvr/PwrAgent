@@ -437,6 +437,26 @@ The `apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.t
 
 Env vars remain the source of truth when present (they shadow the Settings UI), so the operator-runbook headless deployment path keeps working unchanged. Settings UI is the nominal-case path for desktop users.
 
+### 8.6 — Channel chip icon and the brand-asset rule
+
+Every messaging surface in the desktop UI (status-bar chip, sidebar thread row, activity log row) shows a small platform icon. You need one for your provider. Before you draw anything, **check the platform's brand guidelines** — most chat platforms have a published kit and explicit usage rules, and the safe path is to use the official asset rather than redrawing it.
+
+Decision tree:
+
+1. **Find the brand-guidelines page.** Search `<platform> brand guidelines` or check the platform's developer-portal footer. Read the rules. The questions you're answering:
+   - Are recoloring or monochrome silhouettes permitted?
+   - Are there required clearspace, minimum size, or wordmark-vs-icon rules?
+   - Does the platform distribute a downloadable brand kit?
+2. **If the platform forbids alteration** (Mattermost is the canonical example — guidelines explicitly forbid recoloring, redrawing, warping, applying effects), follow the **brand-asset pattern**:
+   - Download the official kit, take the icon-only variant in each colorway you need (typically black + white + brand-color, "without clearspace" if available).
+   - Save the verbatim SVG files under `apps/desktop/src/renderer/src/assets/<platform>/` — never edit the SVG content.
+   - Render via `<img>`, NOT inline `<svg>` — see [`apps/desktop/src/renderer/src/icons/MattermostIcon.tsx`](../apps/desktop/src/renderer/src/icons/MattermostIcon.tsx) for the reference implementation. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from recoloring side-effects (the `messaging-status-chip--errored` class reds the surrounding text but cannot reach into the image).
+   - Add a `README.md` to the asset directory documenting the source URL, the usage rules, and the procedure for re-fetching on update. See [`apps/desktop/src/renderer/src/assets/mattermost/README.md`](../apps/desktop/src/renderer/src/assets/mattermost/README.md) as the template — the minimum content is: source links (brand guidelines + kit zip), the specific usage restrictions ("do not modify color/shape/etc."), and a copy-pasteable update procedure. Future maintainers should be able to update the assets without re-reading this guide.
+3. **If the platform's guidelines permit monochrome silhouettes** (Discord and Telegram are this way in practice, though their guidelines technically restrict recoloring too), the simpler path is a hand-drawn `currentColor`-filled `<svg>` matching the visual weight of the existing icons. See [`DiscordIcon.tsx`](../apps/desktop/src/renderer/src/icons/DiscordIcon.tsx) or [`TelegramIcon.tsx`](../apps/desktop/src/renderer/src/icons/TelegramIcon.tsx). This is acceptable but is a known guideline gray area — prefer the brand-asset pattern when in doubt.
+4. **Wire the icon** into the four usage sites: the icon-map in `MessagingStatusBar.tsx`, the icon-map in `ThreadRow.tsx`, the conditional in `MessagingActivityScreen.tsx`'s `ActivityRow`, and the connection-test row in `MessagingSettings.tsx`. The status-chip dot turns red on `errored` health automatically (it's a separate element from the icon).
+
+Boundary rule (also captured in [`apps/desktop/AGENTS.md`](../apps/desktop/AGENTS.md#third-party-brand-assets)): **never hand-redraw a vendor's mark from memory or training data, and never modify SVG path data inside a brand-asset file.** If the asset needs updating, re-download from the source.
+
 ## Step 9 — Tests
 
 Mirror the patterns in `packages/messaging/providers/discord/src/__tests__/` and `packages/messaging/providers/telegram/src/__tests__/`. Minimum coverage:

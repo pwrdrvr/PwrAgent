@@ -138,6 +138,13 @@ Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 - When in doubt, make the interface calmer, denser, and more editorial.
 - Use the project-local [desktop E2E fixture seeding skill](../../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when capturing or refreshing replay-backed desktop E2E fixtures.
 
+## Third-Party Brand Assets
+
+- Vendor-supplied brand assets (logos, marks, icons) live under `src/renderer/src/assets/<vendor>/` as **verbatim files from the vendor's official brand kit** — never hand-redrawn, recolored, or otherwise altered.
+- Each asset directory MUST include a `README.md` documenting: the source URL, the vendor's usage rules, and the procedure for re-fetching on update. See [`src/renderer/src/assets/mattermost/README.md`](src/renderer/src/assets/mattermost/README.md) as the reference example.
+- Render verbatim assets via `<img>`, NOT inline `<svg>` with `currentColor`. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from accidental recoloring (e.g., the `--errored` chip class that reds the surrounding text).
+- The hand-drawn currentColor silhouettes in `src/renderer/src/icons/` (e.g., `TelegramIcon.tsx`, `DiscordIcon.tsx`) predate this rule. Don't add new ones; if a platform's brand guidelines forbid alteration, follow the Mattermost pattern instead.
+
 ## Worktree Path Computation
 
 - **All worktree paths** must use the shared `computeWorktreePath` from `src/main/app-server/git-directory-service.ts`.
