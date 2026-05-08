@@ -61,6 +61,7 @@ export class SqliteOverlayStore {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const current = this.getThread(threadKey);
         this.putThread(threadKey, {
+          ...(current ?? {}),
           backend: thread.source,
           threadId: thread.id,
           executionMode: current?.executionMode ?? thread.executionMode ?? "default",
@@ -154,22 +155,13 @@ export class SqliteOverlayStore {
     const seenAt = params.seenAt ?? Date.now();
 
     this.putThread(threadKey, {
+      ...(current ?? {}),
       backend: params.backend,
       threadId: params.threadId,
       executionMode: current?.executionMode ?? "default",
-      model: current?.model,
-      reasoningEffort: current?.reasoningEffort,
-      serviceTier: current?.serviceTier,
-      fastMode: current?.fastMode,
-      gitBranch: current?.gitBranch,
-      observedGitBranch: current?.observedGitBranch,
-      dismissedAt: current?.dismissedAt,
-      snoozedUntil: current?.snoozedUntil,
-      retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
       lastSeenAt: seenAt,
       lastSeenUpdatedAt: params.seenUpdatedAt ?? current?.lastSeenUpdatedAt,
       extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
-      worktreeSnapshots: current?.worktreeSnapshots ?? [],
     });
 
     return {
