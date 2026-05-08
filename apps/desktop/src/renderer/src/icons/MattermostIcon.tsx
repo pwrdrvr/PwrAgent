@@ -5,12 +5,10 @@ import iconDenimUrl from "../assets/mattermost/icon-denim.svg";
 import iconWhiteUrl from "../assets/mattermost/icon-white.svg";
 
 /**
- * Mattermost is the only icon in this folder that does NOT render as a
- * monochrome `currentColor` silhouette. Mattermost's brand guidelines
- * explicitly forbid altering the mark — including recoloring — so we
- * embed the official SVG assets verbatim from their downloadable brand
- * kit (https://mattermost.com/brand-guidelines/) and let the consumer
- * pick the variant that suits the surrounding surface.
+ * Official Mattermost logo asset from Mattermost's downloadable brand
+ * kit. Mattermost's brand guidelines explicitly forbid altering the
+ * mark — including recoloring — so we embed the official SVG assets
+ * verbatim and let the consumer pick the variant that suits the surface.
  *
  * Variants map directly to Mattermost's three published colorways:
  *

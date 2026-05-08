@@ -152,9 +152,9 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
         {entry.platform === "telegram" ? (
-          <TelegramIcon size={14} />
+          <TelegramIcon size={14} variant="color" />
         ) : entry.platform === "discord" ? (
-          <DiscordIcon size={14} />
+          <DiscordIcon size={14} variant="white" />
         ) : entry.platform === "mattermost" ? (
           <MattermostIcon size={14} />
         ) : (

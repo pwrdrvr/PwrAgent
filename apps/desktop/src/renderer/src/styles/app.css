@@ -254,10 +254,6 @@ textarea,
   color: var(--text-primary);
 }
 
-.messaging-status-chip--errored {
-  color: var(--danger-text);
-}
-
 .messaging-status-chip__fallback {
   font-size: 10px;
   font-weight: 700;

@@ -139,7 +139,7 @@ export function MessagingSettings(props: {
               <SettingsTestBlock
                 kind="telegram"
                 desktopApi={props.desktopApi}
-                icon={<TelegramIcon size={14} />}
+                icon={<TelegramIcon size={14} variant="color" />}
                 defaultName="@your_bot"
                 defaultSub="api.telegram.org"
               />
@@ -232,7 +232,7 @@ export function MessagingSettings(props: {
               <SettingsTestBlock
                 kind="discord"
                 desktopApi={props.desktopApi}
-                icon={<DiscordIcon size={14} />}
+                icon={<DiscordIcon size={14} variant="white" />}
                 defaultName="Your bot"
                 defaultSub="discord.com/api/v10"
               />

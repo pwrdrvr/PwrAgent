@@ -1,15 +1,40 @@
-import { resolveIconSvgProps, type IconProps } from "./icon-types";
+import type { ImgHTMLAttributes } from "react";
+import { DEFAULT_ICON_SIZE } from "./icon-types";
+import iconColorUrl from "../assets/telegram/icon-color.svg";
+
+const VARIANT_URL: Record<TelegramIconVariant, string> = {
+  color: iconColorUrl,
+};
+
+export type TelegramIconVariant = "color";
+
+export type TelegramIconProps = Omit<
+  ImgHTMLAttributes<HTMLImageElement>,
+  "src" | "width" | "height"
+> & {
+  size?: number;
+  variant?: TelegramIconVariant;
+};
 
 /**
- * Telegram paper-plane glyph, simplified to a monochrome silhouette
- * filled with `currentColor`. Uses `fill` instead of stroke so the mark
- * reads cleanly at 16px against the near-black header background.
+ * Official Telegram logo asset from Telegram's press kit. Telegram only
+ * distributes the current logo as the blue gradient circle with white
+ * paper plane, so the component intentionally has no currentColor path.
  */
-export function TelegramIcon(props: IconProps) {
-  const svgProps = resolveIconSvgProps(props);
+export function TelegramIcon({
+  size = DEFAULT_ICON_SIZE,
+  variant = "color",
+  alt = "",
+  ...rest
+}: TelegramIconProps) {
   return (
-    <svg {...svgProps} fill="currentColor" stroke="none">
-      <path d="M21.6 3.2 2.7 10.6c-.7.3-.7 1.3 0 1.5l4.4 1.4 1.7 5.5c.2.6.9.7 1.3.3l2.6-2.6 4.5 3.3c.6.4 1.5.1 1.6-.6L22.9 4c.2-.7-.5-1.3-1.3-.8zM9.5 13.7l8.6-5.3-7 6.5z" />
-    </svg>
+    <img
+      src={VARIANT_URL[variant]}
+      width={size}
+      height={size}
+      alt={alt}
+      style={{ display: "inline-block", verticalAlign: "middle" }}
+      {...rest}
+    />
   );
 }
