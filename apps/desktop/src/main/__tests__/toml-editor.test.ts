@@ -202,6 +202,40 @@ describe("applyTomlEdits", () => {
     expect(result).toContain('authorized_user_ids = ["111"]');
   });
 
+  it("inserts a marker comment before a key once", () => {
+    const source = [
+      "[messaging.telegram]",
+      'authorized_user_ids = ["111"]',
+      "",
+    ].join("\n");
+
+    const result = applyTomlEdits(source, [
+      {
+        op: "ensureCommentBefore",
+        path: ["messaging", "telegram", "authorized_user_ids"],
+        marker: "pwragent-legacy-settings",
+        comment: "# pwragent-legacy-settings used_through=1.0.0-alpha.9",
+      },
+    ]);
+
+    expect(result).toContain(
+      [
+        "# pwragent-legacy-settings used_through=1.0.0-alpha.9",
+        'authorized_user_ids = ["111"]',
+      ].join("\n"),
+    );
+    expect(
+      applyTomlEdits(result, [
+        {
+          op: "ensureCommentBefore",
+          path: ["messaging", "telegram", "authorized_user_ids"],
+          marker: "pwragent-legacy-settings",
+          comment: "# pwragent-legacy-settings used_through=1.0.0-alpha.9",
+        },
+      ]),
+    ).toBe(result);
+  });
+
   it("emits an inline-table-array as one entry per line", () => {
     const result = applyTomlEdits("[messaging.mattermost]\n", [
       {

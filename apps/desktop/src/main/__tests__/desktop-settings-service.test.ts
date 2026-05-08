@@ -138,7 +138,7 @@ describe("DesktopSettingsService", () => {
         "[messaging.telegram]",
         "enabled = true",
         "",
-        "[[messaging.telegram.authorized_users]]",
+        "[[messaging.telegram.authorized_user_ids]]",
         'id = "111111111"',
         'display_name = "Harold"',
         "",
@@ -200,11 +200,19 @@ describe("DesktopSettingsService", () => {
     });
 
     const contents = fs.readFileSync(configPath, "utf8");
-    expect(contents).not.toContain("authorized_user_ids");
-    expect(contents).toContain("[[messaging.telegram.authorized_users]]");
+    expect(contents).toContain(
+      "# pwragent-legacy-settings key=authorized_user_ids shape=string-array used_through=1.0.0-alpha.9 kept_for_older_clients",
+    );
+    expect(contents).toContain('authorized_user_ids = ["111111111"]');
+    expect(contents).toContain("[[messaging.telegram.authorized_user_ids_list]]");
     expect(contents).toContain('id = "111111111"');
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("streaming_responses = true");
+
+    const after = await service.readSettings();
+    expect(after.messaging.telegram.authorizedUserIds.value).toEqual([
+      { id: "111111111", displayName: "Harold" },
+    ]);
   });
 
   it("loads the worktree storage location from TOML and exposes the effective path", async () => {
@@ -408,8 +416,8 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("input_debounce_ms = 1250");
     expect(contents).toContain('tool_update_mode = "show_less"');
     expect(contents).toContain("streaming_responses = true");
-    expect(contents).not.toContain("authorized_user_ids");
-    expect(contents).toContain("[[messaging.telegram.authorized_users]]");
+    expect(contents).not.toContain("authorized_user_ids =");
+    expect(contents).toContain("[[messaging.telegram.authorized_user_ids]]");
     expect(contents).toContain('id = "111111111"');
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("[applications.terminal]");
@@ -540,8 +548,8 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("register_slash_commands = true");
     expect(contents).not.toContain("callback_port");
     expect(contents).toContain('slash_command_prefix = "agent_"');
-    expect(contents).not.toContain("authorized_user_ids");
-    expect(contents).toContain("[[messaging.mattermost.authorized_users]]");
+    expect(contents).not.toContain("authorized_user_ids =");
+    expect(contents).toContain("[[messaging.mattermost.authorized_user_ids]]");
     expect(contents).toContain('id = "userA"');
     expect(contents).toContain('display_name = "Alice"');
     // Bot token + HMAC secret never written to TOML
