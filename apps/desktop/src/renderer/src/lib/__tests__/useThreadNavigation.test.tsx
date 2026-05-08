@@ -1264,6 +1264,78 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("refreshes the selected thread when only reactions change", async () => {
+    const listeners = new Set<(event: any) => void>();
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "019e0755-ac96-7be2-a94d-78a6912eccb6",
+            title: "Emoji sync regression",
+            titleSource: "explicit" as const,
+            summary: "The thread whose reactions were disappearing.",
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+            reactions: navigationCallCount === 1 ? [] : ["👀", "🚀"],
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe(
+        "019e0755-ac96-7be2-a94d-78a6912eccb6"
+      );
+    });
+    expect(result.current.selectedThread?.reactions).toEqual([]);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "019e0755-ac96-7be2-a94d-78a6912eccb6",
+              turnId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.reactions).toEqual(["👀", "🚀"]);
+    });
+  });
+
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");

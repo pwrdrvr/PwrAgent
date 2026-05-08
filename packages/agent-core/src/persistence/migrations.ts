@@ -161,6 +161,19 @@ function migratePermissionTransitionLog(
   return entries.length > 0 ? entries : undefined;
 }
 
+function migrateThreadReactions(
+  value: unknown,
+): ThreadOverlayState["reactions"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const reactions = value.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  return reactions.length > 0 ? Array.from(new Set(reactions)) : undefined;
+}
+
 function migrateRetainedBranchDriftPairs(
   value: unknown,
 ): ThreadOverlayState["retainedBranchDriftPairs"] {
@@ -373,6 +386,7 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             permissionTransitionLog: migratePermissionTransitionLog(
               threadRecord.permissionTransitionLog,
             ),
+            reactions: migrateThreadReactions(threadRecord.reactions),
           } satisfies ThreadOverlayState,
         ];
       }),

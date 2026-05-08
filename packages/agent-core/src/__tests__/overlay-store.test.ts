@@ -68,6 +68,36 @@ describe("OverlayStore", () => {
     });
   });
 
+  it("preserves reactions when seen state is written later", async () => {
+    const store = await createStore();
+
+    await store.setThreadReaction({
+      backend: "codex",
+      threadId: "thread-1",
+      emoji: "👀",
+      present: true,
+    });
+    await store.setThreadReaction({
+      backend: "codex",
+      threadId: "thread-1",
+      emoji: "🚀",
+      present: true,
+    });
+
+    await store.markThreadSeen({
+      backend: "codex",
+      threadId: "thread-1",
+      seenAt: 2000,
+      seenUpdatedAt: 1000,
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.reactions).toEqual(["👀", "🚀"]);
+  });
+
   it("stores extra linked directories for desktop-only multi-project overlays", async () => {
     const store = await createStore();
 

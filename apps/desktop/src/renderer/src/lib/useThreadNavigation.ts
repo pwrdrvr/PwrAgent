@@ -21,6 +21,7 @@ export type BrowseMode = "inbox" | "recents" | "directories";
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
+const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
 
 type NavigationState = {
   loading: boolean;
@@ -168,6 +169,21 @@ function prSummariesEqual(
   });
 }
 
+function reactionsEqual(
+  left: NavigationThreadSummary["reactions"],
+  right: NavigationThreadSummary["reactions"]
+): boolean {
+  const leftReactions = left ?? [];
+  const rightReactions = right ?? [];
+  if (leftReactions.length !== rightReactions.length) {
+    return false;
+  }
+
+  return leftReactions.every(
+    (reaction, index) => rightReactions[index] === reaction
+  );
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -197,12 +213,14 @@ function threadSummariesEqual(
     threadInboxEqual(left.inbox, right.inbox) &&
     // Bindings and PRs mutate independently of `updatedAt`: the messaging
     // store revokes a binding row without touching the thread row, and
-    // GitHub PR detection runs on its own cadence. Without these checks
-    // the reconciler reuses the previous thread reference whenever
-    // nothing else changed and chips on the row stay stale until
-    // something else triggers a re-render.
+    // GitHub PR detection runs on its own cadence. Reactions can also be
+    // changed by another app instance while the backend thread record is
+    // otherwise unchanged. Without these checks the reconciler reuses the
+    // previous thread reference whenever nothing else changed and chips on
+    // the row stay stale until something else triggers a re-render.
     messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
-    prSummariesEqual(left.prs, right.prs)
+    prSummariesEqual(left.prs, right.prs) &&
+    reactionsEqual(left.reactions, right.reactions)
   );
 }
 
@@ -1279,6 +1297,30 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!desktopApi?.getNavigationSnapshot) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      scheduleRefresh();
+    }, NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [desktopApi?.getNavigationSnapshot, scheduleRefresh]);
+
+  useEffect(() => {
+    if (!desktopApi?.onWindowFocus) {
+      return;
+    }
+
+    return desktopApi.onWindowFocus(() => {
+      scheduleRefresh();
+    });
+  }, [desktopApi, scheduleRefresh]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
