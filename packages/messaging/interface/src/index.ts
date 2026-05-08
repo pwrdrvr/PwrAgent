@@ -14,6 +14,13 @@ import type {
 // import path without seeing two parallel declarations.
 export {
   MESSAGING_TOOL_UPDATE_MODES,
+  validateDiscordSnowflake,
+  validateMattermostId,
+  validateTelegramChatId,
+  validateTelegramPositiveId,
+  validateTelegramSupergroupId,
+  type IdentifierValidationReason,
+  type IdentifierValidationResult,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 
@@ -587,6 +594,24 @@ export type MessagingInboundBaseEvent = {
   receivedAt: number;
   routingState?: MessagingAdapterState;
 };
+
+export type MessagingInboundRejectionReason =
+  | "unauthorized-actor"
+  | "unauthorized-conversation";
+
+export type MessagingRejectedInboundEvent = {
+  id: string;
+  kind: MessagingInboundEventKind;
+  actor: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  receivedAt: number;
+  reason: MessagingInboundRejectionReason;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingInboundRejectedListener = (
+  event: MessagingRejectedInboundEvent,
+) => Promise<void> | void;
 
 export type MessagingInboundTextEvent = MessagingInboundBaseEvent & {
   kind: "text";

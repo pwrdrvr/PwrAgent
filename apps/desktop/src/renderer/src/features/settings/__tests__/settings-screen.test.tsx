@@ -352,6 +352,84 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("validates messaging authorized IDs inline and refuses invalid saves", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText(/Authorization defaults closed/)).toBeInTheDocument();
+    expect(screen.getByText(/Rejected Telegram DMs show the peer ID/)).toBeInTheDocument();
+
+    const telegramUserIds = screen.getAllByLabelText("Authorized User IDs")[0]!;
+    fireEvent.change(telegramUserIds, { target: { value: "@huntharo" } });
+    fireEvent.blur(telegramUserIds);
+
+    expect(
+      await screen.findByText(/That looks like a Telegram username/),
+    ).toBeInTheDocument();
+    expect(telegramUserIds).toHaveAttribute("aria-invalid", "true");
+    expect(settings.writeConfig).not.toHaveBeenCalledWith({
+      messaging: { telegram: { authorizedUserIds: ["@huntharo"] } },
+    });
+
+    fireEvent.change(telegramUserIds, { target: { value: "8460800771" } });
+    fireEvent.blur(telegramUserIds);
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedUserIds: ["8460800771"],
+          },
+        },
+      });
+    });
+  });
+
+  it("surfaces invalid persisted messaging IDs with a Remove action", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          authorizedUserIds: {
+            value: ["@huntharo", "8460800771"],
+            source: "config",
+          },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("@huntharo")).toBeInTheDocument();
+    expect(screen.getByText(/That looks like a Telegram username/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedUserIds: ["8460800771"],
+          },
+        },
+      });
+    });
+  });
+
   it("returns to the previous app surface", () => {
     const onClose = vi.fn();
     render(<SettingsScreen settings={createSettingsState()} onClose={onClose} />);

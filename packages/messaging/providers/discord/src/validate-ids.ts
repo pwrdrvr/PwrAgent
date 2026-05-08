@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  validateDiscordSnowflake,
+  type IdentifierValidationReason,
+  type IdentifierValidationResult,
+} from "@pwragent/messaging-interface";
 
 export type DiscordIdentifierField =
   | "application_id"
@@ -12,26 +17,10 @@ export type DiscordIdentifierField =
   | "message.id"
   | "user.id";
 
-export type IdentifierValidationReason =
-  | "empty"
-  | "format"
-  | "future"
-  | "length"
-  | "range"
-  | "type";
-
-export type IdentifierValidationResult =
-  | { ok: true }
-  | { ok: false; reason: IdentifierValidationReason };
-
 export type IdentifierRejectionLogger = {
   warn?(message: string, data?: Record<string, unknown>): void;
 };
 
-const DISCORD_EPOCH_MS = 1_420_070_400_000n;
-const DISCORD_MAX_SNOWFLAKE_LENGTH = 19;
-const DISCORD_MIN_SNOWFLAKE_LENGTH = 17;
-const DISCORD_MAX_FUTURE_MS = 24n * 60n * 60n * 1000n;
 const DISCORD_MAX_TOKEN_LENGTH = 256;
 const DISCORD_MAX_CUSTOM_ID_BYTES = 100;
 const DISCORD_MAX_ATTACHMENT_URL_LENGTH = 2048;
@@ -40,34 +29,8 @@ const DISCORD_ATTACHMENT_HOSTS = new Set([
   "media.discordapp.net",
 ]);
 
-export function validateDiscordSnowflake(value: unknown): IdentifierValidationResult {
-  if (typeof value !== "string") {
-    return { ok: false, reason: "type" };
-  }
-  if (value.length === 0) {
-    return { ok: false, reason: "empty" };
-  }
-  if (
-    value.length < DISCORD_MIN_SNOWFLAKE_LENGTH ||
-    value.length > DISCORD_MAX_SNOWFLAKE_LENGTH
-  ) {
-    return { ok: false, reason: "length" };
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    if (!isAsciiDigit(value.charCodeAt(index))) {
-      return { ok: false, reason: "format" };
-    }
-  }
-  const parsed = BigInt(value);
-  if (parsed <= 0n) {
-    return { ok: false, reason: "range" };
-  }
-  const timestampMs = (parsed >> 22n) + DISCORD_EPOCH_MS;
-  if (timestampMs > BigInt(Date.now()) + DISCORD_MAX_FUTURE_MS) {
-    return { ok: false, reason: "future" };
-  }
-  return { ok: true };
-}
+export type { IdentifierValidationReason, IdentifierValidationResult };
+export { validateDiscordSnowflake };
 
 export function validateDiscordInteractionToken(
   value: unknown,

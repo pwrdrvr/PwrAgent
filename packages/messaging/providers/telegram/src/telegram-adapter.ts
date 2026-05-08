@@ -12,7 +12,9 @@ import type {
   MessagingDeliveryResult,
   MessagingFilePart,
   MessagingInboundEvent,
+  MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -351,6 +353,7 @@ export type TelegramProviderAdapter = {
    * flip the platform status pill from green to red).
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -430,6 +433,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private static readonly TOPIC_NAME_CACHE_CAP = 500;
   private readonly topicNameCache = new Map<string, string>();
   private readonly unauthorizedConversationLogKeys = new Set<string>();
+  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -457,6 +461,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds;
+  }
+
+  onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
+    this.inboundRejectedListeners.add(listener);
+    return () => {
+      this.inboundRejectedListeners.delete(listener);
+    };
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -1302,12 +1313,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           chatType: message.chat.type,
           actionable: options.actionable,
         });
+        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
+          kind: options.actionable ? "command" : "text",
+          reason: "unauthorized-actor",
+        }));
       }
       return false;
     }
 
     if (!this.isAuthorizedTelegramConversation(message.chat)) {
       this.logUnauthorizedConversationOnce("message", message.chat);
+      this.emitInboundRejected(this.rejectedEventFromMessage(message, {
+        kind: options.actionable ? "command" : "text",
+        reason: "unauthorized-conversation",
+      }));
       return false;
     }
     return true;
@@ -1321,10 +1340,18 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         actorId,
         chatId: chat ? String(chat.id) : undefined,
       });
+      if (chat) {
+        this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
+          reason: "unauthorized-actor",
+        }));
+      }
       return false;
     }
     if (chat && !this.isAuthorizedTelegramConversation(chat)) {
       this.logUnauthorizedConversationOnce("callback", chat);
+      this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
+        reason: "unauthorized-conversation",
+      }));
       return false;
     }
     return true;
@@ -1964,6 +1991,51 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       isBot: user?.is_bot,
       username: user?.username,
     };
+  }
+
+  private rejectedEventFromMessage(
+    message: TelegramMessage,
+    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason">,
+  ): MessagingRejectedInboundEvent {
+    return {
+      id: `telegram:message:${message.message_id}:rejected`,
+      kind: options.kind,
+      actor: this.actorFromUser(message.from),
+      channel: this.channelFromMessage(message),
+      receivedAt: this.messageReceivedAt(message),
+      reason: options.reason,
+      routingState: this.routingStateFromMessage(message),
+    };
+  }
+
+  private rejectedEventFromCallback(
+    callbackQuery: TelegramCallbackQuery,
+    options: Pick<MessagingRejectedInboundEvent, "reason">,
+  ): MessagingRejectedInboundEvent {
+    const message = callbackQuery.message;
+    return {
+      id: `telegram:callback:${callbackQuery.id}:rejected`,
+      kind: "callback",
+      actor: this.actorFromUser(callbackQuery.from),
+      channel: message
+        ? this.channelFromMessage(message)
+        : {
+            channel: this.channel,
+            conversation: {
+              id: String(callbackQuery.from.id),
+              kind: "dm",
+            },
+          },
+      receivedAt: this.now(),
+      reason: options.reason,
+      ...(message ? { routingState: this.routingStateFromMessage(message) } : {}),
+    };
+  }
+
+  private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
+    for (const listener of this.inboundRejectedListeners) {
+      void listener(event);
+    }
   }
 
   private isOwnBotUser(user: TelegramMessage["from"]): boolean {

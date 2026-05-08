@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  validateMattermostId,
+  type IdentifierValidationReason,
+  type IdentifierValidationResult,
+} from "@pwragent/messaging-interface";
 
 export type MattermostIdentifierField =
   | "callback.context.handle"
@@ -12,42 +17,15 @@ export type MattermostIdentifierField =
   | "trigger_id"
   | "user_id";
 
-export type IdentifierValidationReason =
-  | "empty"
-  | "format"
-  | "length"
-  | "type";
-
-export type IdentifierValidationResult =
-  | { ok: true }
-  | { ok: false; reason: IdentifierValidationReason };
-
 export type IdentifierRejectionLogger = {
   warn?(message: string, data?: Record<string, unknown>): void;
 };
 
-const MATTERMOST_ID_LENGTH = 26;
 const MATTERMOST_MAX_TOKEN_LENGTH = 256;
 const MATTERMOST_MAX_RESPONSE_URL_LENGTH = 2048;
 
-export function validateMattermostId(value: unknown): IdentifierValidationResult {
-  if (typeof value !== "string") {
-    return { ok: false, reason: "type" };
-  }
-  if (value.length === 0) {
-    return { ok: false, reason: "empty" };
-  }
-  if (value.length !== MATTERMOST_ID_LENGTH) {
-    return { ok: false, reason: "length" };
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (!isLowercaseAlphaNumeric(code)) {
-      return { ok: false, reason: "format" };
-    }
-  }
-  return { ok: true };
-}
+export type { IdentifierValidationReason, IdentifierValidationResult };
+export { validateMattermostId };
 
 export function validateMattermostCallbackHandle(
   value: unknown,
@@ -131,13 +109,6 @@ export function logMattermostInvalidIdentifier(params: {
     length: identifierLength(params.value),
     first8_hash: identifierHash(params.value),
   });
-}
-
-function isLowercaseAlphaNumeric(code: number): boolean {
-  return (
-    (code >= 0x30 && code <= 0x39) ||
-    (code >= 0x61 && code <= 0x7a)
-  );
 }
 
 function isBase64UrlChar(code: number): boolean {

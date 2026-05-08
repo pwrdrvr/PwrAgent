@@ -1,6 +1,7 @@
 import type {
   MessagingAuditContext,
   MessagingInboundEvent,
+  MessagingRejectedInboundEvent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -306,6 +307,7 @@ describe("discord adapter", () => {
   describe("text mention dispatch", () => {
     it("drops messages from unauthorized guilds before listener dispatch", async () => {
       const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
       const gateway = new TestDiscordGateway();
       const logger = { debug: vi.fn(), warn: vi.fn() };
       const adapter = new DiscordAdapter({
@@ -324,6 +326,9 @@ describe("discord adapter", () => {
       await adapter.start(async (event) => {
         events.push(event);
       });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
       await gateway.emit({
         op: 0,
         t: "MESSAGE_CREATE",
@@ -335,6 +340,19 @@ describe("discord adapter", () => {
       });
 
       expect(events).toHaveLength(0);
+      expect(rejectedEvents).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({
+              id: TEST_CHANNEL_ID,
+              parentId: TEST_GUILD_ID,
+            }),
+          }),
+          kind: "command",
+          reason: "unauthorized-conversation",
+        }),
+      ]);
       expect(logger.warn).toHaveBeenCalledWith(
         "discord inbound ignored unauthorized guild",
         expect.objectContaining({ guildId: TEST_GUILD_ID }),
@@ -396,6 +414,7 @@ describe("discord adapter", () => {
 
     it("acknowledges valid component interactions from unauthorized guilds before dropping them", async () => {
       const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
       const createInteractionResponse = vi.fn(async () => {});
       const gateway = new TestDiscordGateway();
       const logger = { debug: vi.fn(), warn: vi.fn() };
@@ -415,6 +434,9 @@ describe("discord adapter", () => {
 
       await adapter.start(async (event) => {
         events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
       });
       await gateway.emit({
         op: 0,
@@ -439,6 +461,19 @@ describe("discord adapter", () => {
         type: 6,
       });
       expect(events).toHaveLength(0);
+      expect(rejectedEvents).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({
+              id: TEST_CHANNEL_ID,
+              parentId: TEST_GUILD_ID,
+            }),
+          }),
+          kind: "callback",
+          reason: "unauthorized-conversation",
+        }),
+      ]);
       expect(logger.warn).toHaveBeenCalledWith(
         "discord inbound ignored unauthorized guild",
         expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),

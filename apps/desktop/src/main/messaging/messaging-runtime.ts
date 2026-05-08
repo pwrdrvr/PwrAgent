@@ -20,6 +20,8 @@ import type {
   MessagingCredentialValidationResult,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingInboundRejectedListener,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
@@ -49,6 +51,7 @@ export type DesktopMessagingAdapter = {
    * cannot detect post-start failures may simply omit the method.
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -140,6 +143,7 @@ export class DesktopMessagingRuntime {
    * Held so `stop()` can detach before adapters are torn down.
    */
   private adapterRuntimeErrorUnsubscribes: Array<() => void> = [];
+  private adapterInboundRejectedUnsubscribes: Array<() => void> = [];
   private started = false;
   /**
    * Per-platform health snapshot. Keyed by `MessagingChannelKind`. Updated
@@ -203,6 +207,25 @@ export class DesktopMessagingRuntime {
       });
 
       try {
+        const unsubscribeInboundRejected = adapter.onInboundRejected?.((event) => {
+          this.emitPlatformActivity(adapter.channel);
+          this.recordActivityFromRejected(adapter.channel, event);
+          messagingLog.warn("messaging event rejected before dispatch", {
+            actorDisplayName: event.actor.displayName,
+            actorId: event.actor.platformUserId,
+            actorIsBot: event.actor.isBot,
+            actorUsername: event.actor.username,
+            channel: adapter.channel,
+            conversationId: event.channel.conversation.id,
+            conversationKind: event.channel.conversation.kind,
+            eventId: event.id,
+            eventKind: event.kind,
+            reason: event.reason,
+          });
+        });
+        if (unsubscribeInboundRejected) {
+          this.adapterInboundRejectedUnsubscribes.push(unsubscribeInboundRejected);
+        }
         await adapter.start?.(async (event) => {
           // Activity ping fires on every inbound, *before* authorization
           // checks — the platform is active even when the message is
@@ -326,6 +349,16 @@ export class DesktopMessagingRuntime {
       }
     }
     this.adapterRuntimeErrorUnsubscribes = [];
+    for (const unsubscribe of this.adapterInboundRejectedUnsubscribes) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        messagingLog.warn("messaging adapter inbound-rejected unsubscribe threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.adapterInboundRejectedUnsubscribes = [];
     this.controllers.forEach((controller) => controller.dispose());
     const stoppedChannels = this.adapters.map((adapter) => adapter.channel);
     await Promise.all(this.adapters.map(async (adapter) => adapter.stop?.()));
@@ -633,12 +666,46 @@ export class DesktopMessagingRuntime {
           eventId: event.id,
           eventKind: event.kind,
           conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
           actorUsername: event.actor.username,
           actorIsBot: event.actor.isBot,
         },
       });
     } catch (error) {
       messagingLog.warn("messaging activity log write failed", {
+        platform,
+        eventId: event.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private recordActivityFromRejected(
+    platform: MessagingChannelKind,
+    event: MessagingRejectedInboundEvent,
+  ): void {
+    try {
+      const conversation = event.channel.conversation;
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: "inbound-rejected",
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        summary: `Rejected inbound from ${event.actor.displayName ?? event.actor.platformUserId}`,
+        payload: {
+          eventId: event.id,
+          eventKind: event.kind,
+          conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
+          actorUsername: event.actor.username,
+          actorIsBot: event.actor.isBot,
+          rejectionReason: event.reason,
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging rejected activity log write failed", {
         platform,
         eventId: event.id,
         error: error instanceof Error ? error.message : String(error),

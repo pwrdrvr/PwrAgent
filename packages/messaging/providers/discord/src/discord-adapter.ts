@@ -23,7 +23,9 @@ import type {
   MessagingDeliveryResult,
   MessagingFilePart,
   MessagingInboundEvent,
+  MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -246,6 +248,7 @@ export type DiscordProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -307,6 +310,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private readonly unauthorizedGuildLogKeys = new Set<string>();
+  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   private streamSurfaces = new Map<string, string>();
@@ -320,6 +324,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds;
+  }
+
+  onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
+    this.inboundRejectedListeners.add(listener);
+    return () => {
+      this.inboundRejectedListeners.delete(listener);
+    };
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -1011,6 +1022,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     options: { actionable: boolean },
   ): boolean {
     if (!this.isAuthorizedGuild(message.guild_id, "message")) {
+      if (options.actionable) {
+        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
+          kind: "command",
+          reason: "unauthorized-conversation",
+        }));
+      }
       return false;
     }
     if (!this.authorizedActorIds.includes(message.author.id)) {
@@ -1021,6 +1038,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           guildId: message.guild_id,
           actionable: options.actionable,
         });
+        this.emitInboundRejected(this.rejectedEventFromMessage(message, {
+          kind: options.actionable ? "command" : "text",
+          reason: "unauthorized-actor",
+        }));
       }
       return false;
     }
@@ -1032,6 +1053,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     actor: DiscordUser,
   ): boolean {
     if (!this.isAuthorizedGuild(interaction.guild_id, "interaction")) {
+      this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
+        reason: "unauthorized-conversation",
+      }));
       return false;
     }
     if (!this.authorizedActorIds.includes(actor.id)) {
@@ -1041,6 +1065,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         guildId: interaction.guild_id,
         interactionKind: interaction.data?.custom_id ? "component" : "command",
       });
+      this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
+        reason: "unauthorized-actor",
+      }));
       return false;
     }
     return true;
@@ -1464,6 +1491,77 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       isBot: user.bot,
       username: user.username,
     };
+  }
+
+  private rejectedEventFromMessage(
+    message: DiscordMessageCreateDispatch,
+    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason">,
+  ): MessagingRejectedInboundEvent {
+    return {
+      id: `discord:message:${message.id}:rejected`,
+      kind: options.kind,
+      actor: this.actorFromUser(message.author),
+      channel: this.basicChannelRef(
+        message.channel_id,
+        message.guild_id,
+        message.guild_id ? "channel" : "dm",
+      ),
+      receivedAt: this.now(),
+      reason: options.reason,
+      routingState: this.routingStateFromDiscord(message.channel_id, message.guild_id, {
+        channelType: message.channel_type,
+        isThread: message.is_thread,
+      }),
+    };
+  }
+
+  private rejectedEventFromInteraction(
+    interaction: DiscordInteractionCreateDispatch,
+    actor: DiscordUser,
+    options: Pick<MessagingRejectedInboundEvent, "reason">,
+  ): MessagingRejectedInboundEvent {
+    const kind = interaction.data?.custom_id ? "callback" : "command";
+    return {
+      id: `discord:interaction:${interaction.id}:rejected`,
+      kind,
+      actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
+      channel: this.basicChannelRef(
+        interaction.channel_id,
+        interaction.guild_id,
+        interaction.guild_id ? "channel" : "dm",
+      ),
+      receivedAt: this.now(),
+      reason: options.reason,
+      routingState: this.routingStateFromDiscord(
+        interaction.channel_id,
+        interaction.guild_id,
+        {
+          channelType: interaction.channel_type,
+          isThread: interaction.is_thread,
+        },
+      ),
+    };
+  }
+
+  private basicChannelRef(
+    channelId: string,
+    guildId: string | undefined,
+    kind: "dm" | "channel",
+  ): MessagingInboundEvent["channel"] {
+    return {
+      channel: this.channel,
+      conversation: {
+        id: channelId,
+        kind,
+        ...(guildId ? { parentId: guildId } : {}),
+      },
+    };
+  }
+
+  private emitInboundRejected(event: MessagingRejectedInboundEvent): void {
+    for (const listener of this.inboundRejectedListeners) {
+      void listener(event);
+    }
   }
 
   private routingStateFromDiscord(

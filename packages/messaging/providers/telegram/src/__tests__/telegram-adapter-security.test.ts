@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TelegramAdapter, type TelegramBotLike } from "../telegram-adapter.ts";
+import type { MessagingRejectedInboundEvent } from "@pwragent/messaging-interface";
 
 describe("TelegramAdapter inbound security boundary", () => {
   it("drops authorized actors in unauthorized supergroups before listener dispatch", async () => {
@@ -15,6 +16,10 @@ describe("TelegramAdapter inbound security boundary", () => {
       },
       logger,
       pollOnStart: false,
+    });
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
     });
     await adapter.start(listener);
 
@@ -36,6 +41,19 @@ describe("TelegramAdapter inbound security boundary", () => {
     });
 
     expect(listener).not.toHaveBeenCalled();
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({ platformUserId: "42" }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "-1009999999999",
+            kind: "channel",
+          }),
+        }),
+        kind: "command",
+        reason: "unauthorized-conversation",
+      }),
+    ]);
     expect(logger.warn).toHaveBeenCalledWith(
       "telegram inbound ignored unauthorized conversation",
       expect.objectContaining({
@@ -109,6 +127,10 @@ describe("TelegramAdapter inbound security boundary", () => {
       logger,
       pollOnStart: false,
     });
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
     await adapter.start(listener);
 
     await adapter.handleUpdate({
@@ -139,6 +161,19 @@ describe("TelegramAdapter inbound security boundary", () => {
       callback_query_id: "callback-1",
     });
     expect(listener).not.toHaveBeenCalled();
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({ platformUserId: "99" }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "99",
+            kind: "dm",
+          }),
+        }),
+        kind: "callback",
+        reason: "unauthorized-actor",
+      }),
+    ]);
     expect(logger.warn).toHaveBeenCalledWith(
       "telegram callback ignored unauthorized actor",
       expect.objectContaining({
