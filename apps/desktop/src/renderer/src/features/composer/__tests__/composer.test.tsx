@@ -8,7 +8,7 @@ import type {
   StartTurnResponse,
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
 import type {
@@ -34,6 +34,28 @@ vi.mock("../../../lib/image-normalization", () => ({
     width: 32,
   })),
 }));
+
+beforeAll(() => {
+  const emptyRect = {
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    toJSON: () => ({}),
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+  } as DOMRect;
+  const textPrototype = Text.prototype as Text & {
+    getClientRects?: () => DOMRect[];
+    getBoundingClientRect?: () => DOMRect;
+  };
+  textPrototype.getClientRects ??= () => [];
+  textPrototype.getBoundingClientRect ??= () => emptyRect;
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => emptyRect;
+});
 
 afterEach(() => {
   vi.mocked(normalizeImageFile).mockClear();
