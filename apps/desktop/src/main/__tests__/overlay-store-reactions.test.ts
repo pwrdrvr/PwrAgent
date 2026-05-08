@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AppServerThreadSummary } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -19,6 +20,35 @@ afterEach(() => {
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
+
+function buildThreadSummary(
+  overrides: Partial<AppServerThreadSummary> = {},
+): AppServerThreadSummary {
+  return {
+    id: "thread-1",
+    title: "Thread 1",
+    titleSource: "explicit",
+    linkedDirectories: [],
+    source: "codex",
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+async function addTestReactions(target: SqliteOverlayStore, threadId = "thread-1") {
+  await target.setThreadReaction({
+    backend: "codex",
+    threadId,
+    emoji: "👀",
+    present: true,
+  });
+  await target.setThreadReaction({
+    backend: "codex",
+    threadId,
+    emoji: "✅",
+    present: true,
+  });
+}
 
 describe("SqliteOverlayStore — thread reactions", () => {
   it("starts with no reactions on a thread that has never been touched", async () => {
@@ -181,5 +211,51 @@ describe("SqliteOverlayStore — thread reactions", () => {
     // Re-open the original handle so afterEach's close doesn't double-close.
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
+  });
+
+  it("preserves reactions when a single instance refreshes thread metadata", async () => {
+    await addTestReactions(store);
+
+    await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 2000,
+      threads: [
+        buildThreadSummary({
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          fastMode: true,
+          updatedAt: 1500,
+        }),
+      ],
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.reactions).toEqual(["👀", "✅"]);
+  });
+
+  it("preserves reactions when another sqlite handle performs an unrelated overlay write", async () => {
+    await addTestReactions(store);
+
+    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    const secondStore = new SqliteOverlayStore(secondDb);
+    try {
+      await secondStore.markThreadSeen({
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: 2500,
+        seenUpdatedAt: 2000,
+      });
+    } finally {
+      secondDb.close();
+    }
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.reactions).toEqual(["👀", "✅"]);
   });
 });
