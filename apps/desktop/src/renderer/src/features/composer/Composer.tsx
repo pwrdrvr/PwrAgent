@@ -3082,17 +3082,6 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (
-      event.key === "Backspace" &&
-      deleteEditorContent(event, "backward")
-    ) {
-      return;
-    }
-
-    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
-      return;
-    }
-
     handlePlainComposerKeyDown(event);
   };
 
