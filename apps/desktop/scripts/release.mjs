@@ -23,15 +23,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -68,21 +60,6 @@ function runChecked(file, args, opts = {}) {
   }
 }
 
-function runCaptured(file, args, opts = {}) {
-  console.log(`  $ ${file} ${args.join(" ")}`);
-  const result = spawnSync(file, args, {
-    cwd: opts.cwd ?? desktopRoot,
-    env: { ...process.env, ...opts.env },
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    if (result.stdout) process.stdout.write(result.stdout);
-    if (result.stderr) process.stderr.write(result.stderr);
-    process.exit(result.status ?? 1);
-  }
-  return result.stdout;
-}
-
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
 function maybeDecodeAppleApiKey() {
   if (process.env.APPLE_API_KEY && existsSync(process.env.APPLE_API_KEY)) {
@@ -100,58 +77,6 @@ function maybeDecodeAppleApiKey() {
   writeFileSync(target, Buffer.from(base64, "base64"));
   process.env.APPLE_API_KEY = target;
   console.log(`  decoded APPLE_API_KEY_BASE64 -> ${target}`);
-}
-
-function applyDmgFileIcons(distDir) {
-  if (process.platform !== "darwin") {
-    console.log("  skipping Finder file icon step outside macOS");
-    return;
-  }
-
-  const dmgFiles = readdirSync(distDir)
-    .filter((name) => name.endsWith(".dmg"))
-    .map((name) => join(distDir, name));
-
-  if (dmgFiles.length === 0) {
-    throw new Error(`No DMG artifacts found in ${distDir}`);
-  }
-
-  const tempDir = mkdtempSync(join(tmpdir(), "pwragent-dmg-icon-"));
-  try {
-    const iconPath = join(tempDir, "icon.icns");
-    const resourcePath = join(tempDir, "icon.rsrc");
-    copyFileSync(join(stageDir, "build", "icon.icns"), iconPath);
-
-    // Finder file icons are stored in the file's resource fork plus the
-    // custom-icon Finder flag. The DMG volume icon alone does not affect the
-    // unmounted .dmg file as shown in Downloads.
-    runChecked("sips", ["-i", iconPath]);
-    const resource = runCaptured("DeRez", ["-only", "icns", iconPath]);
-    writeFileSync(resourcePath, resource);
-
-    for (const dmgFile of dmgFiles) {
-      runChecked("Rez", ["-append", resourcePath, "-o", dmgFile]);
-      runChecked("SetFile", ["-a", "C", dmgFile]);
-    }
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
-function createFinderPreservingDmgArchives(distDir) {
-  if (process.platform !== "darwin") {
-    console.log("  skipping Finder-preserving DMG archives outside macOS");
-    return;
-  }
-
-  const dmgFiles = readdirSync(distDir).filter((name) => name.endsWith(".dmg"));
-
-  for (const dmgFile of dmgFiles) {
-    const archiveName = dmgFile.replace(/\.dmg$/, "-finder-icon.zip");
-    runChecked("ditto", ["-c", "-k", "--sequesterRsrc", dmgFile, archiveName], {
-      cwd: distDir,
-    });
-  }
 }
 
 // 2. Build (electron-vite -> apps/desktop/out/).
@@ -202,18 +127,7 @@ builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" :
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
 runChecked("npx", cleanedArgs, { cwd: stageDir });
 
-// 6. Apply a Finder file icon to the unmounted DMG artifacts. This is separate
-//    from `dmg.icon`, which controls the mounted volume icon.
-step("apply Finder file icons to DMG artifacts");
-applyDmgFileIcons(join(stageDir, "dist"));
-
-// 7. GitHub Actions artifacts do not preserve macOS resource forks when they
-//    zip raw files. Provide a ditto-built archive that preserves the Finder
-//    file icon for preview/debug downloads.
-step("create Finder-preserving DMG archives");
-createFinderPreservingDmgArchives(join(stageDir, "dist"));
-
-// 8. Post-build asar contents check — fails if forbidden files (TS sources,
+// 6. Post-build asar contents check — fails if forbidden files (TS sources,
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the
 //    bundle. Exclusions are configured in electron-builder.yml; this script
 //    is a belt-and-braces guard against accidental edits to that YAML.
