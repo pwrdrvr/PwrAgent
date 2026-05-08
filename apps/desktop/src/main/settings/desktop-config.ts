@@ -171,16 +171,20 @@ export function desktopSettingsPatchToEdits(
   const setAuthorizedContacts = (
     tablePath: readonly string[],
     legacyKey: string,
+    canonicalKey: string,
     value: readonly DesktopAuthorizedContact[] | undefined,
     oldTableArrayKeys: readonly string[] = [],
   ): void => {
     if (value === undefined) return;
     const tableName = tablePath.join(".");
-    const listKey = `${legacyKey}_list`;
+    const listKey = `${canonicalKey}_list`;
     const table = currentTables[tableName];
     const hasLegacyScalar = readStringArray(table?.[legacyKey]) !== undefined;
     const hasListTable = readAuthorizedContactArray(table?.[listKey]) !== undefined;
-    const tableArrayKey = hasLegacyScalar || hasListTable ? listKey : legacyKey;
+    const tableArrayKey =
+      (hasLegacyScalar && canonicalKey === legacyKey) || hasListTable
+        ? listKey
+        : canonicalKey;
     const tableArrayPath = [...tablePath, tableArrayKey];
     const normalizedContacts = normalizeAuthorizedContacts(value);
 
@@ -205,6 +209,7 @@ export function desktopSettingsPatchToEdits(
       });
     }
 
+    edits.push({ op: "delete", path: tableArrayPath });
     edits.push({ op: "deleteTableArray", path: tableArrayPath });
     if (normalizedContacts.length === 0) {
       return;
@@ -264,13 +269,15 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "telegram"],
       "authorized_user_ids",
+      "authorized_users",
       telegram.authorizedUserIds,
-      ["authorized_users"],
+      ["authorized_user_ids_list"],
     );
   }
   if (telegram?.authorizedSupergroups !== undefined) {
     setAuthorizedContacts(
       ["messaging", "telegram"],
+      "authorized_supergroups",
       "authorized_supergroups",
       telegram.authorizedSupergroups,
     );
@@ -290,13 +297,15 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "discord"],
       "authorized_user_ids",
+      "authorized_users",
       discord.authorizedUserIds,
-      ["authorized_users"],
+      ["authorized_user_ids_list"],
     );
   }
   if (discord?.authorizedGuilds !== undefined) {
     setAuthorizedContacts(
       ["messaging", "discord"],
+      "authorized_guilds",
       "authorized_guilds",
       discord.authorizedGuilds,
     );
@@ -337,8 +346,9 @@ export function desktopSettingsPatchToEdits(
     setAuthorizedContacts(
       ["messaging", "mattermost"],
       "authorized_user_ids",
+      "authorized_users",
       mattermost.authorizedUserIds,
-      ["authorized_users"],
+      ["authorized_user_ids_list"],
     );
   }
 
@@ -406,9 +416,9 @@ function normalizeDesktopConfig(
         enabled: readBoolean(telegram?.enabled),
         streamingResponses: readBoolean(telegram?.streaming_responses),
         authorizedUserIds: readAuthorizedContacts(
+          telegram?.authorized_users,
           telegram?.authorized_user_ids_list,
           telegram?.authorized_user_ids,
-          telegram?.authorized_users,
         ),
         authorizedSupergroups: readAuthorizedContacts(
           telegram?.authorized_supergroups_list,
@@ -420,9 +430,9 @@ function normalizeDesktopConfig(
         streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readAuthorizedContacts(
+          discord?.authorized_users,
           discord?.authorized_user_ids_list,
           discord?.authorized_user_ids,
-          discord?.authorized_users,
         ),
         authorizedGuilds: readAuthorizedContacts(
           discord?.authorized_guilds_list,
@@ -437,9 +447,9 @@ function normalizeDesktopConfig(
         slashCommandPrefix: readString(mattermost?.slash_command_prefix),
         registerSlashCommands: readBoolean(mattermost?.register_slash_commands),
         authorizedUserIds: readAuthorizedContacts(
+          mattermost?.authorized_users,
           mattermost?.authorized_user_ids_list,
           mattermost?.authorized_user_ids,
-          mattermost?.authorized_users,
         ),
       },
     },
