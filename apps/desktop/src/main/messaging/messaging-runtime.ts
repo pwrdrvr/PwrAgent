@@ -1041,7 +1041,9 @@ export class DesktopMessagingRuntime {
     this.addPlatformDegradationReason(platform, {
       kind: "rate-limited",
       key,
-      message: clipStatusText(info.message),
+      message: clipStatusText(
+        info.message ?? `Cool Off active for ${formatDurationForStatus(retryAfterMs)}.`,
+      ),
       scope: sanitizeDeliveryScope(info.scope),
       retryAfterMs,
       startedAt,
@@ -1049,10 +1051,10 @@ export class DesktopMessagingRuntime {
     });
     this.recordDiagnosticActivity({
       platform,
-      summary: `Provider rate limit: ${info.scope.id}`,
+      summary: `Cool Off started: ${info.scope.id}`,
       createdAt: startedAt,
       payload: {
-        type: "provider-rate-limit",
+        type: "provider-cool-off",
         scope: sanitizeDeliveryScope(info.scope),
         retryAfterMs,
         expiresAt,
@@ -1065,12 +1067,12 @@ export class DesktopMessagingRuntime {
     event: MessagingControllerDeliveryBudgetEvent,
   ): void {
     const scopeId = event.scope?.id ?? "unknown";
-    const reason = event.outcome === "deferred"
-      ? "deferred"
-      : event.reason ?? "dropped";
+    const reason = event.reason ?? (event.outcome === "deferred" ? "deferred" : "dropped");
     const retryDelayMs = event.retryAt !== undefined
       ? Math.max(0, event.retryAt - event.at)
       : undefined;
+    const isCoolOff = reason === "cool-off";
+    const modeLabel = isCoolOff ? "Cool Off" : "Slow Mode";
 
     const diagnosticKey = [
       event.channel,
@@ -1100,7 +1102,7 @@ export class DesktopMessagingRuntime {
       retryAt: event.retryAt,
       retryDelayMs,
       scopeId,
-      slowMode: event.slowMode,
+      slowModeActive: event.slowMode,
       threadId: event.threadId,
     });
 
@@ -1112,8 +1114,8 @@ export class DesktopMessagingRuntime {
       kind: "warning",
       key,
       message: event.outcome === "deferred"
-        ? `Delivery budget saturated; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}.`
-        : `Delivery budget dropped ${event.priority} (${reason}).`,
+        ? `${modeLabel} active; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}.`
+        : `${modeLabel} active; dropped ${event.priority} (${reason}).`,
       scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
       startedAt: event.at,
       expiresAt,
@@ -1124,11 +1126,11 @@ export class DesktopMessagingRuntime {
       threadId: event.threadId,
       bindingId: event.bindingId,
       summary: event.outcome === "deferred"
-        ? `Delivery budget deferred ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}`
-        : `Delivery budget dropped ${event.priority}: ${reason}`,
+        ? `${modeLabel} held ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}`
+        : `${modeLabel} dropped ${event.priority}: ${reason}`,
       createdAt: event.at,
       payload: {
-        type: "delivery-budget",
+        type: isCoolOff ? "cool-off" : "slow-mode",
         intentId: event.intentId,
         intentKind: event.intentKind,
         outcome: event.outcome,
@@ -1137,7 +1139,7 @@ export class DesktopMessagingRuntime {
         retryAt: event.retryAt,
         retryDelayMs,
         scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
-        slowMode: event.slowMode,
+        slowModeActive: event.slowMode,
       },
     });
   }

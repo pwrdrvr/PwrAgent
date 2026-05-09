@@ -175,11 +175,13 @@ not ship a new provider with `sdk-managed`; fix or wrap the client first.
 
 The controller budgets all outbound intent kinds against the resolved scope:
 final assistant messages, user prompts, command replies, status updates, tool
-updates, and stream updates. Provider 429 feedback puts that scope into a
-cool-off window, then slow mode. In slow mode, obsolete low-priority traffic
-such as non-final stream updates, routine status edits, and intermediate tool
-progress can be dropped; final turn results and interactive prompts are
-reserved and deferred when possible.
+updates, and stream updates. Slow Mode is local: it starts when the shared
+budget for a scope is exhausted or close enough that reserved capacity must be
+protected. Provider 429 feedback starts a Cool Off window instead: the
+controller sends nothing to that scope until the provider retry window clears.
+In Slow Mode, obsolete low-priority traffic such as non-final stream updates,
+routine status edits, and intermediate tool progress can be dropped; final turn
+results and interactive prompts are reserved and deferred when possible.
 
 If a send attempt is rejected with a rate-limit error, `deliver()` should return
 a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. Set

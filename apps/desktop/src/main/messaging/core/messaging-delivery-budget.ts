@@ -18,6 +18,7 @@ export type MessagingDeliveryAdmission =
     }
   | {
       outcome: "deferred";
+      reason: "cool-off" | "budget-exhausted";
       retryAt: number;
       slowMode: boolean;
     }
@@ -42,6 +43,7 @@ const DEFAULT_LIMIT = 60;
 const DEFAULT_RESERVED = 1;
 const RATE_LIMIT_SAFETY_BUFFER_MS = 2_000;
 const SLOW_MODE_RECOVERY_MS = 5 * 60_000;
+const SLOW_MODE_MINIMUM_MS = 5_000;
 
 const SLOW_MODE_DROP_PRIORITIES = new Set<MessagingDeliveryPriority>([
   "routine_status",
@@ -74,11 +76,16 @@ export class MessagingDeliveryBudget {
     const now = this.now();
     const state = this.stateFor(request.scope);
     this.pruneState(state, request.scope, now);
-    const slowMode = this.isScopeInSlowMode(request.scope);
+    let slowMode = this.isScopeInSlowMode(request.scope);
 
     if (state.coolOffUntil !== undefined && state.coolOffUntil > now) {
       if (DEFERABLE_PRIORITIES.has(request.priority)) {
-        return { outcome: "deferred", retryAt: state.coolOffUntil, slowMode };
+        return {
+          outcome: "deferred",
+          reason: "cool-off",
+          retryAt: state.coolOffUntil,
+          slowMode,
+        };
       }
       return { outcome: "dropped", reason: "cool-off", slowMode };
     }
@@ -88,10 +95,17 @@ export class MessagingDeliveryBudget {
     }
 
     if (!this.hasCapacity(request.scope, state, request.priority)) {
+      const slowModeUntil = Math.max(
+        nextWindowAt(request.scope, state, now),
+        now + SLOW_MODE_MINIMUM_MS,
+      );
+      state.slowModeUntil = Math.max(state.slowModeUntil ?? 0, slowModeUntil);
+      slowMode = true;
       if (DEFERABLE_PRIORITIES.has(request.priority)) {
         return {
           outcome: "deferred",
-          retryAt: nextWindowAt(request.scope, state, now),
+          reason: "budget-exhausted",
+          retryAt: slowModeUntil,
           slowMode,
         };
       }

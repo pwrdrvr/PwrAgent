@@ -190,9 +190,10 @@ Implement, in order:
 ### Rate-limit queue ownership
 
 PwrAgent must own outbound retry queues outside the platform SDK. This lets the
-controller stop sending before a provider-imposed cooldown closes the next send
-window, preserve reserved capacity for final turn and interactive messages, and
-discard obsolete low-priority updates while in slow mode.
+controller stop sending before a provider-imposed Cool Off closes the next send
+window, enter local Slow Mode when its own scope budget is exhausted, preserve
+reserved capacity for final turn and interactive messages, and discard obsolete
+low-priority updates while Slow Mode is active.
 
 Before adding a provider, check the client SDK's outbound rate-limit behavior:
 
@@ -215,6 +216,11 @@ retryable. The desktop controller records every cooldown, but only re-runs
 admission for retryable attempts. Non-final stream updates, intermediate tool
 updates, and routine status edits should be dropped by the controller once slow
 mode applies; do not queue them inside the adapter.
+
+Treat message edits as outbound writes unless the provider has explicit,
+documented semantics saying otherwise. Some platforms put edits in a different
+bucket from new messages, but they are still API calls and may still produce
+provider rate-limit feedback.
 
 Current examples:
 

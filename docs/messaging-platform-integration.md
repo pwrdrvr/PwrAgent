@@ -142,12 +142,23 @@ default, then `Show Some` for old state. Pending batches flush before assistant
 messages, approval or questionnaire prompts, status replies, and terminal turn
 status so tool progress does not arrive after the response it explains.
 
-When provider rate-limit feedback is observed, PwrAgent enters a cool-off for
-that provider scope and then a conservative slow mode. Slow mode preserves
-final assistant messages and interactive prompts, but may drop non-final
-streaming edits, routine status-card edits, and intermediate tool updates
-instead of queueing stale noise. The messaging status dot turns orange while a
-cool-off or reconnect reason is active.
+PwrAgent uses two related but distinct protection states:
+
+- **Slow Mode** is our local budget-protection state. It begins when a
+  provider-defined scope is close to or at its configured write budget. Slow
+  Mode preserves final assistant messages and interactive prompts, but may drop
+  non-final streaming edits, routine status-card edits, and intermediate tool
+  updates instead of queueing stale noise.
+- **Cool Off** is provider-imposed. It begins when a provider returns
+  rate-limit feedback with a retry window. PwrAgent stops sending to that scope
+  until the retry window clears, then resumes conservatively.
+
+The messaging status dot turns orange while Slow Mode, Cool Off, or reconnect
+degradation is active. Message edits should not be treated as free capacity:
+Slack documents `chat.update` as a separately rate-limited Web API method,
+Discord and Mattermost rate-limit API requests/routes, and Telegram documents
+edit calls as Bot API requests while its public send-message limits do not
+guarantee edits are exempt.
 
 ## Attachments
 

@@ -2177,6 +2177,7 @@ describe("MessagingController", () => {
         intentKind: "stream_update",
         outcome: "deferred",
         priority: "final_turn",
+        reason: "budget-exhausted",
         retryAt: 61_000,
         scope,
       }),

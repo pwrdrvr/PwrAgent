@@ -17,9 +17,11 @@ describe("MessagingDeliveryBudget", () => {
     expect(budget.admit({ scope, priority: "stream_partial" })).toMatchObject({
       outcome: "dropped",
       reason: "budget-exhausted",
+      slowMode: true,
     });
     expect(budget.admit({ scope, priority: "final_turn" })).toMatchObject({
       outcome: "admitted",
+      slowMode: true,
     });
 
     now += 60_001;
@@ -46,6 +48,7 @@ describe("MessagingDeliveryBudget", () => {
     });
     expect(budget.admit({ scope, priority: "final_turn" })).toEqual({
       outcome: "deferred",
+      reason: "cool-off",
       retryAt: 28_000,
       slowMode: true,
     });
@@ -59,6 +62,39 @@ describe("MessagingDeliveryBudget", () => {
     expect(budget.admit({ scope, priority: "final_turn" })).toMatchObject({
       outcome: "admitted",
       slowMode: true,
+    });
+  });
+
+  it("enters slow mode when the local budget is exhausted", () => {
+    let now = 1_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    const scope = testScope({ limit: 1, reserved: 0 });
+
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+    expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
+      outcome: "dropped",
+      reason: "budget-exhausted",
+      slowMode: true,
+    });
+    expect(budget.admit({ scope, priority: "stream_partial" })).toEqual({
+      outcome: "dropped",
+      reason: "slow-mode",
+      slowMode: true,
+    });
+    expect(budget.admit({ scope, priority: "final_turn" })).toEqual({
+      outcome: "deferred",
+      reason: "budget-exhausted",
+      retryAt: 61_000,
+      slowMode: true,
+    });
+
+    now = 61_001;
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
     });
   });
 

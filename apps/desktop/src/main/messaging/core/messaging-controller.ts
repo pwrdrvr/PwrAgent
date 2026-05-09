@@ -4084,6 +4084,7 @@ export class MessagingController {
             intentKind: routedIntent.kind,
             outcome: "deferred",
             priority,
+            reason: admission.reason,
             retryAt: admission.retryAt,
             scope,
             slowMode: admission.slowMode,
