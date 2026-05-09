@@ -1076,6 +1076,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
     if (
+      !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage

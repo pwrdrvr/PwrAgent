@@ -3,6 +3,63 @@ import { TelegramAdapter, type TelegramBotLike } from "../telegram-adapter.ts";
 import type { MessagingRejectedInboundEvent } from "@pwragent/messaging-interface";
 
 describe("TelegramAdapter inbound security boundary", () => {
+  it("dispatches pairing tokens from unauthorized actors before allowlist checks", async () => {
+    const listener = vi.fn();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      bot: fakeBot(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001234567890", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      logger,
+      pollOnStart: false,
+    });
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    await adapter.start(listener);
+
+    await adapter.handleUpdate({
+      update_id: 99,
+      message: {
+        chat: {
+          id: -1009999999999,
+          title: "Untrusted",
+          type: "supergroup",
+        },
+        from: {
+          id: 99,
+          first_name: "Mallory",
+        },
+        message_id: 199,
+        text: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      },
+    });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ platformUserId: "99" }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "-1009999999999",
+            kind: "channel",
+          }),
+        }),
+        kind: "text",
+        text: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      }),
+    );
+    expect(rejectedEvents).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "telegram inbound ignored unauthorized actor",
+      expect.anything(),
+    );
+  });
+
   it("drops authorized actors in unauthorized supergroups before listener dispatch", async () => {
     const listener = vi.fn();
     const logger = { debug: vi.fn(), warn: vi.fn() };

@@ -700,6 +700,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       ? Boolean(extractMessagingPairingToken(message.content))
       : false;
     if (
+      !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage

@@ -305,6 +305,61 @@ describe("discord adapter", () => {
   });
 
   describe("text mention dispatch", () => {
+    it("dispatches pairing tokens from unauthorized actors before allowlist checks", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: "1480556454498009999", displayName: "" }],
+          authorizedGuildIds: [{ id: "1480556454498010000", displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+          id: "pairing-msg",
+        }),
+      });
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({
+              id: TEST_CHANNEL_ID,
+              parentId: TEST_GUILD_ID,
+            }),
+          }),
+          kind: "text",
+          text: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        }),
+      ]);
+      expect(rejectedEvents).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.anything(),
+      );
+      await adapter.stop();
+    });
+
     it("drops messages from unauthorized guilds before listener dispatch", async () => {
       const events: MessagingInboundEvent[] = [];
       const rejectedEvents: MessagingRejectedInboundEvent[] = [];
