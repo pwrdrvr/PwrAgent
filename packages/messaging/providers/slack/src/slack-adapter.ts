@@ -14,10 +14,12 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -138,6 +140,8 @@ export type SlackProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "slack";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -268,6 +272,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly signingSecret: string;
   private readonly socketClient: SlackSocketClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private readonly conversationTitleCache = new Map<string, string | undefined>();
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
@@ -303,6 +308,18 @@ export class SlackAdapter implements SlackProviderAdapter {
     return () => {
       this.inboundRejectedListeners.delete(listener);
     };
+  }
+
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const target = this.resolveTarget(intent);
+    return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
   async start(listener: SlackInboundListener): Promise<void> {
@@ -433,6 +450,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       };
     } catch (error) {
+      this.emitRateLimitFromError(error, target);
       return {
         outcome: "failed",
         channel: this.channel,
@@ -761,7 +779,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   private async deliverStreamUpdate(
     intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
   ): Promise<MessagingDeliveryResult> {
-    if (this.config.streamingResponses === false || intent.policy === "disabled") {
+    if (
+      intent.policy === "disabled" ||
+      (this.config.streamingResponses !== true && intent.policy !== "enabled")
+    ) {
       return {
         outcome: "discarded",
         channel: this.channel,
@@ -845,6 +866,42 @@ export class SlackAdapter implements SlackProviderAdapter {
       ...(threadTs ? { threadTs } : {}),
       ...(surfaceState?.ts ? { ts: surfaceState.ts } : {}),
     };
+  }
+
+  private rateLimitScopeForTarget(target: { channelId: string }): MessagingDeliveryScope {
+    return {
+      platform: this.channel,
+      id: `slack:channel:${target.channelId}`,
+      kind: target.channelId.startsWith("D") ? "dm" : "channel",
+      label: target.channelId.startsWith("D") ? "Slack DM" : "Slack channel",
+      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+    };
+  }
+
+  private emitRateLimitFromError(
+    error: unknown,
+    target: { channelId: string },
+  ): void {
+    const retryAfterMs = retryAfterMsFromError(error);
+    if (retryAfterMs === undefined) {
+      return;
+    }
+    this.emitRateLimit({
+      scope: this.rateLimitScopeForTarget(target),
+      retryAfterMs,
+      message: error instanceof Error ? error.message : String(error),
+      observedAt: this.now(),
+    });
+  }
+
+  private emitRateLimit(info: MessagingRateLimitInfo): void {
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
   }
 
   private buildCallbackValueBuilder(params: {
@@ -1569,6 +1626,28 @@ function requiredConversationHistoryScope(channelId: string): string {
   if (channelId.startsWith("D")) return "im:history";
   if (channelId.startsWith("G")) return "groups:history or mpim:history";
   return "channels:history/groups:history/im:history/mpim:history";
+}
+
+function retryAfterMsFromError(error: unknown): number | undefined {
+  const retryAfter =
+    readNumberProperty(error, "retryAfter") ??
+    readNumberProperty(error, "retry_after") ??
+    readNumberProperty(error, "retryAfterMs");
+  if (retryAfter !== undefined) {
+    return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
+  }
+  const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
+  return status === 429 ? 1_000 : undefined;
+}
+
+function readNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "number" && Number.isFinite(property)
+    ? property
+    : undefined;
 }
 
 function safeEqual(left: string, right: string): boolean {

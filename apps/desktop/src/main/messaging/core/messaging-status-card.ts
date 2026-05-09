@@ -9,6 +9,7 @@ import type {
   MessagingBindingRecord,
   MessagingConfirmationIntent,
   MessagingJsonValue,
+  MessagingStreamingResponseMode,
   MessagingSingleSelectIntent,
   MessagingSurfaceAction,
   MessagingStatusIntent,
@@ -86,6 +87,7 @@ export function buildBindingStatusIntent(params: {
     params.binding,
     params.toolUpdateMode,
   );
+  const streamingMode = resolveMessagingStreamingResponseMode(params.binding);
 
   return {
     id: params.id,
@@ -112,6 +114,7 @@ export function buildBindingStatusIntent(params: {
       "Plan mode: unavailable",
       `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+      `Streaming: ${formatMessagingStreamingResponseModeLabel(streamingMode)}`,
       "Context usage: unavailable",
       "Account: unavailable",
       "Rate limits: unavailable",
@@ -127,6 +130,7 @@ export function buildBindingStatusIntent(params: {
       permissionsMode,
       queuedExecutionMode,
       reasoning,
+      streamingMode,
       toolUpdateMode,
     }),
   };
@@ -139,6 +143,7 @@ function buildStatusActions(params: {
   permissionsMode: string;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
+  streamingMode: MessagingStreamingResponseMode;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
@@ -198,18 +203,25 @@ function buildStatusActions(params: {
       priority: 9,
     },
     {
+      id: "status:streaming",
+      label: `Stream: ${formatMessagingStreamingResponseModeLabel(params.streamingMode)}`,
+      style: "secondary",
+      fallbackText: "stream",
+      priority: 10,
+    },
+    {
       id: "status:compact",
       label: "Compact",
       style: "secondary",
       fallbackText: "compact",
-      priority: 10,
+      priority: 11,
     },
     {
       id: "status:sync-name",
       label: "Sync name",
       style: "secondary",
       fallbackText: "sync name",
-      priority: 11,
+      priority: 12,
     },
     {
       id: "status:stop",
@@ -290,6 +302,38 @@ export function nextMessagingToolUpdateMode(
 ): MessagingToolUpdateMode {
   const index = TOOL_UPDATE_MODE_ORDER.indexOf(mode);
   return TOOL_UPDATE_MODE_ORDER[(index + 1) % TOOL_UPDATE_MODE_ORDER.length]!;
+}
+
+export function resolveMessagingStreamingResponseMode(
+  binding: MessagingBindingRecord,
+): MessagingStreamingResponseMode {
+  return binding.preferences?.streamingResponses ?? "inherit";
+}
+
+export function nextMessagingStreamingResponseMode(
+  mode: MessagingStreamingResponseMode,
+): MessagingStreamingResponseMode {
+  switch (mode) {
+    case "inherit":
+      return "disabled";
+    case "disabled":
+      return "enabled";
+    case "enabled":
+      return "inherit";
+  }
+}
+
+export function formatMessagingStreamingResponseModeLabel(
+  mode: MessagingStreamingResponseMode,
+): string {
+  switch (mode) {
+    case "inherit":
+      return "Inherit";
+    case "disabled":
+      return "Off";
+    case "enabled":
+      return "Advanced";
+  }
 }
 
 export function formatMessagingToolUpdateModeLabel(

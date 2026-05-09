@@ -21,9 +21,11 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
   MessagingCallbackHandleStore,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -239,6 +241,8 @@ export type DiscordProviderAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -307,6 +311,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private readonly unauthorizedGuildLogKeys = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   private streamSurfaces = new Map<string, string>();
@@ -327,6 +332,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return () => {
       this.inboundRejectedListeners.delete(listener);
     };
+  }
+
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const target = this.resolveTarget(intent);
+    return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -534,6 +551,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       };
     } catch (error) {
       const message = errorMessage(error);
+      this.emitRateLimitFromError(error, target);
       this.options.logger?.warn?.(
         `discord deliver failed kind=${intent.kind} channel=${target.channelId} error=${message}`,
       );
@@ -571,8 +589,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     target: { channelId: string; guildId?: string; messageId?: string },
   ): Promise<MessagingDeliveryResult> {
     if (
-      this.options.config.streamingResponses !== true ||
-      intent.policy === "disabled"
+      intent.policy === "disabled" ||
+      (
+        this.options.config.streamingResponses !== true &&
+        intent.policy !== "enabled"
+      )
     ) {
       return {
         channel: this.channel,
@@ -1249,6 +1270,46 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         },
       },
     };
+  }
+
+  private rateLimitScopeForTarget(target: {
+    channelId: string;
+    guildId?: string;
+  }): MessagingDeliveryScope {
+    return {
+      platform: this.channel,
+      id: `discord:channel:${target.channelId}`,
+      kind: "channel",
+      parentId: target.guildId,
+      label: "Discord channel",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    };
+  }
+
+  private emitRateLimitFromError(
+    error: unknown,
+    target: { channelId: string; guildId?: string },
+  ): void {
+    const retryAfterMs = retryAfterMsFromError(error);
+    if (retryAfterMs === undefined) {
+      return;
+    }
+    this.emitRateLimit({
+      scope: this.rateLimitScopeForTarget(target),
+      retryAfterMs,
+      message: errorMessage(error),
+      observedAt: this.now(),
+    });
+  }
+
+  private emitRateLimit(info: MessagingRateLimitInfo): void {
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
   }
 
   private firstImageUrl(intent: MessagingSurfaceIntent): string | undefined {
@@ -2258,6 +2319,28 @@ function discordChannelIsThread(channel: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function retryAfterMsFromError(error: unknown): number | undefined {
+  const retryAfter =
+    readNumberProperty(error, "retry_after") ??
+    readNumberProperty(error, "retryAfter") ??
+    readNumberProperty(error, "retryAfterMs");
+  if (retryAfter !== undefined) {
+    return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
+  }
+  const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
+  return status === 429 ? 1_000 : undefined;
+}
+
+function readNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "number" && Number.isFinite(property)
+    ? property
+    : undefined;
 }
 
 function commandArgsFromOptions(

@@ -102,6 +102,7 @@ function upsertHealth(
     health: event.health,
     changedAt: event.at,
     reason: event.reason,
+    degradationReasons: event.degradationReasons,
     lastActivityAt: existing?.lastActivityAt,
   };
   if (!existing) {

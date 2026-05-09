@@ -27,6 +27,7 @@ import type {
   MessagingInboundRejectedListener,
   MessagingJsonValue,
   MessagingRejectedInboundEvent,
+  MessagingReconnectInfo,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -143,6 +144,7 @@ export type MattermostProviderAdapter = {
    * `<img>` icon, which is structurally insulated from `currentColor`).
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(request: {
     actor?: MessagingActorIdentity;
@@ -297,6 +299,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private wsErroredLatched = false;
   private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
+  private readonly reconnectListeners = new Set<
+    (info: MessagingReconnectInfo) => void
+  >();
+  private websocketReconnectActive = false;
   /**
    * Live token set, owned by the adapter and shared by reference with
    * the callback server. The reconciler mutates this on every
@@ -397,6 +403,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // too in case a caller constructs the adapter directly.
     const wsUrl = `${this.config.serverUrl.replace(/^http/, "ws").replace(/\/+$/, "")}/api/v4/websocket`;
     this.websocketClient.addMessageListener((message) => {
+      if (this.websocketReconnectActive) {
+        this.websocketReconnectActive = false;
+        this.emitReconnect({ state: "recovered", observedAt: this.now() });
+      }
       this.handleWebsocketMessage(message).catch((error) => {
         this.logger.error("mattermost websocket message handler crashed", {
           error: error instanceof Error ? error.message : String(error),
@@ -428,6 +438,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         this.emitRuntimeError(
           `websocket disconnected (${connectFailCount} consecutive failures)`,
         );
+      } else if (!this.stopping && connectFailCount > 0) {
+        this.websocketReconnectActive = true;
+        this.emitReconnect({
+          state: "started",
+          attemptCount: connectFailCount,
+          observedAt: this.now(),
+        });
       }
     });
     this.websocketClient.addErrorListener((event) => {
@@ -490,7 +507,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.callbackServer.stop();
     // Reset latch + drop listeners so a subsequent `start()` re-arms.
     this.runtimeErrorListeners.clear();
+    this.reconnectListeners.clear();
     this.wsErroredLatched = false;
+    this.websocketReconnectActive = false;
     this.stopping = false;
     this.logger.info("mattermost adapter stopped", {});
   }
@@ -508,12 +527,31 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
+  onReconnect(listener: (info: MessagingReconnectInfo) => void): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
   private emitRuntimeError(reason: string): void {
     for (const listener of this.runtimeErrorListeners) {
       try {
         listener(reason);
       } catch (error) {
         this.logger.warn("mattermost runtime-error listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private emitReconnect(info: MessagingReconnectInfo): void {
+    for (const listener of this.reconnectListeners) {
+      try {
+        listener(info);
+      } catch (error) {
+        this.logger.warn("mattermost reconnect listener threw", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -1858,7 +1896,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async deliverStreamUpdate(
     intent: MessagingSurfaceIntent & { kind: "stream_update" },
   ): Promise<MessagingDeliveryResult> {
-    if (this.config.streamingResponses === false) {
+    if (
+      intent.policy === "disabled" ||
+      (this.config.streamingResponses !== true && intent.policy !== "enabled")
+    ) {
       return {
         channel: this.channel,
         deliveredAt: this.now(),

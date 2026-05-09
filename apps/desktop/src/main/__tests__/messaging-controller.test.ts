@@ -286,6 +286,51 @@ describe("MessagingController", () => {
           label: "Tools: Show Some",
           fallbackText: "tools",
         }),
+        expect.objectContaining({
+          id: "status:streaming",
+          label: "Stream: Inherit",
+          fallbackText: "stream",
+        }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Streaming: Inherit"),
+    });
+  });
+
+  it("cycles per-binding streaming mode from the status card", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+
+    const bindingAfterDisable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(bindingAfterDisable?.preferences?.streamingResponses).toBe("disabled");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Streaming: Off"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Stream: Off" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+
+    const bindingAfterEnable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(bindingAfterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Streaming: Advanced"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Stream: Advanced" }),
       ]),
     });
   });

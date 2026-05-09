@@ -140,12 +140,42 @@ current update unsafe to edit. Discarding a stream update is not a delivery
 failure and must not be treated as evidence that the conversation target is
 invalid.
 
+Streaming is an advanced capability, not the normal progress-notification path.
+It repeatedly edits the same provider message with partial assistant text. That
+can consume the same write budget needed for final answers, approvals, and
+status replies, and voice readers that announce messages when first received may
+not observe later edits. Providers should honor binding policy as:
+
+- `disabled`: discard stream updates.
+- `enabled`: allow stream updates even when the provider-global setting is off.
+- `inherit`: follow the provider-global setting.
+
 When streaming is enabled, adapters should use accumulated text for idempotent
 edits and keep any stream-key-to-platform-surface mapping in runtime memory
 only. Stream surfaces are transient; completed assistant message delivery
 remains the authoritative final response. Partial stream text may contain
 unfinished markdown, code fences, or links, so adapters should use conservative
 formatting until the final update or final assistant message arrives.
+
+## Rate-Limit and Reconnect Health
+
+Adapters may expose `resolveDeliveryScope(intent)`, `onRateLimit(listener)`,
+and `onReconnect(listener)` to the desktop runtime. Scope metadata must be
+provider-neutral: platform, stable scope id, kind, optional label, optional
+provider bucket id, and conservative write budget hints. Do not leak provider
+SDK error objects through these hooks.
+
+The controller budgets all outbound intent kinds against the resolved scope:
+final assistant messages, user prompts, command replies, status updates, tool
+updates, and stream updates. Provider 429 feedback puts that scope into a
+cool-off window, then slow mode. In slow mode, obsolete low-priority traffic
+such as non-final stream updates, routine status edits, and intermediate tool
+progress can be dropped; final turn results and interactive prompts are
+reserved and deferred when possible.
+
+The runtime reports a platform as `degraded` while a rate-limit or reconnect
+reason is active. `degraded` means connected but constrained. Fatal startup or
+runtime failures still report `errored`.
 
 Workspace handoff is expressed with the same generic status, single-select,
 confirmation, and error intents as other messaging workflows. Adapters should

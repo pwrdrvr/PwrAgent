@@ -30,6 +30,8 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
+  MessagingRateLimitInfo,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
   MessagingCapabilityProfile,
@@ -38,6 +40,7 @@ import type {
   MessagingAdapterState,
   MessagingChannelRef,
   MessagingChannelKind,
+  MessagingReconnectInfo,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 
@@ -60,6 +63,9 @@ export type MessagingConversationTitleUpdateResult = {
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;

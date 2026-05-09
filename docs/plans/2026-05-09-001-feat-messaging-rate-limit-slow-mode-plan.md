@@ -1,7 +1,7 @@
 ---
 title: feat: Add messaging rate-limit slow mode and degraded health
 type: feat
-status: active
+status: implemented
 date: 2026-05-09
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 deepened: 2026-05-09
@@ -31,7 +31,7 @@ PwrAgent's messaging integration is designed for remote agent operation, includi
 - R3. On provider rate-limit feedback, halt sends to that scope until the retry window clears, then enter slow mode with stricter coalescing and drop policy (#220).
 - R4. Reserve limited budget for turn-completed assistant messages and user-response-critical prompts; non-terminal tool/status/stream updates may be dropped while slow mode is active (#220).
 - R5. Stop avoidable per-turn status-message churn in slow mode, and reduce status-card "turn started/turn completed" edits where they are not product-critical (#220).
-- R6. Add `degraded` platform health with structured degradation reasons, auto-recovery, and rich renderer tooltip/popover behavior (#230).
+- R6. Add `degraded` platform health with structured degradation reasons, auto-recovery, and rich renderer tooltip behavior (#230).
 - R7. Add provider hooks for rate-limit and reconnect signals without leaking provider SDK errors into shared contracts (#230).
 - R8. Mark Streaming Responses as Advanced / Cautioned in Settings and docs, including voice-reader and rate-limit tradeoffs (#218).
 - R9. Expose per-binding streaming controls through existing binding preference/status-card command surfaces, defaulting to inherited/global behavior (#218).
@@ -150,13 +150,13 @@ flowchart TB
   U3 --> U4["Unit 4: Controller priority and coalescing integration"]
   U1 --> U5["Unit 5: Runtime degraded health state"]
   U2 --> U5
-  U5 --> U6["Unit 6: Renderer degraded popover"]
+  U5 --> U6["Unit 6: Renderer degraded tooltip"]
   U4 --> U7["Unit 7: Streaming cautions and per-binding controls"]
   U7 --> U8["Unit 8: Docs and operational verification"]
   U6 --> U8
 ```
 
-- [ ] **Unit 1: Extend messaging contracts for degradation and delivery scopes**
+- [x] **Unit 1: Extend messaging contracts for degradation and delivery scopes**
 
 **Goal:** Add channel-neutral types for degraded health reasons, rate-limit scope metadata, and outbound priority hints without importing provider SDKs into shared packages.
 
@@ -192,7 +192,7 @@ flowchart TB
 **Verification:**
 - Contract tests prove the new status and scope shapes are exported, serializable through IPC-facing shared contracts, and provider-neutral.
 
-- [ ] **Unit 2: Add provider rate-limit/reconnect hooks and scope metadata**
+- [x] **Unit 2: Add provider rate-limit/reconnect hooks and scope metadata**
 
 **Goal:** Let adapters report 429/cool-off and reconnect-in-progress signals while declaring the rate-limit scope that should govern each outbound delivery.
 
@@ -237,7 +237,7 @@ flowchart TB
 **Verification:**
 - Provider and runtime tests show hooks fire for rate-limit/reconnect conditions and remain optional for providers that cannot yet expose detailed metadata.
 
-- [ ] **Unit 3: Add shared delivery budget and slow-mode policy**
+- [x] **Unit 3: Add shared delivery budget and slow-mode policy**
 
 **Goal:** Implement a reusable desktop-main budget service that admits, queues, or drops outbound intents across all message kinds for the same provider-defined scope.
 
@@ -277,7 +277,7 @@ flowchart TB
 **Verification:**
 - Unit tests prove budget state transitions, reservation behavior, slow-mode drop policy, and auto-recovery are deterministic without provider SDKs.
 
-- [ ] **Unit 4: Integrate budget admission into controller delivery paths**
+- [x] **Unit 4: Integrate budget admission into controller delivery paths**
 
 **Goal:** Route every outbound messaging intent through the shared budget, classify priority correctly, and reduce status/tool/stream churn while preserving final responses.
 
@@ -321,7 +321,7 @@ flowchart TB
 **Verification:**
 - Controller tests demonstrate cross-kind budget sharing, priority behavior, no lost final responses, and no accidental permanent-target revocation for budget drops.
 
-- [ ] **Unit 5: Add runtime degraded health state and auto-recovery**
+- [x] **Unit 5: Add runtime degraded health state and auto-recovery**
 
 **Goal:** Track structured transient degradation reasons in the desktop runtime and publish orange `degraded` platform status events to the renderer.
 
@@ -360,9 +360,9 @@ flowchart TB
 **Verification:**
 - Runtime and IPC tests show status snapshots and events carry effective health plus reason detail through auto-recovery.
 
-- [ ] **Unit 6: Build degraded status chip popover**
+- [x] **Unit 6: Build degraded status chip tooltip**
 
-**Goal:** Replace the status chip's plain title tooltip with a keyboard-accessible popover that explains degraded reasons and links to Messaging Activity.
+**Goal:** Replace the status chip's plain title tooltip with a keyboard-accessible tooltip that explains degraded reasons while keeping click-through to Messaging Activity.
 
 **Requirements:** R6
 
@@ -373,14 +373,13 @@ flowchart TB
 - Modify: `apps/desktop/src/renderer/src/features/messaging-status/useMessagingPlatformStatuses.ts`
 - Modify: `apps/desktop/src/renderer/src/styles/app.css`
 - Test: `apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.test.tsx`
-- Test: `apps/desktop/src/renderer/src/features/messaging-status/__tests__/MessagingStatusBar.test.tsx` if the suite already has a colocated pattern; otherwise add coverage to the existing settings/sidebar tests.
+- Test: `apps/desktop/src/renderer/src/features/messaging-status/MessagingStatusBar.test.tsx`
 
 **Approach:**
 - Map `degraded` to `status-dot--warning` and a `messaging-status-chip--degraded` text/border treatment using existing `--status-warning`.
-- Add a small popover that opens on hover/focus and pins on click or keyboard activation. Escape closes it.
-- Render a platform summary plus each active degradation reason with sanitized, clipped text and time remaining when an expiry exists.
-- Use a one-second timer only while the popover is open to refresh "remaining" text.
-- Keep click behavior compatible with existing activity navigation; either make the popover include "View activity" or retain chip click as the navigation when no pinned popover is open.
+- Add a small tooltip that opens on hover/focus and includes structured degradation reason lines.
+- Render a platform summary plus each active degradation reason with sanitized, clipped text and retry duration when available.
+- Keep click behavior compatible with existing activity navigation.
 - Preserve vendor logo rendering as `<img>` where current icons require it and avoid recoloring brand assets.
 
 **Patterns to follow:**
@@ -390,17 +389,16 @@ flowchart TB
 
 **Test scenarios:**
 - Happy path: degraded Telegram renders orange dot and warning-toned chip.
-- Happy path: hovering or focusing a degraded chip opens a popover with the rate-limit reason and remaining time.
-- Happy path: clicking pins the popover; Escape dismisses it.
+- Happy path: hovering or focusing a degraded chip exposes a tooltip with the rate-limit reason and retry duration.
 - Edge case: multiple reasons render as separate clipped rows.
 - Edge case: expired reasons are not shown after the hook receives a cleared status.
-- Accessibility: chip has an informative accessible label and uses `aria-describedby` while the popover is open.
+- Accessibility: chip has an informative accessible label and uses `aria-describedby` for the tooltip.
 - Regression: enabled/suspended/errored/unknown chips retain existing visual behavior.
 
 **Verification:**
-- Renderer tests prove the popover interaction and degraded visual state without relying on native `title` tooltips.
+- Renderer tests prove the tooltip content and degraded visual state without relying on native `title` tooltips.
 
-- [ ] **Unit 7: Mark streaming as advanced/cautioned and expose per-binding control**
+- [x] **Unit 7: Mark streaming as advanced/cautioned and expose per-binding control**
 
 **Goal:** Make streaming opt-in feel like an advanced power-user setting and let individual bindings override inherited streaming behavior.
 
@@ -443,7 +441,7 @@ flowchart TB
 **Verification:**
 - Settings and controller tests prove the warning is visible, per-binding control works, and streaming cannot outrank final response delivery under slow mode.
 
-- [ ] **Unit 8: Update docs, smoke checks, and operational guidance**
+- [x] **Unit 8: Update docs, smoke checks, and operational guidance**
 
 **Goal:** Document the new streaming cautions, delivery budget behavior, degraded health semantics, and manual validation flow for provider rate limits.
 
@@ -488,7 +486,7 @@ flowchart TB
   Controller["MessagingController.deliver()"] --> Budget
   Budget --> Provider
   Runtime --> IPC["messaging status IPC"]
-  IPC --> Renderer["MessagingStatusBar popover"]
+  IPC --> Renderer["MessagingStatusBar tooltip"]
   Controller --> Store["MessagingStore delivery/activity records"]
   Controller --> Docs["Operator docs and smoke checks"]
 ```
@@ -508,7 +506,7 @@ flowchart TB
 | Slow mode drops an update the user expected | Restrict dropping to non-final stream, routine status, and intermediate tool progress; preserve final and action-required messages. |
 | Final assistant message is delayed behind lower-priority backlog | Budget service reserves capacity and controller sends final/prompt before optional tool/status flushes. |
 | Degraded status becomes noisy or flaps | Reasons have expiry/recovery semantics; runtime coalesces health transitions and `errored` remains sticky. |
-| UI popover grows too complex | Keep one compact popover, no new positioning library, and reuse existing tokens. |
+| UI tooltip grows too complex | Keep one compact tooltip, no new positioning library, and reuse existing tokens. |
 | Per-binding streaming controls inflate status-card actions | Follow existing action priority/capability limits and text fallback patterns. |
 | Hard-coded platform limits drift | Use documented limits as conservative defaults, parse provider retry metadata when present, and document that exact tuning is operational. |
 

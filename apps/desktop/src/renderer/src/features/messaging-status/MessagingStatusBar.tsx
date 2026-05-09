@@ -1,6 +1,7 @@
-import type { ReactElement } from "react";
+import { useId, type ReactElement } from "react";
 import type {
   MessagingChannelKind,
+  MessagingDegradationReason,
   MessagingPlatformHealth,
   MessagingPlatformStatus,
 } from "@pwragent/shared";
@@ -25,6 +26,7 @@ const ICONS: Partial<
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
+  degraded: "Degraded",
   suspended: "Suspended",
   errored: "Errored",
   unknown: "Loading",
@@ -82,10 +84,15 @@ function PlatformChip(props: {
   onClick?: () => void;
 }) {
   const { status, active, onClick } = props;
+  const tooltipId = useId();
   const Icon = ICONS[status.platform];
-  const baseLabel = `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}${
-    status.reason ? ` (${status.reason})` : ""
-  }`;
+  const labelLines = [
+    `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
+    status.reason,
+    ...formatDegradationReasons(status.degradationReasons ?? []),
+  ]
+    .filter((line): line is string => Boolean(line));
+  const baseLabel = labelLines.join("\n");
   const label = onClick
     ? `${baseLabel} — click to view messaging activity`
     : baseLabel;
@@ -108,11 +115,16 @@ function PlatformChip(props: {
         }`}
         aria-hidden="true"
       />
+      <span className="messaging-status-chip__tooltip" id={tooltipId} role="tooltip">
+        {labelLines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </span>
     </>
   );
   if (!onClick) {
     return (
-      <span className={className} title={label} aria-label={label}>
+      <span className={className} aria-describedby={tooltipId} aria-label={label}>
         {content}
       </span>
     );
@@ -121,7 +133,7 @@ function PlatformChip(props: {
     <button
       type="button"
       className={`${className} messaging-status-chip--clickable`}
-      title={label}
+      aria-describedby={tooltipId}
       aria-label={label}
       onClick={onClick}
     >
@@ -136,7 +148,7 @@ function hasRecentActivity(
 ): boolean {
   // Suspended/errored platforms shouldn't blink even if a stale activity
   // timestamp is hanging around — the dot is a status indicator first.
-  if (status.health !== "enabled") return false;
+  if (status.health !== "enabled" && status.health !== "degraded") return false;
   return Boolean(observedAt);
 }
 
@@ -146,6 +158,8 @@ function dotTone(
   switch (health) {
     case "enabled":
       return "ok";
+    case "degraded":
+      return "warning";
     case "suspended":
       return "suspended";
     case "errored":
@@ -153,6 +167,34 @@ function dotTone(
     case "unknown":
       return "suspended";
   }
+}
+
+function formatDegradationReasons(
+  reasons: readonly MessagingDegradationReason[],
+): string[] {
+  return reasons.map((reason) => {
+    const scopeLabel = reason.scope?.label ? ` (${reason.scope.label})` : "";
+    switch (reason.kind) {
+      case "rate-limited":
+        return `Rate limited${scopeLabel}${formatRetry(reason.retryAfterMs)}`;
+      case "reconnecting":
+        return `Reconnecting${formatAttempt(reason.attemptCount)}${reason.lastFailureReason ? `: ${reason.lastFailureReason}` : ""}`;
+      case "missing-permission":
+        return `Missing permission${reason.permission ? `: ${reason.permission}` : ""}`;
+      case "warning":
+        return reason.message ?? `Warning${scopeLabel}`;
+    }
+  });
+}
+
+function formatRetry(retryAfterMs: number | undefined): string {
+  if (retryAfterMs === undefined) return "";
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return `; retrying in ${seconds}s`;
+}
+
+function formatAttempt(attemptCount: number | undefined): string {
+  return attemptCount === undefined ? "" : ` (attempt ${attemptCount})`;
 }
 
 function formatPlatformName(platform: MessagingChannelKind): string {

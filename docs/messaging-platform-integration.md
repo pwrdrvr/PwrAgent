@@ -84,18 +84,32 @@ resume for the same turn until terminal completion.
 
 ## Streaming Responses
 
-Telegram and Discord can optionally show live assistant response text while
-backend `item/agentMessage/delta` events are arriving. The controller emits a
-generic stream update intent with accumulated assistant text; each provider then
-renders it only when that provider's streaming setting is enabled. When
-streaming is disabled or an update exceeds a safe platform edit limit, the
-provider discards the stream update and waits for the normal final assistant
-message.
+Streaming Responses are advanced. They optionally show live assistant response
+text while backend `item/agentMessage/delta` events are arriving. The controller
+emits a generic stream update intent with accumulated assistant text; each
+provider renders it only when the effective streaming policy allows it. When
+streaming is disabled, slow mode is active, or an update exceeds a safe platform
+edit limit, the provider discards the stream update and waits for the normal
+final assistant message.
 
 Streaming is separate from typing indicators and tool update notifications.
 Typing still reflects turn lifecycle, and the completed assistant message
-remains authoritative. Stream surfaces are transient runtime state and are not
-persisted as restart-safe managed messages.
+remains authoritative. Streaming does not make a turn finish sooner; it edits
+the same provider message repeatedly. Those edits can consume provider write
+budget quickly and can break voice-reader workflows that announce messages when
+received but do not observe later edits. Stream surfaces are transient runtime
+state and are not persisted as restart-safe managed messages.
+
+Effective streaming mode is resolved per binding first, then provider setting:
+
+| Mode | Behavior |
+| --- | --- |
+| `Inherit` | Follow the provider-level Streaming Responses toggle. |
+| `Off` | Suppress stream updates for this binding. |
+| `Advanced` | Enable stream updates for this binding even when the provider toggle is off. |
+
+Use the status card's `Stream: <mode>` action, or reply `stream` when actions
+are not available, to cycle a binding through these modes.
 
 ## Tool Update Verbosity
 
@@ -127,6 +141,13 @@ Effective mode is resolved as binding override, then Settings > Messaging
 default, then `Show Some` for old state. Pending batches flush before assistant
 messages, approval or questionnaire prompts, status replies, and terminal turn
 status so tool progress does not arrive after the response it explains.
+
+When provider rate-limit feedback is observed, PwrAgent enters a cool-off for
+that provider scope and then a conservative slow mode. Slow mode preserves
+final assistant messages and interactive prompts, but may drop non-final
+streaming edits, routine status-card edits, and intermediate tool updates
+instead of queueing stale noise. The messaging status dot turns orange while a
+cool-off or reconnect reason is active.
 
 ## Attachments
 
@@ -225,10 +246,12 @@ first-run discovery. Bot tokens are redacted from runtime logs. Telegram also
 accepts `TELEGRAM_BOT_TOKEN` and Discord also accepts `DISCORD_BOT_TOKEN` as
 local migration fallbacks.
 
-The TOML equivalents are `streaming_responses = true` under
-`[messaging.telegram]` or `[messaging.discord]`. Both providers default to
-`false`; the Settings > Messaging toggles and environment overrides expose the
-same booleans.
+The TOML equivalents are `streaming_responses = true` under a provider section,
+for example `[messaging.telegram]`, `[messaging.discord]`,
+`[messaging.mattermost]`, or `[messaging.slack]`. Providers default to `false`;
+the Settings > Messaging toggles and environment overrides expose the same
+booleans. Binding-level `Stream: Advanced` can opt a single binding into
+streaming without changing the provider default.
 
 Discord slash commands are reconciled on adapter startup when an Application ID
 is configured. The reconciler reads existing commands and only creates, patches,

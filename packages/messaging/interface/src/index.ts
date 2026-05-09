@@ -3,6 +3,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
+  MessagingDeliveryScope,
   MessagingToolUpdateMode,
   ThreadIdentifier,
   ThreadExecutionMode,
@@ -24,7 +25,18 @@ export {
   validateTelegramSupergroupId,
   type IdentifierValidationReason,
   type IdentifierValidationResult,
+  type MessagingDegradationReason,
+  type MessagingDeliveryScope,
+  type MessagingDeliveryScopeBudget,
+  type MessagingDeliveryScopeKind,
+  type MessagingMissingPermissionDegradationReason,
+  type MessagingPlatformHealth,
+  type MessagingPlatformStatus,
+  type MessagingPlatformStatusEvent,
+  type MessagingRateLimitedDegradationReason,
+  type MessagingReconnectingDegradationReason,
   type MessagingToolUpdateMode,
+  type MessagingWarningDegradationReason,
 } from "@pwragent/shared";
 
 export const MESSAGING_SURFACE_INTENT_KINDS = [
@@ -131,6 +143,25 @@ function isAsciiWhitespace(charCode: number): boolean {
     || charCode === 0x0c
     || charCode === 0x0d;
 }
+
+export type MessagingRateLimitInfo = {
+  retryAfterMs?: number;
+  scope: MessagingDeliveryScope;
+  message?: string;
+  observedAt?: number;
+};
+
+export type MessagingReconnectInfo =
+  | {
+      state: "started";
+      attemptCount?: number;
+      lastFailureReason?: string;
+      observedAt?: number;
+    }
+  | {
+      state: "recovered";
+      observedAt?: number;
+    };
 
 export type MessagingChannelKind =
   | "telegram"

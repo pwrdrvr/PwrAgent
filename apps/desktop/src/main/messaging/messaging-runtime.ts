@@ -14,6 +14,7 @@ import type {
   GenerateMessagingPairingTokenResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  MessagingDegradationReason,
   MessagingPairingEntry,
   MessagingPairingObservedActor,
   MessagingPairingObservedChat,
@@ -27,8 +28,11 @@ import type {
   MessagingChannelKind,
   MessagingCredentialValidationResult,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
+  MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -50,12 +54,14 @@ import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
+import { MessagingDeliveryBudget } from "./core/messaging-delivery-budget";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   /**
    * Optional subscription for fatal runtime errors that took the
@@ -66,6 +72,8 @@ export type DesktopMessagingAdapter = {
    * cannot detect post-start failures may simply omit the method.
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
@@ -90,6 +98,8 @@ type RunningMessagingAdapter = {
   controller: MessagingController;
   fingerprint: string;
   unsubscribeInboundRejected?: () => void;
+  unsubscribeRateLimit?: () => void;
+  unsubscribeReconnect?: () => void;
   unsubscribeRuntimeError?: () => void;
 };
 
@@ -101,6 +111,7 @@ const MAX_PAIRING_TTL_MS = 30 * 60 * 1000;
 const MAX_OUTSTANDING_PAIRING_TOKENS = 5;
 const PAIRING_TOKEN_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 
 export type MessagingPairingChangedEvent = {
   at: number;
@@ -188,6 +199,14 @@ export class DesktopMessagingRuntime {
   private readonly platformStatuses = new Map<
     MessagingChannelKind,
     MessagingPlatformStatus
+  >();
+  private readonly platformDegradationReasons = new Map<
+    MessagingChannelKind,
+    Map<string, MessagingDegradationReason>
+  >();
+  private readonly platformDegradationTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
   >();
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
@@ -383,6 +402,9 @@ export class DesktopMessagingRuntime {
    * subscribes to the event stream right after to stay current.
    */
   getPlatformStatuses(): MessagingPlatformStatus[] {
+    for (const platform of this.platformStatuses.keys()) {
+      this.clearExpiredDegradationReasons(platform);
+    }
     return [...this.platformStatuses.values()];
   }
 
@@ -678,12 +700,14 @@ export class DesktopMessagingRuntime {
     const { adapter, config, store } = params;
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorizedActorIdSet = new Set(authorizedActorIds);
+    const deliveryBudget = new MessagingDeliveryBudget();
     const controller = new MessagingController({
       adapter,
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
       backend: this.options.backendBridge,
       channel: adapter.channel,
+      deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
       store,
       toolUpdateDefaultMode: async () =>
@@ -779,12 +803,21 @@ export class DesktopMessagingRuntime {
       });
       this.setPlatformHealth(adapter.channel, "errored", { reason });
     });
+    const unsubscribeRateLimit = adapter.onRateLimit?.((info) => {
+      deliveryBudget.recordRateLimit(info);
+      this.handleAdapterRateLimit(adapter.channel, info);
+    });
+    const unsubscribeReconnect = adapter.onReconnect?.((info) => {
+      this.handleAdapterReconnect(adapter.channel, info);
+    });
 
     this.runningAdapters.set(adapter.channel, {
       adapter,
       controller,
       fingerprint: messagingAdapterConfigFingerprint(config, adapter.channel),
       unsubscribeInboundRejected,
+      unsubscribeRateLimit,
+      unsubscribeReconnect,
       unsubscribeRuntimeError,
     });
     this.syncRunningAdapterLists();
@@ -796,6 +829,20 @@ export class DesktopMessagingRuntime {
   }
 
   private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+    try {
+      running.unsubscribeRateLimit?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter rate-limit unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      running.unsubscribeReconnect?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter reconnect unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     try {
       running.unsubscribeRuntimeError?.();
     } catch (error) {
@@ -934,12 +981,23 @@ export class DesktopMessagingRuntime {
   ): void {
     const at = Date.now();
     const previous = this.platformStatuses.get(platform);
+    if (health === "enabled" || health === "suspended" || health === "errored") {
+      if (health !== "enabled") {
+        this.clearPlatformDegradationReasons(platform, { broadcast: false });
+      } else {
+        this.clearExpiredDegradationReasons(platform);
+      }
+    }
+    const degradationReasons = this.currentDegradationReasons(platform);
+    const effectiveHealth =
+      health === "enabled" && degradationReasons.length > 0 ? "degraded" : health;
     const next: MessagingPlatformStatus = {
       ...previous,
       platform,
-      health,
+      health: effectiveHealth,
       changedAt: at,
       reason: options.reason,
+      degradationReasons,
       // Preserve the existing activity timestamp through health
       // transitions; activity is independent of health and shouldn't
       // be reset just because the user toggled messaging off.
@@ -949,10 +1007,184 @@ export class DesktopMessagingRuntime {
     this.broadcastPlatformStatus({
       kind: "health-changed",
       platform,
-      health,
+      health: effectiveHealth,
       reason: options.reason,
+      degradationReasons,
       at,
     });
+  }
+
+  private handleAdapterRateLimit(
+    platform: MessagingChannelKind,
+    info: MessagingRateLimitInfo,
+  ): void {
+    const startedAt = info.observedAt ?? Date.now();
+    const retryAfterMs = Math.max(0, Math.floor(info.retryAfterMs ?? 0));
+    const expiresAt = startedAt + retryAfterMs + RATE_LIMIT_HEALTH_BUFFER_MS;
+    const key = degradationKey(platform, "rate-limited", info.scope.id);
+    this.addPlatformDegradationReason(platform, {
+      kind: "rate-limited",
+      key,
+      message: clipStatusText(info.message),
+      scope: sanitizeDeliveryScope(info.scope),
+      retryAfterMs,
+      startedAt,
+      expiresAt,
+    });
+  }
+
+  private handleAdapterReconnect(
+    platform: MessagingChannelKind,
+    info: MessagingReconnectInfo,
+  ): void {
+    const key = degradationKey(platform, "reconnecting", "adapter");
+    if (info.state === "recovered") {
+      this.clearPlatformDegradationReason(platform, key);
+      return;
+    }
+    this.addPlatformDegradationReason(platform, {
+      kind: "reconnecting",
+      key,
+      attemptCount: info.attemptCount,
+      lastFailureReason: clipStatusText(info.lastFailureReason),
+      startedAt: info.observedAt ?? Date.now(),
+    });
+  }
+
+  private addPlatformDegradationReason(
+    platform: MessagingChannelKind,
+    reason: MessagingDegradationReason,
+  ): void {
+    this.clearExpiredDegradationReasons(platform);
+    const reasons = this.platformDegradationReasonsFor(platform);
+    reasons.set(reason.key, reason);
+    this.scheduleDegradationExpiry(platform, reason);
+    this.refreshDegradedPlatformHealth(platform);
+  }
+
+  private clearPlatformDegradationReason(
+    platform: MessagingChannelKind,
+    key: string,
+  ): void {
+    const reasons = this.platformDegradationReasons.get(platform);
+    if (!reasons?.delete(key)) {
+      return;
+    }
+    this.clearDegradationTimer(platform, key);
+    this.refreshDegradedPlatformHealth(platform);
+  }
+
+  private clearPlatformDegradationReasons(
+    platform: MessagingChannelKind,
+    options: { broadcast: boolean },
+  ): void {
+    const reasons = this.platformDegradationReasons.get(platform);
+    if (!reasons || reasons.size === 0) {
+      return;
+    }
+    for (const key of reasons.keys()) {
+      this.clearDegradationTimer(platform, key);
+    }
+    reasons.clear();
+    if (options.broadcast) {
+      this.refreshDegradedPlatformHealth(platform);
+    }
+  }
+
+  private clearExpiredDegradationReasons(platform: MessagingChannelKind): void {
+    const reasons = this.platformDegradationReasons.get(platform);
+    if (!reasons || reasons.size === 0) {
+      return;
+    }
+    const now = Date.now();
+    let mutated = false;
+    for (const [key, reason] of [...reasons.entries()]) {
+      const expiresAt = degradationExpiresAt(reason);
+      if (expiresAt !== undefined && expiresAt <= now) {
+        reasons.delete(key);
+        this.clearDegradationTimer(platform, key);
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      this.refreshDegradedPlatformHealth(platform);
+    }
+  }
+
+  private refreshDegradedPlatformHealth(platform: MessagingChannelKind): void {
+    const previous = this.platformStatuses.get(platform);
+    if (!previous || previous.health === "errored" || previous.health === "suspended") {
+      return;
+    }
+    const degradationReasons = this.currentDegradationReasons(platform);
+    const nextHealth: MessagingPlatformHealth =
+      degradationReasons.length > 0 ? "degraded" : "enabled";
+    const at = Date.now();
+    this.platformStatuses.set(platform, {
+      ...previous,
+      health: nextHealth,
+      changedAt: at,
+      reason: nextHealth === "degraded" ? previous.reason : undefined,
+      degradationReasons,
+    });
+    this.broadcastPlatformStatus({
+      kind: "health-changed",
+      platform,
+      health: nextHealth,
+      reason: nextHealth === "degraded" ? previous.reason : undefined,
+      degradationReasons,
+      at,
+    });
+  }
+
+  private currentDegradationReasons(
+    platform: MessagingChannelKind,
+  ): MessagingDegradationReason[] {
+    return [...(this.platformDegradationReasons.get(platform)?.values() ?? [])];
+  }
+
+  private platformDegradationReasonsFor(
+    platform: MessagingChannelKind,
+  ): Map<string, MessagingDegradationReason> {
+    let reasons = this.platformDegradationReasons.get(platform);
+    if (!reasons) {
+      reasons = new Map();
+      this.platformDegradationReasons.set(platform, reasons);
+    }
+    return reasons;
+  }
+
+  private scheduleDegradationExpiry(
+    platform: MessagingChannelKind,
+    reason: MessagingDegradationReason,
+  ): void {
+    const expiresAt = degradationExpiresAt(reason);
+    if (expiresAt === undefined) {
+      return;
+    }
+    const timerKey = degradationTimerKey(platform, reason.key);
+    this.clearDegradationTimer(platform, reason.key);
+    const delayMs = Math.max(0, expiresAt - Date.now());
+    this.platformDegradationTimers.set(
+      timerKey,
+      setTimeout(() => {
+        this.platformDegradationTimers.delete(timerKey);
+        this.clearPlatformDegradationReason(platform, reason.key);
+      }, delayMs),
+    );
+  }
+
+  private clearDegradationTimer(
+    platform: MessagingChannelKind,
+    key: string,
+  ): void {
+    const timerKey = degradationTimerKey(platform, key);
+    const timer = this.platformDegradationTimers.get(timerKey);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.platformDegradationTimers.delete(timerKey);
   }
 
   private emitPlatformActivity(platform: MessagingChannelKind): void {
@@ -1354,6 +1586,45 @@ function bucketIdFromEvent(event: MessagingInboundEvent): string | undefined {
     }
   }
   return event.channel.conversation.parentId ?? event.channel.conversation.id;
+}
+
+function degradationKey(
+  platform: MessagingChannelKind,
+  kind: MessagingDegradationReason["kind"],
+  id: string,
+): string {
+  return `${platform}:${kind}:${id}`;
+}
+
+function degradationTimerKey(
+  platform: MessagingChannelKind,
+  key: string,
+): string {
+  return `${platform}\0${key}`;
+}
+
+function degradationExpiresAt(
+  reason: MessagingDegradationReason,
+): number | undefined {
+  return "expiresAt" in reason ? reason.expiresAt : undefined;
+}
+
+function sanitizeDeliveryScope(
+  scope: MessagingDeliveryScope,
+): MessagingDeliveryScope {
+  return {
+    ...scope,
+    label: clipStatusText(scope.label),
+    bucketId: clipStatusText(scope.bucketId),
+  };
+}
+
+function clipStatusText(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
 }
 
 function isMessagingPendingRequest(

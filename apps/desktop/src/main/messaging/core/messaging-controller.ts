@@ -79,7 +79,9 @@ import {
   buildStatusReasoningPickerIntent,
   formatExecutionModeLabel,
   handoffRequestFromValue,
+  nextMessagingStreamingResponseMode,
   nextMessagingToolUpdateMode,
+  resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
@@ -89,6 +91,10 @@ import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
 } from "./messaging-tool-update-policy.js";
+import {
+  MessagingDeliveryBudget,
+  type MessagingDeliveryPriority,
+} from "./messaging-delivery-budget.js";
 import {
   DEFAULT_MESSAGING_ATTACHMENT_POLICY,
   processMessagingAttachments,
@@ -246,6 +252,7 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
+  deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Notification hook invoked after any binding mutation the
    * controller performs (create, conversation-metadata refresh,
@@ -272,6 +279,7 @@ export class MessagingController {
   private readonly logger: MessagingControllerLogger;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
+  private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
    * we posted to each bound conversation. Cleared when the queue resolves
@@ -290,6 +298,7 @@ export class MessagingController {
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
+    this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
@@ -797,6 +806,10 @@ export class MessagingController {
 
     if (isToolsFallbackText(event.text)) {
       await this.cycleToolUpdateMode(binding, event);
+      return;
+    }
+    if (isStreamFallbackText(event.text)) {
+      await this.cycleStreamingResponseMode(binding, event);
       return;
     }
 
@@ -2556,6 +2569,10 @@ export class MessagingController {
       await this.cycleToolUpdateMode(binding, event);
       return;
     }
+    if (actionId === "status:streaming") {
+      await this.cycleStreamingResponseMode(binding, event);
+      return;
+    }
     if (actionId === "status:stop") {
       await this.stopActiveTurn(binding, event);
       return;
@@ -3334,6 +3351,17 @@ export class MessagingController {
     await this.renderBindingStatus(updatedBinding, event);
   }
 
+  private async cycleStreamingResponseMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const currentMode = resolveMessagingStreamingResponseMode(binding);
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      streamingResponses: nextMessagingStreamingResponseMode(currentMode),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
   private async updateBindingPreferences(
     binding: MessagingBindingRecord,
     patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
@@ -3986,6 +4014,31 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
+    const scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    const priority = messagingDeliveryPriority(routedIntent);
+    if (this.deliveryBudget) {
+      let admission = this.deliveryBudget.admit({ priority, scope });
+      while (admission.outcome === "deferred") {
+        await sleepUntil(admission.retryAt, this.now);
+        admission = this.deliveryBudget.admit({ priority, scope });
+      }
+      if (admission.outcome !== "admitted") {
+        this.logger.debug?.("messaging delivery budget skipped intent", {
+          bindingId: binding?.id ?? intent.bindingId,
+          intentId: routedIntent.id,
+          intentKind: routedIntent.kind,
+          outcome: admission.outcome,
+          priority,
+          reason: admission.outcome === "dropped" ? admission.reason : undefined,
+          scopeId: scope?.id,
+        });
+        return {
+          channel: binding?.channel.channel ?? routedIntent.audit?.channel.channel ?? this.options.channel ?? "custom",
+          deliveredAt: this.now(),
+          outcome: "discarded",
+        };
+      }
+    }
     const result = await this.options.adapter.deliver(routedIntent);
     await this.options.store.recordDelivery({
       ...result,
@@ -4550,6 +4603,51 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
   return true;
 }
 
+function messagingDeliveryPriority(
+  intent: MessagingSurfaceIntent,
+): MessagingDeliveryPriority {
+  switch (intent.kind) {
+    case "approval":
+    case "questionnaire":
+      return "critical_interactive";
+    case "stream_update":
+      return intent.stream.isFinal ? "final_turn" : "stream_partial";
+    case "message":
+      if (intent.role === "assistant") {
+        return "final_turn";
+      }
+      if (intent.role === "system" && intent.id.startsWith("tool-update")) {
+        return "tool_progress";
+      }
+      return "user_command";
+    case "status":
+    case "activity":
+    case "progress":
+    case "dismiss":
+      return "routine_status";
+    case "thread_picker":
+    case "project_picker":
+    case "single_select":
+    case "multi_select":
+    case "confirmation":
+    case "error":
+      return "user_command";
+  }
+}
+
+function sleepUntil(
+  retryAt: number,
+  now: () => number,
+): Promise<void> {
+  const delayMs = Math.max(0, retryAt - now());
+  if (delayMs === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   if (event.notification.method === "item/completed") {
     const params = event.notification.params as {
@@ -4959,6 +5057,10 @@ function parseTextCommandArgs(text: string): string[] {
 
 function isToolsFallbackText(text: string): boolean {
   return text.trim().toLowerCase() === "tools";
+}
+
+function isStreamFallbackText(text: string): boolean {
+  return text.trim().toLowerCase() === "stream";
 }
 
 function readBindingTarget(
