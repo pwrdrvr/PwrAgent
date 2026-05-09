@@ -258,7 +258,10 @@ describe("SettingsScreen", () => {
       });
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
-    expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
+    expect(screen.getByText("Authorized Groups / Supergroups")).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Group/supergroup chat" }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(4);
     expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(4);
     fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);

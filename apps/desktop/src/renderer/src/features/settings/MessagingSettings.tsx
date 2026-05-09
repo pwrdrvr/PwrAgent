@@ -12,8 +12,8 @@ import {
   validateSlackTeamId,
   validateSlackUserId,
   sanitizeMessagingContactLabel,
+  validateTelegramGroupChatId,
   validateTelegramPositiveId,
-  validateTelegramSupergroupId,
   type DesktopAuthorizedContact,
   type DesktopMessagingContactLookupKind,
   type DesktopMessagingContactLookupPlatform,
@@ -207,6 +207,7 @@ export function MessagingSettings(props: {
             disabled={platformControlsDisabled || !telegram.enabled.value}
             onSettingsChanged={props.onPairingSettingsChanged}
             platform="telegram"
+            scopeOptions={TELEGRAM_PAIRING_SCOPE_OPTIONS}
             supportsBucket
           />
           <ToggleField
@@ -256,11 +257,11 @@ export function MessagingSettings(props: {
               "telegram",
               "supergroup",
             )}
-            label="Authorized SuperGroups"
-            sub="Telegram supergroup IDs that may host bound threads."
-            help="Negative ID starting with -100, e.g. -1003841603622. Rejected group messages show the supergroup ID in Messaging Activity."
+            label="Authorized Groups / Supergroups"
+            sub="Telegram group or supergroup IDs that may host bound threads."
+            help="Use the negative chat ID shown in Messaging Activity for the Telegram group or supergroup."
             source={optionalListSourceBadge(telegram.authorizedSupergroups)}
-            validateEntry={validateTelegramSupergroupEntry}
+            validateEntry={validateTelegramGroupChatEntry}
             value={telegram.authorizedSupergroups.value}
             onSave={(authorizedSupergroups) => {
               void props.onSaveTelegram({
@@ -991,6 +992,7 @@ function PairingTokenField(props: {
   disabled: boolean;
   onSettingsChanged?: () => Promise<void>;
   platform: MessagingChannelKind;
+  scopeOptions?: PairingScopeOption[];
   supportsBucket?: boolean;
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
@@ -1068,6 +1070,10 @@ function PairingTokenField(props: {
   };
 
   const observedEntries = entries.filter((entry) => entry.status === "observed");
+  const scopeOptions = props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
+  const availableScopeOptions = props.supportsBucket
+    ? scopeOptions
+    : scopeOptions.filter((option) => option.value !== "bucket");
 
   return (
     <SettingsField
@@ -1077,20 +1083,27 @@ function PairingTokenField(props: {
       control={
         <div className="settings-pairing">
           <div className="settings-pairing__controls">
-            <select
-              className="settings-input"
-              disabled={props.disabled}
-              value={scope}
-              onChange={(event) =>
-                setScope(event.currentTarget.value as MessagingPairingScope)
-              }
+            <div
+              aria-label={`${platformLabel(props.platform)} pairing target`}
+              className="settings-segmented settings-pairing__scope"
+              role="radiogroup"
             >
-              <option value="user_dm">User from DM</option>
-              <option value="user_in_group">User from group</option>
-              {props.supportsBucket ? (
-                <option value="bucket">Group or guild</option>
-              ) : null}
-            </select>
+              {availableScopeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  aria-checked={scope === option.value}
+                  className={`settings-segmented__button${
+                    scope === option.value ? " is-active" : ""
+                  }`}
+                  disabled={props.disabled}
+                  role="radio"
+                  type="button"
+                  onClick={() => setScope(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
             <button
               className="button button--secondary"
               disabled={
@@ -1152,6 +1165,43 @@ function PairingTokenField(props: {
       }
     />
   );
+}
+
+type PairingScopeOption = {
+  label: string;
+  value: MessagingPairingScope;
+};
+
+const TELEGRAM_PAIRING_SCOPE_OPTIONS: PairingScopeOption[] = [
+  { label: "User via DM", value: "user_dm" },
+  { label: "User via group", value: "user_in_group" },
+  { label: "Group/supergroup chat", value: "bucket" },
+];
+
+function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScopeOption[] {
+  if (platform === "discord") {
+    return [
+      { label: "User via DM", value: "user_dm" },
+      { label: "User via server", value: "user_in_group" },
+      { label: "Server", value: "bucket" },
+    ];
+  }
+  if (platform === "slack") {
+    return [
+      { label: "User via DM", value: "user_dm" },
+      { label: "User via channel", value: "user_in_group" },
+      { label: "Workspace", value: "bucket" },
+    ];
+  }
+  return [
+    { label: "User via DM", value: "user_dm" },
+    { label: "User via channel", value: "user_in_group" },
+    { label: "Group", value: "bucket" },
+  ];
+}
+
+function platformLabel(platform: MessagingChannelKind): string {
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
 function pairingEntryLabel(entry: MessagingPairingEntry): string {
@@ -1563,16 +1613,16 @@ function validateTelegramUserIdEntry(value: string): string | undefined {
   );
 }
 
-function validateTelegramSupergroupEntry(value: string): string | undefined {
+function validateTelegramGroupChatEntry(value: string): string | undefined {
   return validationMessage(
-    validateTelegramSupergroupId(value),
-    "Telegram supergroup ID",
+    validateTelegramGroupChatId(value),
+    "Telegram group chat ID",
     {
       format:
-        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
-      length: "Telegram supergroup IDs must fit the decimal numeric ID form.",
+        "Use the negative Telegram group or supergroup chat ID from Messaging Activity.",
+      length: "Telegram group chat IDs must fit the decimal numeric ID form.",
       range:
-        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
+        "Use the negative Telegram group or supergroup chat ID from Messaging Activity.",
     },
   );
 }

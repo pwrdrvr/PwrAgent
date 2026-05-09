@@ -2728,6 +2728,10 @@ textarea,
   max-width: 220px;
 }
 
+.settings-pairing__scope {
+  flex-wrap: wrap;
+}
+
 .settings-pairing__message code {
   min-width: 0;
   overflow: hidden;
