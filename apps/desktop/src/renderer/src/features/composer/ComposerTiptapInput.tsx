@@ -53,6 +53,11 @@ type TiptapReadState = {
   value: string;
 };
 
+type DeletedSingleSkillState = TiptapReadState & {
+  editorDocument: JSONContent;
+  selectionIndex: number;
+};
+
 type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
 type ProseMirrorNode = Parameters<
   Parameters<TiptapEditor["state"]["doc"]["forEach"]>[0]
@@ -153,6 +158,10 @@ function splitTextContent(text: string): JSONContent[] {
     }
   });
   return nodes;
+}
+
+function isMacPlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(window.navigator.platform);
 }
 
 type InlineMarkSpec = {
@@ -891,6 +900,9 @@ export const ComposerTiptapInput = forwardRef<
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const deletedSingleSkillRef = useRef<DeletedSingleSkillState | undefined>(
+    undefined,
+  );
   const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
   const propsSignature = getContentSignature({
     value: props.value,
@@ -940,18 +952,82 @@ export const ComposerTiptapInput = forwardRef<
           return event.defaultPrevented;
         },
         keydown: (_view, event) => {
-          const currentProps = propsRef.current;
+          const macPlatform = isMacPlatform();
+          if (
+            event.key.toLowerCase() === "z" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.shiftKey &&
+            deletedSingleSkillRef.current
+          ) {
+            const deleted = deletedSingleSkillRef.current;
+            deletedSingleSkillRef.current = undefined;
+            event.preventDefault();
+            const currentEditor = editorRef.current;
+            if (!currentEditor) {
+              return true;
+            }
+            currentEditor.commands.setContent(deleted.editorDocument, {
+              emitUpdate: false,
+            });
+            selectionIndexRef.current = deleted.selectionIndex;
+            flushSync(() => {
+              propsRef.current.onChange(deleted.value, deleted.skillTokens, {
+                editorDocument: deleted.editorDocument,
+              });
+            });
+            currentEditor.commands.setTextSelection(
+              getPositionAtDraftIndex(currentEditor, deleted.selectionIndex, readMode),
+            );
+            return true;
+          }
+
+          if (
+            event.key.toLowerCase() === "a" &&
+            ((macPlatform && event.metaKey && !event.ctrlKey) ||
+              (!macPlatform && event.ctrlKey && !event.metaKey)) &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            editorRef.current?.commands.selectAll();
+            return true;
+          }
+
+          if (
+            macPlatform &&
+            event.key.toLowerCase() === "a" &&
+            event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            return true;
+          }
+
           if (
             (event.key === "Backspace" || event.key === "Delete") &&
-            currentProps.value.trim().length === 0 &&
-            currentProps.skillTokens.length === 1
+            propsRef.current.value.trim().length === 0 &&
+            propsRef.current.skillTokens.length === 1
           ) {
             event.preventDefault();
             const currentEditor = editorRef.current;
-            currentEditor?.commands.setContent(buildTiptapContent("", []), {
+            if (!currentEditor) {
+              return true;
+            }
+            deletedSingleSkillRef.current = {
+              editorDocument: currentEditor.getJSON(),
+              selectionIndex: selectionIndexRef.current,
+              skillTokens: propsRef.current.skillTokens,
+              value: propsRef.current.value,
+            };
+            currentEditor.commands.setContent(buildTiptapContent("", []), {
               emitUpdate: false,
             });
-            propsRef.current.onChange("", []);
+            flushSync(() => {
+              propsRef.current.onChange("", [], {
+                editorDocument: currentEditor.getJSON(),
+              });
+            });
             return true;
           }
 

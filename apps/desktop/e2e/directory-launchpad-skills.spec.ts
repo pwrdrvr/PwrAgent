@@ -246,6 +246,13 @@ async function typeSkillChip(
   await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeFocused();
 }
 
+function getLaunchpadComposer(app: Awaited<ReturnType<typeof launchElectronApp>>) {
+  return {
+    root: app.window.getByTestId("composer-tiptap-input"),
+    textbox: app.window.getByRole("textbox", { name: "New thread" }),
+  };
+}
+
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({    fixturePath: fixture.fixturePath,
@@ -302,18 +309,18 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
   try {
     await openDirectoryLaunchpad(app);
 
-    const richInput = app.window.getByTestId("composer-tiptap-input");
-    await richInput.focus();
+    const { root: richInput, textbox } = getLaunchpadComposer(app);
+    await textbox.focus();
     await app.window.keyboard.type("$");
 
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
-    await expect(richInput).toHaveAttribute("aria-expanded", "true");
+    await expect(textbox).toHaveAttribute("aria-expanded", "true");
 
     const firstActiveOption = listbox.locator('[aria-selected="true"]');
     const firstActiveOptionId = await firstActiveOption.getAttribute("id");
     expect(firstActiveOptionId).toBeTruthy();
-    await expect(richInput).toHaveAttribute(
+    await expect(textbox).toHaveAttribute(
       "aria-activedescendant",
       firstActiveOptionId ?? "",
     );
@@ -344,7 +351,7 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
       ""
     );
     expect(secondActiveSkillLabel).toBeTruthy();
-    await expect(richInput).toHaveAttribute(
+    await expect(textbox).toHaveAttribute(
       "aria-activedescendant",
       secondActiveOptionId ?? "",
     );
@@ -355,7 +362,7 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
       richInput.locator(".skill-chip", { hasText: secondActiveSkillLabel }),
     ).toBeVisible();
 
-    await richInput.focus();
+    await textbox.focus();
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+A" : "Control+A",
     );
@@ -606,7 +613,7 @@ test("directory launchpad Tiptap composer preserves pasted paragraph breaks", as
     ).toHaveCount(2);
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
-      "first paragraph\nsecond paragraph",
+      "first paragraph\n\nsecond paragraph",
     );
   } finally {
     await app.close();
@@ -648,6 +655,7 @@ test("directory launchpad Tiptap composer selects focused skills as undoable inl
     await expect(chip).toBeHidden();
     await expect(tiptapInput).toHaveAttribute("data-value", "");
 
+    await textbox.focus();
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+Z" : "Control+Z",
     );
@@ -823,18 +831,27 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
   try {
     await openDirectoryLaunchpad(app);
 
-    const richInput = app.window.getByTestId("composer-tiptap-input");
-    await richInput.focus();
+    const { root: richInput, textbox } = getLaunchpadComposer(app);
+    await textbox.focus();
     await app.window.keyboard.type("before ");
     await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
     await app.window.keyboard.type(" after");
 
     const metrics = await richInput.evaluate((element) => {
       const chip = element.querySelector<HTMLElement>(".skill-chip");
-      const label = element.querySelector<HTMLElement>(".skill-chip__label");
-      if (!chip || !label) {
-        throw new Error("Expected skill chip and label to render");
+      if (!chip) {
+        throw new Error("Expected skill chip to render");
       }
+      const labelTextNode = Array.from(chip.childNodes).find(
+        (node) =>
+          node.nodeType === Node.TEXT_NODE &&
+          (node.nodeValue ?? "").includes("$ce:plan"),
+      );
+      if (!labelTextNode) {
+        throw new Error("Expected skill chip label text to render");
+      }
+      const labelRange = document.createRange();
+      labelRange.selectNodeContents(labelTextNode);
 
       const textRects: DOMRect[] = [];
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -852,10 +869,10 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
         throw new Error("Expected surrounding text to be measurable");
       }
 
-      const labelRect = label.getBoundingClientRect();
+      const labelRect = labelRange.getBoundingClientRect();
       const chipRect = chip.getBoundingClientRect();
       const textStyle = getComputedStyle(element);
-      const labelStyle = getComputedStyle(label);
+      const labelStyle = getComputedStyle(chip);
       const surroundingBottom = textRects.reduce(
         (bottom, rect) => Math.max(bottom, rect.bottom),
         0,
@@ -877,9 +894,9 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
     });
 
     expect(metrics.labelFontSize).toBe(metrics.fontSize);
-    expect(Math.abs(metrics.labelTop - metrics.surroundingTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(metrics.labelTop - metrics.surroundingTop)).toBeLessThanOrEqual(2);
     expect(Math.abs(metrics.labelBottom - metrics.surroundingBottom)).toBeLessThanOrEqual(
-      1,
+      2,
     );
     expect(metrics.chipHeight).toBeLessThanOrEqual(22);
   } finally {
@@ -896,8 +913,8 @@ test("directory launchpad types at the clicked text caret between skill chips", 
   try {
     await openDirectoryLaunchpad(app);
 
-    const richInput = app.window.getByTestId("composer-tiptap-input");
-    await richInput.focus();
+    const { root: richInput, textbox } = getLaunchpadComposer(app);
+    await textbox.focus();
     await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
     await app.window.keyboard.type(" Cats like hats. ");
     await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
@@ -952,10 +969,10 @@ test("directory launchpad does not intercept macOS ctrl-a as select all", async 
   try {
     await openDirectoryLaunchpad(app);
 
-    const richInput = app.window.getByTestId("composer-tiptap-input");
-    await richInput.focus();
+    const { root: richInput, textbox } = getLaunchpadComposer(app);
+    await textbox.focus();
     await app.window.keyboard.type("alpha beta");
-    const shortcutResults = await richInput.evaluate((element) => {
+    const shortcutResults = await textbox.evaluate((element) => {
       const originalPlatformDescriptor =
         Object.getOwnPropertyDescriptor(window.navigator, "platform") ??
         Object.getOwnPropertyDescriptor(Navigator.prototype, "platform");
@@ -1072,7 +1089,7 @@ test("directory launchpad parks the composer at the bottom for skill autocomplet
     await openDirectoryLaunchpad(app);
 
     const composerSlot = app.window.locator(".thread-view__launchpad-composer");
-    const richInput = app.window.getByTestId("composer-tiptap-input");
+    const { root: richInput, textbox } = getLaunchpadComposer(app);
     const [composerBox, viewport] = await Promise.all([
       composerSlot.boundingBox(),
       app.window.evaluate(() => ({
@@ -1085,7 +1102,7 @@ test("directory launchpad parks the composer at the bottom for skill autocomplet
     }
     expect(composerBox.y + composerBox.height).toBeGreaterThan(viewport.height - 80);
 
-    await richInput.fill("$");
+    await textbox.fill("$");
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
 

@@ -2464,6 +2464,7 @@ export function Composer(props: ComposerProps) {
     event.preventDefault();
     setDraft(previous.draft);
     setSkillTokens(previous.skillTokens);
+    setEditorDocument(undefined);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(

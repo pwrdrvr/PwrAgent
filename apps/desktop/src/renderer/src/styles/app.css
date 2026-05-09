@@ -895,6 +895,7 @@ textarea,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
+.composer-tiptap-input__editor:focus,
 .composer__select:focus,
 .composer__review-input:focus,
 .composer__review-option:focus,
@@ -905,6 +906,7 @@ textarea,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
+.composer-tiptap-input__editor:focus-visible,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
@@ -5487,7 +5489,6 @@ textarea,
   position: relative;
   min-height: 142px;
   padding: 12px;
-  outline: none;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
