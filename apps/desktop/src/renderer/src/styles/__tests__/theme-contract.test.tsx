@@ -188,6 +188,33 @@ describe("Tangerine Terminal theme contract", () => {
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
   });
 
+  it("locks composer height contract — compact when empty, grows, capped at 280px", () => {
+    // Issue #240 follow-up: the composer's min-height is the
+    // empty-state floor; max-height is the clamp the editor scrolls
+    // inside once the user has typed enough to fill it. Both values
+    // are visual contracts — bumping min-height back up steals
+    // transcript reading area; lifting max-height above the cap
+    // pushes the picker rows off-screen on shorter viewports. Lock
+    // them so a future innocuous-looking edit doesn't undo the
+    // intent.
+    const tiptapRule = extractRuleBody(css, ".composer-tiptap-input");
+    expect(tiptapRule).toMatch(/min-height:\s*56px;/);
+    expect(tiptapRule).toMatch(/max-height:\s*280px;/);
+    expect(tiptapRule).toMatch(/overflow-y:\s*auto;/);
+
+    // The inner editor's min-height tracks the outer container's
+    // (-2 for the 1px border on each side of the wrapper) so the
+    // editor visually fills the wrapper at the empty-state floor.
+    const editorRule = extractRuleBody(css, ".composer-tiptap-input__editor");
+    expect(editorRule).toMatch(/min-height:\s*54px;/);
+
+    // The unused-but-styled `<textarea>` variant (`.composer__input`)
+    // shares the same empty-state floor so a future swap to it
+    // doesn't surprise the reading area.
+    const textareaRule = extractRuleBody(css, ".composer__input");
+    expect(textareaRule).toMatch(/min-height:\s*56px;/);
+  });
+
   it("uses --accent (not --accent-bright) for every brand-accent mark", () => {
     // The visual brand `Pwr<accent>Agent</accent>` reads identically
     // wherever it appears (main sidebar, Settings nav, Activity
