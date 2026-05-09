@@ -197,6 +197,15 @@ textarea,
   align-items: center;
   min-height: 44px;
   padding-top: 10px;
+  /* Issue #240 follow-up: the thread header carries its OWN left
+     inset, decoupled from the transcript / composer below it. The
+     previous 28px sidebar gutter on `.app-main` provided this for
+     free, but that padding was removed so the chat surface goes
+     edge-to-edge. The header still needs breathing room so the
+     title doesn't sit flush against the sidebar's right border —
+     22px matches the v2 design's `.pa-thread__header { padding:
+     14px 22px }`. */
+  padding-left: 22px;
   /* Reserve space for the position:fixed context-rail spine (48px wide,
      pinned top-right). Without this padding, anything we render in the
      header's right-aligned region (messaging status icons, on/off
