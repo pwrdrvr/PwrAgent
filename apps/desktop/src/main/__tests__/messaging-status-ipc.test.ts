@@ -6,6 +6,7 @@ const runtimeMock = vi.hoisted(() => ({
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
   onBindingsChanged: vi.fn(() => vi.fn()),
+  onPairingChanged: vi.fn(() => vi.fn()),
   onPlatformStatus: vi.fn(() => vi.fn()),
   stop: vi.fn(async () => undefined),
 }));
@@ -69,6 +70,7 @@ describe("messaging status ipc", () => {
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
     runtimeMock.onBindingsChanged.mockClear();
+    runtimeMock.onPairingChanged.mockClear();
     runtimeMock.onPlatformStatus.mockClear();
     runtimeMock.stop.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();

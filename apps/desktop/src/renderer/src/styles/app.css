@@ -2751,7 +2751,7 @@ textarea,
   padding: 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--bg-surface);
+  background: var(--bg-panel-elevated);
 }
 
 .settings-pairing__request-text {
