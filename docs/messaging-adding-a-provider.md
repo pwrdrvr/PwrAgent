@@ -245,7 +245,7 @@ Return `MessagingDeliveryResult` with the appropriate `outcome` (`presented`, `u
 
 ## Step 6 — Wire callback handles
 
-When you render a button, you need to be able to reverse the click. The platform delivers a small payload back when the user clicks (`callback_data` on Telegram, `custom_id` on Discord, `integration.context` on Mattermost). That payload should be an **opaque short handle**, not the semantic action data. The semantic action lives in the `MessagingStore.callbackHandles` table (the controller persists it; restart-safe).
+When you render a button, you need to be able to reverse the click. The platform delivers a small payload back when the user clicks (`callback_data` on Telegram, `custom_id` on Discord, `value` on Slack, `integration.context` on Mattermost). That payload should be an **opaque short handle**, not the semantic action data. The semantic action lives in the `MessagingStore.callbackHandles` table (the controller persists it; restart-safe).
 
 The pattern, identical across providers:
 
@@ -255,21 +255,39 @@ The pattern, identical across providers:
      .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
      .digest("base64url")
      .slice(0, 12)}`;
+
+   const bindingId = intent.audit?.bindingId ?? intent.bindingId;
+   const allowedActorIds =
+     intent.allowedActorIds && intent.allowedActorIds.length > 0
+       ? intent.allowedActorIds
+       : [intent.audit.actor.platformUserId];
+
+   const recordId = `${this.channel}-callback:${handle}:${createHash("sha256")
+     .update(JSON.stringify([
+       intent.audit.channel.channel,
+       intent.audit.channel.conversation.id,
+       intent.audit.channel.conversation.parentId ?? null,
+       bindingId ?? null,
+     ]))
+     .digest("base64url")
+     .slice(0, 18)}`;
    ```
    Persist the handle ↔ semantic-action mapping via the controller's `MessagingCallbackHandleStore`. Embed `handle` in the platform's callback payload.
+
+   The persisted record is delivery-scoped, not handle-scoped. A single intent/action can fan out to multiple bindings and intentionally reuse the same platform handle; the persisted `id` must include the delivered conversation and binding so one delivery does not overwrite another. Persist the full `allowedActorIds` set from the intent, and persist `bindingId` from `intent.audit?.bindingId ?? intent.bindingId` so rebind/revoke cleanup deletes old buttons.
 2. **Click time** — when the platform delivers a click, look up the handle in the store, reconstruct `MessagingInboundCallbackEvent`, fire the listener.
 
-The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). No bespoke state needed — use it.
+The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). Do not keep a parallel in-process map from platform handle to semantic action; that creates a second authorization path and makes live clicks behave differently from restart-recovered clicks. PR [#285](https://github.com/pwrdrvr/PwrAgent/pull/285) shows this model applied to Discord after restart-only component bindings exposed the fan-out and routed-binding edge cases; use that as the current reference pattern.
 
-### Out-of-band HTTP callback model (Mattermost, Slack)
+### Out-of-band HTTP callback model (Mattermost)
 
 If your platform delivers button clicks via HTTP POST instead of through the same connection used for inbound events, additional concerns apply:
 
 - **Run the HTTP listener inside the adapter package**, not the desktop app. Boundary integrity.
 - **Bind to `127.0.0.1`** only. Production deployments expose the listener through a tunnel (Cloudflare Tunnel, Tailscale Funnel, ngrok). See [the operator guide](messaging-platform-integration.md) for setup instructions and security recommendations.
-- **Sign every callback URL with an HMAC** in the platform's free-form callback payload. The platform itself does NOT sign callbacks (e.g., Mattermost doesn't), so anyone with the public URL could forge clicks otherwise. Compute HMAC over `(intentId, actionId, issuedAt)` with a per-process secret; verify on receipt.
+- **Sign every callback URL with an HMAC** in the platform's free-form callback payload. The platform itself does NOT sign callbacks (e.g., Mattermost doesn't), so anyone with the public URL could forge clicks otherwise. Compute HMAC over `(intentId, actionId, issuedAt)` with the configured callback secret; verify on receipt.
 - **Always respond `200` to the callback POST**, even on HMAC verification failure — don't reveal verification status to attackers. Log the failure loudly so you notice in monitoring.
-- **The HMAC secret regenerates on adapter restart.** Outstanding handles created before a restart fail HMAC verification — this is correct (acts as automatic TTL).
+- **Use a persistent HMAC secret when buttons should survive restarts.** Mattermost can default to a fresh per-process secret for isolated tests, but production config should provide a stable secret so callback authenticity checks and persisted callback handles agree across adapter restarts.
 
 See `packages/messaging/providers/mattermost/src/mattermost-callback-server.ts` for the reference implementation.
 

@@ -26,6 +26,7 @@ import type {
   StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ThreadMessagingBindingTransition,
 } from "@pwragent/shared";
 import type { MessagingBackendBridge } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -128,6 +129,14 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse> {
     return await this.registry.setThreadModelSettings(request);
+  }
+
+  async recordMessagingBindingTransition(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    transition: ThreadMessagingBindingTransition;
+  }): Promise<void> {
+    await getDesktopOverlayStore().appendMessagingBindingTransition(request);
   }
 
   async submitServerRequest(

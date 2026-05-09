@@ -10,11 +10,13 @@ import type {
   NavigationSnapshot,
   PrSummary,
   ThreadExecutionMode,
+  ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
 } from "@pwragent/shared";
@@ -77,6 +79,9 @@ export class SqliteOverlayStore {
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
           worktreeSnapshots: current?.worktreeSnapshots ?? [],
           pinnedRank: current?.pinnedRank,
+          permissionTransitionLog: current?.permissionTransitionLog,
+          messagingBindingTransitionLog:
+            current?.messagingBindingTransitionLog,
         });
       }
     }
@@ -425,6 +430,36 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async appendMessagingBindingTransition(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    transition: ThreadMessagingBindingTransition;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextLog = [
+      ...(current.messagingBindingTransitionLog ?? []),
+      params.transition,
+    ];
+    const trimmed =
+      nextLog.length > MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES
+        ? nextLog.slice(
+            nextLog.length - MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
+          )
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      messagingBindingTransitionLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -723,6 +758,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadObservedBranch"
   | "retainThreadBranchDrift"
   | "appendPermissionTransition"
+  | "appendMessagingBindingTransition"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getDirectoryLaunchpad"

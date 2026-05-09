@@ -209,6 +209,29 @@ describe("MessagingController", () => {
       .resolves.toMatchObject({
         revokedAt: 1000,
       });
+    expect(harness.recordMessagingBindingTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "old-thread",
+        transition: expect.objectContaining({
+          action: "unbound",
+          bindingId: "binding:telegram:dm::chat-1:codex:old-thread",
+          platform: "telegram",
+          occurredAt: 1000,
+        }),
+      }),
+    );
+    expect(harness.recordMessagingBindingTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        transition: expect.objectContaining({
+          action: "bound",
+          platform: "telegram",
+          occurredAt: 1000,
+        }),
+      }),
+    );
   });
 
   it("binds a callback-selected thread to the channel", async () => {
@@ -231,6 +254,19 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       authorizedActorIds: ["user-1"],
     });
+    expect(harness.recordMessagingBindingTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        transition: expect.objectContaining({
+          action: "bound",
+          bindingId: "binding:telegram:dm::chat-1:codex:thread-1",
+          conversationKind: "dm",
+          platform: "telegram",
+          occurredAt: 1000,
+        }),
+      }),
+    );
     expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
       kind: "confirmation",
       title: "Thread bound",
@@ -368,6 +404,16 @@ describe("MessagingController", () => {
     harness.onBindingChanged.mockClear();
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
     expect(harness.onBindingChanged).toHaveBeenCalled();
+    expect(harness.recordMessagingBindingTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        transition: expect.objectContaining({
+          action: "unbound",
+          platform: "telegram",
+        }),
+      }),
+    );
   });
 
   it("routes text to the bound thread after a /resume → select-thread bind", async () => {
@@ -4005,6 +4051,7 @@ async function createHarness(options?: {
   listBackends: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
+  recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
@@ -4144,6 +4191,7 @@ async function createHarness(options?: {
     backends: [buildBackendSummary()],
   }));
   const readThreadStatus = vi.fn(async () => undefined);
+  const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -4158,6 +4206,7 @@ async function createHarness(options?: {
     interruptTurn,
     listBackends,
     readThreadStatus,
+    recordMessagingBindingTransition,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
@@ -4197,6 +4246,7 @@ async function createHarness(options?: {
     listBackends,
     onBindingChanged,
     readThreadStatus,
+    recordMessagingBindingTransition,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,

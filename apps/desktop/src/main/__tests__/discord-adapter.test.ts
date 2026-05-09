@@ -1207,6 +1207,7 @@ async function createControllerHarness(options: {
     },
     gateway,
     now: () => 1000,
+    store,
   });
   const controller = new MessagingController({
     adapter,

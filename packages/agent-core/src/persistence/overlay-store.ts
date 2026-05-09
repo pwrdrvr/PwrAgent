@@ -12,11 +12,13 @@ import type {
   NavigationSnapshot,
   PrSummary,
   ThreadExecutionMode,
+  ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadPermissionTransition,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
 } from "@pwragent/shared";
@@ -68,6 +70,9 @@ export class OverlayStore {
             extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
             worktreeSnapshots: current?.worktreeSnapshots ?? [],
             pinnedRank: current?.pinnedRank,
+            permissionTransitionLog: current?.permissionTransitionLog,
+            messagingBindingTransitionLog:
+              current?.messagingBindingTransitionLog,
           };
         }
       }
@@ -338,6 +343,38 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         permissionTransitionLog: trimmed,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async appendMessagingBindingTransition(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    transition: ThreadMessagingBindingTransition;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextLog = [
+        ...(current.messagingBindingTransitionLog ?? []),
+        params.transition,
+      ];
+      const trimmed =
+        nextLog.length > MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES
+          ? nextLog.slice(
+              nextLog.length - MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
+            )
+          : nextLog;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        messagingBindingTransitionLog: trimmed,
       };
       data.threads[threadKey] = nextState;
       return nextState;

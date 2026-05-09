@@ -464,9 +464,11 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
       title: "Choose",
       body: "Pick one",
       actions: [{ id: "action-resume", label: "Resume" }],
+      allowedActorIds: ["user-1", "user-2"],
       audit: {
         channel: { channel: "mattermost", conversation: { id: "dm-id", kind: "dm" } },
         actor: { platformUserId: "user-1" },
+        bindingId: "binding-1",
       },
     } as unknown as MessagingSurfaceIntent;
 
@@ -479,6 +481,64 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
     expect(persisted[0].channel.conversation.kind).toBe("dm");
     expect(persisted[0].channel.conversation.id).toBe("dm-id");
     expect(persisted[0].actionId).toBe("action-resume");
+    expect(persisted[0].allowedActorIds).toEqual(["user-1", "user-2"]);
+    expect(persisted[0].bindingId).toBe("binding-1");
+  });
+
+  it("keeps fan-out callback records scoped per routed binding", async () => {
+    const persisted: MessagingCallbackHandleRecord[] = [];
+    const trackingStore: MessagingCallbackHandleStore = {
+      resolveCallbackHandle: async () => undefined,
+      upsertCallbackHandle: async (record) => {
+        persisted.push(record);
+        return record;
+      },
+    };
+    const spies = { createdPosts: [] as CreatedPost[], patchedPosts: [] as PatchedPost[] };
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: trackingStore,
+      client: fakeClient4(spies),
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(),
+      now: () => 1_700_000_000_000,
+    });
+    const baseIntent: MessagingSurfaceIntent = {
+      id: "fanout-confirmation",
+      kind: "confirmation",
+      createdAt: 1_700_000_000_000,
+      title: "Choose",
+      body: "Pick one",
+      allowedActorIds: ["user-1"],
+      actions: [{ id: "action-cancel", label: "Cancel" }],
+    };
+
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-1",
+      },
+    } as MessagingSurfaceIntent);
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        channel: { channel: "mattermost", conversation: { id: "channel-2", kind: "channel" } },
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-2",
+      },
+    } as MessagingSurfaceIntent);
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(persisted).toHaveLength(2);
+    expect(persisted[0]?.handle).toBe(persisted[1]?.handle);
+    expect(persisted[0]?.id).not.toBe(persisted[1]?.id);
+    expect(persisted.map((record) => record.bindingId)).toEqual([
+      "binding-1",
+      "binding-2",
+    ]);
   });
 });
 

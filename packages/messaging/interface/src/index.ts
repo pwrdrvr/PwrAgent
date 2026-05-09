@@ -488,6 +488,7 @@ export type MessagingBaseSurfaceIntent = {
   kind: MessagingSurfaceIntentKind;
   actionLayout?: MessagingActionLayoutPolicy;
   audit?: MessagingAuditContext;
+  allowedActorIds?: string[];
   bindingId?: string;
   createdAt: number;
   delivery?: MessagingSurfaceDeliveryPolicy;

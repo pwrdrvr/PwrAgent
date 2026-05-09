@@ -16,8 +16,10 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   DesktopApplicationsSnapshot,
-  ThreadPermissionTransition
+  ThreadMessagingBindingTransition,
+  ThreadPermissionTransition,
 } from "@pwragent/shared";
+import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThinkingScanner } from "./ThinkingScanner";
@@ -59,6 +61,7 @@ type TranscriptListProps = {
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   permissionTransitions?: ThreadPermissionTransition[];
+  messagingBindingTransitions?: ThreadMessagingBindingTransition[];
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
   threadId?: string;
@@ -325,13 +328,17 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectPermissionTransitions(entries, props.permissionTransitions);
+    return injectMessagingBindingTransitions(
+      injectPermissionTransitions(entries, props.permissionTransitions),
+      props.messagingBindingTransitions,
+    );
   }, [
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
+    props.messagingBindingTransitions,
     props.permissionTransitions,
   ]);
   const transcriptRenderItems = useMemo(
@@ -351,6 +358,13 @@ export function TranscriptList(props: TranscriptListProps) {
       transcriptEntries,
     ]
   );
+  const visibleItemCount =
+    transcriptEntries.length +
+    (props.pendingStatusText ? 1 : 0) +
+    (props.pendingRequest ? 1 : 0) +
+    (props.pendingMcpInteraction ? 1 : 0) +
+    (props.pendingUserInput ? 1 : 0);
+  const hasTranscriptContent = transcriptEntries.length > 0;
   useEffect(() => {
     setExpandedCommentaryGroupIds(new Set());
   }, [props.threadId]);
@@ -386,18 +400,8 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const firstMessageId = props.entries[0]?.id;
-    const lastMessageId = props.entries[props.entries.length - 1]?.id;
-    const itemCount =
-      props.entries.length +
-      (props.pendingActivityEntry ? 1 : 0) +
-      (props.pendingProtocolActivityEntry ? 1 : 0) +
-      (props.pendingAssistantMessage ? 1 : 0) +
-      (props.pendingPlanEntry ? 1 : 0) +
-      (props.pendingStatusText ? 1 : 0) +
-      (props.pendingRequest ? 1 : 0) +
-      (props.pendingMcpInteraction ? 1 : 0) +
-      (props.pendingUserInput ? 1 : 0);
+    const firstMessageId = transcriptEntries[0]?.id;
+    const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -407,7 +411,7 @@ export function TranscriptList(props: TranscriptListProps) {
       clientHeight: container.clientHeight,
       distanceFromBottom,
       firstMessageId,
-      itemCount,
+      itemCount: visibleItemCount,
       lastMessageId,
       pendingStatusText: props.pendingStatusText,
       scrollHeight: container.scrollHeight,
@@ -415,16 +419,13 @@ export function TranscriptList(props: TranscriptListProps) {
       threadId: props.threadId
     };
   }, [
-    props.entries,
-    props.pendingActivityEntry,
-    props.pendingProtocolActivityEntry,
-    props.pendingAssistantMessage,
-    props.pendingPlanEntry,
     props.pendingRequest,
     props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
-    props.threadId
+    props.threadId,
+    transcriptEntries,
+    visibleItemCount
   ]);
 
   const syncScrollState = useCallback((options?: SyncScrollStateOptions) => {
@@ -493,10 +494,10 @@ export function TranscriptList(props: TranscriptListProps) {
   }, []);
 
   useEffect(() => {
-    if (props.loading && props.entries.length === 0) {
+    if (props.loading && !hasTranscriptContent) {
       shouldScrollToBottomRef.current = true;
     }
-  }, [props.entries.length, props.loading]);
+  }, [hasTranscriptContent, props.loading]);
 
   useEffect(() => {
     if (typeof props.reglueRequestKey !== "number" || props.reglueRequestKey <= 0) {
@@ -524,7 +525,7 @@ export function TranscriptList(props: TranscriptListProps) {
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container || props.entries.length === 0) {
+    if (!container || !hasTranscriptContent) {
       snapshotRef.current = undefined;
       isGluedToBottomRef.current = true;
       setHasContentBelow(false);
@@ -535,8 +536,8 @@ export function TranscriptList(props: TranscriptListProps) {
     const restoredViewport =
       props.restoredViewport ??
       (props.threadId ? savedViewportsRef.current.get(props.threadId) : undefined);
-    const firstMessageId = props.entries[0]?.id;
-    const lastMessageId = props.entries[props.entries.length - 1]?.id;
+    const firstMessageId = transcriptEntries[0]?.id;
+    const lastMessageId = transcriptEntries[transcriptEntries.length - 1]?.id;
     const hasPrependedMessages = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
@@ -549,16 +550,7 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.firstMessageId === firstMessageId &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-      previousSnapshot.itemCount <
-            props.entries.length +
-              (props.pendingActivityEntry ? 1 : 0) +
-              (props.pendingProtocolActivityEntry ? 1 : 0) +
-              (props.pendingAssistantMessage ? 1 : 0) +
-              (props.pendingPlanEntry ? 1 : 0) +
-              (props.pendingStatusText ? 1 : 0) +
-              (props.pendingRequest ? 1 : 0) +
-              (props.pendingMcpInteraction ? 1 : 0) +
-              (props.pendingUserInput ? 1 : 0))
+          previousSnapshot.itemCount < visibleItemCount)
     );
     const hasGrownWhileFollowingBottom = Boolean(
       previousSnapshot &&
@@ -612,11 +604,7 @@ export function TranscriptList(props: TranscriptListProps) {
 
     syncScrollState();
   }, [
-    props.entries,
-    props.pendingActivityEntry,
-    props.pendingProtocolActivityEntry,
-    props.pendingAssistantMessage,
-    props.pendingPlanEntry,
+    hasTranscriptContent,
     props.pendingRequest,
     props.pendingMcpInteraction,
     props.pendingUserInput,
@@ -625,6 +613,8 @@ export function TranscriptList(props: TranscriptListProps) {
     props.threadId,
     scrollToBottom,
     syncScrollState,
+    transcriptEntries,
+    visibleItemCount,
   ]);
 
   useEffect(() => {
@@ -648,15 +638,15 @@ export function TranscriptList(props: TranscriptListProps) {
     };
   }, [scrollToBottom, syncScrollState]);
 
-  if (props.loading && props.entries.length === 0 && !hasPendingContent) {
+  if (props.loading && !hasTranscriptContent && !hasPendingContent) {
     return <p className="transcript-empty">Loading transcript…</p>;
   }
 
-  if (props.error && props.entries.length === 0 && !hasPendingContent) {
+  if (props.error && !hasTranscriptContent && !hasPendingContent) {
     return <p className="transcript-error">{props.error}</p>;
   }
 
-  if (props.entries.length === 0 && !hasPendingContent) {
+  if (!hasTranscriptContent && !hasPendingContent) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
