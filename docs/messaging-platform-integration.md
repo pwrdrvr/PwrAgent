@@ -689,9 +689,13 @@ Minimum bot scopes for the current adapter shape:
 ### 2. Configure PwrAgent
 
 **Path A — Desktop Settings UI.** Open Settings → Messaging → Slack. Fill in Bot
-Token, App Token, authorized Slack user IDs, optional workspace/team IDs, and
-leave Inbound Mode set to Socket Mode. The connection-test button calls Slack
-`auth.test` with the bot token.
+Token and App Token, then leave Inbound Mode set to Socket Mode. Authorized
+Slack user IDs and optional workspace/team IDs can be added immediately if you
+already know them. If you do not, leave the authorized user list empty, enable
+Slack, DM or mention the bot, then open Messaging Activity. PwrAgent starts the
+adapter in discovery mode, discards the unauthorized inbound message, and logs
+the Slack user ID there so you can copy it into the allowlist. The
+connection-test button calls Slack `auth.test` with the bot token.
 
 **Path B — Environment variables.** Env vars override Settings UI values when
 both are present.

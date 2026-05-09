@@ -223,7 +223,6 @@ export function loadDesktopMessagingConfig(
       : {}),
     ...(slackBotToken
       && slackAppToken
-      && slackAuthorizedActorIds.length > 0
       ? {
           slack: {
             channel: "slack" as const,
