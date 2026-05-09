@@ -262,9 +262,11 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(4);
-    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(4);
-    fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
+    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(4);
+    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(4);
+    fireEvent.click(
+      screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
