@@ -642,7 +642,7 @@ export function MessagingSettings(props: {
             sub="Socket Mode keeps Slack callbacks on an outbound WebSocket. Events API is reserved for a future HTTP callback path."
             options={SLACK_INBOUND_MODE_OPTIONS}
             source={sourceBadge(slack.inboundMode)}
-            value={slack.inboundMode.value}
+            value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
             onChange={(inboundMode) => {
               void props.onSaveSlack({
                 ...slack,
@@ -776,7 +776,6 @@ const SLACK_INBOUND_MODE_OPTIONS: Array<{
   value: "socket" | "events";
 }> = [
   { label: "Socket Mode", value: "socket" },
-  { label: "Events API", value: "events" },
 ];
 
 const STREAMING_RESPONSES_WARNING =

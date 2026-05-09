@@ -671,7 +671,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       channelId: body.channel_id,
       teamId: body.team_id,
       userId: body.user_id,
-      ts: body.thread_ts ?? `${this.now() / 1000}`,
+      ts: body.thread_ts ?? (this.now() / 1000).toFixed(6),
     });
     if (!ids || !body.command) return;
     const actor = await this.actorForSlackUser(ids.userId, body.user_name);
@@ -693,7 +693,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     })) {
       return;
     }
-    const command = body.command.replace(/^\//, "");
+    const command = normalizeSlackSlashCommand(
+      body.command,
+      this.config.slashCommandPrefix,
+    );
     const args = (body.text ?? "").trim().split(/\s+/).filter(Boolean);
     await this.listener({
       id: this.newEventId("slack-slash"),
@@ -1377,6 +1380,18 @@ function parseBareCommand(text: string): { command: string; args: string[] } | u
   const trimmed = text.trim();
   if (!/^[A-Za-z0-9_]+(?:\s|$)/.test(trimmed)) return undefined;
   return parseCommand(`/${trimmed}`);
+}
+
+function normalizeSlackSlashCommand(
+  command: string,
+  prefix: string | undefined,
+): string {
+  const stripped = command.replace(/^\//, "").toLowerCase();
+  const normalizedPrefix = prefix?.trim().toLowerCase() ?? "";
+  if (normalizedPrefix && stripped.startsWith(normalizedPrefix)) {
+    return stripped.slice(normalizedPrefix.length);
+  }
+  return stripped;
 }
 
 function readSlackSurfaceState(

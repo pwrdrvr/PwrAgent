@@ -16,6 +16,7 @@ import {
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_BOT_TOKEN_ENV,
+  SLACK_INBOUND_MODE_ENV,
   normalizeMattermostUrl,
   redactDesktopMessagingConfig,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
@@ -128,6 +129,32 @@ describe("desktop messaging config", () => {
     });
   });
 
+  it("normalizes unimplemented Slack Events API mode from settings to Socket Mode", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.slack]",
+        "enabled = true",
+        'inbound_mode = "events"',
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("slackBotToken", "settings-slack-bot-token");
+    await secretStore.setSecret("slackAppToken", "settings-slack-app-token");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+
+    expect(config.slack?.inboundMode).toBe("socket");
+  });
+
   it("loads Slack from env before authorized user IDs are configured", () => {
     const config = loadDesktopMessagingConfig({
       [SLACK_BOT_TOKEN_ENV]: "xoxb-token",
@@ -143,6 +170,16 @@ describe("desktop messaging config", () => {
       authorizedActorIds: [],
       authorizedTeamIds: [],
     });
+  });
+
+  it("normalizes unimplemented Slack Events API mode from env to Socket Mode", () => {
+    const config = loadDesktopMessagingConfig({
+      [SLACK_BOT_TOKEN_ENV]: "xoxb-token",
+      [SLACK_APP_TOKEN_ENV]: "xapp-token",
+      [SLACK_INBOUND_MODE_ENV]: "events",
+    });
+
+    expect(config.slack?.inboundMode).toBe("socket");
   });
 
   it("supports legacy bot token aliases for local testing", () => {

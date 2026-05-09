@@ -265,6 +265,46 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("strips the configured prefix from Slack slash commands", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        slashCommandPrefix: "pwragent_",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slash_commands", {
+      ack: async () => undefined,
+      body: {
+        channel_id: "C012ABCDEF0",
+        channel_name: "signals-chat",
+        command: "/pwragent_status",
+        team_id: "T012ABCDEF0",
+        text: "now",
+        user_id: "U012ABCDEF0",
+        user_name: "alice",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "status",
+        args: ["now"],
+        rawText: "/pwragent_status now",
+      }),
+    ]);
+  });
+
   it("uses users.info display names for DM labels when users:read is granted", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({

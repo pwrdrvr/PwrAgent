@@ -146,7 +146,9 @@ export function loadDesktopMessagingConfig(
   const slackAppToken = readEnv(env, SLACK_APP_TOKEN_ENV);
   const slackSigningSecret = readEnv(env, SLACK_SIGNING_SECRET_ENV);
   const slackWorkspaceUrl = readEnv(env, SLACK_WORKSPACE_URL_ENV);
-  const slackInboundMode = readSlackInboundMode(env[SLACK_INBOUND_MODE_ENV]);
+  const slackInboundMode = normalizeSlackRuntimeInboundMode(
+    readSlackInboundMode(env[SLACK_INBOUND_MODE_ENV]),
+  );
   const slackAuthorizedActorIds = parseContactList(env[SLACK_AUTHORIZED_USER_IDS_ENV]);
   const slackAuthorizedWorkspaces = parseContactList(
     env[SLACK_AUTHORIZED_WORKSPACES_ENV],
@@ -231,7 +233,7 @@ export function loadDesktopMessagingConfig(
             appToken: slackAppToken,
             ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
             ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
-            inboundMode: slackInboundMode ?? "socket",
+            inboundMode: slackInboundMode,
             ...(slackSlashCommandPrefix !== undefined
               ? { slashCommandPrefix: slackSlashCommandPrefix }
               : {}),
@@ -322,8 +324,10 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack?.workspaceUrl
     || snapshot.messaging.slack.workspaceUrl.value
     || undefined;
-  const slackInboundMode =
-    envConfig.slack?.inboundMode ?? snapshot.messaging.slack.inboundMode.value;
+  const slackInboundMode = normalizeSlackRuntimeInboundMode(
+    envConfig.slack?.inboundMode ?? snapshot.messaging.slack.inboundMode.value,
+    log,
+  );
   const slackSlashCommandPrefix =
     envConfig.slack?.slashCommandPrefix
     ?? snapshot.messaging.slack.slashCommandPrefix.value;
@@ -618,6 +622,20 @@ function readEnv(
 function readSlackInboundMode(value: string | undefined): "socket" | "events" | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized === "socket" || normalized === "events" ? normalized : undefined;
+}
+
+function normalizeSlackRuntimeInboundMode(
+  value: "socket" | "events" | undefined,
+  log?: Pick<ReturnType<typeof getMainLogger>, "warn">,
+): "socket" {
+  if (value === "events") {
+    log?.warn("slack Events API inbound mode is not implemented; using Socket Mode", {
+      channel: "slack",
+      configuredInboundMode: "events",
+      runtimeInboundMode: "socket",
+    });
+  }
+  return "socket";
 }
 
 function parseContactList(value: string | undefined): Array<{

@@ -625,6 +625,21 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("does not offer the unimplemented Slack Events API inbound mode", () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: "Socket Mode" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
+  });
+
   it("sanitizes manually entered messaging display names before saving", async () => {
     const settings = createSettingsState();
 
