@@ -50,6 +50,7 @@ function fakeApi(spies: {
   conversations?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
+  replies?: Record<string, string>;
   updated?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
 }): SlackApi {
@@ -64,6 +65,10 @@ function fakeApi(spies: {
       id: params.channel,
       name: spies.conversations?.[params.channel],
     }),
+    conversationsReplies: async (params) => [{
+      ts: params.ts,
+      text: spies.replies?.[`${params.channel}:${params.ts}`],
+    }],
     deleteMessage: async (params) => {
       spies.deleted?.push(params);
     },
@@ -386,6 +391,9 @@ describe("SlackAdapter", () => {
         conversations: {
           G012ABCDEF0: "agents-private",
         },
+        replies: {
+          "G012ABCDEF0:1712023030.000000": "Root message for this Slack thread",
+        },
       }),
       socketClient: socket,
       now: () => 1_700_000_000_000,
@@ -417,10 +425,10 @@ describe("SlackAdapter", () => {
             kind: "thread",
             parentId: "1712023030.000000",
             parentTitle: "agents-private",
+            title: "Root message for this Slack thread",
           }),
         }),
       }),
     ]);
-    expect(events[0]?.channel.conversation.title).toBeUndefined();
   });
 });

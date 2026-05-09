@@ -57,6 +57,11 @@ export type SlackProviderLogger = {
 export type SlackApi = {
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
+  conversationsReplies?(params: {
+    channel: string;
+    limit?: number;
+    ts: string;
+  }): Promise<SlackThreadMessageInfo[]>;
   deleteMessage(params: { channel: string; ts: string }): Promise<void>;
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
@@ -98,6 +103,11 @@ export type SlackMessageResult = {
 export type SlackConversationInfo = {
   id?: string;
   name?: string;
+};
+
+export type SlackThreadMessageInfo = {
+  text?: string;
+  ts?: string;
 };
 
 export type SlackFileInfo = {
@@ -256,9 +266,11 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly socketClient: SlackSocketClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly conversationTitleCache = new Map<string, string | undefined>();
+  private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
   private botUserId: string | undefined;
   private conversationInfoLookupDisabled = false;
+  private threadInfoLookupDisabled = false;
   private userInfoLookupDisabled = false;
   private listener: SlackInboundListener | undefined;
   private started = false;
@@ -986,6 +998,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         ? params.peerTitle
         : normalizeSlackConversationTitle(params.channelName)
           ?? (await this.lookupSlackConversationTitle(params.channelId));
+    const threadTitle = isThread && params.threadTs
+      ? await this.lookupSlackThreadTitle(params.channelId, params.threadTs)
+      : undefined;
     return {
       channel: this.channel,
       conversation: {
@@ -994,6 +1009,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         ...(kind === "dm" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
         ...(kind === "channel" && channelTitle ? { title: channelTitle } : {}),
+        ...(isThread && threadTitle ? { title: threadTitle } : {}),
         ...(isThread && channelTitle ? { parentTitle: channelTitle } : {}),
       },
     };
@@ -1105,6 +1121,49 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  private async lookupSlackThreadTitle(
+    channelId: string,
+    threadTs: string,
+  ): Promise<string | undefined> {
+    const cacheKey = `${channelId}:${threadTs}`;
+    if (this.threadTitleCache.has(cacheKey)) {
+      return this.threadTitleCache.get(cacheKey);
+    }
+    if (this.threadInfoLookupDisabled || !this.api.conversationsReplies) {
+      this.threadTitleCache.set(cacheKey, undefined);
+      return undefined;
+    }
+
+    try {
+      const messages = await this.api.conversationsReplies({
+        channel: channelId,
+        limit: 1,
+        ts: threadTs,
+      });
+      const root = messages.find((message) => message.ts === threadTs) ?? messages[0];
+      const title = normalizeSlackThreadTitle(root?.text);
+      this.threadTitleCache.set(cacheKey, title);
+      return title;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.threadInfoLookupDisabled = true;
+        this.logger.warn?.("slack thread root lookup unavailable", {
+          reason: "missing_scope",
+          requiredScope: requiredConversationHistoryScope(channelId),
+        });
+      } else {
+        this.logger.warn?.("slack thread root lookup failed", {
+          reason,
+          channelHash: createHash("sha256").update(channelId).digest("hex").slice(0, 8),
+          threadHash: createHash("sha256").update(threadTs).digest("hex").slice(0, 8),
+        });
+      }
+      this.threadTitleCache.set(cacheKey, undefined);
+      return undefined;
+    }
+  }
+
   private describeFile(file: SlackFileInfo): MessagingAttachmentDescriptor[] {
     const fileIdValidation = validateSlackFileId(file.id);
     if (!file.id) {
@@ -1196,6 +1255,10 @@ export function createSlackApi(botToken: string): SlackApi {
     async conversationsInfo(params) {
       const response = await client.conversations.info(params);
       return response.channel as SlackConversationInfo | undefined;
+    },
+    async conversationsReplies(params) {
+      const response = await client.conversations.replies(params);
+      return (response.messages ?? []) as SlackThreadMessageInfo[];
     },
     async deleteMessage(params) {
       await client.chat.delete(params);
@@ -1325,11 +1388,24 @@ function normalizeSlackConversationTitle(value: string | undefined): string | un
   return normalized;
 }
 
+function normalizeSlackThreadTitle(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
+}
+
 function requiredConversationReadScopes(channelId: string): string {
   if (channelId.startsWith("C")) return "channels:read";
   if (channelId.startsWith("D")) return "im:read";
   if (channelId.startsWith("G")) return "groups:read or mpim:read";
   return "channels:read/groups:read/im:read/mpim:read";
+}
+
+function requiredConversationHistoryScope(channelId: string): string {
+  if (channelId.startsWith("C")) return "channels:history";
+  if (channelId.startsWith("D")) return "im:history";
+  if (channelId.startsWith("G")) return "groups:history or mpim:history";
+  return "channels:history/groups:history/im:history/mpim:history";
 }
 
 function safeEqual(left: string, right: string): boolean {
