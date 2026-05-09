@@ -1349,8 +1349,19 @@ textarea,
 
 .thread-row__title {
   padding-bottom: 2px;
-  font-size: 14px;
-  font-weight: 600;
+  /* Sidebar readability tune (issue #240 follow-up). The default
+     sidebar is 408px wide and resizes up to 560px in this app;
+     internal feedback noted that the previous 14/600 felt thin and
+     hard to read against the near-black panel at those widths. The
+     v2 design preview uses 13/600, but its sidebar is only 320px
+     wide — narrower than ours and built for a denser layout. We
+     err toward our wider canvas: 15/650 reads as a clear
+     scannable list-row title without going full Bold (700) which
+     would pull focus from the active thread's accent treatment.
+     Titles average 5-6 words so the extra px doesn't push them to
+     wrap. */
+  font-size: 15px;
+  font-weight: 650;
   line-height: 1.25;
 }
 
