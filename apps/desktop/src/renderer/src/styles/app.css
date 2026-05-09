@@ -6539,8 +6539,13 @@ textarea,
 }
 
 .workspace-handoff-dialog code {
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
   color: var(--text-primary);
   font-family: var(--font-mono);
+  font-size: 0.95em;
   overflow-wrap: anywhere;
 }
 
@@ -6571,10 +6576,14 @@ textarea,
 .workspace-handoff-dialog__branch-path dd {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 16px;
+}
+
+.workspace-handoff-dialog__branch-code {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 15px;
   font-weight: 700;
+  line-height: 1.35;
 }
 
 .workspace-handoff-dialog__branch-arrow {
@@ -6591,6 +6600,8 @@ textarea,
 }
 
 .workspace-handoff-dialog__comparison section {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
@@ -6662,23 +6673,22 @@ textarea,
   color: var(--danger-text);
 }
 
-.workspace-handoff-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 16px;
-}
-
 .workspace-handoff-dialog__action {
-  display: inline-grid;
-  gap: 2px;
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  align-content: center;
   min-width: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  padding-bottom: 8px;
   text-align: left;
 }
 
 .workspace-handoff-dialog__action small {
-  max-width: 220px;
+  min-width: 0;
   overflow-wrap: anywhere;
+  color: inherit;
   font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
@@ -7295,10 +7305,6 @@ textarea,
 
   .workspace-handoff-dialog__branch-arrow {
     display: none;
-  }
-
-  .workspace-handoff-dialog__actions {
-    flex-direction: column;
   }
 
   .workspace-handoff-dialog__action {
