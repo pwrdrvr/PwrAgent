@@ -1155,9 +1155,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const now = this.now();
       const write = this.options.store
         .upsertCallbackHandle({
-          id: `discord-callback:${customId}`,
+          id: discordCallbackRecordId(customId, intent),
           actionId: action.id,
-          allowedActorIds: [intent.audit.actor.platformUserId],
+          allowedActorIds: callbackAllowedActorIds(intent),
           bindingId: intent.bindingId,
           browseSessionId: browseSessionIdForIntent(intent),
           channel: intent.audit.channel,
@@ -2222,6 +2222,31 @@ function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | unde
   return intent.kind === "thread_picker" || intent.kind === "project_picker"
     ? intent.browseSessionId
     : undefined;
+}
+
+function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
+  return intent.allowedActorIds && intent.allowedActorIds.length > 0
+    ? intent.allowedActorIds
+    : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function discordCallbackRecordId(
+  customId: string,
+  intent: MessagingSurfaceIntent,
+): string {
+  const conversation = intent.audit?.channel.conversation;
+  const deliveryScope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        intent.audit?.channel.channel ?? "discord",
+        conversation?.id ?? null,
+        conversation?.parentId ?? null,
+        intent.audit?.bindingId ?? intent.bindingId ?? null,
+      ]),
+    )
+    .digest("base64url")
+    .slice(0, 18);
+  return `discord-callback:${customId}:${deliveryScope}`;
 }
 
 function discordChannelIsThread(channel: unknown): boolean {

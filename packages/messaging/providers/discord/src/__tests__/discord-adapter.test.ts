@@ -4,6 +4,7 @@ import type {
   MessagingCallbackHandleStore,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
+  MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +23,7 @@ const TEST_CHANNEL_ID = "1480556454498009352";
 const TEST_GUILD_ID = "1480556454498009353";
 const TEST_MESSAGE_ID = "1480556454498009354";
 const TEST_USER_ID = "1480556454498009355";
+const TEST_OTHER_USER_ID = "1480556454498009356";
 
 describe("discord adapter", () => {
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
@@ -305,6 +307,7 @@ describe("discord adapter", () => {
         },
         occurredAt: 1234,
       },
+      allowedActorIds: [TEST_USER_ID, TEST_OTHER_USER_ID],
       actions: [
         {
           id: "permissions",
@@ -324,7 +327,7 @@ describe("discord adapter", () => {
     expect(store.upsertCallbackHandle).toHaveBeenCalledWith(
       expect.objectContaining({
         actionId: "permissions",
-        allowedActorIds: [TEST_USER_ID],
+        allowedActorIds: [TEST_USER_ID, TEST_OTHER_USER_ID],
         handle: customId,
         value: { mode: "review" },
       }),
@@ -336,7 +339,10 @@ describe("discord adapter", () => {
     const restartedAdapter = new DiscordAdapter({
       api: createApi({ createInteractionResponse }),
       config: {
-        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        authorizedActorIds: [
+          { id: TEST_USER_ID, displayName: "" },
+          { id: TEST_OTHER_USER_ID, displayName: "" },
+        ],
         botToken: "token",
         channel: "discord",
       },
@@ -361,8 +367,8 @@ describe("discord adapter", () => {
         token: "token_ABC.123",
         type: 3,
         user: {
-          id: TEST_USER_ID,
-          username: "huntharo",
+          id: TEST_OTHER_USER_ID,
+          username: "pwrdrvr",
         },
       },
     });
@@ -375,6 +381,138 @@ describe("discord adapter", () => {
         actionId: "permissions",
         kind: "callback",
         value: { mode: "review" },
+      }),
+    ]);
+    await restartedAdapter.stop();
+  });
+
+  it("keeps persisted handles for fan-out deliveries in separate conversations", async () => {
+    const store = createCallbackHandleStore();
+    const firstChannelId = TEST_CHANNEL_ID;
+    const secondChannelId = "1480556454498009360";
+    const createdRequests = new Map<string, Parameters<DiscordApi["createMessage"]>[1]>();
+    const createMessage = vi.fn(async (channelId: string, request) => {
+      createdRequests.set(channelId, request);
+      return {
+        channel_id: channelId,
+        id: `message-${channelId}`,
+      };
+    });
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+      store,
+    });
+    const baseIntent: Omit<MessagingStatusIntent, "audit" | "bindingId"> = {
+      allowedActorIds: [TEST_USER_ID],
+      actions: [
+        {
+          id: "cancel",
+          label: "Cancel",
+          value: { queue: "permissions" },
+        },
+      ],
+      createdAt: 1234,
+      id: "queued-permissions-1",
+      kind: "status",
+      status: "waiting",
+      text: "Permissions change queued",
+    };
+
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        action: "intent.deliver",
+        actor: { platformUserId: TEST_USER_ID },
+        bindingId: "binding-1",
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: firstChannelId,
+            kind: "channel",
+            parentId: TEST_GUILD_ID,
+          },
+        },
+        occurredAt: 1234,
+      },
+      bindingId: "binding-1",
+    });
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        action: "intent.deliver",
+        actor: { platformUserId: TEST_USER_ID },
+        bindingId: "binding-2",
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: secondChannelId,
+            kind: "channel",
+            parentId: TEST_GUILD_ID,
+          },
+        },
+        occurredAt: 1234,
+      },
+      bindingId: "binding-2",
+    });
+
+    const firstCustomId =
+      createdRequests.get(firstChannelId)?.components?.[0]?.components[0]?.custom_id;
+    const secondCustomId =
+      createdRequests.get(secondChannelId)?.components?.[0]?.components[0]?.custom_id;
+    expect(firstCustomId).toMatch(/^dc:/);
+    expect(secondCustomId).toBe(firstCustomId);
+    expect(store.upsertCallbackHandle).toHaveBeenCalledTimes(2);
+
+    const events: MessagingInboundEvent[] = [];
+    const gateway = new TestDiscordGateway();
+    const restartedAdapter = new DiscordAdapter({
+      api: createApi(),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      now: () => 1235,
+      store,
+    });
+    await restartedAdapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        channel_id: firstChannelId,
+        data: {
+          custom_id: firstCustomId,
+        },
+        guild_id: TEST_GUILD_ID,
+        id: TEST_MESSAGE_ID,
+        token: "token_ABC.123",
+        type: 3,
+        user: {
+          id: TEST_USER_ID,
+          username: "huntharo",
+        },
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actionId: "cancel",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({ id: firstChannelId }),
+        }),
+        kind: "callback",
+        value: { queue: "permissions" },
       }),
     ]);
     await restartedAdapter.stop();
@@ -935,23 +1073,23 @@ function createCallbackHandleStore(): MessagingCallbackHandleStore {
   const records = new Map<string, MessagingCallbackHandleRecord>();
   return {
     resolveCallbackHandle: vi.fn(async ({ actorId, channel, handle, now = Date.now() }) => {
-      const record = records.get(handle);
+      const record = [...records.values()]
+        .filter(
+          (candidate) =>
+            candidate.handle === handle
+            && candidate.expiresAt > now
+            && candidate.allowedActorIds.includes(actorId)
+            && candidate.channel.channel === channel.channel
+            && candidate.channel.conversation.id === channel.conversation.id,
+        )
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
       if (!record || record.expiresAt <= now) {
-        return undefined;
-      }
-      if (!record.allowedActorIds.includes(actorId)) {
-        return undefined;
-      }
-      if (
-        record.channel.channel !== channel.channel
-        || record.channel.conversation.id !== channel.conversation.id
-      ) {
         return undefined;
       }
       return record;
     }),
     upsertCallbackHandle: vi.fn(async (record: MessagingCallbackHandleRecord) => {
-      records.set(record.handle, record);
+      records.set(record.id, record);
       return record;
     }),
   };
