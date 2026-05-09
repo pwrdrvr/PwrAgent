@@ -123,4 +123,60 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("code")).toHaveTextContent("inline code");
   });
 
+  // The `is-empty` class on `.composer-tiptap-input` is the contract
+  // hook for empty-state styling — currently used for the placeholder
+  // appearance, but reserved for any future CSS that distinguishes
+  // "no content yet" from "user is typing". The class flips off as
+  // soon as either text content OR a skill chip lands in the
+  // composer; both code paths are tested here so a future refactor
+  // of the conditional in `ComposerTiptapInput.tsx` doesn't silently
+  // break the contract.
+  describe("is-empty class contract", () => {
+    it("applies is-empty when value is empty and no skill tokens are present", async () => {
+      const { container } = renderTiptapInput({ value: "" });
+      await screen.findByRole("textbox", { name: "Reply" });
+
+      const wrapper = container.querySelector(".composer-tiptap-input");
+      expect(wrapper).toHaveClass("is-empty");
+    });
+
+    it("removes is-empty as soon as the user types content", async () => {
+      const { container } = renderTiptapInput({ value: "hello" });
+      await screen.findByRole("textbox", { name: "Reply" });
+
+      const wrapper = container.querySelector(".composer-tiptap-input");
+      expect(wrapper).not.toHaveClass("is-empty");
+    });
+
+    it("removes is-empty when only skill tokens are present (no text)", () => {
+      // Render the underlying component directly so we can supply
+      // skillTokens without the wrapping default state. Mirrors the
+      // wrapper used by the other tests but holds skill tokens
+      // immutable rather than tracking onChange.
+      const skillTokens = [
+        {
+          id: "skill-1",
+          index: 0,
+          name: "ce:plan",
+          description: "Plan a thread",
+          source: "user" as const,
+          path: "/skills/ce-plan.md",
+        },
+      ];
+      const { container } = render(
+        <ComposerTiptapInput
+          id="reply"
+          label="Reply"
+          markdownConversion
+          onChange={() => undefined}
+          placeholder="Ask anything"
+          skillTokens={skillTokens}
+          value=""
+        />,
+      );
+
+      const wrapper = container.querySelector(".composer-tiptap-input");
+      expect(wrapper).not.toHaveClass("is-empty");
+    });
+  });
 });

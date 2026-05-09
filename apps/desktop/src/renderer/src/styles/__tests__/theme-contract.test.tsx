@@ -135,14 +135,24 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps transcript bottom reserve close to the thinking indicator height", () => {
-    expect(css).toMatch(
-      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*24px;[\s\S]*?\}/
+    // The items rule may declare bottom padding either explicitly
+    // (`padding-bottom: 24px`) or via the `padding` shorthand
+    // (`padding: T R 24px L`). Both are equivalent; the lock here is
+    // that the bottom value stays at 24 (the over-scroll feel above
+    // the last message / thinking indicator) and that the pending
+    // override still drops to 4px.
+    const itemsRule = css.match(/\.transcript-list__items\s*\{[\s\S]*?\}/)?.[0];
+    expect(itemsRule).toBeDefined();
+    expect(itemsRule).toMatch(
+      /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
       /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
     );
-    expect(css).not.toMatch(
-      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*(?:[4-9]\d|\d{3,})px;[\s\S]*?\}/
+    // Negative regex stays — guard against accidental large bottom
+    // values (>= 40px) regardless of which form is used.
+    expect(itemsRule).not.toMatch(
+      /padding-bottom:\s*(?:[4-9]\d|\d{3,})px;|padding:\s*\S+\s+\S+\s+(?:[4-9]\d|\d{3,})px(?:\s+\S+)?;/,
     );
   });
 
@@ -176,6 +186,33 @@ describe("Tangerine Terminal theme contract", () => {
     expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
     expect(autocompleteRule).toContain("inset 0 0 0 1px rgba(247, 243, 235, 0.06)");
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
+  });
+
+  it("locks composer height contract — compact when empty, grows, capped at 280px", () => {
+    // Issue #240 follow-up: the composer's min-height is the
+    // empty-state floor; max-height is the clamp the editor scrolls
+    // inside once the user has typed enough to fill it. Both values
+    // are visual contracts — bumping min-height back up steals
+    // transcript reading area; lifting max-height above the cap
+    // pushes the picker rows off-screen on shorter viewports. Lock
+    // them so a future innocuous-looking edit doesn't undo the
+    // intent.
+    const tiptapRule = extractRuleBody(css, ".composer-tiptap-input");
+    expect(tiptapRule).toMatch(/min-height:\s*56px;/);
+    expect(tiptapRule).toMatch(/max-height:\s*280px;/);
+    expect(tiptapRule).toMatch(/overflow-y:\s*auto;/);
+
+    // The inner editor's min-height tracks the outer container's
+    // (-2 for the 1px border on each side of the wrapper) so the
+    // editor visually fills the wrapper at the empty-state floor.
+    const editorRule = extractRuleBody(css, ".composer-tiptap-input__editor");
+    expect(editorRule).toMatch(/min-height:\s*54px;/);
+
+    // The unused-but-styled `<textarea>` variant (`.composer__input`)
+    // shares the same empty-state floor so a future swap to it
+    // doesn't surprise the reading area.
+    const textareaRule = extractRuleBody(css, ".composer__input");
+    expect(textareaRule).toMatch(/min-height:\s*56px;/);
   });
 
   it("uses --accent (not --accent-bright) for every brand-accent mark", () => {

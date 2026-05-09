@@ -29,6 +29,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { ThreadContextPanel } from "./ThreadContextPanel";
@@ -725,6 +726,19 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  // Auto-pin the context rail on wide displays (issue #240). Same
+  // breakpoint as the CSS in `app.css` (`@media (min-width: 1700px)`)
+  // so the React state and the visual styles agree about when the
+  // rail is "always visible". Without this, the rail's React panel
+  // content is conditionally rendered (`open = pinned || revealed`)
+  // and the user sees an empty rail wrapper on wide displays because
+  // CSS forced the wrapper visible without the panel content. The
+  // userPinned-vs-effective split also means the user's manual
+  // pin/unpin choice is preserved across resizes — when they shrink
+  // the window back below 1700px the rail returns to whatever they
+  // had it set to before.
+  const contextRailWideMatch = useMediaQuery("(min-width: 1700px)");
+  const contextRailEffectivePinned = contextRailPinned || contextRailWideMatch;
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
@@ -1539,7 +1553,7 @@ export function ThreadView(props: ThreadViewProps) {
 
       <div
         className={`thread-view__layout${
-          contextRailPinned ? " has-pinned-context-rail" : ""
+          contextRailEffectivePinned ? " has-pinned-context-rail" : ""
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         style={
           {
@@ -1642,7 +1656,14 @@ export function ThreadView(props: ThreadViewProps) {
           onPinnedChange={setContextRailPinned}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
-          pinned={contextRailPinned}
+          // Auto-pinned when wide (issue #240) — the panel renders
+          // `open = pinned || revealed` so passing the effective
+          // value here makes sure the panel content is in the DOM
+          // at wide widths, not just the empty rail wrapper. The
+          // raw user state (`contextRailPinned`) still flows through
+          // `onPinnedChange` so the user's narrow-width preference
+          // is preserved across resizes.
+          pinned={contextRailEffectivePinned}
           platform={props.platform}
           thread={selectedThread!}
           worktreeArchiveError={props.worktreeArchiveError}

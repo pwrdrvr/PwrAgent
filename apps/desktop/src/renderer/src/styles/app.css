@@ -42,6 +42,14 @@
   --thinking-scanner-mini-offset: 0px;
   --thinking-scanner-offset: var(--thinking-scanner-full-offset);
   --thinking-scanner-progress: 0;
+  /* Issue #240: max reading width for the centered chat column —
+     transcript message column AND composer rows both cap here so
+     the input's text-block lines up with the messages above it. The
+     value is high enough to fit code blocks comfortably yet narrow
+     enough that on a 32" monitor people aren't reading line lengths
+     that defeat scanning. Themes / future surfaces can override
+     this single token to retune both surfaces in lockstep. */
+  --chat-column-max: 940px;
 }
 
 * {
@@ -197,6 +205,15 @@ textarea,
   align-items: center;
   min-height: 44px;
   padding-top: 10px;
+  /* Issue #240 follow-up: the thread header carries its OWN left
+     inset, decoupled from the transcript / composer below it. The
+     previous 28px sidebar gutter on `.app-main` provided this for
+     free, but that padding was removed so the chat surface goes
+     edge-to-edge. The header still needs breathing room so the
+     title doesn't sit flush against the sidebar's right border —
+     22px matches the v2 design's `.pa-thread__header { padding:
+     14px 22px }`. */
+  padding-left: 22px;
   /* Reserve space for the position:fixed context-rail spine (48px wide,
      pinned top-right). Without this padding, anything we render in the
      header's right-aligned region (messaging status icons, on/off
@@ -1349,8 +1366,19 @@ textarea,
 
 .thread-row__title {
   padding-bottom: 2px;
-  font-size: 14px;
-  font-weight: 600;
+  /* Sidebar readability tune (issue #240 follow-up). The default
+     sidebar is 408px wide and resizes up to 560px in this app;
+     internal feedback noted that the previous 14/600 felt thin and
+     hard to read against the near-black panel at those widths. The
+     v2 design preview uses 13/600, but its sidebar is only 320px
+     wide — narrower than ours and built for a denser layout. We
+     err toward our wider canvas: 15/650 reads as a clear
+     scannable list-row title without going full Bold (700) which
+     would pull focus from the active thread's accent treatment.
+     Titles average 5-6 words so the extra px doesn't push them to
+     wrap. */
+  font-size: 15px;
+  font-weight: 650;
   line-height: 1.25;
 }
 
@@ -1938,7 +1966,14 @@ textarea,
   display: flex;
   min-height: 0;
   min-width: 0;
-  padding: 0 0 24px 28px;
+  /* Issue #240: edge-to-edge transcript + composer. Bottom padding
+     was 24px — produced a dead band below the composer. Left padding
+     was 28px — produced a dead band between the sidebar's right
+     border and the start of the composer / transcript content. The
+     sidebar already provides its own right-edge separation via
+     `.sidebar { border-right: 1px solid var(--border-subtle) }`, so
+     the composer can sit flush against it without crowding. */
+  padding: 0;
   overflow: hidden;
 }
 
@@ -1961,7 +1996,12 @@ textarea,
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 18px;
+  /* Issue #240: header sits flush against the transcript area; the
+     transcript's top-fade overlay handles the visual transition where
+     the header meets scrolled content. The previous 18px gap created
+     a dead band of empty app-bg between the header and the first
+     message that the user couldn't scroll past. */
+  gap: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -3385,6 +3425,15 @@ textarea,
   width: 100%;
 }
 
+/* The launchpad surface doesn't have a transcript above the composer,
+   so the composer's `border-top` (issue #240) would render as a
+   floating divider line with empty space above it. The launchpad-panel
+   above the composer is its own visually-framed card; no divider line
+   needed between it and the composer. */
+.thread-view__launchpad-composer > .composer {
+  border-top: 0;
+}
+
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
@@ -3456,12 +3505,26 @@ textarea,
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding-right: calc(48px + 24px);
+  /* Issue #240: only reserve enough on the right for the 48px
+     context-rail spine — the previous extra 24px gutter showed up
+     as a visible band of empty bg-app between the composer's right
+     edge and the spine. The composer/transcript now sit flush
+     against the spine without overlapping the hamburger button. */
+  padding-right: 48px;
   transition: padding-right 160ms ease;
 }
 
 .thread-view__layout.has-pinned-context-rail {
-  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 24px);
+  /* When the rail is pinned (manually or auto-pinned via the wide
+     breakpoint), the chat area sits flush against the rail's left
+     border (issue #240). The transcript / composer are themselves
+     max-width-capped + centered (`.transcript-list__content`,
+     `.composer > *`), so the visual breathing room between the
+     message column and the rail comes from the centered chat
+     column's right margin — no extra layout padding needed. The
+     rail's `border-left: 1px solid var(--border-subtle)` already
+     provides the visual divider. */
+  padding-right: min(var(--context-rail-width, 380px), 42vw);
 }
 
 .thread-view__layout.is-resizing-context-rail {
@@ -3472,17 +3535,31 @@ textarea,
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 24px;
+  /* Issue #240: no inter-pane gap — the composer's `border-top` is the
+     single divider between transcript and composer. The previous 24px
+     gap plus the transcript / composer box borders + each surface's
+     own inner padding stacked into a wide visual gutter that pushed
+     the composer noticeably away from the last message. */
+  gap: 0;
   min-width: 0;
   min-height: 0;
 }
 
-.transcript-panel,
-.context-panel,
-.composer {
+/* The right-rail context panel still reads as a card. */
+.context-panel {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+
+/* Transcript + composer share ONE continuous chat surface (issue #240).
+   Both panes are transparent — they ride the app background. The
+   composer no longer carries its own bg tint or top divider; the
+   textarea inside it has `bg-input + border` chrome which is enough
+   visual differentiation on its own (per testing feedback). */
+.transcript-panel,
+.composer {
+  background: transparent;
 }
 
 .launchpad-panel {
@@ -3600,12 +3677,19 @@ textarea,
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  padding: 16px;
+  /* No outer padding (issue #240): all internal spacing lives on the
+     items / siblings so the top/bottom fades can overlay the items'
+     visible edges directly without a coupled offset. */
+  padding: 0;
   overflow: hidden;
 }
 
-.transcript-list__load-older {
+.transcript-list__load-older,
+.transcript-list > .transcript-error {
+  /* Restore the lateral / top breathing room the wrapper used to
+     provide for these sibling rows above the items. */
   align-self: flex-start;
+  margin: 12px 16px 0;
 }
 
 .transcript-list__items {
@@ -3617,25 +3701,88 @@ textarea,
   min-height: 0;
   overflow-anchor: none;
   overflow-y: auto;
-  padding-right: 4px;
-  padding-bottom: 24px;
+  /* Internal padding the wrapper used to provide. Right is 12px
+     (instead of 16) so the scrollbar has its own narrow gutter. The
+     bottom 24 keeps the existing over-scroll feel above the last
+     message; the top 16 puts the first message a beat below the
+     transcript-area top edge (the fade overlays this band). */
+  padding: 16px 12px 24px 16px;
 }
 
 .transcript-list__items:has(.transcript-list__pending:last-child) {
   padding-bottom: 4px;
 }
 
+/* Top / bottom scroll-fade overlays (issue #240). Only the items area
+   scrolls, so the fade sits inside the relatively-positioned wrapper
+   directly over the items at top: 0 / bottom: 0. The fade gradient
+   blends scrolled content into the surrounding app surface — same
+   color (`--bg-app`) as the transparent transcript-panel sits on, so
+   there's no visible color boundary, just a smooth dissolve.
+   Visibility is driven by data attributes set from the scroll
+   handler in `TranscriptList.tsx`: `data-fade-top="hidden"` when the
+   list is scrolled to the very top (no content to fade above) and
+   `data-fade-bottom="hidden"` when pinned to the bottom. The default
+   in markup is hidden so we don't flash a fade on first paint before
+   the scroll handler runs. */
+.transcript-list__fade {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* 18px matches the design's `.pa-transcript__fade` band — wide
+     enough to read as a soft blend, narrow enough not to obscure the
+     first / last visible message text. */
+  height: 18px;
+  z-index: 2;
+  opacity: 1;
+  transition: opacity 140ms ease;
+}
+
+.transcript-list__fade--top {
+  top: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--bg-app) 0%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+.transcript-list__fade--bottom {
+  bottom: 0;
+  background: linear-gradient(
+    to top,
+    var(--bg-app) 0%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+.transcript-list[data-fade-top="hidden"] .transcript-list__fade--top,
+.transcript-list[data-fade-bottom="hidden"] .transcript-list__fade--bottom {
+  opacity: 0;
+}
+
 .transcript-list__content {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Issue #240: cap reading width on wide displays. Above the cap the
+     content centers and bg-app shows on either side of the column.
+     The same `--chat-column-max` is applied to the composer's
+     children below so the input column lines up with the messages. */
+  max-width: var(--chat-column-max);
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .transcript-list__scroll-bottom {
   position: absolute;
   left: 50%;
   bottom: 20px;
-  z-index: 1;
+  /* Above the bottom-fade overlay (z-index: 2) so the chevron button
+     stays clickable. */
+  z-index: 3;
   display: inline-flex;
   width: 42px;
   height: 42px;
@@ -5523,19 +5670,35 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
+  /* Issue #240: lighter top padding (12 vs the old uniform 16) since
+     the composer's `border-top` defines the boundary — no need for
+     the panel-style breathing room above the eyebrow / textarea.
+     Horizontal padding stays 16 so the input column lines up with the
+     transcript message inset. */
+  padding: 12px 16px 16px;
+  /* Centering context for the children below (issue #240). The
+     composer's bg-panel band stays edge-to-edge but each direct
+     child caps its width so the input column matches the transcript
+     reading width on wide displays. */
+  align-items: center;
 }
 
-.composer__label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
+/* Cap each composer row at the shared chat reading width so the
+   composer's content column lines up with the transcript's. The
+   composer form itself stays full-width (bg-panel band edge-to-edge)
+   — only the rows inside it center. */
+.composer > * {
+  width: 100%;
+  max-width: var(--chat-column-max);
 }
 
 .composer__input {
   width: 100%;
-  min-height: 144px;
+  /* Compact when empty — grows as the user types up to a max via the
+     contenteditable variant below. The previous 144px default
+     reserved ~6 lines of dead space when the input was empty, which
+     ate into the transcript's reading area on shorter viewports. */
+  min-height: 56px;
   resize: vertical;
   padding: 12px;
   border: 1px solid var(--border-subtle);
@@ -5549,7 +5712,14 @@ textarea,
 }
 
 .composer-tiptap-input {
-  min-height: 144px;
+  /* Compact when empty (issue #240 follow-up). The container grows
+     with content — single line at 14/1.6 ≈ 22.4px, plus 12px top+
+     bottom padding on the inner editor ≈ 46.4px usable, so 56px
+     gives a comfortable empty-state with one full line visible.
+     Editing pushes the height up to the 280px cap (≈11 lines).
+     Reclaiming the 88px the previous 144px floor was eating gives
+     the transcript that much more reading room on every viewport. */
+  min-height: 56px;
   max-height: 280px;
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
@@ -5562,7 +5732,7 @@ textarea,
 
 .composer-tiptap-input__editor {
   position: relative;
-  min-height: 142px;
+  min-height: 54px;
   padding: 12px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -6974,6 +7144,32 @@ textarea,
   font-family: var(--font-mono);
   font-size: 13px;
   white-space: pre-wrap;
+}
+
+/* ============================================================
+   Wide-display auto-pin (issue #240)
+   ============================================================
+   On displays wide enough to comfortably show sidebar + capped
+   transcript column + the full context rail, ThreadView auto-pins
+   the rail via React state (`contextRailEffectivePinned`) using
+   the same `min-width: 1700px` breakpoint as below. That React
+   path adds the `.is-pinned` class which the existing rail rules
+   pick up — so the rail's wrapper position, sizing, and panel
+   content render the same way as a manually-pinned rail.
+
+   What this CSS adds on top is the visibility hiding for the
+   manual-toggle UI: at this width the user can't change pinning,
+   so leaving the controls visible would just confuse them. The
+   threshold (1700px) is the minimum where:
+     sidebar (≥280) + transcript max (940) + rail (≤380) + gutters
+   all fit without crowding. Below it, the existing mouseover +
+   pin/unpin behavior remains. */
+@media (min-width: 1700px) {
+  .context-rail__menu-button,
+  .context-panel__pin-button,
+  .context-panel__rail-state {
+    display: none;
+  }
 }
 
 @media (max-width: 1100px) {

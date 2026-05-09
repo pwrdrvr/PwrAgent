@@ -301,6 +301,14 @@ export function TranscriptList(props: TranscriptListProps) {
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
+  // Top-edge fade visibility (issue #240). The bottom-fade visibility
+  // is the inverse of `hasContentBelow` — we already track that to
+  // drive the scroll-to-bottom button — so it doesn't get a separate
+  // state. `isAtTop` defaults to `true` so the top fade is hidden on
+  // first paint (the typical state before any scroll has happened);
+  // the post-mount `syncScrollState` corrects it for threads that
+  // hydrate at a saved-scroll position other than the top.
+  const [isAtTop, setIsAtTop] = useState(true);
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
     () => new Set<string>()
   );
@@ -461,6 +469,7 @@ export function TranscriptList(props: TranscriptListProps) {
       isGluedToBottomRef.current = false;
     }
     setHasContentBelow(Boolean(snapshot && !isAtBottom));
+    setIsAtTop(Boolean(snapshot && snapshot.scrollTop <= 0));
     if (snapshot?.threadId) {
       savedViewportsRef.current.set(snapshot.threadId, {
         distanceFromBottom: snapshot.distanceFromBottom,
@@ -529,6 +538,7 @@ export function TranscriptList(props: TranscriptListProps) {
       snapshotRef.current = undefined;
       isGluedToBottomRef.current = true;
       setHasContentBelow(false);
+      setIsAtTop(true);
       return;
     }
 
@@ -651,7 +661,18 @@ export function TranscriptList(props: TranscriptListProps) {
   }
 
   return (
-    <div className="transcript-list">
+    <div
+      className="transcript-list"
+      // Issue #240: scroll-edge fades. The fade gradients are always
+      // mounted (so they can transition on opacity) but read these
+      // attributes to decide whether to render visibly.
+      //   - `data-fade-top="hidden"` when the scroll is at the very
+      //     top (no content above, nothing to fade in from)
+      //   - `data-fade-bottom="hidden"` when pinned to the bottom (no
+      //     content below)
+      data-fade-top={isAtTop ? "hidden" : "visible"}
+      data-fade-bottom={hasContentBelow ? "visible" : "hidden"}
+    >
       {canLoadOlder ? (
         <button
           className="button button--ghost transcript-list__load-older"
@@ -810,6 +831,18 @@ export function TranscriptList(props: TranscriptListProps) {
           ) : null}
         </div>
       </div>
+
+      {/* Scroll-edge fade overlays (issue #240). Always rendered so
+          they can opacity-transition; visibility driven by
+          `data-fade-*` on the wrapper. */}
+      <div
+        aria-hidden="true"
+        className="transcript-list__fade transcript-list__fade--top"
+      />
+      <div
+        aria-hidden="true"
+        className="transcript-list__fade transcript-list__fade--bottom"
+      />
 
       {hasContentBelow ? (
         <button
