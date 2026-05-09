@@ -277,7 +277,7 @@ The pattern, identical across providers:
    The persisted record is delivery-scoped, not handle-scoped. A single intent/action can fan out to multiple bindings and intentionally reuse the same platform handle; the persisted `id` must include the delivered conversation and binding so one delivery does not overwrite another. Persist the full `allowedActorIds` set from the intent, and persist `bindingId` from `intent.audit?.bindingId ?? intent.bindingId` so rebind/revoke cleanup deletes old buttons.
 2. **Click time** — when the platform delivers a click, look up the handle in the store, reconstruct `MessagingInboundCallbackEvent`, fire the listener.
 
-The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). No bespoke state needed — use it. PR [#285](https://github.com/pwrdrvr/PwrAgent/pull/285) shows this model applied to Discord after restart-only component bindings exposed the fan-out and routed-binding edge cases; use that as the current reference pattern.
+The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). Do not keep a parallel in-process map from platform handle to semantic action; that creates a second authorization path and makes live clicks behave differently from restart-recovered clicks. PR [#285](https://github.com/pwrdrvr/PwrAgent/pull/285) shows this model applied to Discord after restart-only component bindings exposed the fan-out and routed-binding edge cases; use that as the current reference pattern.
 
 ### Out-of-band HTTP callback model (Mattermost)
 

@@ -15,6 +15,7 @@ import {
 import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
+  MessagingInboundEvent,
   MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 
@@ -233,6 +234,93 @@ describe("TelegramAdapter callback persistence", () => {
     expect(store.records.map((record) => record.bindingId)).toEqual([
       "binding-1",
       "binding-2",
+    ]);
+  });
+
+  it("validates live callbacks against persisted callback actor scope", async () => {
+    const store = fakeCallbackStore();
+    let sentRequest: TelegramSendMessageRequest | undefined;
+    const api: TelegramBotApi = {
+      ...fakeTelegramApi(),
+      sendMessage: async (request) => {
+        sentRequest = request;
+        return {
+          chat: {
+            id: Number(request.chat_id),
+            type: "private",
+          },
+          message_id: 200,
+        };
+      },
+    };
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [
+          { id: "42", displayName: "" },
+          { id: "99", displayName: "" },
+        ],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store,
+    });
+
+    await adapter.deliver({
+      id: "status-1",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Choose",
+      allowedActorIds: ["42"],
+      audit: {
+        actor: { platformUserId: "42" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "42", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "permissions", label: "Permissions" }],
+    });
+
+    const callbackData =
+      sentRequest?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^tg:/);
+
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleUpdate({
+      update_id: 99,
+      callback_query: {
+        id: "callback-1",
+        data: callbackData,
+        from: {
+          id: 99,
+          first_name: "Other",
+        },
+        message: {
+          chat: {
+            id: 42,
+            type: "private",
+          },
+          message_id: 200,
+          text: "Choose",
+        },
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actionId: undefined,
+        kind: "callback",
+        value: undefined,
+      }),
     ]);
   });
 });

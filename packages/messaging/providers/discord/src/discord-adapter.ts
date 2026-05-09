@@ -24,7 +24,6 @@ import type {
   MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
-  MessagingJsonValue,
   MessagingCallbackHandleStore,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -56,11 +55,6 @@ import {
 
 const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
-
-type DiscordComponentBinding = {
-  actionId: string;
-  value?: MessagingJsonValue;
-};
 
 type FetchLike = (url: string) => Promise<{
   arrayBuffer(): Promise<ArrayBuffer>;
@@ -292,7 +286,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     },
   };
 
-  private componentBindings = new Map<string, DiscordComponentBinding>();
   private defaultApi?: DiscordApi;
   private defaultGateway?: DiscordGatewayConnection;
   /**
@@ -880,9 +873,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           now: this.now(),
         })
       : undefined;
-    const binding = this.options.store
-      ? undefined
-      : this.componentBindings.get(customId);
     await listener({
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
@@ -898,8 +888,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           },
         },
       },
-      actionId: binding?.actionId ?? persistedBinding?.actionId,
-      value: binding?.value ?? persistedBinding?.value,
+      actionId: persistedBinding?.actionId,
+      value: persistedBinding?.value,
       receivedAt: this.now(),
       routingState: this.routingStateFromDiscord(
         interaction.channel_id,
@@ -1148,10 +1138,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       throw new Error("Discord component custom_id exceeds limit.");
     }
 
-    this.componentBindings.set(customId, {
-      actionId: action.id,
-      value: action.value,
-    });
     if (this.options.store && intent.audit) {
       const now = this.now();
       const write = this.options.store
