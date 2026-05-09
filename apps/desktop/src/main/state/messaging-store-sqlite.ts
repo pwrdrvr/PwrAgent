@@ -117,18 +117,8 @@ export class SqliteMessagingStore {
     this.stateDb.raw
       .prepare("DELETE FROM browse_sessions WHERE binding_id = ?")
       .run(params.bindingId);
-
-    const handles = this.stateDb.raw
-      .prepare("SELECT handle_id, payload FROM callback_handles")
-      .all() as { handle_id: string; payload: string }[];
-    for (const h of handles) {
-      const handle: MessagingCallbackHandleRecord = JSON.parse(h.payload);
-      if (handle.bindingId === params.bindingId) {
-        this.stateDb.raw
-          .prepare("DELETE FROM callback_handles WHERE handle_id = ?")
-          .run(h.handle_id);
-      }
-    }
+    await this.deletePendingIntentsForChannel({ channel: current.channel });
+    await this.deleteCallbackHandlesForBinding({ bindingId: params.bindingId });
 
     return structuredClone(revoked);
   }
@@ -258,10 +248,15 @@ export class SqliteMessagingStore {
       }
     }
     if (removed.length === 0) return [];
-    const placeholders = removed.map(() => "?").join(",");
-    this.stateDb.raw
-      .prepare(`DELETE FROM pending_intents WHERE intent_id IN (${placeholders})`)
-      .run(...removed);
+    const deleteIntent = this.stateDb.raw.prepare(
+      "DELETE FROM pending_intents WHERE intent_id = ?",
+    );
+    const deleteIntents = this.stateDb.raw.transaction((ids: string[]) => {
+      for (const id of ids) {
+        deleteIntent.run(id);
+      }
+    });
+    deleteIntents(removed);
     return removed;
   }
 
@@ -427,6 +422,37 @@ export class SqliteMessagingStore {
     this.stateDb.raw
       .prepare("DELETE FROM callback_handles WHERE handle_id = ?")
       .run(id);
+  }
+
+  async deleteCallbackHandlesForBinding(params: {
+    bindingId: string;
+  }): Promise<string[]> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT handle_id, payload FROM callback_handles")
+      .all() as { handle_id: string; payload: string }[];
+    const removed: string[] = [];
+    for (const row of rows) {
+      try {
+        const handle = JSON.parse(row.payload) as MessagingCallbackHandleRecord;
+        if (handle.bindingId === params.bindingId) {
+          removed.push(row.handle_id);
+        }
+      } catch {
+        // Malformed payload — skip; the row will be cleaned up by GC
+        // on its expiry.
+      }
+    }
+    if (removed.length === 0) return [];
+    const deleteHandle = this.stateDb.raw.prepare(
+      "DELETE FROM callback_handles WHERE handle_id = ?",
+    );
+    const deleteHandles = this.stateDb.raw.transaction((ids: string[]) => {
+      for (const id of ids) {
+        deleteHandle.run(id);
+      }
+    });
+    deleteHandles(removed);
+    return removed;
   }
 
   async cleanupExpiredCallbackHandles(options?: {
@@ -651,6 +677,7 @@ export type MessagingStoreLike = Pick<
   | "getCallbackHandle"
   | "resolveCallbackHandle"
   | "deleteCallbackHandle"
+  | "deleteCallbackHandlesForBinding"
   | "cleanupExpiredCallbackHandles"
   | "recordDelivery"
   | "getDelivery"

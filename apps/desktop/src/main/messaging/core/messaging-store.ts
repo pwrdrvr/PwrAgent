@@ -182,18 +182,7 @@ export class MessagingStore {
   }): Promise<string[]> {
     const channelKey = buildMessagingConversationKey(params.channel);
     return await this.withData((data) => {
-      const removed: string[] = [];
-      for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
-        if (intent.bindingId) continue;
-        if (
-          intent.channel &&
-          buildMessagingConversationKey(intent.channel) === channelKey
-        ) {
-          delete data.pendingIntents[intentId];
-          removed.push(intentId);
-        }
-      }
-      return removed;
+      return deletePendingIntentsForChannelInData(data, channelKey);
     });
   }
 
@@ -337,6 +326,14 @@ export class MessagingStore {
     await this.withData((data) => {
       delete data.callbackHandles[id];
     });
+  }
+
+  async deleteCallbackHandlesForBinding(params: {
+    bindingId: string;
+  }): Promise<string[]> {
+    return await this.withData((data) =>
+      deleteCallbackHandlesForBindingInData(data, params.bindingId),
+    );
   }
 
   async cleanupExpiredCallbackHandles(options?: { now?: number }): Promise<string[]> {
@@ -508,6 +505,10 @@ function revokeBindingInData(
   };
   data.bindings[bindingId] = revoked;
 
+  deletePendingIntentsForChannelInData(
+    data,
+    buildMessagingConversationKey(current.channel),
+  );
   for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
     if (intent.bindingId === bindingId) {
       delete data.pendingIntents[intentId];
@@ -518,13 +519,41 @@ function revokeBindingInData(
       delete data.browseSessions[sessionId];
     }
   }
+  deleteCallbackHandlesForBindingInData(data, bindingId);
+
+  return revoked;
+}
+
+function deletePendingIntentsForChannelInData(
+  data: MessagingStoreData,
+  channelKey: string,
+): string[] {
+  const removed: string[] = [];
+  for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
+    if (intent.bindingId) continue;
+    if (
+      intent.channel &&
+      buildMessagingConversationKey(intent.channel) === channelKey
+    ) {
+      delete data.pendingIntents[intentId];
+      removed.push(intentId);
+    }
+  }
+  return removed;
+}
+
+function deleteCallbackHandlesForBindingInData(
+  data: MessagingStoreData,
+  bindingId: string,
+): string[] {
+  const removed: string[] = [];
   for (const [handleId, handle] of Object.entries(data.callbackHandles)) {
     if (handle.bindingId === bindingId) {
       delete data.callbackHandles[handleId];
+      removed.push(handleId);
     }
   }
-
-  return revoked;
+  return removed;
 }
 
 function sanitizeSurfaceRef<T extends { state?: MessagingAdapterState }>(
