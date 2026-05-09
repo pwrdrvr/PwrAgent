@@ -149,6 +149,11 @@ export type MessagingRateLimitInfo = {
   scope: MessagingDeliveryScope;
   message?: string;
   observedAt?: number;
+  /**
+   * True only when replaying the same outbound intent cannot duplicate visible
+   * platform side effects from the failed attempt.
+   */
+  retryable?: boolean;
 };
 
 /**
@@ -675,8 +680,8 @@ export type MessagingDeliveryResult = {
   /**
    * Structured provider rate-limit feedback for this delivery attempt.
    * When present, the desktop controller should feed it back through
-   * its external admission budget instead of letting provider SDKs own
-   * hidden retry queues.
+   * its external admission budget. The controller only replays the
+   * intent when `rateLimit.retryable` is true.
    */
   rateLimit?: MessagingRateLimitInfo;
   deliveredAt: number;

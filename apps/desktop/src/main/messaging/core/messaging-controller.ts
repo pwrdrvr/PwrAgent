@@ -4044,7 +4044,18 @@ export class MessagingController {
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
-        this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
+        if (result.rateLimit.retryable === true) {
+          this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
+            bindingId: binding?.id ?? intent.bindingId,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            priority,
+            retryAfterMs: result.rateLimit.retryAfterMs,
+            scopeId: result.rateLimit.scope.id,
+          });
+          continue;
+        }
+        this.logger.debug?.("messaging delivery rate-limited; not retrying non-replayable attempt", {
           bindingId: binding?.id ?? intent.bindingId,
           intentId: routedIntent.id,
           intentKind: routedIntent.kind,
@@ -4052,7 +4063,6 @@ export class MessagingController {
           retryAfterMs: result.rateLimit.retryAfterMs,
           scopeId: result.rateLimit.scope.id,
         });
-        continue;
       }
       await this.options.store.recordDelivery({
         ...result,

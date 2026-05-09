@@ -182,11 +182,12 @@ progress can be dropped; final turn results and interactive prompts are
 reserved and deferred when possible.
 
 If a send attempt is rejected with a rate-limit error, `deliver()` should return
-a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. The
-controller records that feedback and re-runs admission for the same intent. A
-low-priority intent that would not be admitted under the new cool-off/slow-mode
-state is discarded instead of being queued for retry; reserved priority intents
-wait for the external budget window to reopen.
+a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. Set
+`rateLimit.retryable: true` only when replaying the same intent cannot duplicate
+visible platform side effects from the failed attempt. The controller always
+records the cooldown. It only re-runs admission for retryable attempts; partial
+successes are recorded as failed delivery attempts so they do not duplicate
+already visible messages or attachments.
 
 The runtime reports a platform as `degraded` while a rate-limit or reconnect
 reason is active. `degraded` means connected but constrained. Fatal startup or

@@ -1991,6 +1991,7 @@ describe("MessagingController", () => {
               retryAfterMs: 5_000,
               observedAt: now,
               message: "Too Many Requests",
+              retryable: true,
             },
           };
         }
@@ -2008,6 +2009,7 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
+    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
     attempts.length = 0;
     rejectNextStream = true;
 
@@ -2030,6 +2032,81 @@ describe("MessagingController", () => {
         text: "Hello",
       }),
     ]);
+    expect(Object.keys((await harness.store.readSnapshot()).deliveries)).toHaveLength(
+      deliveriesBefore,
+    );
+  });
+
+  it("does not replay non-retryable provider rate-limit failures", async () => {
+    let now = 1000;
+    let rejectNextStream = false;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliver: async (intent) => {
+        attempts.push(intent);
+        if (rejectNextStream && intent.kind === "stream_update") {
+          return {
+            channel: "telegram" as const,
+            deliveredAt: now,
+            errorMessage: "Too Many Requests after partial send",
+            outcome: "failed" as const,
+            rateLimit: {
+              scope,
+              retryAfterMs: 5_000,
+              observedAt: now,
+              message: "Too Many Requests after partial send",
+              retryable: false,
+            },
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin
+            ? "pinned" as const
+            : "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
+    attempts.length = 0;
+    rejectNextStream = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(attempts).toHaveLength(1);
+    const deliveries = Object.values((await harness.store.readSnapshot()).deliveries);
+    expect(deliveries).toHaveLength(deliveriesBefore + 1);
+    expect(deliveries.at(-1)).toMatchObject({
+      outcome: "failed",
+      rateLimit: {
+        retryable: false,
+      },
+    });
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {

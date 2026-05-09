@@ -207,11 +207,14 @@ Before adding a provider, check the client SDK's outbound rate-limit behavior:
 
 When a send is rejected with rate-limit information, emit it through
 `onRateLimit` and include it on the failed `MessagingDeliveryResult.rateLimit`.
-The desktop controller records that cooldown, re-runs admission for the same
-intent, and only retries messages that would still be admitted under the new
-slow-mode state. Non-final stream updates, intermediate tool updates, and
-routine status edits should be dropped by the controller once slow mode applies;
-do not queue them inside the adapter.
+Set `rateLimit.retryable: true` only if the failed attempt had no visible side
+effects. For example, a rejected first HTTP call is retryable; a failure after
+one Discord chunk was already sent, after a Slack message was posted but before
+file upload completed, or after one Telegram file/message was sent is not
+retryable. The desktop controller records every cooldown, but only re-runs
+admission for retryable attempts. Non-final stream updates, intermediate tool
+updates, and routine status edits should be dropped by the controller once slow
+mode applies; do not queue them inside the adapter.
 
 Current examples:
 
@@ -530,7 +533,7 @@ Mirror the patterns in `packages/messaging/providers/discord/src/__tests__/` and
 | Authorization | Unauthorized actor IDs are rejected before the controller sees the event. |
 | HMAC | (HTTP-callback platforms only) HMAC generation and verification, positive and negative. |
 | Threading | Parent post id round-trip for threaded conversations. |
-| Rate-limit ownership | SDK 429 handling is externalized or direct; rejected sends return `rateLimit` metadata and do not enter an SDK-owned queue. |
+| Rate-limit ownership | SDK 429 handling is externalized or direct; rejected sends return `rateLimit` metadata, mark partial-success failures `retryable: false`, and do not enter an SDK-owned queue. |
 | Reconnect | (For platforms with persistent connections) WS or gateway disconnect / reconnect doesn't drop in-flight callback handles. |
 
 Optional but valuable:

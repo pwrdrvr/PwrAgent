@@ -413,6 +413,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       unfurl_media: false,
     };
 
+    let deliveredSideEffects = false;
     try {
       const updated =
         intent.delivery?.mode === "update" && target.ts
@@ -421,6 +422,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       const result = updated ?? (await this.api.postMessage(body));
       const channelId = result.channel ?? target.channelId;
       const ts = result.ts ?? target.ts;
+      deliveredSideEffects = true;
       if (!ts) {
         return {
           outcome: "failed",
@@ -453,7 +455,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: !deliveredSideEffects,
+      });
       return {
         outcome: "failed",
         channel: this.channel,
@@ -772,7 +776,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         deliveredAt: this.now(),
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, { channelId });
+      const rateLimit = this.emitRateLimitFromError(error, { channelId }, {
+        retryable: true,
+      });
       return {
         outcome: "failed",
         channel: this.channel,
@@ -831,7 +837,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: true,
+      });
       return {
         outcome: "failed",
         channel: this.channel,
@@ -890,6 +898,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: { channelId: string },
+    options?: { retryable?: boolean },
   ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);
     if (retryAfterMs === undefined) {
@@ -900,6 +909,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       retryAfterMs,
       message: error instanceof Error ? error.message : String(error),
       observedAt: this.now(),
+      retryable: options?.retryable ?? false,
     };
     this.emitRateLimit(info);
     return info;

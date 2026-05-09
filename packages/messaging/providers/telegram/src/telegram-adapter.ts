@@ -644,7 +644,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     } catch (error) {
       const target = this.resolveTarget(intent);
       const rateLimit = target
-        ? this.emitRateLimitFromError(error, target)
+        ? this.emitRateLimitFromError(error, target, { retryable: false })
         : undefined;
       this.options.logger?.warn?.(
         `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
@@ -977,6 +977,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           retryAfterMs,
           message: errorMessage(error),
           observedAt: this.now(),
+          retryable: true,
         };
         this.emitRateLimit(rateLimit);
         this.options.logger?.warn?.(
@@ -1994,6 +1995,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: TelegramDeliveryTarget,
+    options?: { retryable?: boolean },
   ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = telegramRetryAfterMs(error);
     if (retryAfterMs === undefined) {
@@ -2004,6 +2006,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       retryAfterMs,
       message: errorMessage(error),
       observedAt: this.now(),
+      retryable: options?.retryable ?? false,
     };
     this.emitRateLimit(info);
     return info;

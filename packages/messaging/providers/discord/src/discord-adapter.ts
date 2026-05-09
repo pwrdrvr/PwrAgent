@@ -442,6 +442,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return await this.deliverStreamUpdate(intent, target);
     }
 
+    let deliveredSideEffects = false;
     try {
       const callbackHandleWrites: Promise<unknown>[] = [];
       const components = buildDiscordComponents(
@@ -512,6 +513,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             surface: this.surfaceForMessage(message, target),
           };
         } catch (error) {
+          if (retryAfterMsFromError(error) !== undefined) {
+            throw error;
+          }
           if (intent.delivery.fallback !== "present_new") {
             throw error;
           }
@@ -538,6 +542,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           files: index === chunks.length - 1 ? filesForDiscordRequest(files) : undefined,
         };
         messages.push(await this.api.createMessage(target.channelId, request));
+        deliveredSideEffects = true;
       }
 
       const lastMessage = messages.at(-1);
@@ -554,7 +559,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       };
     } catch (error) {
       const message = errorMessage(error);
-      const rateLimit = this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: !deliveredSideEffects,
+      });
       this.options.logger?.warn?.(
         `discord deliver failed kind=${intent.kind} channel=${target.channelId} error=${message}`,
       );
@@ -640,7 +647,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         surface: this.surfaceForMessage(message, target),
       };
     } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: true,
+      });
       return {
         channel: this.channel,
         deliveredAt: this.now(),
@@ -1295,6 +1304,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: { channelId: string; guildId?: string },
+    options?: { retryable?: boolean },
   ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);
     if (retryAfterMs === undefined) {
@@ -1305,6 +1315,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       retryAfterMs,
       message: errorMessage(error),
       observedAt: this.now(),
+      retryable: options?.retryable ?? false,
     };
     this.emitRateLimit(info);
     return info;
@@ -2333,12 +2344,15 @@ function errorMessage(error: unknown): string {
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {
-  const retryAfter =
-    readNumberProperty(error, "retry_after") ??
+  const retryAfterMs =
     readNumberProperty(error, "retryAfter") ??
     readNumberProperty(error, "retryAfterMs");
-  if (retryAfter !== undefined) {
-    return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
+  if (retryAfterMs !== undefined) {
+    return Math.ceil(retryAfterMs);
+  }
+  const retryAfterSeconds = readNumberProperty(error, "retry_after");
+  if (retryAfterSeconds !== undefined) {
+    return Math.ceil(retryAfterSeconds * 1000);
   }
   const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
   return status === 429 ? 1_000 : undefined;
