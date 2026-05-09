@@ -653,14 +653,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "active",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: working"),
     });
 
     await harness.controller.handleBackendEvent({
@@ -679,14 +675,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -725,7 +717,7 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
-    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered).toHaveLength(1);
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -743,7 +735,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered).toHaveLength(1);
   });
 
   it("stops typing when the backend reports idle without a turn completion event", async () => {
@@ -765,14 +757,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -1790,8 +1778,9 @@ describe("MessagingController", () => {
         ],
       });
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
     });
   });
 
@@ -2608,7 +2597,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
@@ -2738,7 +2727,7 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("batches noisy default tool updates and flushes them before turn status", async () => {
+  it("batches noisy default tool updates and flushes them before turn completion activity", async () => {
     const harness = await createHarness();
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildTextEvent("start work"));
@@ -2777,12 +2766,15 @@ describe("MessagingController", () => {
           (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
         ),
     );
-    const statusIndex = harness.delivered.findIndex(
-      (intent) => intent.kind === "status" && intent.status === "idle",
+    const activityIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "activity" &&
+        intent.activity === "typing" &&
+        intent.state === "idle",
     );
 
     expect(batchIndex).toBeGreaterThanOrEqual(0);
-    expect(statusIndex).toBeGreaterThan(batchIndex);
+    expect(activityIndex).toBeGreaterThan(batchIndex);
   });
 
   it("flushes queued tool updates before assistant final text", async () => {
@@ -2899,15 +2891,11 @@ describe("MessagingController", () => {
       },
     } as unknown as AgentEvent);
 
-    expect(harness.delivered).toHaveLength(2);
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -3140,9 +3128,14 @@ describe("MessagingController", () => {
         decision: "accept_for_session",
       },
     });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: "Approval response sent.",
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "approval" && intent.decisions.length === 0,
+      ),
+    ).toMatchObject({
+      kind: "approval",
+      body: expect.stringContaining("Response Received: Approved for Session"),
+      decisions: [],
     });
   });
 
@@ -3169,20 +3162,13 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([
       expect.objectContaining({
         kind: "approval",
+        body: expect.stringContaining("Response Received: Approved"),
         decisions: [],
       }),
       expect.objectContaining({
         kind: "activity",
         activity: "typing",
         state: "active",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        status: "working",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        text: "Approval response sent.",
       }),
     ]);
   });
@@ -3229,6 +3215,7 @@ describe("MessagingController", () => {
       ),
     ).toMatchObject({
       kind: "approval",
+      body: expect.stringContaining("Response Received: Approved"),
       decisions: [],
       delivery: {
         mode: "update",
@@ -3238,10 +3225,6 @@ describe("MessagingController", () => {
       targetSurface: {
         id: `surface:${approvalIntent?.id}`,
       },
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: "Approval response sent.",
     });
   });
 
@@ -3286,6 +3269,7 @@ describe("MessagingController", () => {
       ),
     ).toMatchObject({
       kind: "approval",
+      body: expect.stringContaining("Response Received: Resolved"),
       decisions: [],
       delivery: {
         mode: "update",
@@ -3330,6 +3314,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([
       expect.objectContaining({
         kind: "approval",
+        body: expect.stringContaining("Response Received: Resolved"),
         decisions: [],
         targetSurface: expect.objectContaining({
           id: `surface:${approvalIntent?.id}`,
@@ -3339,10 +3324,6 @@ describe("MessagingController", () => {
         kind: "activity",
         activity: "typing",
         state: "active",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        status: "working",
       }),
     ]);
   });

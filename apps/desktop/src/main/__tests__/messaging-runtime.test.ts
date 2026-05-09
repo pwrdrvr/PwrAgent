@@ -275,7 +275,9 @@ describe("DesktopMessagingRuntime", () => {
         role: "assistant",
       });
     expect(adapter.delivered.at(-1)).toMatchObject({
-      kind: "status",
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
     });
   });
 

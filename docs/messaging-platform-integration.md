@@ -160,6 +160,22 @@ Discord and Mattermost rate-limit API requests/routes, and Telegram documents
 edit calls as Bot API requests while its public send-message limits do not
 guarantee edits are exempt.
 
+Telegram-specific guidance:
+
+- Treat Telegram sends and edits as consuming the same practical supergroup
+  write budget. In a May 9, 2026 live probe, one bot message plus 19 one-second
+  edits in a PwrDrvr supergroup succeeded, and the next edit received a 429
+  with `retry_after=36`.
+- The same probe pattern run concurrently in two different supergroups
+  completed independently: each supergroup accepted one message plus 19 edits
+  without hitting a shared bot-wide 20/minute ceiling.
+- Active PwrAgent threads should usually be bound to separate Telegram
+  supergroups. Binding multiple active threads to topics in the same supergroup
+  is likely to exhaust that supergroup's budget, trigger PwrAgent Slow Mode,
+  and drop routine updates.
+- Topics should be treated as sharing the parent supergroup budget unless a
+  future live probe proves Telegram isolates their edit/send budgets.
+
 ## Attachments
 
 Bound, authorized conversations can send supported attachments into the active

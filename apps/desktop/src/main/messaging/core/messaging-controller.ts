@@ -22,6 +22,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
+  MessagingApprovalDecision,
   MessagingChannelKind,
   MessagingConfirmationIntent,
   MessagingDeliveryScope,
@@ -519,7 +520,9 @@ export class MessagingController {
           reason: event.notification.method,
           force: true,
         });
-        await this.renderBindingStatus(binding);
+        if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
+          await this.renderBindingStatus(binding);
+        }
         await this.startNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
         const previousTurn = activeTurn;
@@ -539,7 +542,6 @@ export class MessagingController {
           reason: event.notification.method,
           force: true,
         });
-        await this.renderBindingStatus(binding);
       } else {
         const latestActiveTurn = this.getActiveTurn(binding);
         if (latestActiveTurn?.status !== "working") {
@@ -1387,25 +1389,19 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
-        await this.submitApprovalAction(pendingIntent.intent, action.id);
-        await this.retireApprovalIntent(pendingIntent, event);
+        const decision = await this.submitApprovalAction(
+          pendingIntent.intent,
+          action.id,
+        );
+        await this.retireApprovalIntent(
+          pendingIntent,
+          event,
+          approvalResponseLabel(decision),
+        );
         await this.options.store.deletePendingIntent(pendingIntent.id);
-        const resumedBinding = await this.resumeBindingForPendingIntent(
+        await this.resumeBindingForPendingIntent(
           pendingIntent,
           "pending_request.submitted",
-        );
-        if (resumedBinding) {
-          await this.renderBindingStatus(resumedBinding, event);
-        }
-        await this.deliver(
-          buildStatusIntent({
-            id: this.newIntentId("approval-submitted"),
-            createdAt: this.now(),
-            status: "completed",
-            text: "Approval response sent.",
-          }),
-          undefined,
-          event,
         );
         return;
       }
@@ -1442,11 +1438,11 @@ export class MessagingController {
   private async submitApprovalAction(
     intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
     actionId: string,
-  ): Promise<void> {
+  ): Promise<MessagingApprovalDecision | undefined> {
     const requestContext = intent.requestContext;
     const decision = intent.decisions.find((action) => action.id === actionId)?.decision;
     if (!requestContext || !decision || !this.options.backend.submitServerRequest) {
-      return;
+      return decision;
     }
 
     await this.options.backend.submitServerRequest({
@@ -1458,6 +1454,7 @@ export class MessagingController {
         decision,
       },
     });
+    return decision;
   }
 
   /**
@@ -1730,21 +1727,19 @@ export class MessagingController {
     for (const pendingIntent of pendingIntents.filter((intent) =>
       this.isChannelInScope(intent.channel),
     )) {
-      await this.retireApprovalIntent(pendingIntent);
+      await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
       await this.options.store.deletePendingIntent(pendingIntent.id);
-      const resumedBinding = await this.resumeBindingForPendingIntent(
+      await this.resumeBindingForPendingIntent(
         pendingIntent,
         event.notification.method,
       );
-      if (resumedBinding) {
-        await this.renderBindingStatus(resumedBinding);
-      }
     }
   }
 
   private async retireApprovalIntent(
     pendingIntent: MessagingPendingIntentRecord,
     event?: MessagingInboundCallbackEvent,
+    responseLabel = "Resolved",
   ): Promise<void> {
     if (pendingIntent.intent.kind !== "approval") {
       return;
@@ -1759,12 +1754,14 @@ export class MessagingController {
       await this.deliver(
         {
           ...pendingIntent.intent,
+          body: approvalBodyWithResponse(pendingIntent.intent.body, responseLabel),
           decisions: [],
           delivery: {
             mode: "update",
             replaceMarkup: true,
             fallback: "fail",
           },
+          fallbackText: `Approval response received: ${responseLabel}.`,
           targetSurface,
         },
         undefined,
@@ -4726,6 +4723,16 @@ function isThreadNameUpdatedEvent(event: AgentEvent): boolean {
   return event.notification.method === "thread/name/updated";
 }
 
+function shouldRenderStatusForTurnStateChange(
+  event: AgentEvent,
+  lifecycle: MessagingActiveTurnSummary | undefined,
+): boolean {
+  if (event.notification.method === "thread/status/changed") {
+    return false;
+  }
+  return Boolean(lifecycle && ["failed", "interrupted"].includes(lifecycle.status));
+}
+
 function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
   if (intent.kind === "activity" || intent.kind === "dismiss") {
     return false;
@@ -4774,6 +4781,38 @@ export function messagingDeliveryPriority(
     case "error":
       return "user_command";
   }
+}
+
+function approvalResponseLabel(
+  decision: MessagingApprovalDecision | undefined,
+): string {
+  switch (decision) {
+    case "accept":
+      return "Approved";
+    case "accept_for_session":
+      return "Approved for Session";
+    case "decline":
+      return "Declined";
+    case "cancel":
+      return "Canceled";
+    case undefined:
+      return "Resolved";
+  }
+}
+
+function approvalBodyWithResponse(body: string, responseLabel: string): string {
+  const blocks = body
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const preservedBlocks = blocks.filter((block, index) => {
+    if (index === 0) {
+      return false;
+    }
+    return !/^Reply with\b/i.test(block);
+  });
+
+  return [...preservedBlocks, `Response Received: ${responseLabel}`].join("\n\n");
 }
 
 function sleepUntil(
