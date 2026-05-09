@@ -52,6 +52,15 @@ export const MESSAGING_INBOUND_EVENT_KINDS = [
   "lifecycle",
 ] as const;
 
+export const MESSAGING_PAIRING_COMMAND = "pair";
+export const MESSAGING_PAIRING_COMMAND_ALIASES = [
+  MESSAGING_PAIRING_COMMAND,
+  "pwragent_pair",
+] as const;
+export const MESSAGING_PAIRING_TOKEN_PATTERN =
+  /^[1-9A-HJ-NP-Za-km-z]{32}$/;
+export const MESSAGING_PAIRING_SCAN_MAX_CHARS = 512;
+
 export const MESSAGING_DELIVERY_OUTCOMES = [
   "presented",
   "updated",
@@ -72,6 +81,56 @@ export type MessagingInboundEventKind =
 export type MessagingDeliveryOutcome =
   (typeof MESSAGING_DELIVERY_OUTCOMES)[number];
 export type MessagingStreamingResponseMode = "inherit" | "enabled" | "disabled";
+
+export function extractMessagingPairingToken(text: string): string | undefined {
+  let previousToken: string | undefined;
+  for (const token of pairingScanTokens(text)) {
+    if (previousToken && isMessagingPairingCommand(previousToken)) {
+      if (MESSAGING_PAIRING_TOKEN_PATTERN.test(token)) {
+        return token;
+      }
+    }
+    previousToken = token;
+  }
+  return undefined;
+}
+
+function* pairingScanTokens(text: string): Generator<string> {
+  const scanLength = Math.min(text.length, MESSAGING_PAIRING_SCAN_MAX_CHARS);
+  let tokenStart: number | undefined;
+  for (let index = 0; index < scanLength; index += 1) {
+    const char = text.charCodeAt(index);
+    if (isAsciiWhitespace(char)) {
+      if (tokenStart !== undefined) {
+        yield text.slice(tokenStart, index);
+        tokenStart = undefined;
+      }
+      continue;
+    }
+    tokenStart ??= index;
+  }
+  if (tokenStart !== undefined) {
+    const token = text.slice(tokenStart, scanLength);
+    if (scanLength === text.length || text.charCodeAt(scanLength) <= 0x20) {
+      yield token;
+    }
+  }
+}
+
+export function isMessagingPairingCommand(command: string | undefined): boolean {
+  if (!command) return false;
+  const normalized = command.replace(/^\//, "").toLowerCase();
+  return MESSAGING_PAIRING_COMMAND_ALIASES.some((alias) => alias === normalized);
+}
+
+function isAsciiWhitespace(charCode: number): boolean {
+  return charCode === 0x20
+    || charCode === 0x09
+    || charCode === 0x0a
+    || charCode === 0x0b
+    || charCode === 0x0c
+    || charCode === 0x0d;
+}
 
 export type MessagingChannelKind =
   | "telegram"
@@ -130,6 +189,7 @@ export type MessagingConversationRef = {
 export type MessagingActorIdentity = {
   platformUserId: string;
   displayName?: string;
+  phoneNumber?: string;
   username?: string;
   isBot?: boolean;
 };

@@ -27,6 +27,18 @@ export function validateTelegramPositiveId(value: unknown): IdentifierValidation
   return validateTelegramIntegerId(value, { allowNegative: false });
 }
 
+export function validateTelegramGroupChatId(
+  value: unknown,
+): IdentifierValidationResult {
+  const result = validateTelegramIntegerId(value, { allowNegative: true });
+  if (!result.ok) return result;
+  const normalized = typeof value === "number" ? String(value) : value;
+  if (typeof normalized !== "string" || !normalized.startsWith("-")) {
+    return { ok: false, reason: "format" };
+  }
+  return { ok: true };
+}
+
 export function validateTelegramSupergroupId(
   value: unknown,
 ): IdentifierValidationResult {

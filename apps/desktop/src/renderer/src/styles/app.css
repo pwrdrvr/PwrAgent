@@ -2709,9 +2709,84 @@ textarea,
   align-self: flex-start;
 }
 
+.settings-pairing {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-pairing__controls,
+.settings-pairing__message,
+.settings-pairing__request {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-pairing__controls .settings-input {
+  max-width: 220px;
+}
+
+.settings-pairing__scope {
+  flex-wrap: wrap;
+}
+
+.settings-pairing__message code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-pairing__requests {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-pairing__request {
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.settings-pairing__request-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-pairing__request-title,
+.settings-pairing__request-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-pairing__request-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-pairing__request-meta {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 @media (max-width: 760px) {
-  .settings-authorized-list__row {
+  .settings-authorized-list__row,
+  .settings-pairing__controls,
+  .settings-pairing__message,
+  .settings-pairing__request {
     grid-template-columns: 1fr;
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

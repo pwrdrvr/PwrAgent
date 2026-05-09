@@ -42,10 +42,19 @@ import type {
   SetThreadPinResponse,
   GetGhStatusRequest,
   GhStatus,
+  ApproveMessagingPairingRequest,
+  ApproveMessagingPairingResponse,
+  GenerateMessagingPairingTokenRequest,
+  GenerateMessagingPairingTokenResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
+  ListMessagingPairingRequestsRequest,
+  ListMessagingPairingRequestsResponse,
+  MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  RejectMessagingPairingRequest,
+  RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
@@ -288,6 +297,21 @@ export type DesktopApi = {
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;
+  generateMessagingPairingToken?: (
+    request: GenerateMessagingPairingTokenRequest,
+  ) => Promise<GenerateMessagingPairingTokenResponse>;
+  listMessagingPairingRequests?: (
+    request?: ListMessagingPairingRequestsRequest,
+  ) => Promise<ListMessagingPairingRequestsResponse>;
+  approveMessagingPairing?: (
+    request: ApproveMessagingPairingRequest,
+  ) => Promise<ApproveMessagingPairingResponse>;
+  rejectMessagingPairing?: (
+    request: RejectMessagingPairingRequest,
+  ) => Promise<RejectMessagingPairingResponse>;
+  onMessagingPairingChanged?: (
+    callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
+  ) => () => void;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;

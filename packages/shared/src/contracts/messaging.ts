@@ -106,6 +106,7 @@ export type MessagingActivityKind =
   | "inbound-routed"
   | "inbound-rejected"
   | "inbound-ignored"
+  | "pairing"
   | "outbound";
 
 export type MessagingActivityEntry = {
@@ -165,4 +166,84 @@ export type SetMessagingEnabledResponse = {
   overridden: boolean;
   /** Human-readable explanation of the launch override, when applicable. */
   overrideReason?: string;
+};
+
+export type MessagingPairingScope = "user_dm" | "bucket" | "user_in_group";
+
+export type MessagingPairingStatus =
+  | "pending"
+  | "observed"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "consumed";
+
+export type MessagingPairingObservedActor = {
+  id: string;
+  displayName?: string;
+  phoneNumber?: string;
+  username?: string;
+};
+
+export type MessagingPairingObservedChat = {
+  id: string;
+  kind: MessagingConversationKind;
+  title?: string;
+  parentId?: string;
+  parentTitle?: string;
+  bucketId?: string;
+};
+
+export type MessagingPairingEntry = {
+  id: string;
+  platform: MessagingChannelKind;
+  instanceId: string;
+  scope: MessagingPairingScope;
+  status: MessagingPairingStatus;
+  generatedAt: number;
+  expiresAt: number;
+  observedAt?: number;
+  observedActor?: MessagingPairingObservedActor;
+  observedChat?: MessagingPairingObservedChat;
+  failureReason?: string;
+};
+
+export type GenerateMessagingPairingTokenRequest = {
+  platform: MessagingChannelKind;
+  instanceId?: string;
+  scope: MessagingPairingScope;
+  ttlMs?: number;
+};
+
+export type GenerateMessagingPairingTokenResponse = {
+  entry: MessagingPairingEntry;
+  message: string;
+  token: string;
+  expiresAt: number;
+};
+
+export type ListMessagingPairingRequestsRequest = {
+  platform?: MessagingChannelKind;
+  includeResolved?: boolean;
+};
+
+export type ListMessagingPairingRequestsResponse = {
+  entries: MessagingPairingEntry[];
+};
+
+export type ApproveMessagingPairingRequest = {
+  entryId: string;
+};
+
+export type ApproveMessagingPairingResponse = {
+  entry: MessagingPairingEntry;
+  added: boolean;
+};
+
+export type RejectMessagingPairingRequest = {
+  entryId: string;
+};
+
+export type RejectMessagingPairingResponse = {
+  entry: MessagingPairingEntry;
 };

@@ -23,6 +23,7 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
+import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
 import type { SlackMessagingConfig } from "./slack-config.ts";
 import {
   actionsForSlackIntent,
@@ -535,10 +536,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: event.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+    });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
     const text = strippedText.trim();
+    const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
     const command = strippedText === rawText
       ? parseCommand(text)
       : parseBareCommand(text);
@@ -548,6 +552,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind,
+      pairing: isPairingMessage,
       routingState,
       teamId: ids.teamId,
     })) return;
@@ -629,7 +634,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: body.message?.thread_ts ?? body.container?.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel, ids.ts);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+      ts: ids.ts,
+    });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -691,7 +699,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: body.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+    });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -983,9 +993,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
+    pairing?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
   }): boolean {
+    if (params.pairing) return true;
+
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
     if (
       allowedTeams?.length
@@ -1072,7 +1085,10 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private routingStateForChannel(
     channel: MessagingChannelRef,
-    ts?: string,
+    options: {
+      teamId?: string;
+      ts?: string;
+    } = {},
   ): MessagingAdapterState {
     return {
       opaque: {
@@ -1080,7 +1096,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         ...(channel.conversation.parentId
           ? { threadTs: channel.conversation.parentId }
           : {}),
-        ...(ts ? { ts } : {}),
+        ...(options.teamId ? { teamId: options.teamId } : {}),
+        ...(options.ts ? { ts: options.ts } : {}),
       },
     };
   }

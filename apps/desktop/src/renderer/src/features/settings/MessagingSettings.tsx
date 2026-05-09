@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -11,8 +12,8 @@ import {
   validateSlackTeamId,
   validateSlackUserId,
   sanitizeMessagingContactLabel,
+  validateTelegramGroupChatId,
   validateTelegramPositiveId,
-  validateTelegramSupergroupId,
   type DesktopAuthorizedContact,
   type DesktopMessagingContactLookupKind,
   type DesktopMessagingContactLookupPlatform,
@@ -20,9 +21,13 @@ import {
   type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
+  type MessagingChannelKind,
+  type MessagingPairingEntry,
+  type MessagingPairingScope,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { DiscordIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -52,6 +57,7 @@ export function MessagingSettings(props: {
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
+  onPairingSettingsChanged?: () => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -196,6 +202,14 @@ export function MessagingSettings(props: {
               />
             }
           />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !telegram.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="telegram"
+            scopeOptions={TELEGRAM_PAIRING_SCOPE_OPTIONS}
+            supportsBucket
+          />
           <ToggleField
             checked={telegram.streamingResponses.value}
             disabled={props.saving}
@@ -243,11 +257,11 @@ export function MessagingSettings(props: {
               "telegram",
               "supergroup",
             )}
-            label="Authorized SuperGroups"
-            sub="Telegram supergroup IDs that may host bound threads."
-            help="Negative ID starting with -100, e.g. -1003841603622. Rejected group messages show the supergroup ID in Messaging Activity."
+            label="Authorized Groups / Supergroups"
+            sub="Telegram group or supergroup IDs that may host bound threads."
+            help="Use the negative chat ID shown in Messaging Activity for the Telegram group or supergroup."
             source={optionalListSourceBadge(telegram.authorizedSupergroups)}
-            validateEntry={validateTelegramSupergroupEntry}
+            validateEntry={validateTelegramGroupChatEntry}
             value={telegram.authorizedSupergroups.value}
             onSave={(authorizedSupergroups) => {
               void props.onSaveTelegram({
@@ -303,6 +317,13 @@ export function MessagingSettings(props: {
                 defaultSub="discord.com/api/v10"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !discord.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="discord"
+            supportsBucket
           />
           <ToggleField
             checked={discord.streamingResponses.value}
@@ -449,6 +470,12 @@ export function MessagingSettings(props: {
                 defaultSub="api/v4/users/me"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !mattermost.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="mattermost"
           />
           <ToggleField
             checked={mattermost.streamingResponses.value}
@@ -621,6 +648,13 @@ export function MessagingSettings(props: {
                 defaultSub="auth.test"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !slack.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="slack"
+            supportsBucket
           />
           <TextField
             disabled={props.saving}
@@ -953,6 +987,259 @@ function NumberField(props: {
   );
 }
 
+function PairingTokenField(props: {
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  onSettingsChanged?: () => Promise<void>;
+  platform: MessagingChannelKind;
+  scopeOptions?: PairingScopeOption[];
+  supportsBucket?: boolean;
+}) {
+  const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
+  const [message, setMessage] = useState<string | undefined>(undefined);
+  const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
+  const [busyId, setBusyId] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const refresh = async () => {
+    if (!props.desktopApi?.listMessagingPairingRequests) return;
+    const result = await props.desktopApi.listMessagingPairingRequests({
+      platform: props.platform,
+    });
+    setEntries(result.entries);
+  };
+
+  useEffect(() => {
+    void refresh();
+    return props.desktopApi?.onMessagingPairingChanged?.((event) => {
+      if (event.entry.platform === props.platform) void refresh();
+    });
+  }, [props.desktopApi, props.platform]);
+
+  const generate = async () => {
+    if (!props.desktopApi?.generateMessagingPairingToken) return;
+    setBusyId("generate");
+    setError(undefined);
+    try {
+      const result = await props.desktopApi.generateMessagingPairingToken({
+        platform: props.platform,
+        scope,
+      });
+      setMessage(result.message);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusyId(undefined);
+    }
+  };
+
+  const decide = async (
+    entry: MessagingPairingEntry,
+    decision: "approve" | "reject",
+  ) => {
+    setBusyId(entry.id);
+    setError(undefined);
+    try {
+      if (decision === "approve") {
+        const result = await props.desktopApi?.approveMessagingPairing?.({
+          entryId: entry.id,
+        });
+        if (result?.added) {
+          await props.onSettingsChanged?.();
+        }
+      } else {
+        await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+      }
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusyId(undefined);
+    }
+  };
+
+  const copyMessage = async () => {
+    if (!message) return;
+    setError(undefined);
+    try {
+      await copyText(message, props.desktopApi);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const observedEntries = entries.filter((entry) => entry.status === "observed");
+  const scopeOptions = props.scopeOptions ?? defaultPairingScopeOptions(props.platform);
+  const availableScopeOptions = props.supportsBucket
+    ? scopeOptions
+    : scopeOptions.filter((option) => option.value !== "bucket");
+
+  return (
+    <SettingsField
+      label="Pairing"
+      sub="Generate a short-lived code to approve a user or group from chat."
+      error={error}
+      control={
+        <div className="settings-pairing">
+          <div className="settings-pairing__controls">
+            <div
+              aria-label={`${platformLabel(props.platform)} pairing target`}
+              className="settings-segmented settings-pairing__scope"
+              role="radiogroup"
+            >
+              {availableScopeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  aria-checked={scope === option.value}
+                  className={`settings-segmented__button${
+                    scope === option.value ? " is-active" : ""
+                  }`}
+                  disabled={props.disabled}
+                  role="radio"
+                  type="button"
+                  onClick={() => setScope(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button
+              className="button button--secondary"
+              disabled={
+                props.disabled
+                || busyId === "generate"
+                || !props.desktopApi?.generateMessagingPairingToken
+              }
+              type="button"
+              onClick={() => void generate()}
+            >
+              {busyId === "generate" ? "Generating..." : "Generate"}
+            </button>
+          </div>
+          {message ? (
+            <div className="settings-pairing__message">
+              <code>{message}</code>
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => void copyMessage()}
+              >
+                Copy
+              </button>
+            </div>
+          ) : null}
+          {observedEntries.length > 0 ? (
+            <div className="settings-pairing__requests">
+              {observedEntries.map((entry) => (
+                <div className="settings-pairing__request" key={entry.id}>
+                  <div className="settings-pairing__request-text">
+                    <span className="settings-pairing__request-title">
+                      {pairingEntryLabel(entry)}
+                    </span>
+                    <span className="settings-pairing__request-meta">
+                      {pairingEntryDetails(entry).join(" | ")}
+                    </span>
+                  </div>
+                  <button
+                    className="button button--secondary"
+                    disabled={busyId === entry.id}
+                    type="button"
+                    onClick={() => void decide(entry, "approve")}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="button button--ghost"
+                    disabled={busyId === entry.id}
+                    type="button"
+                    onClick={() => void decide(entry, "reject")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+type PairingScopeOption = {
+  label: string;
+  value: MessagingPairingScope;
+};
+
+const TELEGRAM_PAIRING_SCOPE_OPTIONS: PairingScopeOption[] = [
+  { label: "User via DM", value: "user_dm" },
+  { label: "User via group", value: "user_in_group" },
+  { label: "Group/supergroup chat", value: "bucket" },
+];
+
+function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScopeOption[] {
+  if (platform === "discord") {
+    return [
+      { label: "User via DM", value: "user_dm" },
+      { label: "User via server", value: "user_in_group" },
+      { label: "Server", value: "bucket" },
+    ];
+  }
+  if (platform === "slack") {
+    return [
+      { label: "User via DM", value: "user_dm" },
+      { label: "User via channel", value: "user_in_group" },
+      { label: "Workspace", value: "bucket" },
+    ];
+  }
+  return [
+    { label: "User via DM", value: "user_dm" },
+    { label: "User via channel", value: "user_in_group" },
+    { label: "Group", value: "bucket" },
+  ];
+}
+
+function platformLabel(platform: MessagingChannelKind): string {
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
+}
+
+function pairingEntryLabel(entry: MessagingPairingEntry): string {
+  if (entry.scope === "bucket") {
+    return `${entry.observedChat?.title ?? entry.observedChat?.id ?? "Chat"} wants group access`;
+  }
+  const actor =
+    entry.observedActor?.displayName
+    ?? entry.observedActor?.username
+    ?? entry.observedActor?.id
+    ?? "User";
+  return `${actor} wants access`;
+}
+
+function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
+  const details: string[] = [];
+  if (entry.observedActor?.id) {
+    details.push(`User ID ${entry.observedActor.id}`);
+  }
+  if (entry.observedActor?.username) {
+    details.push(`@${entry.observedActor.username}`);
+  }
+  if (entry.observedActor?.phoneNumber) {
+    details.push(`Phone ${entry.observedActor.phoneNumber}`);
+  }
+  if (entry.observedChat?.id) {
+    const chatLabel = entry.observedChat.kind === "dm" ? "DM peer" : "Chat";
+    details.push(`${chatLabel} ID ${entry.observedChat.id}`);
+  }
+  if (entry.observedChat?.title) {
+    details.push(entry.observedChat.title);
+  }
+  if (entry.observedChat?.bucketId && entry.observedChat.bucketId !== entry.observedChat.id) {
+    details.push(`Bucket ID ${entry.observedChat.bucketId}`);
+  }
+  return details;
+}
+
 function AuthorizedListField(props: {
   disabled?: boolean;
   help?: ReactNode;
@@ -971,6 +1258,11 @@ function AuthorizedListField(props: {
   const [lookupState, setLookupState] = useState<
     Record<number, { loading?: boolean; message?: string }>
   >({});
+  useEffect(() => {
+    rowsRef.current = props.value;
+    setRowsState(props.value);
+    setLookupState({});
+  }, [props.value]);
   const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
     ? normalizedRows
@@ -1321,16 +1613,16 @@ function validateTelegramUserIdEntry(value: string): string | undefined {
   );
 }
 
-function validateTelegramSupergroupEntry(value: string): string | undefined {
+function validateTelegramGroupChatEntry(value: string): string | undefined {
   return validationMessage(
-    validateTelegramSupergroupId(value),
-    "Telegram supergroup ID",
+    validateTelegramGroupChatId(value),
+    "Telegram group chat ID",
     {
       format:
-        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
-      length: "Telegram supergroup IDs must fit the decimal numeric ID form.",
+        "Use the negative Telegram group or supergroup chat ID from Messaging Activity.",
+      length: "Telegram group chat IDs must fit the decimal numeric ID form.",
       range:
-        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
+        "Use the negative Telegram group or supergroup chat ID from Messaging Activity.",
     },
   );
 }

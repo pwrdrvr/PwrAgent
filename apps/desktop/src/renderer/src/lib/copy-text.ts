@@ -1,7 +1,10 @@
-import { getDesktopApi } from "./desktop-api";
+import { getDesktopApi, type DesktopApi } from "./desktop-api";
 
-export async function copyText(text: string): Promise<void> {
-  const desktopApi = getDesktopApi();
+export async function copyText(
+  text: string,
+  desktopApiOverride?: Pick<DesktopApi, "copyText">,
+): Promise<void> {
+  const desktopApi = desktopApiOverride ?? getDesktopApi();
   if (desktopApi?.copyText) {
     try {
       await desktopApi.copyText(text);

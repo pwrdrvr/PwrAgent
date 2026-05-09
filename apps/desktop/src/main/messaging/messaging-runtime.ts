@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { MessagingController } from "./core/messaging-controller";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
@@ -10,6 +10,13 @@ import type {
 import type {
   AgentEvent,
   AppServerPendingRequestNotification,
+  GenerateMessagingPairingTokenRequest,
+  GenerateMessagingPairingTokenResponse,
+  ListMessagingPairingRequestsRequest,
+  ListMessagingPairingRequestsResponse,
+  MessagingPairingEntry,
+  MessagingPairingObservedActor,
+  MessagingPairingObservedChat,
   MessagingPlatformHealth,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -25,6 +32,12 @@ import type {
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  isMessagingPairingCommand,
+  MESSAGING_PAIRING_COMMAND,
+  MESSAGING_PAIRING_TOKEN_PATTERN,
+} from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import {
@@ -35,6 +48,7 @@ import {
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
+import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 
 export type DesktopMessagingAdapter = {
@@ -80,6 +94,18 @@ type RunningMessagingAdapter = {
 };
 
 const messagingLog = getMainLogger("pwragent:messaging");
+const PAIRING_INSTANCE_ID = "default";
+const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
+const MIN_PAIRING_TTL_MS = 60 * 1000;
+const MAX_PAIRING_TTL_MS = 30 * 60 * 1000;
+const MAX_OUTSTANDING_PAIRING_TOKENS = 5;
+const PAIRING_TOKEN_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+export type MessagingPairingChangedEvent = {
+  at: number;
+  entry: MessagingPairingEntry;
+};
 
 /**
  * Origin tag carried on `requestBindingRevoke` /
@@ -174,6 +200,9 @@ export class DesktopMessagingRuntime {
    * snapshot rather than diffing per-binding changes themselves.
    */
   private readonly bindingsChangedListeners = new Set<() => void>();
+  private readonly pairingChangedListeners = new Set<
+    (event: MessagingPairingChangedEvent) => void
+  >();
 
   constructor(
     private readonly options: {
@@ -370,6 +399,102 @@ export class DesktopMessagingRuntime {
     return () => {
       this.bindingsChangedListeners.delete(listener);
     };
+  }
+
+  onPairingChanged(
+    listener: (event: MessagingPairingChangedEvent) => void,
+  ): () => void {
+    this.pairingChangedListeners.add(listener);
+    return () => {
+      this.pairingChangedListeners.delete(listener);
+    };
+  }
+
+  generatePairingToken(
+    request: GenerateMessagingPairingTokenRequest,
+  ): GenerateMessagingPairingTokenResponse {
+    const now = Date.now();
+    const ttlMs = clampPairingTtlMs(request.ttlMs);
+    const instanceId = request.instanceId ?? PAIRING_INSTANCE_ID;
+    const store = getDesktopMessagingPairingStore();
+    const outstanding = store.countOutstanding({
+      platform: request.platform,
+      instanceId,
+      now,
+    });
+    if (outstanding >= MAX_OUTSTANDING_PAIRING_TOKENS) {
+      throw new Error(
+        `Too many active pairing tokens for ${request.platform}. Wait for one to expire or approve/reject a pending request.`,
+      );
+    }
+    const token = generatePairingToken();
+    const entry = store.create({
+      token,
+      platform: request.platform,
+      instanceId,
+      scope: request.scope,
+      generatedAt: now,
+      expiresAt: now + ttlMs,
+    });
+    this.recordPairingActivity(entry, "Generated pairing token");
+    this.broadcastPairingChanged(entry);
+    return {
+      entry,
+      token,
+      expiresAt: entry.expiresAt,
+      message: `${MESSAGING_PAIRING_COMMAND} ${token}`,
+    };
+  }
+
+  listPairingRequests(
+    request: ListMessagingPairingRequestsRequest = {},
+  ): ListMessagingPairingRequestsResponse {
+    return {
+      entries: getDesktopMessagingPairingStore().list({
+        includeResolved: request.includeResolved,
+        platform: request.platform,
+        now: Date.now(),
+      }),
+    };
+  }
+
+  async deliverPairingOutcome(
+    entry: MessagingPairingEntry,
+    outcome: "approved" | "rejected" | "expired",
+  ): Promise<void> {
+    const running = this.runningAdapters.get(entry.platform);
+    if (!running || !entry.observedActor || !entry.observedChat) return;
+    const text = outcome === "approved"
+      ? "PwrAgent pairing approved."
+      : outcome === "expired"
+        ? "PwrAgent pairing expired."
+        : "PwrAgent pairing rejected.";
+    await running.adapter.deliver({
+      id: `pairing:${outcome}:${entry.id}`,
+      kind: "message",
+      createdAt: Date.now(),
+      parts: [{ type: "text", text }],
+      audit: {
+        actor: {
+          platformUserId: entry.observedActor.id,
+          displayName: entry.observedActor.displayName,
+          phoneNumber: entry.observedActor.phoneNumber,
+          username: entry.observedActor.username,
+        },
+        action: `pairing.${outcome}`,
+        channel: {
+          channel: entry.platform,
+          conversation: {
+            id: entry.observedChat.id,
+            kind: entry.observedChat.kind,
+            parentId: entry.observedChat.parentId,
+            title: entry.observedChat.title,
+            parentTitle: entry.observedChat.parentTitle,
+          },
+        },
+        occurredAt: Date.now(),
+      },
+    });
   }
 
   /**
@@ -588,6 +713,9 @@ export class DesktopMessagingRuntime {
       await adapter.start?.(async (event) => {
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
+        if (await this.handlePairingInbound(adapter, event)) {
+          return;
+        }
         const authorized = authorizedActorIdSet.has(event.actor.platformUserId);
         this.recordActivityFromInbound(adapter.channel, event, authorized);
         try {
@@ -786,6 +914,19 @@ export class DesktopMessagingRuntime {
     }
   }
 
+  private broadcastPairingChanged(entry: MessagingPairingEntry): void {
+    const event = { at: Date.now(), entry };
+    for (const listener of this.pairingChangedListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        messagingLog.error("messaging pairing-changed listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   private setPlatformHealth(
     platform: MessagingChannelKind,
     health: MessagingPlatformHealth,
@@ -821,6 +962,139 @@ export class DesktopMessagingRuntime {
       this.platformStatuses.set(platform, { ...previous, lastActivityAt: at });
     }
     this.broadcastPlatformStatus({ kind: "activity", platform, at });
+  }
+
+  private async handlePairingInbound(
+    adapter: DesktopMessagingAdapter,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const token = tokenFromInboundEvent(event);
+    if (!token) return false;
+
+    const now = Date.now();
+    const store = getDesktopMessagingPairingStore();
+    const entry = store.findMatchingPending({
+      token,
+      platform: adapter.channel,
+      instanceId: PAIRING_INSTANCE_ID,
+      now,
+    });
+    if (!entry) {
+      await this.deliverPairingReply(
+        adapter,
+        event,
+        "That PwrAgent pairing token is invalid or expired.",
+      );
+      this.recordPairingAttemptActivity(adapter.channel, event, "Invalid pairing token");
+      return true;
+    }
+
+    const scopeFailure = pairingScopeFailure(entry, event);
+    if (scopeFailure) {
+      const rejected = store.markStatus({
+        entryId: entry.id,
+        status: "rejected",
+        failureReason: scopeFailure,
+      }) ?? entry;
+      this.recordPairingActivity(rejected, `Rejected pairing token: ${scopeFailure}`);
+      this.broadcastPairingChanged(rejected);
+      await this.deliverPairingReply(adapter, event, `Pairing rejected: ${scopeFailure}`);
+      return true;
+    }
+
+    const observed = store.markObserved({
+      entryId: entry.id,
+      observedAt: now,
+      actor: observedActorFromEvent(event),
+      chat: observedChatFromEvent(event),
+    }) ?? entry;
+    this.recordPairingActivity(observed, "Observed pairing token");
+    this.broadcastPairingChanged(observed);
+    await this.deliverPairingReply(
+      adapter,
+      event,
+      "Pairing request received. Approve it in PwrAgent to finish.",
+    );
+    return true;
+  }
+
+  private async deliverPairingReply(
+    adapter: DesktopMessagingAdapter,
+    event: MessagingInboundEvent,
+    text: string,
+  ): Promise<void> {
+    try {
+      await adapter.deliver({
+        id: `pairing:reply:${event.id}:${Date.now()}`,
+        kind: "message",
+        createdAt: Date.now(),
+        parts: [{ type: "text", text }],
+        audit: {
+          actor: event.actor,
+          action: "pairing.reply",
+          channel: event.channel,
+          occurredAt: Date.now(),
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging pairing reply failed", {
+        channel: adapter.channel,
+        eventId: event.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private recordPairingActivity(entry: MessagingPairingEntry, summary: string): void {
+    try {
+      getDesktopMessagingActivityLog().record({
+        platform: entry.platform,
+        kind: "pairing",
+        conversationId: entry.observedChat?.id,
+        conversationTitle: entry.observedChat?.title,
+        actorId: entry.observedActor?.id,
+        actorDisplayName: entry.observedActor?.displayName,
+        summary,
+        payload: {
+          pairingId: entry.id,
+          scope: entry.scope,
+          status: entry.status,
+          instanceId: entry.instanceId,
+          expiresAt: entry.expiresAt,
+          failureReason: entry.failureReason,
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging pairing activity write failed", {
+        pairingId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private recordPairingAttemptActivity(
+    platform: MessagingChannelKind,
+    event: MessagingInboundEvent,
+    summary: string,
+  ): void {
+    try {
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: "pairing",
+        conversationId: event.channel.conversation.id,
+        conversationTitle: event.channel.conversation.title,
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        summary,
+        payload: {
+          eventId: event.id,
+          eventKind: event.kind,
+          conversationKind: event.channel.conversation.kind,
+        },
+      });
+    } catch {
+      // Best effort only.
+    }
   }
 
   private recordActivityFromInbound(
@@ -991,6 +1265,95 @@ function stableStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function clampPairingTtlMs(ttlMs: number | undefined): number {
+  if (ttlMs === undefined) return DEFAULT_PAIRING_TTL_MS;
+  if (!Number.isFinite(ttlMs)) return DEFAULT_PAIRING_TTL_MS;
+  return Math.min(
+    Math.max(Math.floor(ttlMs), MIN_PAIRING_TTL_MS),
+    MAX_PAIRING_TTL_MS,
+  );
+}
+
+function generatePairingToken(): string {
+  const bytes = randomBytes(32);
+  let token = "";
+  for (let index = 0; token.length < 32; index += 1) {
+    token += PAIRING_TOKEN_ALPHABET[bytes[index % bytes.length] % PAIRING_TOKEN_ALPHABET.length];
+  }
+  return token;
+}
+
+function tokenFromInboundEvent(event: MessagingInboundEvent): string | undefined {
+  if (event.kind === "text") {
+    return extractMessagingPairingToken(event.text);
+  }
+  if (event.kind === "command" && isMessagingPairingCommand(event.command)) {
+    const candidate = event.args[0];
+    return candidate && MESSAGING_PAIRING_TOKEN_PATTERN.test(candidate)
+      ? candidate
+      : undefined;
+  }
+  if (event.kind === "media" && event.text) {
+    return extractMessagingPairingToken(event.text);
+  }
+  return undefined;
+}
+
+function pairingScopeFailure(
+  entry: MessagingPairingEntry,
+  event: MessagingInboundEvent,
+): string | undefined {
+  const isDm = event.channel.conversation.kind === "dm";
+  if (entry.scope === "user_dm" && !isDm) {
+    return "token was generated for a DM but was pasted in a group/channel";
+  }
+  if (entry.scope === "user_in_group" && isDm) {
+    return "token was generated for a user-in-group flow but was pasted in a DM";
+  }
+  if (entry.scope === "bucket" && isDm) {
+    return "token was generated for a group/guild bucket but was pasted in a DM";
+  }
+  return undefined;
+}
+
+function observedActorFromEvent(event: MessagingInboundEvent): MessagingPairingObservedActor {
+  return {
+    id: event.actor.platformUserId,
+    displayName: event.actor.displayName,
+    phoneNumber: event.actor.phoneNumber,
+    username: event.actor.username,
+  };
+}
+
+function observedChatFromEvent(event: MessagingInboundEvent): MessagingPairingObservedChat {
+  const conversation = event.channel.conversation;
+  return {
+    id: conversation.id,
+    kind: conversation.kind,
+    title: conversation.title,
+    parentId: conversation.parentId,
+    parentTitle: conversation.parentTitle,
+    bucketId: bucketIdFromEvent(event),
+  };
+}
+
+function bucketIdFromEvent(event: MessagingInboundEvent): string | undefined {
+  const opaque = event.routingState?.opaque;
+  if (opaque && typeof opaque === "object" && !Array.isArray(opaque)) {
+    const record = opaque as Record<string, unknown>;
+    if (typeof record.guildId === "string" && record.guildId) {
+      return record.guildId;
+    }
+    if (typeof record.chatId === "number" || typeof record.chatId === "string") {
+      return String(record.chatId);
+    }
+    if (typeof record.teamId === "string" && record.teamId) {
+      return record.teamId;
+    }
+  }
+  return event.channel.conversation.parentId ?? event.channel.conversation.id;
 }
 
 function isMessagingPendingRequest(

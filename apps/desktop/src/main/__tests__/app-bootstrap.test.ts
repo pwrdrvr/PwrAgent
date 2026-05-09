@@ -199,6 +199,31 @@ describe("createMainWindow", () => {
     expect(browserWindowState.setWindowOpenHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("registers the main window for messaging push-event channels", async () => {
+    const { createMainWindow } = await import("../window");
+    const { debugListRegisteredWindows } = await import("../window-channels");
+    const {
+      AGENT_EVENT_CHANNEL,
+      MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+      MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
+      MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    createMainWindow();
+
+    expect(debugListRegisteredWindows()).toEqual([
+      {
+        kind: "main",
+        channels: expect.arrayContaining([
+          AGENT_EVENT_CHANNEL,
+          MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+          MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
+          MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+        ]),
+      },
+    ]);
+  });
+
   it("only opens safe external URLs requested by the renderer", async () => {
     const { createMainWindow } = await import("../window");
     createMainWindow();

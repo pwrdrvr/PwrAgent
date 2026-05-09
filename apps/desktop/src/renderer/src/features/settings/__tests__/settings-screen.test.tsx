@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
@@ -15,6 +16,15 @@ import type { DesktopSettingsState } from "../useDesktopSettings";
 
 afterEach(() => {
   cleanup();
+  Object.defineProperty(window, "pwragent", {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+  vi.restoreAllMocks();
 });
 
 function createSnapshot(
@@ -248,7 +258,10 @@ describe("SettingsScreen", () => {
       });
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
-    expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
+    expect(screen.getByText("Authorized Groups / Supergroups")).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Group/supergroup chat" }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(4);
     expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(4);
     fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
@@ -532,6 +545,179 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByLabelText("Authorized User IDs display name 1"),
     ).toHaveValue("Harold (@huntharo)");
+  });
+
+  it("copies generated pairing messages through the clipboard fallback", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          enabled: { value: true, source: "config" as const },
+        },
+      },
+    });
+    const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const bridgeCopy = vi.fn(async () => {
+      throw new Error("bridge clipboard unavailable");
+    });
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+    const desktopApi = {
+      copyText: bridgeCopy,
+      generateMessagingPairingToken: vi.fn(async () => ({
+        entry: {
+          id: "pairing-1",
+          platform: "telegram" as const,
+          instanceId: "default",
+          scope: "user_dm" as const,
+          status: "pending" as const,
+          generatedAt: 1,
+          expiresAt: 2,
+        },
+        expiresAt: 2,
+        message: pairingMessage,
+        token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      })),
+      listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      onMessagingPairingChanged: vi.fn(() => () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
+    expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => {
+      expect(bridgeCopy).toHaveBeenCalledWith(pairingMessage);
+    });
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(pairingMessage);
+    });
+  });
+
+  it("shows observed pairing IDs and refreshes authorized IDs after approval", async () => {
+    const snapshot = createSnapshot();
+    const initialSnapshot: DesktopSettingsSnapshot = {
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    };
+    const approvedSnapshot: DesktopSettingsSnapshot = {
+      ...initialSnapshot,
+      messaging: {
+        ...initialSnapshot.messaging,
+        telegram: {
+          ...initialSnapshot.messaging.telegram,
+          authorizedUserIds: {
+            value: [{ id: "8460800771", displayName: "Harold Hunt" }],
+            source: "config" as const,
+          },
+        },
+      },
+    };
+    let approved = false;
+    const observedEntry = {
+      id: "pairing-1",
+      platform: "telegram" as const,
+      instanceId: "default",
+      scope: "user_dm" as const,
+      status: "observed" as const,
+      generatedAt: 1,
+      expiresAt: 2,
+      observedAt: 1,
+      observedActor: {
+        id: "8460800771",
+        displayName: "Harold Hunt",
+        phoneNumber: "+15551234567",
+        username: "huntharo",
+      },
+      observedChat: {
+        id: "8460800771",
+        kind: "dm" as const,
+        title: "Harold Hunt",
+      },
+    };
+    const refreshSpy = vi.fn();
+    const approveMessagingPairing = vi.fn(async () => {
+      approved = true;
+      return {
+        added: true,
+        entry: {
+          ...observedEntry,
+          status: "consumed" as const,
+        },
+      };
+    });
+    const desktopApi = {
+      approveMessagingPairing,
+      listMessagingPairingRequests: vi.fn(async (request) => ({
+        entries: !approved && request?.platform === "telegram" ? [observedEntry] : [],
+      })),
+      onMessagingPairingChanged: vi.fn(() => () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    function Harness() {
+      const [settingsSnapshot, setSettingsSnapshot] = useState(initialSnapshot);
+      const settings = createSettingsState(settingsSnapshot);
+      settings.refresh = vi.fn(async () => {
+        refreshSpy();
+        setSettingsSnapshot(approvedSnapshot);
+      });
+      return (
+        <SettingsScreen
+          desktopApi={desktopApi}
+          settings={settings}
+          initialSection="messaging"
+          onClose={() => undefined}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const request = await screen.findByText("Harold Hunt wants access");
+    const requestCard = request.closest(".settings-pairing__request");
+    expect(requestCard).not.toBeNull();
+    expect(requestCard).toHaveTextContent("User ID 8460800771");
+    expect(requestCard).toHaveTextContent("@huntharo");
+    expect(requestCard).toHaveTextContent("Phone +15551234567");
+    expect(requestCard).toHaveTextContent("DM peer ID 8460800771");
+
+    fireEvent.click(within(requestCard as HTMLElement).getByRole("button", {
+      name: "Approve",
+    }));
+
+    await waitFor(() => {
+      expect(approveMessagingPairing).toHaveBeenCalledWith({ entryId: "pairing-1" });
+    });
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("8460800771")).toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue("Harold Hunt")).toBeInTheDocument();
   });
 
   it("looks up Slack authorized user display names", async () => {

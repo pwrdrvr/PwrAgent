@@ -3,7 +3,10 @@ import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
 } from "../index";
-import { MESSAGING_SURFACE_INTENT_KINDS } from "../index";
+import {
+  MESSAGING_SURFACE_INTENT_KINDS,
+  extractMessagingPairingToken,
+} from "../index";
 
 type FakeProvider = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
@@ -70,5 +73,43 @@ describe("messaging interface package", () => {
     ]);
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("message");
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("stream_update");
+  });
+
+  it("extracts pairing tokens from plain text, mention, and legacy forms", () => {
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+
+    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`@PwrAgentBot pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`please pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pwragent_pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`/pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`/pwragent_pair ${token}`)).toBe(token);
+  });
+
+  it("bounds pairing scans over untrusted message text", () => {
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const largePayload = "x".repeat(1_000_000);
+
+    expect(extractMessagingPairingToken(`pair ${token} ${largePayload}`)).toBe(token);
+    expect(extractMessagingPairingToken(`${largePayload} pair ${token}`)).toBeUndefined();
+    expect(extractMessagingPairingToken(`pair ${largePayload}`)).toBeUndefined();
+  });
+
+  it("does not throw on fuzzed pairing-like payloads", () => {
+    let seed = 0x5eed;
+    const next = () => {
+      seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff;
+      return seed;
+    };
+    const alphabet = "pair/PWRAGENT_  \t\r\n'\";--0123456789ABCDEFGHJKLMNPQRSTUVWXYZxyz";
+
+    for (let caseIndex = 0; caseIndex < 500; caseIndex += 1) {
+      const length = next() % 2048;
+      let payload = "";
+      for (let index = 0; index < length; index += 1) {
+        payload += alphabet[next() % alphabet.length];
+      }
+      expect(() => extractMessagingPairingToken(payload)).not.toThrow();
+    }
   });
 });

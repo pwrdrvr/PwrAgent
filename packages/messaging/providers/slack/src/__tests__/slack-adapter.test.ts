@@ -285,6 +285,12 @@ describe("SlackAdapter", () => {
             kind: "channel",
           }),
         }),
+        routingState: expect.objectContaining({
+          opaque: expect.objectContaining({
+            channelId: "C012ABCDEF0",
+            teamId: "T012ABCDEF0",
+          }),
+        }),
       }),
     ]);
   });

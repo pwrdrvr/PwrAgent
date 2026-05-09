@@ -31,6 +31,7 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
+import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
   createMattermostCallbackServer,
@@ -726,7 +727,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       return;
     }
-    if (!this.authorizedActorIds.includes(post.user_id)) {
+    const messageText = post.message ?? "";
+    const isPairingMessage = Boolean(extractMessagingPairingToken(messageText));
+    if (!isPairingMessage && !this.authorizedActorIds.includes(post.user_id)) {
       this.logUnauthorizedPostIfActionable(post, data);
       return;
     }
@@ -743,7 +746,6 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       isBot: false,
     };
 
-    const messageText = post.message ?? "";
     const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
 
     if (fileIds.length > 0) {

@@ -17,7 +17,10 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { layoutMessagingActionRows } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  layoutMessagingActionRows,
+} from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
@@ -92,6 +95,7 @@ export type TelegramUser = {
   id: number;
   is_bot?: boolean;
   last_name?: string;
+  phone_number?: string;
   username?: string;
 };
 
@@ -1059,12 +1063,19 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     // Username matching is case-insensitive — Telegram usernames are
     // case-insensitive.
     const mentionCandidate = message.text ?? message.caption;
+    const isPairingMessage = mentionCandidate
+      ? Boolean(extractMessagingPairingToken(mentionCandidate))
+      : false;
     const mentionRemainder = mentionCandidate
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
     if (
+      !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
-        actionable: Boolean(mentionRemainder) || Boolean(message.text?.startsWith("/")),
+        actionable:
+          isPairingMessage
+          || Boolean(mentionRemainder)
+          || Boolean(message.text?.startsWith("/")),
       })
     ) {
       return;
@@ -1985,6 +1996,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       platformUserId: String(user?.id ?? "unknown"),
       displayName: [user?.first_name, user?.last_name].filter(Boolean).join(" ") || undefined,
       isBot: user?.is_bot,
+      phoneNumber: user?.phone_number,
       username: user?.username,
     };
   }

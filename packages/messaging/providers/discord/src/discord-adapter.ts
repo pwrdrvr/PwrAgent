@@ -29,6 +29,7 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import type {
   DiscordApplicationCommand,
@@ -692,9 +693,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             this.options.config.applicationId,
           )
         : undefined;
+    const isPairingMessage = message.content !== undefined
+      ? Boolean(extractMessagingPairingToken(message.content))
+      : false;
     if (
+      !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
-        actionable: Boolean(mentionRemainder) || Boolean(message.content?.startsWith("/")),
+        actionable:
+          isPairingMessage
+          || Boolean(mentionRemainder)
+          || Boolean(message.content?.startsWith("/")),
       })
     ) {
       return;

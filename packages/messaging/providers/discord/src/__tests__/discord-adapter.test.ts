@@ -678,6 +678,120 @@ describe("discord adapter", () => {
   });
 
   describe("text mention dispatch", () => {
+    it("dispatches pairing tokens from unauthorized actors before allowlist checks", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: "1480556454498009999", displayName: "" }],
+          authorizedGuildIds: [{ id: "1480556454498010000", displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+          id: "pairing-msg",
+        }),
+      });
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({
+              id: TEST_CHANNEL_ID,
+              parentId: TEST_GUILD_ID,
+            }),
+          }),
+          kind: "text",
+          text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        }),
+      ]);
+      expect(rejectedEvents).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.anything(),
+      );
+      await adapter.stop();
+    });
+
+    it("dispatches mention pairing commands from unauthorized actors before allowlist checks", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: "1480556454498009999", displayName: "" }],
+          authorizedGuildIds: [{ id: "1480556454498010000", displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: `<@${BOT_ID}> pair 123456789ABCDEFGHJKLMNPQRSTUVWXY`,
+          id: "pairing-mention-msg",
+        }),
+      });
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
+          args: ["123456789ABCDEFGHJKLMNPQRSTUVWXY"],
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({
+              id: TEST_CHANNEL_ID,
+              parentId: TEST_GUILD_ID,
+            }),
+          }),
+          command: "pair",
+          kind: "command",
+          rawText: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        }),
+      ]);
+      expect(rejectedEvents).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.anything(),
+      );
+      await adapter.stop();
+    });
+
     it("drops messages from unauthorized guilds before listener dispatch", async () => {
       const events: MessagingInboundEvent[] = [];
       const rejectedEvents: MessagingRejectedInboundEvent[] = [];
