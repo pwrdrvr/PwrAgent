@@ -42,6 +42,14 @@
   --thinking-scanner-mini-offset: 0px;
   --thinking-scanner-offset: var(--thinking-scanner-full-offset);
   --thinking-scanner-progress: 0;
+  /* Issue #240: max reading width for the centered chat column —
+     transcript message column AND composer rows both cap here so
+     the input's text-block lines up with the messages above it. The
+     value is high enough to fit code blocks comfortably yet narrow
+     enough that on a 32" monitor people aren't reading line lengths
+     that defeat scanning. Themes / future surfaces can override
+     this single token to retune both surfaces in lockstep. */
+  --chat-column-max: 940px;
 }
 
 * {
@@ -3762,7 +3770,7 @@ textarea,
      content centers and bg-app shows on either side of the column.
      The same `--chat-column-max` is applied to the composer's
      children below so the input column lines up with the messages. */
-  max-width: var(--chat-column-max, 940px);
+  max-width: var(--chat-column-max);
   width: 100%;
   margin-left: auto;
   margin-right: auto;
@@ -5681,7 +5689,7 @@ textarea,
    — only the rows inside it center. */
 .composer > * {
   width: 100%;
-  max-width: var(--chat-column-max, 940px);
+  max-width: var(--chat-column-max);
 }
 
 .composer__input {

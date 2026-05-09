@@ -109,87 +109,103 @@ async function createComposerHeightFixture(): Promise<{
 const COMPOSER_MIN_HEIGHT = 56;
 const COMPOSER_MAX_HEIGHT = 280;
 
-// Wrapper border (1px top + 1px bottom) is NOT part of the
-// `min-height` / `max-height` since `box-sizing: border-box` is the
-// renderer-wide default — the height reported by `getBoundingClientRect`
-// is the full border-box including the 2px of borders. Allow a small
-// fudge factor for sub-pixel rendering / scrollbar variation.
-const HEIGHT_TOLERANCE_PX = 4;
+// `box-sizing: border-box` is the renderer-wide default, so the
+// wrapper's `getBoundingClientRect().height` matches the
+// `min-height` / `max-height` values directly (the 1px top + bottom
+// borders are inside the box). 2px tolerance covers sub-pixel
+// rendering rounding on HiDPI displays and is tight enough to catch
+// any silent regression that nudges the floor / cap by more than a
+// few pixels.
+const HEIGHT_TOLERANCE_PX = 2;
+
+// How much extra above the floor counts as "still compact" — small
+// enough that a regression bumping `min-height` past 64px would
+// fail this assertion. Larger than HEIGHT_TOLERANCE_PX because the
+// floor includes the wrapper border + a single line of input that
+// renders slightly taller than 56 if the line-height rounds up.
+const EMPTY_FLOOR_SLACK_PX = 8;
 
 test("composer is compact when empty, grows with content, clamps at max-height", async () => {
   const fixture = await createComposerHeightFixture();
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-  });
-
+  // Defensive cleanup: `launchElectronApp` can throw before the
+  // `try` block enters its scope (Electron startup, fixture-replay
+  // initialize step, etc.). Without an outer try/finally around the
+  // app launch, a launch failure would leak the fixture's tmp dir.
   try {
-    await app.window
-      .getByRole("button", { name: /Composer height growth/i })
-      .first()
-      .click();
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Composer height growth",
-      }),
-    ).toBeVisible();
+    const app = await launchElectronApp({
+      fixturePath: fixture.fixturePath,
+    });
 
-    const composerWrapper = app.window.locator(".composer-tiptap-input");
-    await expect(composerWrapper).toBeVisible();
+    try {
+      await app.window
+        .getByRole("button", { name: /Composer height growth/i })
+        .first()
+        .click();
+      await expect(
+        app.window.getByRole("heading", {
+          level: 2,
+          name: "Composer height growth",
+        }),
+      ).toBeVisible();
 
-    // ---- Empty state ----
-    const emptyHeight = (await composerWrapper.boundingBox())?.height ?? 0;
-    expect(
-      emptyHeight,
-      "empty composer should sit at the compact min-height floor",
-    ).toBeGreaterThanOrEqual(COMPOSER_MIN_HEIGHT - HEIGHT_TOLERANCE_PX);
-    expect(
-      emptyHeight,
-      "empty composer should not balloon past the floor before any input",
-    ).toBeLessThan(COMPOSER_MIN_HEIGHT + 24);
+      const composerWrapper = app.window.locator(".composer-tiptap-input");
+      await expect(composerWrapper).toBeVisible();
 
-    // ---- A few lines fits inside the cap and grows the wrapper ----
-    const reply = app.window.getByRole("textbox", { name: "Reply" });
-    const shortDraft = ["one", "two", "three", "four", "five"].join("\n");
-    await reply.fill(shortDraft);
+      // ---- Empty state ----
+      const emptyHeight = (await composerWrapper.boundingBox())?.height ?? 0;
+      expect(
+        emptyHeight,
+        "empty composer should sit at the compact min-height floor",
+      ).toBeGreaterThanOrEqual(COMPOSER_MIN_HEIGHT - HEIGHT_TOLERANCE_PX);
+      expect(
+        emptyHeight,
+        "empty composer should not balloon past the floor before any input",
+      ).toBeLessThanOrEqual(COMPOSER_MIN_HEIGHT + EMPTY_FLOOR_SLACK_PX);
 
-    const grownHeight = (await composerWrapper.boundingBox())?.height ?? 0;
-    expect(
-      grownHeight,
-      "five-line draft should grow the composer wrapper above the empty floor",
-    ).toBeGreaterThan(emptyHeight + 16);
-    expect(
-      grownHeight,
-      "five-line draft should still fit inside the max-height cap",
-    ).toBeLessThanOrEqual(COMPOSER_MAX_HEIGHT + HEIGHT_TOLERANCE_PX);
+      // ---- A few lines fits inside the cap and grows the wrapper ----
+      const reply = app.window.getByRole("textbox", { name: "Reply" });
+      const shortDraft = ["one", "two", "three", "four", "five"].join("\n");
+      await reply.fill(shortDraft);
 
-    // ---- Many lines clamp at the cap (overflow scrolls the editor) ----
-    const tallDraft = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join(
-      "\n",
-    );
-    await reply.fill(tallDraft);
+      const grownHeight = (await composerWrapper.boundingBox())?.height ?? 0;
+      expect(
+        grownHeight,
+        "five-line draft should grow the composer wrapper above the empty floor",
+      ).toBeGreaterThan(emptyHeight + 16);
+      expect(
+        grownHeight,
+        "five-line draft should still fit inside the max-height cap",
+      ).toBeLessThanOrEqual(COMPOSER_MAX_HEIGHT + HEIGHT_TOLERANCE_PX);
 
-    const clampedHeight = (await composerWrapper.boundingBox())?.height ?? 0;
-    expect(
-      clampedHeight,
-      "40-line draft should clamp at the wrapper's max-height (no off-screen growth)",
-    ).toBeLessThanOrEqual(COMPOSER_MAX_HEIGHT + HEIGHT_TOLERANCE_PX);
-    // And the wrapper should be near the cap (not stuck at a smaller
-    // height) — the editor inside should be the part that scrolls.
-    expect(
-      clampedHeight,
-      "40-line draft should push the wrapper to the max-height cap",
-    ).toBeGreaterThanOrEqual(COMPOSER_MAX_HEIGHT - HEIGHT_TOLERANCE_PX);
+      // ---- Many lines clamp at the cap (overflow scrolls the editor) ----
+      const tallDraft = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join(
+        "\n",
+      );
+      await reply.fill(tallDraft);
 
-    // ---- Clearing returns the wrapper to the compact floor ----
-    await reply.fill("");
-    const clearedHeight = (await composerWrapper.boundingBox())?.height ?? 0;
-    expect(
-      clearedHeight,
-      "clearing the draft should collapse the composer back to the floor",
-    ).toBeLessThan(COMPOSER_MIN_HEIGHT + 24);
+      const clampedHeight = (await composerWrapper.boundingBox())?.height ?? 0;
+      expect(
+        clampedHeight,
+        "40-line draft should clamp at the wrapper's max-height (no off-screen growth)",
+      ).toBeLessThanOrEqual(COMPOSER_MAX_HEIGHT + HEIGHT_TOLERANCE_PX);
+      // And the wrapper should be near the cap (not stuck at a smaller
+      // height) — the editor inside should be the part that scrolls.
+      expect(
+        clampedHeight,
+        "40-line draft should push the wrapper to the max-height cap",
+      ).toBeGreaterThanOrEqual(COMPOSER_MAX_HEIGHT - HEIGHT_TOLERANCE_PX);
+
+      // ---- Clearing returns the wrapper to the compact floor ----
+      await reply.fill("");
+      const clearedHeight = (await composerWrapper.boundingBox())?.height ?? 0;
+      expect(
+        clearedHeight,
+        "clearing the draft should collapse the composer back to the floor",
+      ).toBeLessThanOrEqual(COMPOSER_MIN_HEIGHT + EMPTY_FLOOR_SLACK_PX);
+    } finally {
+      await app.close();
+    }
   } finally {
-    await app.close();
     await fixture.cleanup();
   }
 });

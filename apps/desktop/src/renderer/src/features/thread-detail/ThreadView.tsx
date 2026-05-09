@@ -29,6 +29,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { ThreadContextPanel } from "./ThreadContextPanel";
@@ -736,24 +737,7 @@ export function ThreadView(props: ThreadViewProps) {
   // pin/unpin choice is preserved across resizes — when they shrink
   // the window back below 1700px the rail returns to whatever they
   // had it set to before.
-  const [contextRailWideMatch, setContextRailWideMatch] = useState(() => {
-    if (typeof window === "undefined" || !window.matchMedia) {
-      return false;
-    }
-    return window.matchMedia("(min-width: 1700px)").matches;
-  });
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) {
-      return;
-    }
-    const mql = window.matchMedia("(min-width: 1700px)");
-    const handler = (event: MediaQueryListEvent): void => {
-      setContextRailWideMatch(event.matches);
-    };
-    setContextRailWideMatch(mql.matches);
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }, []);
+  const contextRailWideMatch = useMediaQuery("(min-width: 1700px)");
   const contextRailEffectivePinned = contextRailPinned || contextRailWideMatch;
 
   useEffect(() => {
