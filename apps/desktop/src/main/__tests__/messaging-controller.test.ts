@@ -19,6 +19,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingSurfaceAction,
+  MessagingChannelKind,
   MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
@@ -29,6 +30,7 @@ import type {
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   MessagingController,
+  messagingDeliveryPriority,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
@@ -2107,6 +2109,123 @@ describe("MessagingController", () => {
         retryable: false,
       },
     });
+  });
+
+  it("reports budget deferrals before holding final stream updates", async () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:group:chat-1",
+      kind: "group",
+      budget: { limit: 1, intervalMs: 60_000, reserved: 0 },
+    };
+    const budgetEvents: Parameters<
+      NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+    >[0][] = [];
+    const onDeliveryBudgetEvent = vi.fn(
+      (event: Parameters<
+        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+      >[0]) => {
+        budgetEvents.push(event);
+      },
+    );
+    const harness = await createHarness({
+      channel: "telegram",
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      resolveDeliveryScope: (intent) =>
+        intent.kind === "stream_update" ? scope : undefined,
+      onDeliveryBudgetEvent,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    const finalDelivery = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Hello final." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await vi.waitFor(() => {
+      expect(onDeliveryBudgetEvent).toHaveBeenCalledTimes(1);
+    });
+    expect(budgetEvents).toEqual([
+      expect.objectContaining({
+        intentKind: "stream_update",
+        outcome: "deferred",
+        priority: "final_turn",
+        retryAt: 61_000,
+        scope,
+      }),
+    ]);
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+      ),
+    ).toEqual([]);
+
+    now = 61_001;
+    await vi.advanceTimersByTimeAsync(60_001);
+    await finalDelivery;
+
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+      ),
+    ).toMatchObject({
+      kind: "stream_update",
+      text: "Hello final.",
+    });
+  });
+
+  it("treats actionless approval cleanup edits as routine budget traffic", () => {
+    const approvalWithButtons = {
+      id: "approval-1",
+      kind: "approval",
+      createdAt: 1_000,
+      title: "Approve",
+      body: "Run command?",
+      decisions: [
+        {
+          id: "accept",
+          label: "Approve",
+          decision: "accept",
+        },
+      ],
+    } satisfies MessagingSurfaceIntent;
+    const approvalCleanup = {
+      ...approvalWithButtons,
+      id: "approval-2",
+      decisions: [],
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(approvalWithButtons)).toBe(
+      "critical_interactive",
+    );
+    expect(messagingDeliveryPriority(approvalCleanup)).toBe("routine_status");
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {
@@ -4221,6 +4340,8 @@ async function createHarness(options?: {
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
+  channel?: MessagingChannelKind;
+  onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   /**
    * Set to `false` to construct the controller WITHOUT an
@@ -4416,10 +4537,12 @@ async function createHarness(options?: {
     adapter,
     authorizedActorIds: ["user-1"],
     backend,
+    channel: options?.channel,
     deliveryBudget: options?.deliveryBudget,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    onDeliveryBudgetEvent: options?.onDeliveryBudgetEvent,
     // Pass the spy by default so tests can assert on fan-out. The
     // `bindingChangedListener: false` opt-out exists for tests that
     // verify the nullish-callback guard — production wiring always

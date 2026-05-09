@@ -24,6 +24,7 @@ import type {
   MessagingActiveTurnSummary,
   MessagingChannelKind,
   MessagingConfirmationIntent,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
@@ -213,6 +214,22 @@ type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
   | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
+export type MessagingControllerDeliveryBudgetEvent = {
+  at: number;
+  backend?: AppServerBackendKind;
+  bindingId?: string;
+  channel: MessagingChannelKind;
+  intentId: string;
+  intentKind: MessagingSurfaceIntent["kind"];
+  outcome: "deferred" | "dropped";
+  priority: MessagingDeliveryPriority;
+  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
+  retryAt?: number;
+  scope?: MessagingDeliveryScope;
+  slowMode: boolean;
+  threadId?: ThreadIdentifier;
+};
+
 type QueuedTurnAction = {
   entryId: string;
   kind: "cancel" | "steer";
@@ -253,6 +270,7 @@ export type MessagingControllerOptions = {
   store: MessagingStoreLike;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   deliveryBudget?: MessagingDeliveryBudget;
+  onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
   /**
    * Notification hook invoked after any binding mutation the
    * controller performs (create, conversation-metadata refresh,
@@ -3794,9 +3812,6 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     occurredAt: number = this.now(),
   ): Promise<void> {
-    if (!this.options.backend.recordMessagingBindingTransition) {
-      return;
-    }
     const conversation = binding.channel.conversation;
     const transition: ThreadMessagingBindingTransition = {
       id: randomUUID(),
@@ -3809,20 +3824,23 @@ export class MessagingController {
       ancestorTitle: conversation.ancestorTitle,
       occurredAt,
     };
-    try {
-      await this.options.backend.recordMessagingBindingTransition({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        transition,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging binding-transition audit failed", {
-        action,
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
+    if (this.options.backend.recordMessagingBindingTransition) {
+      try {
+        await this.options.backend.recordMessagingBindingTransition({
+          backend: binding.backend,
+          threadId: binding.threadId,
+          transition,
+        });
+      } catch (error) {
+        this.logger.debug?.("messaging binding-transition audit failed", {
+          action,
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
     }
+    this.recordBindingActivity(action, binding, occurredAt);
   }
 
   private async bindChannelToThread(
@@ -3975,16 +3993,7 @@ export class MessagingController {
     const conversation = binding?.channel.conversation;
     const summary = describeOutboundIntent(intent);
     try {
-      // Lazy import keeps the controller free of a top-level dep on
-      // the desktop activity-log singleton (the controller is shared
-      // with other harnesses; this method is the only main-process
-      // entry that needs it).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const log = (require(
-        "../desktop-messaging-activity-log",
-      ) as typeof import("../desktop-messaging-activity-log"))
-        .getDesktopMessagingActivityLog();
-      log.record({
+      this.desktopActivityLog().record({
         platform: channel,
         kind: "outbound",
         backend: binding?.backend,
@@ -4005,6 +4014,48 @@ export class MessagingController {
     }
   }
 
+  private recordBindingActivity(
+    action: ThreadMessagingBindingTransition["action"],
+    binding: MessagingBindingRecord,
+    occurredAt: number,
+  ): void {
+    try {
+      const conversation = binding.channel.conversation;
+      const log = this.desktopActivityLog();
+      log.record({
+        platform: binding.channel.channel,
+        kind: "binding",
+        backend: binding.backend,
+        threadId: binding.threadId,
+        bindingId: binding.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        summary: `Channel ${action}: ${describeConversation(conversation)} / ${binding.threadId}`,
+        createdAt: occurredAt,
+        payload: {
+          action,
+          conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
+          parentTitle: conversation.parentTitle,
+          ancestorTitle: conversation.ancestorTitle,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
+  }
+
+  private desktopActivityLog(): import("../messaging-activity-log").MessagingActivityLog {
+    // Lazy import keeps the controller free of a top-level dep on the
+    // desktop activity-log singleton (the controller is shared with
+    // other harnesses).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require(
+      "../desktop-messaging-activity-log",
+    ) as typeof import("../desktop-messaging-activity-log"))
+      .getDesktopMessagingActivityLog();
+  }
+
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -4016,14 +4067,57 @@ export class MessagingController {
     const routedIntent = this.withRoutingAudit(intent, binding, event);
     let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent);
+    const channel = binding?.channel.channel ??
+      routedIntent.audit?.channel.channel ??
+      this.options.channel;
     while (true) {
       if (this.deliveryBudget) {
+        const budgetChannel = channel ?? scope?.platform ?? "telegram";
         let admission = this.deliveryBudget.admit({ priority, scope });
         while (admission.outcome === "deferred") {
+          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
+            at: this.now(),
+            backend: binding?.backend,
+            bindingId: binding?.id ?? intent.bindingId,
+            channel: budgetChannel,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: "deferred",
+            priority,
+            retryAt: admission.retryAt,
+            scope,
+            slowMode: admission.slowMode,
+            threadId: binding?.threadId,
+          };
+          this.logger.info?.("messaging delivery budget deferred intent", {
+            bindingId: binding?.id ?? intent.bindingId,
+            delayMs: Math.max(0, admission.retryAt - this.now()),
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            priority,
+            retryAt: admission.retryAt,
+            scopeId: scope?.id,
+            slowMode: admission.slowMode,
+          });
+          this.notifyDeliveryBudgetEvent(budgetEvent);
           await sleepUntil(admission.retryAt, this.now);
           admission = this.deliveryBudget.admit({ priority, scope });
         }
         if (admission.outcome !== "admitted") {
+          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
+            at: this.now(),
+            backend: binding?.backend,
+            bindingId: binding?.id ?? intent.bindingId,
+            channel: budgetChannel,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: "dropped",
+            priority,
+            reason: admission.reason,
+            scope,
+            slowMode: admission.slowMode,
+            threadId: binding?.threadId,
+          };
           this.logger.debug?.("messaging delivery budget skipped intent", {
             bindingId: binding?.id ?? intent.bindingId,
             intentId: routedIntent.id,
@@ -4032,9 +4126,11 @@ export class MessagingController {
             priority,
             reason: admission.outcome === "dropped" ? admission.reason : undefined,
             scopeId: scope?.id,
+            slowMode: admission.slowMode,
           });
+          this.notifyDeliveryBudgetEvent(budgetEvent);
           return {
-            channel: binding?.channel.channel ?? routedIntent.audit?.channel.channel ?? this.options.channel ?? "custom",
+            channel: channel ?? "telegram",
             deliveredAt: this.now(),
             outcome: "discarded",
           };
@@ -4092,6 +4188,21 @@ export class MessagingController {
         });
       }
       return result;
+    }
+  }
+
+  private notifyDeliveryBudgetEvent(
+    event: MessagingControllerDeliveryBudgetEvent,
+  ): void {
+    if (!this.options.onDeliveryBudgetEvent) return;
+    try {
+      this.options.onDeliveryBudgetEvent(event);
+    } catch (error) {
+      this.logger.debug?.("messaging delivery-budget listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+        intentId: event.intentId,
+        outcome: event.outcome,
+      });
     }
   }
 
@@ -4628,11 +4739,15 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
   return true;
 }
 
-function messagingDeliveryPriority(
+export function messagingDeliveryPriority(
   intent: MessagingSurfaceIntent,
 ): MessagingDeliveryPriority {
   switch (intent.kind) {
     case "approval":
+      if (intent.decisions.length === 0) {
+        return "routine_status";
+      }
+      return "critical_interactive";
     case "questionnaire":
       return "critical_interactive";
     case "stream_update":
@@ -5149,4 +5264,15 @@ function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
   if (intent.kind === "approval") return "Sent approval request";
   if (intent.kind === "error") return "Sent error notice";
   return `Sent ${intent.kind}`;
+}
+
+function describeConversation(
+  conversation: MessagingBindingRecord["channel"]["conversation"],
+): string {
+  const pieces = [
+    conversation.ancestorTitle,
+    conversation.parentTitle,
+    conversation.title,
+  ].filter((piece): piece is string => Boolean(piece));
+  return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
 }

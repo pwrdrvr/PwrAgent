@@ -176,7 +176,9 @@ export type MessagingActivityKind =
   | "inbound-rejected"
   | "inbound-ignored"
   | "pairing"
-  | "outbound";
+  | "outbound"
+  | "binding"
+  | "diagnostic";
 
 export type MessagingActivityEntry = {
   id: number;

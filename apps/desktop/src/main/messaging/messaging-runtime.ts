@@ -1,5 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { MessagingController } from "./core/messaging-controller";
+import {
+  MessagingController,
+  type MessagingControllerDeliveryBudgetEvent,
+} from "./core/messaging-controller";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
@@ -114,6 +117,8 @@ const MAX_OUTSTANDING_PAIRING_TOKENS = 5;
 const PAIRING_TOKEN_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
+const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
+const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 
 export type MessagingPairingChangedEvent = {
   at: number;
@@ -210,6 +215,7 @@ export class DesktopMessagingRuntime {
     string,
     ReturnType<typeof setTimeout>
   >();
+  private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
@@ -721,6 +727,7 @@ export class DesktopMessagingRuntime {
       toolUpdateDefaultMode: async () =>
         (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
       onBindingChanged: () => this.broadcastBindingsChanged(),
+      onDeliveryBudgetEvent: (event) => this.handleDeliveryBudgetEvent(event),
     });
 
     let unsubscribeInboundRejected: (() => void) | undefined;
@@ -928,33 +935,34 @@ export class DesktopMessagingRuntime {
   }
 
   private async recordBindingUnbound(binding: MessagingBindingRecord): Promise<void> {
-    if (!this.options.backendBridge.recordMessagingBindingTransition) {
-      return;
-    }
     const conversation = binding.channel.conversation;
-    try {
-      await this.options.backendBridge.recordMessagingBindingTransition({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        transition: {
-          id: randomUUID(),
-          action: "unbound",
+    const occurredAt = Date.now();
+    if (this.options.backendBridge.recordMessagingBindingTransition) {
+      try {
+        await this.options.backendBridge.recordMessagingBindingTransition({
+          backend: binding.backend,
+          threadId: binding.threadId,
+          transition: {
+            id: randomUUID(),
+            action: "unbound",
+            bindingId: binding.id,
+            platform: binding.channel.channel,
+            conversationKind: conversation.kind,
+            conversationTitle: conversation.title,
+            parentTitle: conversation.parentTitle,
+            ancestorTitle: conversation.ancestorTitle,
+            occurredAt,
+          },
+        });
+      } catch (error) {
+        messagingLog.warn("messaging binding-transition audit failed", {
           bindingId: binding.id,
-          platform: binding.channel.channel,
-          conversationKind: conversation.kind,
-          conversationTitle: conversation.title,
-          parentTitle: conversation.parentTitle,
-          ancestorTitle: conversation.ancestorTitle,
-          occurredAt: Date.now(),
-        },
-      });
-    } catch (error) {
-      messagingLog.warn("messaging binding-transition audit failed", {
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
     }
+    this.recordBindingActivity("unbound", binding, occurredAt);
   }
 
   private broadcastBindingsChanged(): void {
@@ -1038,6 +1046,99 @@ export class DesktopMessagingRuntime {
       retryAfterMs,
       startedAt,
       expiresAt,
+    });
+    this.recordDiagnosticActivity({
+      platform,
+      summary: `Provider rate limit: ${info.scope.id}`,
+      createdAt: startedAt,
+      payload: {
+        type: "provider-rate-limit",
+        scope: sanitizeDeliveryScope(info.scope),
+        retryAfterMs,
+        expiresAt,
+        message: clipStatusText(info.message),
+      },
+    });
+  }
+
+  private handleDeliveryBudgetEvent(
+    event: MessagingControllerDeliveryBudgetEvent,
+  ): void {
+    const scopeId = event.scope?.id ?? "unknown";
+    const reason = event.outcome === "deferred"
+      ? "deferred"
+      : event.reason ?? "dropped";
+    const retryDelayMs = event.retryAt !== undefined
+      ? Math.max(0, event.retryAt - event.at)
+      : undefined;
+
+    const diagnosticKey = [
+      event.channel,
+      scopeId,
+      event.outcome,
+      event.reason ?? "deferred",
+      event.priority,
+      event.intentKind,
+    ].join("\0");
+    const lastLoggedAt = this.deliveryBudgetDiagnosticLastLoggedAt.get(diagnosticKey);
+    if (
+      lastLoggedAt !== undefined &&
+      event.at - lastLoggedAt < DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS
+    ) {
+      return;
+    }
+    this.deliveryBudgetDiagnosticLastLoggedAt.set(diagnosticKey, event.at);
+
+    messagingLog.info("messaging delivery budget constrained", {
+      bindingId: event.bindingId,
+      channel: event.channel,
+      intentId: event.intentId,
+      intentKind: event.intentKind,
+      outcome: event.outcome,
+      priority: event.priority,
+      reason,
+      retryAt: event.retryAt,
+      retryDelayMs,
+      scopeId,
+      slowMode: event.slowMode,
+      threadId: event.threadId,
+    });
+
+    const expiresAt = event.outcome === "deferred"
+      ? event.retryAt
+      : event.at + DELIVERY_BUDGET_WARNING_TTL_MS;
+    const key = degradationKey(event.channel, "warning", `delivery-budget:${scopeId}`);
+    this.addPlatformDegradationReason(event.channel, {
+      kind: "warning",
+      key,
+      message: event.outcome === "deferred"
+        ? `Delivery budget saturated; holding ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}.`
+        : `Delivery budget dropped ${event.priority} (${reason}).`,
+      scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
+      startedAt: event.at,
+      expiresAt,
+    });
+    this.recordDiagnosticActivity({
+      platform: event.channel,
+      backend: event.backend,
+      threadId: event.threadId,
+      bindingId: event.bindingId,
+      summary: event.outcome === "deferred"
+        ? `Delivery budget deferred ${event.priority} for ${formatDurationForStatus(retryDelayMs ?? 0)}`
+        : `Delivery budget dropped ${event.priority}: ${reason}`,
+      createdAt: event.at,
+      payload: {
+        type: "delivery-budget",
+        intentId: event.intentId,
+        intentKind: event.intentKind,
+        outcome: event.outcome,
+        priority: event.priority,
+        reason,
+        retryAt: event.retryAt,
+        retryDelayMs,
+        scope: event.scope ? sanitizeDeliveryScope(event.scope) : undefined,
+        slowMode: event.slowMode,
+      },
     });
   }
 
@@ -1337,6 +1438,69 @@ export class DesktopMessagingRuntime {
     }
   }
 
+  private recordBindingActivity(
+    action: "bound" | "unbound",
+    binding: MessagingBindingRecord,
+    occurredAt: number,
+  ): void {
+    try {
+      const conversation = binding.channel.conversation;
+      getDesktopMessagingActivityLog().record({
+        platform: binding.channel.channel,
+        kind: "binding",
+        backend: binding.backend,
+        threadId: binding.threadId,
+        bindingId: binding.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        summary: `Channel ${action}: ${describeConversation(conversation)} / ${binding.threadId}`,
+        createdAt: occurredAt,
+        payload: {
+          action,
+          conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
+          parentTitle: conversation.parentTitle,
+          ancestorTitle: conversation.ancestorTitle,
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging binding activity write failed", {
+        action,
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private recordDiagnosticActivity(params: {
+    platform: MessagingChannelKind;
+    backend?: AgentEvent["backend"];
+    threadId?: string;
+    bindingId?: string;
+    summary: string;
+    createdAt: number;
+    payload: Record<string, unknown>;
+  }): void {
+    try {
+      getDesktopMessagingActivityLog().record({
+        platform: params.platform,
+        kind: "diagnostic",
+        backend: params.backend,
+        threadId: params.threadId,
+        bindingId: params.bindingId,
+        summary: params.summary,
+        createdAt: params.createdAt,
+        payload: params.payload,
+      });
+    } catch (error) {
+      messagingLog.warn("messaging diagnostic activity write failed", {
+        bindingId: params.bindingId,
+        error: error instanceof Error ? error.message : String(error),
+        platform: params.platform,
+      });
+    }
+  }
+
   private recordActivityFromInbound(
     platform: MessagingChannelKind,
     event: MessagingInboundEvent,
@@ -1633,6 +1797,26 @@ function clipStatusText(value: string | undefined): string | undefined {
   }
   const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
   return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function describeConversation(
+  conversation: MessagingBindingRecord["channel"]["conversation"],
+): string {
+  const pieces = [
+    conversation.ancestorTitle,
+    conversation.parentTitle,
+    conversation.title,
+  ].filter((piece): piece is string => Boolean(piece));
+  return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
+}
+
+function formatDurationForStatus(durationMs: number): string {
+  const seconds = Math.max(0, Math.ceil(durationMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes}m`;
 }
 
 function isMessagingPendingRequest(
