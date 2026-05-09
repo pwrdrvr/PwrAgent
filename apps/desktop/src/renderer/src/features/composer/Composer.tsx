@@ -55,6 +55,7 @@ import {
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
+  type ComposerPendingSteerSnapshot,
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 
@@ -862,6 +863,9 @@ export function Composer(props: ComposerProps) {
   const savedInitialQueuedTurn = props.thread
     ? draftStore.getQueuedTurn(composerScopeKey)
     : undefined;
+  const savedInitialPendingSteer = props.thread
+    ? draftStore.getPendingSteer(composerScopeKey)
+    : undefined;
   const hydratedInitialLaunchpad =
     savedInitialDraft || !props.launchpad
       ? undefined
@@ -914,7 +918,13 @@ export function Composer(props: ComposerProps) {
   const [queuedTurn, setQueuedTurnState] = useState<QueuedTurnDraft | undefined>(
     savedInitialQueuedTurn
   );
-  const [pendingSteer, setPendingSteer] = useState<PendingSteerDraft>();
+  const [pendingSteer, setPendingSteerState] = useState<
+    PendingSteerDraft | undefined
+  >(
+    savedInitialPendingSteer
+      ? { ...savedInitialPendingSteer, status: "pending" }
+      : undefined
+  );
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
     props.activeTurnId
   );
@@ -1026,6 +1036,21 @@ export function Composer(props: ComposerProps) {
   };
   const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
+  const savePendingSteerSnapshot = (
+    scopeKey: string,
+    state?: ComposerPendingSteerSnapshot,
+  ): void => {
+    if (!isQueuedTurnStoreScope(scopeKey)) {
+      return;
+    }
+
+    if (!state || (!state.text.trim() && state.imageAttachments.length === 0)) {
+      draftStore.deletePendingSteer(scopeKey);
+      return;
+    }
+
+    draftStore.setPendingSteer(scopeKey, state);
+  };
   const saveQueuedTurnSnapshot = (
     scopeKey: string,
     state?: ComposerQueuedTurnSnapshot,
@@ -1044,6 +1069,27 @@ export function Composer(props: ComposerProps) {
   const setQueuedTurn = (nextQueuedTurn?: QueuedTurnDraft): void => {
     saveQueuedTurnSnapshot(composerScopeKey, nextQueuedTurn);
     setQueuedTurnState(nextQueuedTurn);
+  };
+  const setPendingSteer = (nextPendingSteer?: PendingSteerDraft): void => {
+    if (nextPendingSteer?.status === "pending") {
+      savePendingSteerSnapshot(composerScopeKey, nextPendingSteer);
+    } else {
+      savePendingSteerSnapshot(composerScopeKey);
+    }
+    setPendingSteerState(nextPendingSteer);
+  };
+  const updatePendingSteer = (
+    updater: (current?: PendingSteerDraft) => PendingSteerDraft | undefined,
+  ): void => {
+    setPendingSteerState((current) => {
+      const nextPendingSteer = updater(current);
+      if (nextPendingSteer?.status === "pending") {
+        savePendingSteerSnapshot(composerScopeKey, nextPendingSteer);
+      } else {
+        savePendingSteerSnapshot(composerScopeKey);
+      }
+      return nextPendingSteer;
+    });
   };
   const markComposerDraftSubmitted = (scopeKey: string): void => {
     if (!isDraftStoreScope(scopeKey)) {
@@ -1222,13 +1268,18 @@ export function Composer(props: ComposerProps) {
 
     if (props.thread) {
       const saved = draftStore.get(composerScopeKey);
+      const savedPendingSteer = draftStore.getPendingSteer(composerScopeKey);
       const savedQueuedTurn = draftStore.getQueuedTurn(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setEditorDocument(saved?.editorDocument);
       setImageAttachments(saved?.imageAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
+      setPendingSteerState(
+        savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
+      );
       setQueuedTurnState(savedQueuedTurn);
     } else {
+      setPendingSteerState(undefined);
       setQueuedTurnState(undefined);
     }
     setSending(false);
@@ -1237,7 +1288,6 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setPendingSteer(undefined);
   }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
 
   useEffect(() => {
@@ -1729,6 +1779,28 @@ export function Composer(props: ComposerProps) {
     });
   }, [activeTurnId, queuedTurn, sending, props.disabled, props.launchpad]);
 
+  useEffect(() => {
+    if (
+      !pendingSteer ||
+      pendingSteer.status !== "pending" ||
+      activeTurnId ||
+      props.launchpad
+    ) {
+      return;
+    }
+
+    if (queuedTurn) {
+      setComposerDraftFromCanonical(pendingSteer.text);
+      setImageAttachments(pendingSteer.imageAttachments);
+    } else {
+      setQueuedTurn({
+        text: pendingSteer.text,
+        imageAttachments: pendingSteer.imageAttachments,
+      });
+    }
+    setPendingSteer(undefined);
+  }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
+
   const queueCurrentDraft = (): void => {
     if (!hasComposerContent && imageAttachments.length === 0) {
       return;
@@ -1767,7 +1839,7 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     setSteering(true);
-    setPendingSteer((current) =>
+    updatePendingSteer((current) =>
       current?.text === pending.text &&
       current.imageAttachments === pending.imageAttachments
         ? { ...current, status: "steering" }
@@ -1801,7 +1873,7 @@ export function Composer(props: ComposerProps) {
         props.onPendingStatusChange?.(staleSteer.active ? "Thinking" : undefined);
         return;
       }
-      setPendingSteer((current) =>
+      updatePendingSteer((current) =>
         current?.text === pending.text &&
         current.imageAttachments === pending.imageAttachments
           ? { ...current, status: "pending" }
