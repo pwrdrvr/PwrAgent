@@ -181,6 +181,7 @@ export type MessagingPairingStatus =
 export type MessagingPairingObservedActor = {
   id: string;
   displayName?: string;
+  phoneNumber?: string;
   username?: string;
 };
 

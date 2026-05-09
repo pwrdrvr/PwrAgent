@@ -159,6 +159,7 @@ export type MessagingConversationRef = {
 export type MessagingActorIdentity = {
   platformUserId: string;
   displayName?: string;
+  phoneNumber?: string;
   username?: string;
   isBot?: boolean;
 };

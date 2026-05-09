@@ -57,6 +57,7 @@ export function MessagingSettings(props: {
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
+  onPairingSettingsChanged?: () => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -204,6 +205,7 @@ export function MessagingSettings(props: {
           <PairingTokenField
             desktopApi={props.desktopApi}
             disabled={platformControlsDisabled || !telegram.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
             platform="telegram"
             supportsBucket
           />
@@ -318,6 +320,7 @@ export function MessagingSettings(props: {
           <PairingTokenField
             desktopApi={props.desktopApi}
             disabled={platformControlsDisabled || !discord.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
             platform="discord"
             supportsBucket
           />
@@ -470,6 +473,7 @@ export function MessagingSettings(props: {
           <PairingTokenField
             desktopApi={props.desktopApi}
             disabled={platformControlsDisabled || !mattermost.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
             platform="mattermost"
           />
           <ToggleField
@@ -647,6 +651,7 @@ export function MessagingSettings(props: {
           <PairingTokenField
             desktopApi={props.desktopApi}
             disabled={platformControlsDisabled || !slack.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
             platform="slack"
             supportsBucket
           />
@@ -984,6 +989,7 @@ function NumberField(props: {
 function PairingTokenField(props: {
   desktopApi?: DesktopApi;
   disabled: boolean;
+  onSettingsChanged?: () => Promise<void>;
   platform: MessagingChannelKind;
   supportsBucket?: boolean;
 }) {
@@ -1034,7 +1040,12 @@ function PairingTokenField(props: {
     setError(undefined);
     try {
       if (decision === "approve") {
-        await props.desktopApi?.approveMessagingPairing?.({ entryId: entry.id });
+        const result = await props.desktopApi?.approveMessagingPairing?.({
+          entryId: entry.id,
+        });
+        if (result?.added) {
+          await props.onSettingsChanged?.();
+        }
       } else {
         await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
       }
@@ -1109,7 +1120,14 @@ function PairingTokenField(props: {
             <div className="settings-pairing__requests">
               {observedEntries.map((entry) => (
                 <div className="settings-pairing__request" key={entry.id}>
-                  <span>{pairingEntryLabel(entry)}</span>
+                  <div className="settings-pairing__request-text">
+                    <span className="settings-pairing__request-title">
+                      {pairingEntryLabel(entry)}
+                    </span>
+                    <span className="settings-pairing__request-meta">
+                      {pairingEntryDetails(entry).join(" | ")}
+                    </span>
+                  </div>
                   <button
                     className="button button--secondary"
                     disabled={busyId === entry.id}
@@ -1148,6 +1166,30 @@ function pairingEntryLabel(entry: MessagingPairingEntry): string {
   return `${actor} wants access`;
 }
 
+function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
+  const details: string[] = [];
+  if (entry.observedActor?.id) {
+    details.push(`User ID ${entry.observedActor.id}`);
+  }
+  if (entry.observedActor?.username) {
+    details.push(`@${entry.observedActor.username}`);
+  }
+  if (entry.observedActor?.phoneNumber) {
+    details.push(`Phone ${entry.observedActor.phoneNumber}`);
+  }
+  if (entry.observedChat?.id) {
+    const chatLabel = entry.observedChat.kind === "dm" ? "DM peer" : "Chat";
+    details.push(`${chatLabel} ID ${entry.observedChat.id}`);
+  }
+  if (entry.observedChat?.title) {
+    details.push(entry.observedChat.title);
+  }
+  if (entry.observedChat?.bucketId && entry.observedChat.bucketId !== entry.observedChat.id) {
+    details.push(`Bucket ID ${entry.observedChat.bucketId}`);
+  }
+  return details;
+}
+
 function AuthorizedListField(props: {
   disabled?: boolean;
   help?: ReactNode;
@@ -1166,6 +1208,11 @@ function AuthorizedListField(props: {
   const [lookupState, setLookupState] = useState<
     Record<number, { loading?: boolean; message?: string }>
   >({});
+  useEffect(() => {
+    rowsRef.current = props.value;
+    setRowsState(props.value);
+    setLookupState({});
+  }, [props.value]);
   const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
     ? normalizedRows

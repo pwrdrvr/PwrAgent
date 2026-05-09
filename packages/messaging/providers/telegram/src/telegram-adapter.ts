@@ -101,6 +101,7 @@ export type TelegramUser = {
   id: number;
   is_bot?: boolean;
   last_name?: string;
+  phone_number?: string;
   username?: string;
 };
 
@@ -2008,6 +2009,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       platformUserId: String(user?.id ?? "unknown"),
       displayName: [user?.first_name, user?.last_name].filter(Boolean).join(" ") || undefined,
       isBot: user?.is_bot,
+      phoneNumber: user?.phone_number,
       username: user?.username,
     };
   }

@@ -2750,14 +2750,29 @@ textarea,
   background: var(--bg-surface);
 }
 
-.settings-pairing__request span {
+.settings-pairing__request-text {
   flex: 1 1 auto;
   min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-pairing__request-title,
+.settings-pairing__request-meta {
   overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-pairing__request-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-pairing__request-meta {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 @media (max-width: 760px) {

@@ -478,6 +478,7 @@ export class DesktopMessagingRuntime {
         actor: {
           platformUserId: entry.observedActor.id,
           displayName: entry.observedActor.displayName,
+          phoneNumber: entry.observedActor.phoneNumber,
           username: entry.observedActor.username,
         },
         action: `pairing.${outcome}`,
@@ -1289,6 +1290,7 @@ function observedActorFromEvent(event: MessagingInboundEvent): MessagingPairingO
   return {
     id: event.actor.platformUserId,
     displayName: event.actor.displayName,
+    phoneNumber: event.actor.phoneNumber,
     username: event.actor.username,
   };
 }

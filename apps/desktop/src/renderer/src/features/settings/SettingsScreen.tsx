@@ -230,6 +230,7 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        onPairingSettingsChanged={props.settings.refresh}
         onClearSecret={props.settings.clearSecret}
         onReplaceSecret={props.settings.replaceSecret}
         onToolUpdateModeChange={async (toolUpdateMode) => {
