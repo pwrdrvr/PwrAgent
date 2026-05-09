@@ -388,6 +388,113 @@ describe("discord adapter", () => {
     await restartedAdapter.stop();
   });
 
+  it("validates live component clicks against persisted callback actor scope", async () => {
+    const store = createCallbackHandleStore();
+    let createdRequest: Parameters<DiscordApi["createMessage"]>[1] | undefined;
+    const createMessage = vi.fn(async (channelId: string, request) => {
+      createdRequest = request;
+      return {
+        channel_id: channelId,
+        id: "message-2",
+      };
+    });
+    const gateway = new TestDiscordGateway();
+    const createInteractionResponse = vi.fn(async () => {});
+    const adapter = new DiscordAdapter({
+      api: createApi({ createInteractionResponse, createMessage }),
+      config: {
+        authorizedActorIds: [
+          { id: TEST_USER_ID, displayName: "" },
+          { id: TEST_OTHER_USER_ID, displayName: "" },
+        ],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      now: () => 1235,
+      store,
+    });
+
+    await adapter.deliver({
+      audit: {
+        action: "intent.deliver",
+        actor: {
+          platformUserId: TEST_USER_ID,
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: TEST_CHANNEL_ID,
+            kind: "channel",
+            parentId: TEST_GUILD_ID,
+          },
+        },
+        bindingId: "binding-1",
+        occurredAt: 1234,
+      },
+      allowedActorIds: [TEST_USER_ID],
+      actions: [
+        {
+          id: "permissions",
+          label: "Permissions",
+          value: { mode: "review" },
+        },
+      ],
+      createdAt: 1234,
+      id: "status-1",
+      kind: "status",
+      status: "waiting",
+      text: "Ready",
+    });
+
+    const customId = createdRequest?.components?.[0]?.components[0]?.custom_id;
+    expect(customId).toMatch(/^dc:/);
+
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        channel_id: TEST_CHANNEL_ID,
+        data: {
+          custom_id: customId,
+        },
+        guild_id: TEST_GUILD_ID,
+        id: TEST_MESSAGE_ID,
+        token: "token_ABC.123",
+        type: 3,
+        user: {
+          id: TEST_OTHER_USER_ID,
+          username: "pwrdrvr",
+        },
+      },
+    });
+
+    expect(store.resolveCallbackHandle).toHaveBeenCalledWith({
+      actorId: TEST_OTHER_USER_ID,
+      channel: expect.objectContaining({
+        conversation: expect.objectContaining({ id: TEST_CHANNEL_ID }),
+      }),
+      handle: customId,
+      now: 1235,
+    });
+    expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+      type: 6,
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        actionId: undefined,
+        kind: "callback",
+        value: undefined,
+      }),
+    ]);
+    await adapter.stop();
+  });
+
   it("keeps persisted handles for fan-out deliveries in separate conversations", async () => {
     const store = createCallbackHandleStore();
     const firstChannelId = TEST_CHANNEL_ID;

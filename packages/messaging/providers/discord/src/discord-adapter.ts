@@ -872,16 +872,17 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       interaction.channel_id,
       interaction.guild_id,
     );
-    const binding = this.componentBindings.get(customId);
-    const persistedBinding =
-      !binding && this.options.store
-        ? await this.options.store.resolveCallbackHandle({
-            actorId: actor.id,
-            channel,
-            handle: customId,
-            now: this.now(),
-          })
-        : undefined;
+    const persistedBinding = this.options.store
+      ? await this.options.store.resolveCallbackHandle({
+          actorId: actor.id,
+          channel,
+          handle: customId,
+          now: this.now(),
+        })
+      : undefined;
+    const binding = this.options.store
+      ? undefined
+      : this.componentBindings.get(customId);
     await listener({
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
