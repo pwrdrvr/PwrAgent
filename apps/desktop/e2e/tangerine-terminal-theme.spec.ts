@@ -135,15 +135,16 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
 
     await expect(shell).toHaveCSS("background-color", "rgb(0, 0, 0)");
     await expect(sidebar).toHaveCSS("background-color", "rgb(5, 5, 5)");
-    // Issue #240: the transcript pane is now transparent — it rides
-    // the app-shell's `--bg-app` background. Only the composer below
-    // it carries the panel-tinted surface, separated by the
-    // composer's `border-top`.
+    // Issue #240: the transcript and composer panes are both
+    // transparent — they ride the app-shell's `--bg-app` background.
+    // The textarea / picker buttons inside the composer carry their
+    // own bg-input + border styling, which is enough visual
+    // differentiation without tinting the whole composer surface.
     await expect(transcriptPanel).toHaveCSS(
       "background-color",
       "rgba(0, 0, 0, 0)",
     );
-    await expect(composer).toHaveCSS("background-color", "rgb(10, 10, 10)");
+    await expect(composer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(activeLens).toHaveCSS("background-color", "rgb(18, 8, 0)");
     await expect(activeLens).toHaveCSS("color", "rgb(255, 179, 92)");
     await expect(primaryButton).toHaveCSS("background-color", "rgb(18, 8, 0)");
