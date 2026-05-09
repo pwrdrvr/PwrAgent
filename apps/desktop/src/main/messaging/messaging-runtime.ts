@@ -164,6 +164,7 @@ export class DesktopMessagingRuntime {
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
+  private lifecycleQueue: Promise<void> = Promise.resolve();
   /**
    * Listeners notified whenever any controller mutates a binding
    * (create / refresh metadata / sync title / detach / revoke). The
@@ -183,11 +184,19 @@ export class DesktopMessagingRuntime {
   ) {}
 
   async start(): Promise<void> {
-    const config = await this.loadConfig({ logStartupEligibility: true });
-    await this.applyConfig(config);
+    await this.enqueueLifecycle(async () => {
+      const config = await this.loadConfig({ logStartupEligibility: true });
+      await this.applyConfigNow(config);
+    });
   }
 
   async stop(): Promise<void> {
+    await this.enqueueLifecycle(async () => {
+      await this.stopNow();
+    });
+  }
+
+  private async stopNow(): Promise<void> {
     if (!this.started) {
       return;
     }
@@ -216,8 +225,17 @@ export class DesktopMessagingRuntime {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    await this.enqueueLifecycle(async () => {
+      await this.applyConfigNow(config, options);
+    });
+  }
+
+  private async applyConfigNow(
+    config: DesktopMessagingConfig,
+    options: { allowStart?: boolean } = {},
+  ): Promise<void> {
     if (config.enabled === false) {
-      await this.stop();
+      await this.stopNow();
       return;
     }
 
@@ -303,7 +321,9 @@ export class DesktopMessagingRuntime {
   async applyLatestConfig(
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
-    await this.applyConfig(await this.loadConfig(), options);
+    await this.enqueueLifecycle(async () => {
+      await this.applyConfigNow(await this.loadConfig(), options);
+    });
   }
 
   isEnabled(): boolean {
@@ -504,6 +524,17 @@ export class DesktopMessagingRuntime {
         );
       }
     }
+  }
+
+  private async enqueueLifecycle(
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const run = this.lifecycleQueue.catch(() => undefined).then(operation);
+    this.lifecycleQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    await run;
   }
 
   private async startRunningAdapter(params: {
