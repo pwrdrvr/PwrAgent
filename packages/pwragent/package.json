@@ -1,0 +1,42 @@
+{
+  "name": "pwragent",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Coming soon: PwrAgent command-line tools.",
+  "author": "PwrDrvr LLC <harold@pwrdrvr.com>",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 PwrDrvr LLC",
+  "homepage": "https://github.com/pwrdrvr/PwrAgent#readme",
+  "bugs": {
+    "url": "https://github.com/pwrdrvr/PwrAgent/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwrdrvr/PwrAgent.git",
+    "directory": "packages/pwragent"
+  },
+  "keywords": [
+    "pwragent",
+    "agent",
+    "coding-agent",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "pwragent": "bin/pwragent.js"
+  },
+  "scripts": {
+    "pack:check": "npm pack --dry-run"
+  }
+}
