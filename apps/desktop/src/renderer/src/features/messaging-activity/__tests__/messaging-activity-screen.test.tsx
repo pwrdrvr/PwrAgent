@@ -44,4 +44,74 @@ describe("MessagingActivityScreen", () => {
     expect(screen.getByText("1480554271907905000").closest("button"))
       .toHaveTextContent("Channel ID");
   });
+
+  it("labels Telegram topic pairing IDs with their parent supergroup", async () => {
+    const desktopApi = {
+      listMessagingActivity: vi.fn(async () => ({
+        entries: [
+          {
+            id: 1,
+            platform: "telegram",
+            kind: "pairing",
+            conversationId: "5642",
+            actorId: "8460800771",
+            actorDisplayName: "Harold",
+            summary: "Observed pairing token",
+            createdAt: Date.now(),
+            payload: {
+              conversationKind: "topic",
+              conversationParentId: "-1003841603622",
+            },
+          },
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<MessagingActivityScreen desktopApi={desktopApi} />);
+
+    await waitFor(() => {
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+    });
+    expect((await screen.findByText("8460800771")).closest("button"))
+      .toHaveTextContent("Peer ID");
+    expect(screen.getByText("-1003841603622").closest("button"))
+      .toHaveTextContent("Supergroup ID");
+    expect(screen.getByText("5642").closest("button"))
+      .toHaveTextContent("Topic ID");
+  });
+
+  it("shows Slack workspace IDs from bucket metadata", async () => {
+    const desktopApi = {
+      listMessagingActivity: vi.fn(async () => ({
+        entries: [
+          {
+            id: 1,
+            platform: "slack",
+            kind: "pairing",
+            conversationId: "C079K80HTGS",
+            actorId: "U079K80HTGS",
+            actorDisplayName: "Harold",
+            summary: "Observed pairing token",
+            createdAt: Date.now(),
+            payload: {
+              conversationKind: "channel",
+              conversationBucketId: "T079K80HTGS",
+            },
+          },
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<MessagingActivityScreen desktopApi={desktopApi} />);
+
+    await waitFor(() => {
+      expect(desktopApi.listMessagingActivity).toHaveBeenCalledWith({ limit: 200 });
+    });
+    expect((await screen.findByText("U079K80HTGS")).closest("button"))
+      .toHaveTextContent("User ID");
+    expect(screen.getByText("T079K80HTGS").closest("button"))
+      .toHaveTextContent("Workspace ID");
+    expect(screen.getByText("C079K80HTGS").closest("button"))
+      .toHaveTextContent("Channel ID");
+  });
 });

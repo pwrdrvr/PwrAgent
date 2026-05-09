@@ -230,12 +230,23 @@ function copyFieldsForEntry(
     typeof entry.payload?.conversationParentId === "string"
       ? entry.payload.conversationParentId
       : undefined;
+  const bucketId =
+    typeof entry.payload?.conversationBucketId === "string"
+      ? entry.payload.conversationBucketId
+      : undefined;
 
   if (parentId) {
     fields.push({
       key: "parent",
       label: parentIdLabel(entry.platform, conversationKind),
       value: parentId,
+    });
+  }
+  if (bucketId && bucketId !== parentId && bucketId !== entry.conversationId) {
+    fields.push({
+      key: "bucket",
+      label: bucketIdLabel(entry.platform),
+      value: bucketId,
     });
   }
   if (entry.conversationId) {
@@ -252,6 +263,7 @@ function copyFieldsForEntry(
 function userIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Peer ID";
   if (platform === "discord") return "User ID";
+  if (platform === "slack") return "User ID";
   if (platform === "mattermost") return "User ID";
   return "Actor ID";
 }
@@ -266,6 +278,14 @@ function parentIdLabel(
   return "Parent ID";
 }
 
+function bucketIdLabel(platform: MessagingActivityEntry["platform"]): string {
+  if (platform === "telegram") return "Supergroup ID";
+  if (platform === "discord") return "Guild ID";
+  if (platform === "slack") return "Workspace ID";
+  if (platform === "mattermost") return "Team ID";
+  return "Bucket ID";
+}
+
 function conversationIdLabel(
   platform: MessagingActivityEntry["platform"],
   conversationKind?: string,
@@ -274,6 +294,7 @@ function conversationIdLabel(
     return conversationKind === "topic" ? "Topic ID" : "Supergroup ID";
   }
   if (platform === "discord" && conversationKind !== "dm") return "Channel ID";
+  if (platform === "slack" && conversationKind !== "dm") return "Channel ID";
   if (platform === "mattermost" && conversationKind !== "dm") return "Channel ID";
   return "Conversation ID";
 }

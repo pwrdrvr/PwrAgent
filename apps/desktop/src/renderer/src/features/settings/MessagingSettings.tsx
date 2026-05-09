@@ -1227,15 +1227,21 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
   if (entry.observedActor?.phoneNumber) {
     details.push(`Phone ${entry.observedActor.phoneNumber}`);
   }
-  if (entry.observedChat?.id) {
-    const chatLabel = entry.observedChat.kind === "dm" ? "DM peer" : "Chat";
-    details.push(`${chatLabel} ID ${entry.observedChat.id}`);
+  const chat = entry.observedChat;
+  if (chat?.id) {
+    if (entry.platform === "telegram" && chat.kind === "topic") {
+      details.push(`Topic ID ${chat.id}`);
+    } else {
+      const chatLabel = chat.kind === "dm" ? "DM peer" : "Chat";
+      details.push(`${chatLabel} ID ${chat.id}`);
+    }
   }
   if (entry.observedChat?.title) {
     details.push(entry.observedChat.title);
   }
-  if (entry.observedChat?.bucketId && entry.observedChat.bucketId !== entry.observedChat.id) {
-    details.push(`Bucket ID ${entry.observedChat.bucketId}`);
+  if (chat?.bucketId && chat.bucketId !== chat.id) {
+    const bucketLabel = entry.platform === "telegram" ? "Supergroup ID" : "Bucket ID";
+    details.push(`${bucketLabel} ${chat.bucketId}`);
   }
   return details;
 }
