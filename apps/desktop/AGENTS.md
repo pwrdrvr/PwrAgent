@@ -50,6 +50,21 @@ pnpm --filter @pwragent/desktop dev:no-messaging
 - The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
+## Inspecting Branch Drift Dialog E2E
+
+To open the replay-backed "Thread branch changed" dialog and keep Electron
+open for manual screenshots, run from the repo root:
+
+```bash
+pnpm --filter @pwragent/desktop inspect:e2e:branch-drift
+```
+
+The script builds the desktop app, launches a deterministic branch-drift
+fixture in headed Electron, waits with the dialog visible, and exits only
+after you close the Electron window or quit the app. Use this for visual
+inspection of the dialog instead of the normal `thread-branch-drift.spec.ts`,
+which closes Electron automatically after assertions pass.
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read
