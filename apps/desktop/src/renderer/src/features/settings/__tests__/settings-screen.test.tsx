@@ -733,7 +733,7 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => [
         {
-          platform: "telegram" as const,
+          platform: "slack" as const,
           health: "enabled" as const,
           changedAt: 0,
         },
@@ -777,6 +777,8 @@ describe("SettingsScreen", () => {
       expect(bar).not.toBeNull();
       // Specifically inside the title-bar strip, not the nav.
       expect(bar?.closest(".settings-titlebar")).not.toBeNull();
+      expect(bar?.querySelector("img")).not.toBeNull();
+      expect(bar?.querySelector(".messaging-status-chip__fallback")).toBeNull();
     });
   });
 

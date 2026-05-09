@@ -934,7 +934,9 @@ function messagingAdapterConfigFingerprint(
         ? config.discord
         : channel === "mattermost"
           ? config.mattermost
-          : undefined;
+          : channel === "slack"
+            ? config.slack
+            : undefined;
 
   return stableStringify({
     attachmentPolicy: config.attachmentPolicy,

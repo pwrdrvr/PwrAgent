@@ -1334,9 +1334,11 @@ describe("DesktopMessagingRuntime", () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");
     const discordAdapter = createAdapter("discord");
+    const slackAdapter = createAdapter("slack");
     const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => [
       ...(config.telegram ? [telegramAdapter] : []),
       ...(config.discord ? [discordAdapter] : []),
+      ...(config.slack ? [slackAdapter] : []),
     ]);
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
@@ -1367,17 +1369,78 @@ describe("DesktopMessagingRuntime", () => {
         botToken: "discord-token",
         authorizedActorIds: [{ id: "user-1", displayName: "" }],
       },
+      slack: {
+        channel: "slack",
+        botToken: "slack-bot-token",
+        appToken: "slack-app-token",
+        inboundMode: "socket",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
     });
 
     expect(telegramAdapter.start).toHaveBeenCalledTimes(1);
     expect(telegramAdapter.stop).not.toHaveBeenCalled();
     expect(discordAdapter.start).toHaveBeenCalledTimes(1);
+    expect(slackAdapter.start).toHaveBeenCalledTimes(1);
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ platform: "telegram", health: "enabled" }),
         expect.objectContaining({ platform: "discord", health: "enabled" }),
+        expect.objectContaining({ platform: "slack", health: "enabled" }),
       ]),
     );
+  });
+
+  it("hot-applies Slack config changes by restarting the running adapter", async () => {
+    await prepareRuntimeStore();
+    const firstSlackAdapter = createAdapter("slack");
+    const secondSlackAdapter = createAdapter("slack");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.slack) return [];
+      return [
+        config.slack.botToken === "slack-bot-token-2"
+          ? secondSlackAdapter
+          : firstSlackAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        slack: {
+          channel: "slack",
+          botToken: "slack-bot-token-1",
+          appToken: "slack-app-token",
+          inboundMode: "socket",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      slack: {
+        channel: "slack",
+        botToken: "slack-bot-token-2",
+        appToken: "slack-app-token",
+        inboundMode: "socket",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+
+    expect(firstSlackAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(secondSlackAdapter.start).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "slack",
+        health: "enabled",
+      }),
+    ]);
   });
 
   it("hot-applies config by stopping disabled channels and restarting changed credentials", async () => {

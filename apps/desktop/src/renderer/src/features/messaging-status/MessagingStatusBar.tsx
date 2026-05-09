@@ -7,6 +7,7 @@ import type {
 import {
   DiscordIcon,
   MattermostIcon,
+  SlackIcon,
   TelegramIcon,
   type IconProps,
 } from "../../icons";
@@ -19,6 +20,7 @@ const ICONS: Partial<
   telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
   discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
+  slack: ({ size }) => <SlackIcon size={size} />,
 };
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
