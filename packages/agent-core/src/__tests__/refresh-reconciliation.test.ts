@@ -155,6 +155,36 @@ describe("refresh reconciliation", () => {
     expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
   });
 
+  it("prefers persisted observed branch metadata over stale thread cache after drift handling", async () => {
+    const store = await createStore();
+
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "HEAD",
+    });
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/testing-detached-head",
+      expectedBranch: "HEAD",
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 2000,
+      threads: [
+        buildThread({
+          gitBranch: undefined,
+          observedGitBranch: "HEAD",
+        }),
+      ],
+    });
+
+    expect(snapshot.threads[0]?.gitBranch).toBe("HEAD");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
+  });
+
   it("uses overlay expected branch metadata when a workspace handoff updates the checkout", async () => {
     const store = await createStore();
 
@@ -183,7 +213,9 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
-    expect(snapshot.threads[0]?.observedGitBranch).toBe("main");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
   });
 
   it("uses observed handoff branch metadata when legacy overlay state has no expected branch", async () => {

@@ -96,6 +96,20 @@ function resolveNavigationGitBranch(params: {
   return params.thread.gitBranch;
 }
 
+function resolveNavigationObservedBranch(params: {
+  overlay?: ThreadOverlayState;
+  thread: AppServerThreadSummary;
+}): string | undefined {
+  const overlayBranch = params.overlay?.gitBranch?.trim();
+  const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
+
+  if (overlayBranch && overlayObservedBranch) {
+    return overlayObservedBranch;
+  }
+
+  return params.thread.observedGitBranch ?? params.overlay?.observedGitBranch;
+}
+
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
@@ -120,12 +134,13 @@ export function materializeNavigationThreads(params: {
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
+    const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
     const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
 
     return {
       ...thread,
       gitBranch,
-      observedGitBranch: thread.observedGitBranch ?? overlay?.observedGitBranch,
+      observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
       queuedExecutionMode: overlay?.queuedExecutionMode,
