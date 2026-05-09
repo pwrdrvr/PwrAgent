@@ -684,6 +684,11 @@ Minimum bot scopes for the current adapter shape:
   conversation types you allow.
 - `files:read` for inbound file downloads.
 - `files:write` for outbound file delivery.
+- `users:read` is optional but recommended. Slack message events include the
+  sender's stable user ID, but not their display name; with `users:read`,
+  PwrAgent can call `users.info` and label DM bindings / Messaging Activity with
+  the person's Slack profile name. Without it, authorization still works, but
+  the UI falls back to user IDs or generic DM labels.
 - `commands` only if you configure Slack slash commands for the app.
 
 ### 2. Configure PwrAgent

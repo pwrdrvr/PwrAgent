@@ -69,6 +69,7 @@ export type SlackApi = {
     threadTs?: string;
     title?: string;
   }): Promise<void>;
+  usersInfo?(params: { user: string }): Promise<SlackUserInfo | undefined>;
 };
 
 export type SlackSocketClient = {
@@ -101,6 +102,16 @@ export type SlackFileInfo = {
   title?: string;
   url_private?: string;
   url_private_download?: string;
+};
+
+export type SlackUserInfo = {
+  id?: string;
+  name?: string;
+  profile?: {
+    display_name?: string;
+    real_name?: string;
+  };
+  real_name?: string;
 };
 
 export type SlackProviderAdapter = {
@@ -238,7 +249,9 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly signingSecret: string;
   private readonly socketClient: SlackSocketClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly userDisplayNameCache = new Map<string, string | undefined>();
   private botUserId: string | undefined;
+  private userInfoLookupDisabled = false;
   private listener: SlackInboundListener | undefined;
   private started = false;
 
@@ -481,11 +494,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     if (!ids) return;
 
-    const actor = this.actorForSlackUser(ids.userId);
+    const actor = await this.actorForSlackUser(ids.userId);
     const channel = this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: undefined,
       channelType: event.channel_type,
+      peerTitle: actor.displayName ?? actor.username,
       teamId: ids.teamId,
       threadTs: event.thread_ts,
       ts: ids.ts,
@@ -562,10 +576,14 @@ export class SlackAdapter implements SlackProviderAdapter {
       return;
     }
 
-    const actor = this.actorForSlackUser(ids.userId, body.user?.name ?? body.user?.username);
+    const actor = await this.actorForSlackUser(
+      ids.userId,
+      body.user?.name ?? body.user?.username,
+    );
     const channel = this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: body.channel?.name,
+      peerTitle: actor.displayName ?? actor.username,
       teamId: ids.teamId,
       threadTs: body.message?.thread_ts ?? body.container?.thread_ts,
       ts: ids.ts,
@@ -617,10 +635,11 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: body.thread_ts ?? `${this.now() / 1000}`,
     });
     if (!ids || !body.command) return;
-    const actor = this.actorForSlackUser(ids.userId, body.user_name);
+    const actor = await this.actorForSlackUser(ids.userId, body.user_name);
     const channel = this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: body.channel_name,
+      peerTitle: actor.displayName ?? actor.username,
       teamId: ids.teamId,
       threadTs: body.thread_ts,
       ts: ids.ts,
@@ -943,6 +962,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     channelId: string;
     channelName?: string;
     channelType?: string;
+    peerTitle?: string;
     teamId?: string;
     threadTs?: string;
     ts: string;
@@ -958,8 +978,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: params.channelId,
         kind,
+        ...(kind === "dm" && params.peerTitle ? { title: params.peerTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
-        ...(params.channelName ? { title: params.channelName } : {}),
+        ...(kind !== "dm" && params.channelName ? { title: params.channelName } : {}),
         ...(isThread && params.channelName ? { parentTitle: params.channelName } : {}),
       },
     };
@@ -980,18 +1001,60 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private actorForSlackUser(
+  private async actorForSlackUser(
     userId: string,
     username?: string,
-  ): MessagingActorIdentity {
+  ): Promise<MessagingActorIdentity> {
     const contact = this.config.authorizedActorIds.find((item) => item.id === userId);
+    const displayName =
+      contact?.displayName
+      || (await this.lookupSlackUserDisplayName(userId))
+      || username;
     return {
       platformUserId: userId,
-      ...(contact?.displayName || username
-        ? { displayName: contact?.displayName || username }
-        : {}),
+      ...(displayName ? { displayName } : {}),
       ...(username ? { username } : {}),
     };
+  }
+
+  private async lookupSlackUserDisplayName(
+    userId: string,
+  ): Promise<string | undefined> {
+    if (this.userDisplayNameCache.has(userId)) {
+      return this.userDisplayNameCache.get(userId);
+    }
+    if (this.userInfoLookupDisabled || !this.api.usersInfo) {
+      this.userDisplayNameCache.set(userId, undefined);
+      return undefined;
+    }
+
+    try {
+      const user = await this.api.usersInfo({ user: userId });
+      const displayName =
+        user?.profile?.display_name?.trim()
+        || user?.profile?.real_name?.trim()
+        || user?.real_name?.trim()
+        || user?.name?.trim()
+        || undefined;
+      this.userDisplayNameCache.set(userId, displayName);
+      return displayName;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.userInfoLookupDisabled = true;
+        this.logger.warn?.("slack user profile lookup unavailable", {
+          reason: "missing_scope",
+          requiredScope: "users:read",
+        });
+      } else {
+        this.logger.warn?.("slack user profile lookup failed", {
+          reason,
+          userHash: createHash("sha256").update(userId).digest("hex").slice(0, 8),
+        });
+      }
+      this.userDisplayNameCache.set(userId, undefined);
+      return undefined;
+    }
   }
 
   private describeFile(file: SlackFileInfo): MessagingAttachmentDescriptor[] {
@@ -1107,6 +1170,10 @@ export function createSlackApi(botToken: string): SlackApi {
     },
     async updateMessage(params) {
       return (await client.chat.update(params)) as SlackMessageResult;
+    },
+    async usersInfo(params) {
+      const response = await client.users.info(params);
+      return response.user as SlackUserInfo | undefined;
     },
     async uploadFile(params) {
       const files = client.files as unknown as {

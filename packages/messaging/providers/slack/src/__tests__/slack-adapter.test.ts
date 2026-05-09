@@ -50,6 +50,7 @@ function fakeApi(spies: {
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
   updated?: unknown[];
+  users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
 }): SlackApi {
   return {
     authTest: async () => ({
@@ -70,6 +71,19 @@ function fakeApi(spies: {
     updateMessage: async (params) => {
       spies.updated?.push(params);
       return { channel: params.channel, ts: params.ts };
+    },
+    usersInfo: async (params) => {
+      const user = spies.users?.[params.user];
+      if (!user) return undefined;
+      return {
+        id: params.user,
+        name: user.username,
+        real_name: user.realName,
+        profile: {
+          display_name: user.displayName,
+          real_name: user.realName,
+        },
+      };
     },
   };
 }
@@ -204,6 +218,57 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("uses users.info display names for DM labels when users:read is granted", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "" }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        users: {
+          U012ABCDEF0: { displayName: "Harold Hunt", username: "hhunt" },
+        },
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          displayName: "Harold Hunt",
+          platformUserId: "U012ABCDEF0",
+        }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "D012ABCDEF0",
+            kind: "dm",
+            title: "Harold Hunt",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("emits rejected activity for unauthorized actors", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -286,7 +351,7 @@ describe("SlackAdapter", () => {
         type: "block_actions",
         user: { id: "U012ABCDEF0", username: "alice" },
         team: { id: "T012ABCDEF0" },
-        channel: { id: "D012ABCDEF0" },
+        channel: { id: "D012ABCDEF0", name: "directmessage" },
         message: { ts: "1712023032.123456" },
         actions: [button],
       },
@@ -300,6 +365,7 @@ describe("SlackAdapter", () => {
           conversation: expect.objectContaining({
             id: "D012ABCDEF0",
             kind: "dm",
+            title: "Alice",
           }),
         }),
       }),
