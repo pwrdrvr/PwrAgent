@@ -12,6 +12,9 @@ packages/agent-core/.env.local
 .env.local
 excalidraw.log
 .worktrees/
+.claude/worktrees
+.claude/worktrees/
+.claude/worktrees/**
 
 # electron-builder output (signed/notarized DMG + ZIP land here)
 apps/desktop/dist/
