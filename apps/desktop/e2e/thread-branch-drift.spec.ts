@@ -30,6 +30,15 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
         name: "Accept current branch as correct. Continue working on codex/current-branch without further warnings",
       }),
     ).toBeVisible();
+    const actionHeights = await dialog
+      .locator(".workspace-handoff-dialog__action")
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getBoundingClientRect().height),
+      );
+    expect(actionHeights).toHaveLength(2);
+    expect(Math.abs(actionHeights[0] - actionHeights[1])).toBeLessThanOrEqual(
+      1,
+    );
 
     await app.window.waitForTimeout(7_000);
 
