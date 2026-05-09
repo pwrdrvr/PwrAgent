@@ -1,5 +1,4 @@
 import type {
-  DesktopChatReplyComposer,
   DesktopSettingsSnapshot,
   MessagingChannelKind,
 } from "@pwragent/shared";
@@ -210,11 +209,6 @@ function SettingsSectionBody(props: {
       <ExperimentalSettings
         saving={props.settings.saving}
         snapshot={props.snapshot}
-        onComposerChange={async (chatReplyComposer: DesktopChatReplyComposer) => {
-          await props.settings.writeConfig({
-            experimental: { chatReplyComposer },
-          });
-        }}
         onDiffCondensationEnabledChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { diffCondensation: { enabled } },

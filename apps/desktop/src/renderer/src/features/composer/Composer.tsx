@@ -45,12 +45,10 @@ import {
 } from "../../lib/skill-mentions";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import {
-  ComposerRichInput,
-  type ComposerRichInputChangeMetadata,
-  type ComposerRichInputHandle,
+  type ComposerInputChangeMetadata,
+  type ComposerInputHandle,
   type ComposerSkillToken,
-} from "./ComposerRichInput";
-import { ComposerTextareaInput } from "./ComposerTextareaInput";
+} from "./ComposerInputTypes";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
 import {
@@ -182,15 +180,6 @@ type PendingProgrammaticComposerChange = {
   expectedSkillTokensSignature: string;
   staleDraft: string;
   staleSkillTokensSignature: string;
-};
-
-const COMPOSER_SKILL_TOKEN_SELECTOR = "[data-composer-skill-token-id]";
-
-type SkillTokenDeletionEvent = {
-  currentTarget: HTMLElement;
-  preventDefault: () => void;
-  stopPropagation: () => void;
-  target: EventTarget | null;
 };
 
 type ComposerImageFile = {
@@ -852,7 +841,7 @@ function ComposerApplicationButton(props: {
 }
 
 export function Composer(props: ComposerProps) {
-  const inputRef = useRef<ComposerRichInputHandle>(null);
+  const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
@@ -869,9 +858,6 @@ export function Composer(props: ComposerProps) {
       : "empty";
   const localDraftStore = useComposerDraftStore();
   const draftStore = props.draftStore ?? localDraftStore;
-  const composerImplementation = props.composerImplementation ?? "textarea";
-  const composerSupportsSkillTokens = composerImplementation !== "textarea";
-  const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurn = props.thread
     ? draftStore.getQueuedTurn(composerScopeKey)
@@ -899,9 +885,7 @@ export function Composer(props: ComposerProps) {
         props.launchpad?.imageAttachments ??
         [],
       skillTokens:
-        composerSupportsSkillTokens
-          ? savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? []
-          : [],
+        savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? [],
     },
   });
   const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
@@ -969,16 +953,11 @@ export function Composer(props: ComposerProps) {
   const isDraftStoreScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:") || scopeKey.startsWith("launchpad:");
   const canonicalDraft = useMemo(
-    () =>
-      serializeDraftWithSkillTokens(
-        draft,
-        composerSupportsSkillTokens ? skillTokens : [],
-      ),
-    [composerSupportsSkillTokens, draft, skillTokens]
+    () => serializeDraftWithSkillTokens(draft, skillTokens),
+    [draft, skillTokens]
   );
   const hasComposerContent =
-    draft.trim().length > 0 ||
-    (composerSupportsSkillTokens && skillTokens.length > 0);
+    draft.trim().length > 0 || skillTokens.length > 0;
   launchpadUpdateRef.current = props.onUpdateLaunchpad;
   latestDraftSnapshotRef.current = {
     scopeKey: composerScopeKey,
@@ -986,18 +965,12 @@ export function Composer(props: ComposerProps) {
       draft,
       editorDocument,
       imageAttachments,
-      skillTokens: composerSupportsSkillTokens ? skillTokens : [],
+      skillTokens,
     },
   };
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
-    if (!composerSupportsSkillTokens) {
-      setDraft(nextDraft);
-      setSkillTokens([]);
-      return;
-    }
-
     const hydrated = hydrateComposerDraft(nextDraft, props.skills);
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
@@ -1014,9 +987,7 @@ export function Composer(props: ComposerProps) {
   ): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
-    if (!composerSupportsSkillTokens) {
-      setSkillTokens([]);
-    } else if (nextSkillTokens) {
+    if (nextSkillTokens) {
       setSkillTokens(nextSkillTokens);
     } else {
       setSkillTokens((current) =>
@@ -1114,10 +1085,7 @@ export function Composer(props: ComposerProps) {
     void updateLaunchpad(directoryKey, {
       imageAttachments:
         snapshot.imageAttachments.length > 0 ? snapshot.imageAttachments : undefined,
-      prompt: serializeDraftWithSkillTokens(
-        snapshot.draft,
-        composerSupportsSkillTokens ? snapshot.skillTokens : [],
-      ),
+      prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
     });
   };
   const flushComposerDraftSnapshot = (
@@ -1282,14 +1250,6 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     deletedSkillTokenHistoryRef.current = [];
-    if (composerImplementation === "textarea") {
-      if (skillTokens.length > 0) {
-        setDraft(serializeDraftWithSkillTokens(draft, skillTokens));
-        setSkillTokens([]);
-      }
-      return;
-    }
-
     if (skillTokens.length === 0 && draft.includes("](")) {
       const hydrated = hydrateComposerDraft(draft, props.skills);
       if (hydrated.skillTokens.length > 0) {
@@ -1297,7 +1257,7 @@ export function Composer(props: ComposerProps) {
         setSkillTokens(hydrated.skillTokens);
       }
     }
-  }, [composerImplementation]);
+  }, [draft, props.skills, skillTokens.length]);
 
   useEffect(() => {
     if (!autocompleteKind) {
@@ -1365,7 +1325,7 @@ export function Composer(props: ComposerProps) {
       setDraft(saved.draft);
       setEditorDocument(saved.editorDocument);
       setImageAttachments(saved.imageAttachments);
-      setSkillTokens(composerSupportsSkillTokens ? saved.skillTokens : []);
+      setSkillTokens(saved.skillTokens);
     } else {
       setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
       setEditorDocument(
@@ -1386,7 +1346,6 @@ export function Composer(props: ComposerProps) {
     }, 0);
   }, [
     composerScopeKey,
-    composerSupportsSkillTokens,
     draftStore,
     isLaunchpad,
     props.launchpad?.directoryKey,
@@ -2041,23 +2000,6 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!composerSupportsSkillTokens) {
-      const before = draft.slice(0, trigger.start);
-      const after = draft.slice(Math.max(trigger.end, selectionEnd));
-      const mention = buildSkillMentionMarkdown(skill);
-      const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
-      const nextDraft = `${before}${mention}${needsTrailingSpace ? " " : ""}${after}`;
-      const nextSelection = before.length + mention.length + (needsTrailingSpace ? 1 : 0);
-
-      updateVisibleDraft(nextDraft, []);
-      setActiveSkillIndex(0);
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        inputRef.current?.setSelectionRange(nextSelection, nextSelection);
-      });
-      return;
-    }
-
     const before = draft.slice(0, trigger.start);
     const after = draft.slice(Math.max(trigger.end, selectionEnd));
     const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
@@ -2084,15 +2026,7 @@ export function Composer(props: ComposerProps) {
       setDraft(nextDraft);
       setActiveSkillIndex(0);
     });
-    const restoreSelection = (): void => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
-    };
-    if (composerUsesTiptap) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    } else {
-      restoreSelection();
-    }
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -2514,339 +2448,6 @@ export function Composer(props: ComposerProps) {
     );
   };
 
-  const findEventTargetSkillTokenId = (
-    event: SkillTokenDeletionEvent,
-  ): string | undefined => {
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return undefined;
-    }
-
-    const tokenElement = target.closest(COMPOSER_SKILL_TOKEN_SELECTOR);
-    return tokenElement instanceof HTMLElement
-      ? tokenElement.dataset.composerSkillTokenId
-      : undefined;
-  };
-
-  const selectionBelongsToEditor = (editor: HTMLElement): boolean => {
-    const ownerDocument = editor.ownerDocument;
-    const selection = ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0) {
-      return editor.contains(ownerDocument.activeElement);
-    }
-
-    const range = selection.getRangeAt(0);
-    return (
-      editor.contains(range.startContainer) ||
-      editor.contains(range.endContainer) ||
-      range.intersectsNode(editor)
-    );
-  };
-
-  const findSelectedSkillTokenId = (
-    editor: HTMLElement,
-  ): string | undefined => {
-    const selection = editor.ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      return undefined;
-    }
-
-    const range = selection.getRangeAt(0);
-    const tokenElement = Array.from(
-      editor.querySelectorAll<HTMLElement>(COMPOSER_SKILL_TOKEN_SELECTOR),
-    ).find((candidate) => range.intersectsNode(candidate));
-    return tokenElement?.dataset.composerSkillTokenId;
-  };
-
-  const hasRangedEditorSelection = (editor: HTMLElement): boolean => {
-    const selection = editor.ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    return (
-      editor.contains(range.startContainer) ||
-      editor.contains(range.endContainer) ||
-      range.intersectsNode(editor)
-    );
-  };
-
-  const shouldGuardNativeTextDeletion = (
-    editor: HTMLElement,
-    direction: "backward" | "forward",
-  ): boolean => {
-    const selection = editor.ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer)) {
-      return false;
-    }
-
-    if (range.startContainer.nodeType !== Node.TEXT_NODE) {
-      return true;
-    }
-
-    const textLength = range.startContainer.nodeValue?.length ?? 0;
-    return direction === "backward"
-      ? range.startOffset === 0
-      : range.startOffset >= textLength;
-  };
-
-  const findTokenIdInNode = (node: Node | undefined): string | undefined => {
-    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
-      return undefined;
-    }
-
-    const element = node as Element;
-    const tokenElement = element.matches(COMPOSER_SKILL_TOKEN_SELECTOR)
-      ? element
-      : element.querySelector(COMPOSER_SKILL_TOKEN_SELECTOR);
-    return tokenElement instanceof HTMLElement
-      ? tokenElement.dataset.composerSkillTokenId
-      : undefined;
-  };
-
-  const findEditorChildForNode = (
-    editor: HTMLElement,
-    node: Node,
-  ): Node | undefined => {
-    let current: Node | null = node;
-    while (current && current.parentNode !== editor) {
-      current = current.parentNode;
-    }
-    return current ?? undefined;
-  };
-
-  const findAdjacentSkillTokenId = (
-    editor: HTMLElement,
-    direction: "backward" | "forward",
-  ): string | undefined => {
-    const selection = editor.ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
-      return undefined;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer)) {
-      return undefined;
-    }
-
-    if (range.startContainer === editor) {
-      const sibling =
-        direction === "backward"
-          ? editor.childNodes[range.startOffset - 1]
-          : editor.childNodes[range.startOffset];
-      return findTokenIdInNode(sibling);
-    }
-
-    if (range.startContainer.nodeType === Node.TEXT_NODE) {
-      const textLength = range.startContainer.nodeValue?.length ?? 0;
-      if (direction === "backward" && range.startOffset > 0) {
-        return undefined;
-      }
-      if (direction === "forward" && range.startOffset < textLength) {
-        return undefined;
-      }
-    }
-
-    const editorChild = findEditorChildForNode(editor, range.startContainer);
-    if (!editorChild) {
-      return undefined;
-    }
-
-    const siblings = Array.from(editor.childNodes);
-    const childIndex = siblings.indexOf(editorChild as ChildNode);
-    const sibling =
-      direction === "backward"
-        ? siblings[childIndex - 1]
-        : siblings[childIndex + 1];
-    return findTokenIdInNode(sibling);
-  };
-
-  const removeSkillToken = (
-    token: ComposerSkillToken,
-    selectionStart: number,
-  ): void => {
-    const nextSkillTokens = skillTokens.filter(
-      (candidate) => candidate.id !== token.id
-    );
-    deletedSkillTokenHistoryRef.current.push({
-      draft,
-      selectionStart,
-      skillTokens,
-    });
-    flushSync(() => {
-      setEditorDocument(undefined);
-      setSkillTokens(nextSkillTokens);
-    });
-    saveComposerDraftSnapshot(composerScopeKey, {
-      draft,
-      editorDocument: undefined,
-      imageAttachments,
-      skillTokens: nextSkillTokens,
-    });
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(selectionStart, selectionStart);
-    });
-  };
-
-  const removeEditorSkillToken = (
-    event: SkillTokenDeletionEvent,
-    direction: "backward" | "forward",
-  ): boolean => {
-    if (!inputRef.current) {
-      return false;
-    }
-
-    if (hasRangedEditorSelection(event.currentTarget)) {
-      return false;
-    }
-
-    const tokenId =
-      findEventTargetSkillTokenId(event) ??
-      findSelectedSkillTokenId(event.currentTarget) ??
-      findAdjacentSkillTokenId(event.currentTarget, direction);
-    const token =
-      tokenId
-        ? skillTokens.find((candidate) => candidate.id === tokenId)
-        : draft.length === 0 && skillTokens.length === 1
-          ? skillTokens[0]
-          : undefined;
-    if (!token) {
-      if (tokenId) {
-        event.preventDefault();
-        event.stopPropagation();
-        return true;
-      }
-      return false;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    removeSkillToken(token, token.index);
-    void direction;
-    return true;
-  };
-
-  const deleteEditorText = (
-    event: SkillTokenDeletionEvent,
-    direction: "backward" | "forward",
-  ): boolean => {
-    if (!inputRef.current) {
-      return false;
-    }
-
-    const caret = Math.min(inputRef.current.selectionStart, draft.length);
-    const deleteStart = direction === "backward" ? Math.max(0, caret - 1) : caret;
-    const deleteEnd =
-      direction === "backward" ? caret : Math.min(draft.length, caret + 1);
-
-    event.preventDefault();
-    event.stopPropagation();
-    if (deleteStart === deleteEnd) {
-      return true;
-    }
-
-    const nextDraft = `${draft.slice(0, deleteStart)}${draft.slice(deleteEnd)}`;
-    updateVisibleDraft(nextDraft);
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(deleteStart, deleteStart);
-    });
-    return true;
-  };
-
-  const deleteEditorContent = (
-    event: SkillTokenDeletionEvent,
-    direction: "backward" | "forward",
-  ): boolean => {
-    if (inputRef.current && hasRangedEditorSelection(event.currentTarget)) {
-      event.preventDefault();
-      event.stopPropagation();
-      inputRef.current.deleteSelection(direction);
-      return true;
-    }
-
-    return (
-      removeEditorSkillToken(event, direction) ||
-      (shouldGuardNativeTextDeletion(event.currentTarget, direction)
-        ? deleteEditorText(event, direction)
-        : false)
-    );
-  };
-
-  useEffect(() => {
-    const ownerDocument = inputWrapRef.current?.ownerDocument ?? document;
-    const getEditor = (): HTMLElement | undefined =>
-      inputWrapRef.current?.querySelector<HTMLElement>(
-        '[data-testid="composer-rich-input"]',
-      ) ?? undefined;
-
-    const handleDocumentKeyDown = (event: KeyboardEvent): void => {
-      if (
-        event.defaultPrevented ||
-        (event.key !== "Backspace" && event.key !== "Delete")
-      ) {
-        return;
-      }
-
-      const editor = getEditor();
-      if (!editor || !selectionBelongsToEditor(editor)) {
-        return;
-      }
-
-      deleteEditorContent(
-        {
-          currentTarget: editor,
-          target: event.target,
-          preventDefault: () => event.preventDefault(),
-          stopPropagation: () => event.stopPropagation(),
-        },
-        event.key === "Backspace" ? "backward" : "forward",
-      );
-    };
-    const handleDocumentBeforeInput = (event: InputEvent): void => {
-      if (
-        event.defaultPrevented ||
-        (event.inputType !== "deleteContentBackward" &&
-          event.inputType !== "deleteContentForward")
-      ) {
-        return;
-      }
-
-      const editor = getEditor();
-      if (!editor || !selectionBelongsToEditor(editor)) {
-        return;
-      }
-
-      deleteEditorContent(
-        {
-          currentTarget: editor,
-          target: event.target,
-          preventDefault: () => event.preventDefault(),
-          stopPropagation: () => event.stopPropagation(),
-        },
-        event.inputType === "deleteContentBackward" ? "backward" : "forward",
-      );
-    };
-
-    ownerDocument.addEventListener("keydown", handleDocumentKeyDown, true);
-    ownerDocument.addEventListener("beforeinput", handleDocumentBeforeInput, true);
-    return () => {
-      ownerDocument.removeEventListener("keydown", handleDocumentKeyDown, true);
-      ownerDocument.removeEventListener(
-        "beforeinput",
-        handleDocumentBeforeInput,
-        true,
-      );
-    };
-  });
-
   const restoreDeletedSkillToken = (
     event: ReactKeyboardEvent<HTMLElement>,
   ): boolean => {
@@ -2863,6 +2464,7 @@ export function Composer(props: ComposerProps) {
     event.preventDefault();
     setDraft(previous.draft);
     setSkillTokens(previous.skillTokens);
+    setEditorDocument(undefined);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(
@@ -2968,7 +2570,7 @@ export function Composer(props: ComposerProps) {
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
-    metadata?: ComposerRichInputChangeMetadata,
+    metadata?: ComposerInputChangeMetadata,
   ): void => {
     unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
@@ -2987,7 +2589,6 @@ export function Composer(props: ComposerProps) {
     }
 
     const deletedSkillTokenHistoryEntry =
-      composerSupportsSkillTokens &&
       nextSkillTokens &&
       nextSkillTokens.length < skillTokens.length
         ? (() => {
@@ -3006,9 +2607,7 @@ export function Composer(props: ComposerProps) {
               : undefined;
           })()
         : undefined;
-    const storedSkillTokens = composerSupportsSkillTokens
-      ? nextSkillTokens ?? skillTokens
-      : [];
+    const storedSkillTokens = nextSkillTokens ?? skillTokens;
 
     updateVisibleDraft(nextDraft, nextSkillTokens);
     setEditorDocument(metadata?.editorDocument);
@@ -3047,30 +2646,6 @@ export function Composer(props: ComposerProps) {
 
     handleAutocompleteKeyDown(event);
   };
-  const handleCustomComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLDivElement>,
-  ): void => {
-    if (event.defaultPrevented) {
-      return;
-    }
-
-    if (restoreDeletedSkillToken(event)) {
-      return;
-    }
-
-    if (
-      event.key === "Backspace" &&
-      deleteEditorContent(event, "backward")
-    ) {
-      return;
-    }
-
-    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
-      return;
-    }
-
-    handlePlainComposerKeyDown(event);
-  };
   const handleTiptapComposerKeyDown = (
     event: ReactKeyboardEvent<HTMLDivElement>,
   ): void => {
@@ -3088,7 +2663,7 @@ export function Composer(props: ComposerProps) {
   return (
     <form
       className="composer"
-      data-composer-implementation={props.composerImplementation ?? "textarea"}
+      data-composer-implementation="tiptap-wysiwyg-markdown-chips"
       onSubmit={(event) => {
         event.preventDefault();
         void submitTurn();
@@ -3349,76 +2924,8 @@ export function Composer(props: ComposerProps) {
               </button>
             </div>
           </fieldset>
-        ) : composerImplementation === "custom-widget-chips" ? (
-          <ComposerRichInput
-            ref={inputRef}
-            id="thread-composer"
-            ariaActiveDescendant={activeAutocompleteOptionId}
-            ariaControls={autocompleteListboxId}
-            ariaExpanded={hasAutocomplete}
-            disabled={composerDisabled}
-            label={isLaunchpad ? "New thread" : "Reply"}
-            placeholder={composerPlaceholder}
-            skillTokens={skillTokens}
-            value={draft}
-            onChange={handleComposerChange}
-            onPaste={handlePaste}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onClick={handleComposerClick}
-            onBeforeInputCapture={(event) => {
-              const inputType = (event.nativeEvent as InputEvent).inputType;
-              if (
-                inputType === "deleteContentBackward" &&
-                deleteEditorContent(event, "backward")
-              ) {
-                return;
-              }
-              if (
-                inputType === "deleteContentForward" &&
-                deleteEditorContent(event, "forward")
-              ) {
-                return;
-              }
-            }}
-            onBeforeInput={(event) => {
-              if (event.defaultPrevented) {
-                return;
-              }
-              const inputType = (event.nativeEvent as InputEvent).inputType;
-              if (
-                inputType === "deleteContentBackward" &&
-                deleteEditorContent(event, "backward")
-              ) {
-                return;
-              }
-              if (
-                inputType === "deleteContentForward" &&
-                deleteEditorContent(event, "forward")
-              ) {
-                return;
-              }
-            }}
-            onKeyDownCapture={(event) => {
-              if (
-                event.key === "Backspace" &&
-                deleteEditorContent(event, "backward")
-              ) {
-                return;
-              }
-
-              if (
-                event.key === "Delete" &&
-                deleteEditorContent(event, "forward")
-              ) {
-                return;
-              }
-            }}
-            onKeyDown={handleCustomComposerKeyDown}
-          />
-        ) : composerUsesTiptap ? (
+        ) : (
           <ComposerTiptapInput
-            key={composerImplementation}
             ref={inputRef}
             id="thread-composer"
             ariaActiveDescendant={activeAutocompleteOptionId}
@@ -3426,9 +2933,7 @@ export function Composer(props: ComposerProps) {
             ariaExpanded={hasAutocomplete}
             disabled={composerDisabled}
             label={isLaunchpad ? "New thread" : "Reply"}
-            markdownConversion={
-              composerImplementation === "tiptap-wysiwyg-markdown-chips"
-            }
+            markdownConversion
             placeholder={composerPlaceholder}
             editorDocument={editorDocument}
             skillTokens={skillTokens}
@@ -3439,24 +2944,6 @@ export function Composer(props: ComposerProps) {
             onDrop={handleDrop}
             onClick={handleComposerClick}
             onKeyDown={handleTiptapComposerKeyDown}
-          />
-        ) : (
-          <ComposerTextareaInput
-            ref={inputRef}
-            id="thread-composer"
-            ariaActiveDescendant={activeAutocompleteOptionId}
-            ariaControls={autocompleteListboxId}
-            ariaExpanded={hasAutocomplete}
-            disabled={composerDisabled}
-            label={isLaunchpad ? "New thread" : "Reply"}
-            placeholder={composerPlaceholder}
-            value={draft}
-            onChange={(nextDraft) => handleComposerChange(nextDraft, [])}
-            onPaste={handlePaste}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onClick={handleComposerClick}
-            onKeyDown={handlePlainComposerKeyDown}
           />
         )}
 

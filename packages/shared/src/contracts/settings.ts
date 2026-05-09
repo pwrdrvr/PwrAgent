@@ -1,10 +1,7 @@
 import type { MessagingToolUpdateMode } from "./messaging";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
-  "textarea",
-  "tiptap-chips",
   "tiptap-wysiwyg-markdown-chips",
-  "custom-widget-chips",
 ] as const;
 
 export type DesktopChatReplyComposer =
@@ -260,7 +257,6 @@ export type DesktopSettingsSnapshot = {
 
 export type DesktopSettingsConfigPatch = {
   experimental?: {
-    chatReplyComposer?: DesktopChatReplyComposer;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */

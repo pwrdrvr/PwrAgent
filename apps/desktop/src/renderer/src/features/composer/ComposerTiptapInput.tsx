@@ -10,20 +10,40 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import type { AppServerSkillSummary } from "@pwragent/shared";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import type {
-  ComposerRichInputHandle,
-  ComposerRichInputProps,
+  ComposerInputChangeMetadata,
+  ComposerInputHandle,
   ComposerSkillToken,
-} from "./ComposerRichInput";
+} from "./ComposerInputTypes";
 
-type ComposerTiptapInputProps = ComposerRichInputProps & {
+type ComposerTiptapInputProps = {
+  ariaActiveDescendant?: string;
+  ariaControls?: string;
+  ariaExpanded?: boolean;
+  disabled?: boolean;
   editorDocument?: JSONContent;
+  id: string;
+  label: string;
   markdownConversion?: boolean;
+  onChange: (
+    value: string,
+    skillTokens?: ComposerSkillToken[],
+    metadata?: ComposerInputChangeMetadata,
+  ) => void;
+  onClick?: (event: MouseEvent<HTMLDivElement>) => void;
+  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: DragEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  placeholder: string;
+  skillTokens: ComposerSkillToken[];
+  value: string;
 };
 
 type TiptapReadMode = "markdown" | "text";
@@ -31,6 +51,11 @@ type TiptapReadMode = "markdown" | "text";
 type TiptapReadState = {
   skillTokens: ComposerSkillToken[];
   value: string;
+};
+
+type DeletedSingleSkillState = TiptapReadState & {
+  editorDocument: JSONContent;
+  selectionIndex: number;
 };
 
 type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
@@ -133,6 +158,10 @@ function splitTextContent(text: string): JSONContent[] {
     }
   });
   return nodes;
+}
+
+function isMacPlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(window.navigator.platform);
 }
 
 type InlineMarkSpec = {
@@ -615,6 +644,32 @@ function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
   };
 }
 
+function getMarkdownBlockPrefixLength(
+  node: ProseMirrorNode,
+  parent: ProseMirrorNode | null,
+  childIndex: number,
+): number {
+  if (parent?.type.name === "doc" && node.type.name === "heading") {
+    const level = typeof node.attrs.level === "number" ? node.attrs.level : 1;
+    return `${"#".repeat(Math.min(Math.max(level, 1), 6))} `.length;
+  }
+
+  if (parent?.type.name === "bulletList" && node.type.name === "listItem") {
+    return `${childIndex > 0 ? "\n" : ""}- `.length;
+  }
+
+  if (parent?.type.name === "orderedList" && node.type.name === "listItem") {
+    const start = typeof parent.attrs.start === "number" ? parent.attrs.start : 1;
+    return `${childIndex > 0 ? "\n" : ""}${start + childIndex}. `.length;
+  }
+
+  if (parent?.type.name === "listItem" && childIndex > 0) {
+    return "\n  ".length;
+  }
+
+  return 0;
+}
+
 function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   position: number,
@@ -650,18 +705,38 @@ function getDraftIndexAtPosition(
         found = true;
         return false;
       }
-      return true;
+    }
+
+    if (mode === "markdown") {
+      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      if (prefixLength > 0) {
+        if (position <= pos + 1) {
+          index += prefixLength;
+          found = true;
+          return false;
+        }
+        index += prefixLength;
+      }
     }
 
     if (node.isText) {
       const text = node.text ?? "";
       const end = pos + text.length;
-      if (position <= end) {
-        index += Math.max(0, Math.min(text.length, position - pos));
+      const delimiters =
+        mode === "markdown"
+          ? getMarkdownMarkDelimiters(node)
+          : { prefix: "", suffix: "" };
+      if (position < end) {
+        index += delimiters.prefix.length + Math.max(0, position - pos);
         found = true;
         return false;
       }
-      index += text.length;
+      if (position === end) {
+        index += delimiters.prefix.length + text.length + delimiters.suffix.length;
+        found = true;
+        return false;
+      }
+      index += delimiters.prefix.length + text.length + delimiters.suffix.length;
       return false;
     }
 
@@ -725,17 +800,35 @@ function getPositionAtDraftIndex(
         index += codeBlock.totalLength;
         return false;
       }
-      return true;
+    }
+
+    if (mode === "markdown") {
+      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      if (prefixLength > 0) {
+        if (draftIndex <= index + prefixLength) {
+          position = pos + 1;
+          found = true;
+          return false;
+        }
+        index += prefixLength;
+      }
     }
 
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      if (draftIndex <= index + textLength) {
-        position = pos + Math.max(0, draftIndex - index);
+      const delimiters =
+        mode === "markdown"
+          ? getMarkdownMarkDelimiters(node)
+          : { prefix: "", suffix: "" };
+      const totalLength =
+        delimiters.prefix.length + textLength + delimiters.suffix.length;
+      if (draftIndex <= index + totalLength) {
+        const textIndex = draftIndex - index - delimiters.prefix.length;
+        position = pos + Math.max(0, Math.min(textLength, textIndex));
         found = true;
         return false;
       }
-      index += textLength;
+      index += totalLength;
       return false;
     }
 
@@ -863,7 +956,7 @@ function applyExternalSkillInsertion(params: {
 }
 
 export const ComposerTiptapInput = forwardRef<
-  ComposerRichInputHandle,
+  ComposerInputHandle,
   ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
@@ -871,6 +964,9 @@ export const ComposerTiptapInput = forwardRef<
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const deletedSingleSkillRef = useRef<DeletedSingleSkillState | undefined>(
+    undefined,
+  );
   const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
   const propsSignature = getContentSignature({
     value: props.value,
@@ -903,6 +999,7 @@ export const ComposerTiptapInput = forwardRef<
         "aria-label": props.label,
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
         "data-placeholder": props.placeholder,
+        id: props.id,
         role: "textbox",
       },
       handleClick: (_view, _pos, event) => {
@@ -919,18 +1016,82 @@ export const ComposerTiptapInput = forwardRef<
           return event.defaultPrevented;
         },
         keydown: (_view, event) => {
-          const currentProps = propsRef.current;
+          const macPlatform = isMacPlatform();
+          if (
+            event.key.toLowerCase() === "z" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.shiftKey &&
+            deletedSingleSkillRef.current
+          ) {
+            const deleted = deletedSingleSkillRef.current;
+            deletedSingleSkillRef.current = undefined;
+            event.preventDefault();
+            const currentEditor = editorRef.current;
+            if (!currentEditor) {
+              return true;
+            }
+            currentEditor.commands.setContent(deleted.editorDocument, {
+              emitUpdate: false,
+            });
+            selectionIndexRef.current = deleted.selectionIndex;
+            flushSync(() => {
+              propsRef.current.onChange(deleted.value, deleted.skillTokens, {
+                editorDocument: deleted.editorDocument,
+              });
+            });
+            currentEditor.commands.setTextSelection(
+              getPositionAtDraftIndex(currentEditor, deleted.selectionIndex, readMode),
+            );
+            return true;
+          }
+
+          if (
+            event.key.toLowerCase() === "a" &&
+            ((macPlatform && event.metaKey && !event.ctrlKey) ||
+              (!macPlatform && event.ctrlKey && !event.metaKey)) &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            event.preventDefault();
+            editorRef.current?.commands.selectAll();
+            return true;
+          }
+
+          if (
+            macPlatform &&
+            event.key.toLowerCase() === "a" &&
+            event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            return true;
+          }
+
           if (
             (event.key === "Backspace" || event.key === "Delete") &&
-            currentProps.value.trim().length === 0 &&
-            currentProps.skillTokens.length === 1
+            propsRef.current.value.trim().length === 0 &&
+            propsRef.current.skillTokens.length === 1
           ) {
             event.preventDefault();
             const currentEditor = editorRef.current;
-            currentEditor?.commands.setContent(buildTiptapContent("", []), {
+            if (!currentEditor) {
+              return true;
+            }
+            deletedSingleSkillRef.current = {
+              editorDocument: currentEditor.getJSON(),
+              selectionIndex: selectionIndexRef.current,
+              skillTokens: propsRef.current.skillTokens,
+              value: propsRef.current.value,
+            };
+            currentEditor.commands.setContent(buildTiptapContent("", []), {
               emitUpdate: false,
             });
-            propsRef.current.onChange("", []);
+            flushSync(() => {
+              propsRef.current.onChange("", [], {
+                editorDocument: currentEditor.getJSON(),
+              });
+            });
             return true;
           }
 
@@ -998,6 +1159,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     editor.setEditable(!props.disabled);
+    editor.view.dom.setAttribute("id", props.id);
     editor.view.dom.setAttribute("aria-label", props.label);
     editor.view.dom.setAttribute("aria-expanded", String(Boolean(props.ariaExpanded)));
     if (props.ariaActiveDescendant) {
@@ -1016,8 +1178,70 @@ export const ComposerTiptapInput = forwardRef<
     props.ariaControls,
     props.ariaExpanded,
     props.disabled,
+    props.id,
     props.label,
   ]);
+
+  useLayoutEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const editorDom = editor.view.dom as HTMLElement & {
+      selectionEnd?: number;
+      selectionStart?: number;
+      setSelectionRange?: (start: number, end?: number) => void;
+      value?: string;
+    };
+    Object.defineProperty(editorDom, "value", {
+      configurable: true,
+      get: () => propsRef.current.value,
+      set: (nextValue) => {
+        const value = String(nextValue ?? "");
+        selectionIndexRef.current = value.length;
+        editor.commands.setContent(
+          buildTiptapContent(value, [], {
+            markdownConversion: propsRef.current.markdownConversion,
+          }),
+          { emitUpdate: true },
+        );
+        flushSync(() => {
+          propsRef.current.onChange(value, [], {
+            editorDocument: editor.getJSON(),
+          });
+        });
+      },
+    });
+    Object.defineProperty(editorDom, "selectionStart", {
+      configurable: true,
+      get: () => selectionIndexRef.current,
+    });
+    Object.defineProperty(editorDom, "selectionEnd", {
+      configurable: true,
+      get: () => selectionIndexRef.current,
+    });
+    Object.defineProperty(editorDom, "setSelectionRange", {
+      configurable: true,
+      value: (start: number) => {
+        selectionIndexRef.current = start;
+        try {
+          editor.commands.setTextSelection(
+            getPositionAtDraftIndex(editor, start, readMode),
+          );
+        } catch {
+          // jsdom does not implement the layout APIs ProseMirror uses when
+          // scrolling selections; the stored selection index is enough there.
+        }
+      },
+    });
+
+    return () => {
+      delete editorDom.value;
+      delete editorDom.selectionStart;
+      delete editorDom.selectionEnd;
+      delete editorDom.setSelectionRange;
+    };
+  }, [editor, readMode]);
 
   useEffect(() => {
     if (!editor) {

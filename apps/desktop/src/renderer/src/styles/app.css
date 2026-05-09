@@ -895,7 +895,7 @@ textarea,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
-.composer-rich-input:focus-within,
+.composer-tiptap-input__editor:focus,
 .composer__select:focus,
 .composer__review-input:focus,
 .composer__review-option:focus,
@@ -906,7 +906,7 @@ textarea,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
-.composer-rich-input:focus-within,
+.composer-tiptap-input__editor:focus-visible,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
@@ -5473,22 +5473,6 @@ textarea,
   position: relative;
 }
 
-.composer-rich-input {
-  display: block;
-  min-height: 144px;
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
 .composer-tiptap-input {
   min-height: 144px;
   max-height: 280px;
@@ -5505,7 +5489,6 @@ textarea,
   position: relative;
   min-height: 142px;
   padding: 12px;
-  outline: none;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -5602,45 +5585,6 @@ textarea,
   font-size: inherit;
   line-height: normal;
   vertical-align: 0.13em;
-}
-
-.composer-rich-input.is-disabled {
-  opacity: 0.72;
-}
-
-.composer-rich-input.is-empty::before {
-  content: attr(data-placeholder);
-  color: var(--text-muted);
-  pointer-events: none;
-}
-
-.composer-rich-input__token {
-  display: inline-flex;
-  margin: 0 3px;
-  line-height: inherit;
-  vertical-align: 0.13em;
-}
-
-.composer-rich-input__token:first-child {
-  margin-left: 0;
-}
-
-.composer-rich-input .skill-chip {
-  height: 1.35em;
-  gap: 0.35em;
-  padding: 0 0.5em;
-  font-size: inherit;
-  line-height: normal;
-}
-
-.composer-rich-input .thread-row__chip-icon {
-  flex: 0 0 auto;
-  font-size: 0.72em;
-  line-height: 1;
-}
-
-.composer-rich-input .skill-chip__label {
-  line-height: normal;
 }
 
 .composer__mentioned-skills {

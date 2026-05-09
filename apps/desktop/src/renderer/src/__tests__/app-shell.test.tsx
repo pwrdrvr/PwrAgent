@@ -13,8 +13,48 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
+
+beforeAll(() => {
+  const emptyRect = {
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    toJSON: () => ({}),
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+  } as DOMRect;
+  const textPrototype = Text.prototype as Text & {
+    getClientRects?: () => DOMRect[];
+    getBoundingClientRect?: () => DOMRect;
+  };
+  textPrototype.getClientRects ??= () => [];
+  textPrototype.getBoundingClientRect ??= () => emptyRect;
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => emptyRect;
+});
+
+function pasteComposerText(textbox: HTMLElement, value: string): void {
+  fireEvent.paste(textbox, {
+    clipboardData: {
+      files: [],
+      getData: (type: string) => (type === "text/plain" ? value : ""),
+      items: [],
+      types: ["text/plain"],
+    },
+  });
+}
+
+function getComposerValueHost(textbox: HTMLElement): HTMLElement {
+  return (
+    textbox.closest<HTMLElement>('[data-testid="composer-tiptap-input"]') ??
+    textbox
+  );
+}
 
 describe("App", () => {
   afterEach(() => {
@@ -455,11 +495,8 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
-    const reply = screen.getByLabelText("Reply") as HTMLTextAreaElement;
-    fireEvent.change(reply, {
-      target: { value: "$frontend-design what can this skill do" }
-    });
-    reply.setSelectionRange(reply.value.length, reply.value.length);
+    const reply = screen.getByLabelText("Reply");
+    pasteComposerText(reply, "$frontend-design what can this skill do");
     fireEvent.click(reply);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -653,11 +690,7 @@ describe("App", () => {
       name: "PwrAgent",
     });
 
-    fireEvent.change(screen.getByRole("textbox", { name: "New thread" }), {
-      target: {
-        value: "$front",
-      },
-    });
+    pasteComposerText(screen.getByRole("textbox", { name: "New thread" }), "$front");
 
     await waitFor(() => {
       expect(listSkills).toHaveBeenCalledWith({
@@ -1012,14 +1045,13 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
     const newThreadComposer = await screen.findByRole("textbox", { name: "New thread" });
     await act(async () => {
-      fireEvent.change(newThreadComposer, {
-        target: {
-          value: "Start a Grok-backed thread from the sidebar.",
-        },
-      });
+      pasteComposerText(newThreadComposer, "Start a Grok-backed thread from the sidebar.");
     });
     await waitFor(() => {
-      expect(newThreadComposer).toHaveValue("Start a Grok-backed thread from the sidebar.");
+      expect(getComposerValueHost(newThreadComposer)).toHaveAttribute(
+        "data-value",
+        "Start a Grok-backed thread from the sidebar.",
+      );
     });
     const startThreadButton = screen.getByRole("button", { name: "Start thread" });
     await waitFor(() => {
@@ -1059,11 +1091,10 @@ describe("App", () => {
       );
     });
 
-    fireEvent.change(await screen.findByLabelText("Reply"), {
-      target: {
-        value: "Can you check the plugin sdk boundary?"
-      }
-    });
+    pasteComposerText(
+      await screen.findByLabelText("Reply"),
+      "Can you check the plugin sdk boundary?",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(startTurn).toHaveBeenCalledWith({
@@ -1428,11 +1459,10 @@ describe("App", () => {
       await screen.findByRole("heading", { level: 2, name: "New thread" })
     ).toBeInTheDocument();
 
-    fireEvent.change(await screen.findByRole("textbox", { name: "New thread" }), {
-      target: {
-        value: "hello new codex thread"
-      }
-    });
+    pasteComposerText(
+      await screen.findByRole("textbox", { name: "New thread" }),
+      "hello new codex thread",
+    );
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });
@@ -1448,11 +1478,10 @@ describe("App", () => {
       });
     });
 
-    fireEvent.change(screen.getByLabelText("Reply"), {
-      target: {
-        value: "follow up on the new codex thread"
-      }
-    });
+    pasteComposerText(
+      screen.getByLabelText("Reply"),
+      "follow up on the new codex thread",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(startTurn).toHaveBeenCalledWith({
@@ -1720,11 +1749,10 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
 
-    fireEvent.change(await screen.findByRole("textbox", { name: "New thread" }), {
-      target: {
-        value: "Name this thread something funny and spunky. Something about potatoes."
-      }
-    });
+    pasteComposerText(
+      await screen.findByRole("textbox", { name: "New thread" }),
+      "Name this thread something funny and spunky. Something about potatoes.",
+    );
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });

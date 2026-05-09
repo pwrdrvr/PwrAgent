@@ -138,11 +138,11 @@ describe("desktop settings contracts", () => {
     expect(encoded).not.toContain("xai-");
   });
 
-  it("validates the supported composer options", () => {
-    expect(isDesktopChatReplyComposer("textarea")).toBe(true);
-    expect(isDesktopChatReplyComposer("tiptap-chips")).toBe(true);
+  it("validates the active composer option", () => {
+    expect(isDesktopChatReplyComposer("textarea")).toBe(false);
+    expect(isDesktopChatReplyComposer("tiptap-chips")).toBe(false);
     expect(isDesktopChatReplyComposer("tiptap-wysiwyg-markdown-chips")).toBe(true);
-    expect(isDesktopChatReplyComposer("custom-widget-chips")).toBe(true);
+    expect(isDesktopChatReplyComposer("custom-widget-chips")).toBe(false);
     expect(isDesktopChatReplyComposer("markdown")).toBe(false);
   });
 });

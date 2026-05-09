@@ -138,11 +138,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   return useMemo(
     () => ({
       clearSecret,
-      composerImplementation:
-        snapshot?.experimental.chatReplyComposer.value ??
-        (desktopApi?.readSettings
-          ? DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT
-          : "textarea"),
+      composerImplementation: DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       error,
       loading,
       refresh,

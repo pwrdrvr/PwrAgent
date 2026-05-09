@@ -70,8 +70,8 @@ describe("DesktopSettingsService", () => {
 
     expect(snapshot.fetchedAt).toBe(10);
     expect(snapshot.experimental.chatReplyComposer).toEqual({
-      value: "tiptap-chips",
-      source: "config",
+      value: "tiptap-wysiwyg-markdown-chips",
+      source: "default",
     });
     expect(snapshot.messaging.toolUpdateMode).toEqual({
       value: "show_more",
@@ -127,6 +127,40 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.worktrees.effectivePath).toMatch(
       /\.pwragent\/worktrees$/,
     );
+  });
+
+  it("marks legacy chat reply composer config when another setting is saved", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[experimental]",
+        'chat_reply_composer = "custom-widget-chips"',
+        "",
+        "[messaging]",
+        'tool_update_mode = "show_some"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        toolUpdateMode: "show_all",
+      },
+    });
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain(
+      "# pwragent-legacy-settings key=chat_reply_composer shape=string-enum used_through=1.0.0-alpha.8 kept_for_older_clients obsolete_no_replacement ignored_by_current_clients remove_when_convenient",
+    );
+    expect(contents).toContain('chat_reply_composer = "custom-widget-chips"');
+    expect(contents).toContain('tool_update_mode = "show_all"');
   });
 
   it("reads authorized contacts from TOML array-of-tables", async () => {
@@ -395,10 +429,9 @@ describe("DesktopSettingsService", () => {
 
     const snapshot = await service.readSettings();
 
-    expect(snapshot.experimental.chatReplyComposer).toMatchObject({
-      value: "custom-widget-chips",
-      source: "env",
-      overriddenByEnv: true,
+    expect(snapshot.experimental.chatReplyComposer).toEqual({
+      value: "tiptap-wysiwyg-markdown-chips",
+      source: "default",
     });
     expect(snapshot.messaging.telegram.enabled).toMatchObject({
       value: true,
@@ -575,7 +608,9 @@ describe("DesktopSettingsService", () => {
     await expect(
       service.writeConfigPatch({
         experimental: {
-          chatReplyComposer: "tiptap-chips",
+          diffCondensation: {
+            enabled: true,
+          },
         },
       }),
     ).rejects.toThrow("could not be parsed");

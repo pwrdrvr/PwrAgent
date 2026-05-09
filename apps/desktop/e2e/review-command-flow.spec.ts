@@ -27,8 +27,9 @@ test("review command asks for target and preserves transcript order", async () =
     ).toBeVisible();
 
     const reply = app.window.getByLabel("Reply");
+    const replyValue = app.window.getByTestId("composer-tiptap-input");
     await reply.fill("/review");
-    await expect(reply).toHaveValue("/review");
+    await expect(replyValue).toHaveAttribute("data-value", "/review");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     const reviewTarget = app.window.getByRole("group", { name: "Review target" });

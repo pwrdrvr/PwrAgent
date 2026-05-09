@@ -1,5 +1,4 @@
 import type {
-  DesktopChatReplyComposer,
   DesktopMessagingImageProfile,
   DesktopWorktreeStorageLocation,
 } from "@pwragent/shared";
@@ -135,19 +134,6 @@ export function readEnvMessagingImageProfile(
   return { value };
 }
 
-export function readEnvComposer(
-  env: NodeJS.ProcessEnv,
-): ParsedEnvValue<DesktopChatReplyComposer> {
-  const value = readEnvString(env, CHAT_REPLY_COMPOSER_ENV);
-  if (!value) {
-    return {};
-  }
-  if (!isDesktopChatReplyComposer(value)) {
-    return { error: `Invalid composer value for ${CHAT_REPLY_COMPOSER_ENV}` };
-  }
-  return { value };
-}
-
 export function readEnvWorktreeStorage(
   env: NodeJS.ProcessEnv,
 ): ParsedEnvValue<DesktopWorktreeStorageLocation> {
@@ -161,17 +147,6 @@ export function readEnvWorktreeStorage(
     };
   }
   return { value };
-}
-
-function isDesktopChatReplyComposer(
-  value: string,
-): value is DesktopChatReplyComposer {
-  return (
-    value === "textarea"
-    || value === "tiptap-chips"
-    || value === "tiptap-wysiwyg-markdown-chips"
-    || value === "custom-widget-chips"
-  );
 }
 
 function isDesktopMessagingImageProfile(

@@ -1,6 +1,5 @@
-import type { DesktopChatReplyComposer, DesktopSettingsSnapshot } from "@pwragent/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import {
-  SettingsCompOption,
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -8,35 +7,6 @@ import {
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
-
-const COMPOSER_OPTIONS: Array<{
-  default?: boolean;
-  label: string;
-  sub: string;
-  value: DesktopChatReplyComposer;
-}> = [
-  {
-    label: "Textarea",
-    sub: "Native textarea reply composer. No formatting, no chips. Smallest surface, most predictable.",
-    value: "textarea",
-  },
-  {
-    label: "TipTap raw Markdown + chips",
-    sub: "TipTap editor that shows the Markdown source. Slash menu inserts chips for models, worktrees, and access modes.",
-    value: "tiptap-chips",
-  },
-  {
-    default: true,
-    label: "TipTap WYSIWYG Markdown + chips",
-    sub: "Renders Markdown as you type. Bold, links, lists, and chips appear inline. The default for new users.",
-    value: "tiptap-wysiwyg-markdown-chips",
-  },
-  {
-    label: "Custom widget with chips",
-    sub: "In-house composer built around chip primitives. No Markdown parser; chips are first-class tokens.",
-    value: "custom-widget-chips",
-  },
-];
 
 /**
  * Diff condensation runs an xAI judgment call on each "focused diff"
@@ -59,11 +29,9 @@ const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> =
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
-  onComposerChange: (value: DesktopChatReplyComposer) => Promise<void>;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onDiffCondensationModelChange: (model: string) => Promise<void>;
 }) {
-  const composer = props.snapshot.experimental.chatReplyComposer;
   const condensation = props.snapshot.experimental.diffCondensation;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
@@ -76,34 +44,6 @@ export function ExperimentalSettings(props: {
         title="Experimental features"
         help="Opt-in features that may change shape or be removed without notice."
       />
-
-      <SettingsSection
-        eyebrow="Experimental"
-        title="Chat Reply Composer"
-        chip={sourceBadge(composer)}
-        chipKind={composer.source === "env" ? "warn" : "default"}
-      >
-        <div
-          className="settings-comp-opts"
-          role="radiogroup"
-          aria-label="Chat Reply Composer"
-        >
-          {COMPOSER_OPTIONS.map((option) => (
-            <SettingsCompOption
-              key={option.value}
-              value={option.value}
-              title={option.label}
-              sub={option.sub}
-              isDefault={option.default}
-              active={composer.value === option.value}
-              disabled={props.saving}
-              onSelect={(value) => {
-                void props.onComposerChange(value);
-              }}
-            />
-          ))}
-        </div>
-      </SettingsSection>
 
       <SettingsSection
         eyebrow="Experimental"

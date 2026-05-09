@@ -155,7 +155,7 @@ test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
     const modelSelect = settings.getByLabel("Model");
-    const prompt = app.window.locator("textarea.composer__input");
+    const prompt = app.window.getByRole("textbox", { name: "New thread" });
 
     await expect(providerSelect).toHaveAttribute("data-value", "codex");
     await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerTiptapInput } from "../ComposerTiptapInput";
-import type { ComposerSkillToken } from "../ComposerRichInput";
+import type { ComposerSkillToken } from "../ComposerInputTypes";
 
 afterEach(() => {
   cleanup();

@@ -170,7 +170,7 @@ function createSettingsState(
 }
 
 describe("SettingsScreen", () => {
-  it("switches sections and saves the composer preference", async () => {
+  it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
@@ -201,19 +201,11 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    fireEvent.click(screen.getByRole("radio", { name: "TipTap raw Markdown + chips" }));
+    expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { chatReplyComposer: "tiptap-chips" },
-      });
-    });
-
-    fireEvent.click(
-      screen.getByRole("radio", { name: "TipTap WYSIWYG Markdown + chips" }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { chatReplyComposer: "tiptap-wysiwyg-markdown-chips" },
+        experimental: { diffCondensation: { enabled: true } },
       });
     });
 
