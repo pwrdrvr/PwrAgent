@@ -592,6 +592,39 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("allows replacing the Slack signing secret while Socket Mode is selected", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const signingSecretInput = screen.getByLabelText("Signing Secret");
+    const signingSecretControls = signingSecretInput.closest(".settings-secret");
+    expect(signingSecretInput).toBeEnabled();
+    expect(signingSecretControls).not.toBeNull();
+
+    fireEvent.change(signingSecretInput, {
+      target: { value: "slack-signing-secret" },
+    });
+    fireEvent.click(
+      within(signingSecretControls as HTMLElement).getByRole("button", {
+        name: "Replace",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackSigningSecret",
+        "slack-signing-secret",
+      );
+    });
+  });
+
   it("sanitizes manually entered messaging display names before saving", async () => {
     const settings = createSettingsState();
 

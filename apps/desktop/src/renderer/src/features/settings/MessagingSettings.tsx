@@ -651,13 +651,9 @@ export function MessagingSettings(props: {
             }}
           />
           <SecretField
-            disabled={
-              props.saving
-              || slack.inboundMode.value !== "events"
-              || !slack.signingSecret.writable
-            }
+            disabled={props.saving || !slack.signingSecret.writable}
             label="Signing Secret"
-            sub="Stored in the system keychain. Only needed for Events API mode."
+            sub="Optional for Socket Mode button validation. Required for future Events API mode."
             secret="slackSigningSecret"
             state={slack.signingSecret}
             onClearSecret={props.onClearSecret}

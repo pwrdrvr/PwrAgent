@@ -701,13 +701,16 @@ Minimum bot scopes for the current adapter shape:
 ### 2. Configure PwrAgent
 
 **Path A — Desktop Settings UI.** Open Settings → Messaging → Slack. Fill in Bot
-Token and App Token, then leave Inbound Mode set to Socket Mode. Authorized
-Slack user IDs and optional workspace/team IDs can be added immediately if you
-already know them. If you do not, leave the authorized user list empty, enable
-Slack, DM or mention the bot, then open Messaging Activity. PwrAgent starts the
-adapter in discovery mode, discards the unauthorized inbound message, and logs
-the Slack user ID there so you can copy it into the allowlist. The
-connection-test button calls Slack `auth.test` with the bot token.
+Token and App Token, then leave Inbound Mode set to Socket Mode. Signing Secret
+is optional for Socket Mode, but recommended because PwrAgent uses it as a
+stable local secret for Block Kit button payload validation; use the value from
+Slack **Basic Information → App Credentials → Signing Secret**. Authorized Slack
+user IDs and optional workspace/team IDs can be added immediately if you already
+know them. If you do not, leave the authorized user list empty, enable Slack, DM
+or mention the bot, then open Messaging Activity. PwrAgent starts the adapter in
+discovery mode, discards the unauthorized inbound message, and logs the Slack
+user ID there so you can copy it into the allowlist. The connection-test button
+calls Slack `auth.test` with the bot token.
 
 **Path B — Environment variables.** Env vars override Settings UI values when
 both are present.
@@ -716,6 +719,7 @@ both are present.
 PWRAGENT_MESSAGING_SLACK_ENABLED=true
 PWRAGENT_MESSAGING_SLACK_BOT_TOKEN=xoxb-...
 PWRAGENT_MESSAGING_SLACK_APP_TOKEN=xapp-...
+PWRAGENT_MESSAGING_SLACK_SIGNING_SECRET=...                    # optional in Socket Mode
 PWRAGENT_MESSAGING_SLACK_AUTHORIZED_USER_IDS=U012ABCDEF0,U099ZZZZZZZ
 PWRAGENT_MESSAGING_SLACK_AUTHORIZED_WORKSPACES=T012ABCDEF0   # optional
 PWRAGENT_MESSAGING_SLACK_WORKSPACE_URL=https://example.slack.com # optional
