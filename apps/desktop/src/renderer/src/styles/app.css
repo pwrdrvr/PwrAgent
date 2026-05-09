@@ -6539,14 +6539,18 @@ textarea,
 }
 
 .workspace-handoff-dialog code {
-  padding: 1px 5px;
+  padding: 0 4px;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
   background: var(--bg-panel);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 0.95em;
-  overflow-wrap: anywhere;
+  font-size: 0.9em;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 
 .workspace-handoff-dialog__branch-path {
@@ -6579,9 +6583,9 @@ textarea,
 }
 
 .workspace-handoff-dialog__branch-code {
-  display: inline-block;
+  display: inline;
   max-width: 100%;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.35;
 }
@@ -6595,13 +6599,18 @@ textarea,
 .workspace-handoff-dialog__comparison {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
   margin-top: 14px;
 }
 
-.workspace-handoff-dialog__comparison section {
-  display: flex;
-  flex-direction: column;
+.workspace-handoff-dialog__choice {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace-handoff-dialog__choice-copy {
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
@@ -6609,14 +6618,14 @@ textarea,
   background: var(--bg-input);
 }
 
-.workspace-handoff-dialog__comparison h3 {
+.workspace-handoff-dialog__choice-copy h3 {
   margin: 0;
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.3;
 }
 
-.workspace-handoff-dialog__comparison p {
+.workspace-handoff-dialog__choice-copy p {
   margin-top: 8px;
 }
 
@@ -6679,10 +6688,15 @@ textarea,
   gap: 3px;
   align-content: center;
   min-width: 0;
-  margin-top: auto;
-  padding-top: 8px;
-  padding-bottom: 8px;
+  min-height: 44px;
+  padding: 7px 12px;
+  font-size: 12px;
+  line-height: 1.25;
   text-align: left;
+}
+
+.workspace-handoff-dialog__action > span {
+  font-weight: 700;
 }
 
 .workspace-handoff-dialog__action small {

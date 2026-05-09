@@ -1734,16 +1734,17 @@ export function ThreadView(props: ThreadViewProps) {
               current branch.
             </p>
             <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
-              <section>
-                <h3>I'll switch back</h3>
-                <p>
-                  Keep the warning because the thread should still expect{" "}
-                  <code>{branchDriftDialog.expectedBranch}</code>.
-                </p>
-                <p>
-                  Next: switch the worktree back to{" "}
-                  <code>{branchDriftDialog.expectedBranch}</code> yourself.
-                </p>
+              <div className="workspace-handoff-dialog__choice">
+                <section className="workspace-handoff-dialog__choice-copy">
+                  <h3>I'll switch back</h3>
+                  <p>
+                    Keep the warning. This thread will continue to expect{" "}
+                    <code>{branchDriftDialog.expectedBranch}</code>.
+                  </p>
+                  <p>
+                    Next: switch the worktree back yourself.
+                  </p>
+                </section>
                 <button
                   aria-label={
                     branchDriftDialog.reason === "turn"
@@ -1792,17 +1793,18 @@ export function ThreadView(props: ThreadViewProps) {
                   </span>
                   <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
                 </button>
-              </section>
-              <section>
-                <h3>Keep current branch</h3>
-                <p>
-                  Treat <code>{branchDriftDialog.observedBranch}</code> as the branch this thread
-                  should use from now on.
-                </p>
-                <p>
-                  Next: start the next turn on{" "}
-                  <code>{branchDriftDialog.observedBranch}</code> with no warning.
-                </p>
+              </div>
+              <div className="workspace-handoff-dialog__choice">
+                <section className="workspace-handoff-dialog__choice-copy">
+                  <h3>Keep current branch</h3>
+                  <p>
+                    Update this thread so it expects{" "}
+                    <code>{branchDriftDialog.observedBranch}</code> from now on.
+                  </p>
+                  <p>
+                    Next: start the next turn with no warning.
+                  </p>
+                </section>
                 <button
                   aria-label={`Use current branch. Continue on ${branchDriftDialog.observedBranch}`}
                   className="button button--primary workspace-handoff-dialog__action"
@@ -1833,7 +1835,7 @@ export function ThreadView(props: ThreadViewProps) {
                   <span>Use Current Branch</span>
                   <small>Continue on {branchDriftDialog.observedBranch}</small>
                 </button>
-              </section>
+              </div>
             </div>
             {branchDriftError ? (
               <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
