@@ -2709,9 +2709,65 @@ textarea,
   align-self: flex-start;
 }
 
+.settings-pairing {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-pairing__controls,
+.settings-pairing__message,
+.settings-pairing__request {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-pairing__controls .settings-input {
+  max-width: 220px;
+}
+
+.settings-pairing__message code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-pairing__requests {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-pairing__request {
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-surface);
+}
+
+.settings-pairing__request span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 760px) {
-  .settings-authorized-list__row {
+  .settings-authorized-list__row,
+  .settings-pairing__controls,
+  .settings-pairing__message,
+  .settings-pairing__request {
     grid-template-columns: 1fr;
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -20,6 +21,9 @@ import {
   type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
+  type MessagingChannelKind,
+  type MessagingPairingEntry,
+  type MessagingPairingScope,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { DiscordIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
@@ -196,6 +200,12 @@ export function MessagingSettings(props: {
               />
             }
           />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !telegram.enabled.value}
+            platform="telegram"
+            supportsBucket
+          />
           <ToggleField
             checked={telegram.streamingResponses.value}
             disabled={props.saving}
@@ -303,6 +313,12 @@ export function MessagingSettings(props: {
                 defaultSub="discord.com/api/v10"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !discord.enabled.value}
+            platform="discord"
+            supportsBucket
           />
           <ToggleField
             checked={discord.streamingResponses.value}
@@ -449,6 +465,11 @@ export function MessagingSettings(props: {
                 defaultSub="api/v4/users/me"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !mattermost.enabled.value}
+            platform="mattermost"
           />
           <ToggleField
             checked={mattermost.streamingResponses.value}
@@ -621,6 +642,12 @@ export function MessagingSettings(props: {
                 defaultSub="auth.test"
               />
             }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !slack.enabled.value}
+            platform="slack"
+            supportsBucket
           />
           <TextField
             disabled={props.saving}
@@ -951,6 +978,163 @@ function NumberField(props: {
       }
     />
   );
+}
+
+function PairingTokenField(props: {
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+  platform: MessagingChannelKind;
+  supportsBucket?: boolean;
+}) {
+  const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
+  const [message, setMessage] = useState<string | undefined>(undefined);
+  const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
+  const [busyId, setBusyId] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  const refresh = async () => {
+    if (!props.desktopApi?.listMessagingPairingRequests) return;
+    const result = await props.desktopApi.listMessagingPairingRequests({
+      platform: props.platform,
+    });
+    setEntries(result.entries);
+  };
+
+  useEffect(() => {
+    void refresh();
+    return props.desktopApi?.onMessagingPairingChanged?.((event) => {
+      if (event.entry.platform === props.platform) void refresh();
+    });
+  }, [props.desktopApi, props.platform]);
+
+  const generate = async () => {
+    if (!props.desktopApi?.generateMessagingPairingToken) return;
+    setBusyId("generate");
+    setError(undefined);
+    try {
+      const result = await props.desktopApi.generateMessagingPairingToken({
+        platform: props.platform,
+        scope,
+      });
+      setMessage(result.message);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusyId(undefined);
+    }
+  };
+
+  const decide = async (
+    entry: MessagingPairingEntry,
+    decision: "approve" | "reject",
+  ) => {
+    setBusyId(entry.id);
+    setError(undefined);
+    try {
+      if (decision === "approve") {
+        await props.desktopApi?.approveMessagingPairing?.({ entryId: entry.id });
+      } else {
+        await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+      }
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusyId(undefined);
+    }
+  };
+
+  const observedEntries = entries.filter((entry) => entry.status === "observed");
+
+  return (
+    <SettingsField
+      label="Pairing"
+      sub="Generate a short-lived code to approve a user or group from chat."
+      error={error}
+      control={
+        <div className="settings-pairing">
+          <div className="settings-pairing__controls">
+            <select
+              className="settings-input"
+              disabled={props.disabled}
+              value={scope}
+              onChange={(event) =>
+                setScope(event.currentTarget.value as MessagingPairingScope)
+              }
+            >
+              <option value="user_dm">User from DM</option>
+              <option value="user_in_group">User from group</option>
+              {props.supportsBucket ? (
+                <option value="bucket">Group or guild</option>
+              ) : null}
+            </select>
+            <button
+              className="button button--secondary"
+              disabled={
+                props.disabled
+                || busyId === "generate"
+                || !props.desktopApi?.generateMessagingPairingToken
+              }
+              type="button"
+              onClick={() => void generate()}
+            >
+              {busyId === "generate" ? "Generating..." : "Generate"}
+            </button>
+          </div>
+          {message ? (
+            <div className="settings-pairing__message">
+              <code>{message}</code>
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => void props.desktopApi?.copyText?.(message)}
+              >
+                Copy
+              </button>
+            </div>
+          ) : null}
+          {observedEntries.length > 0 ? (
+            <div className="settings-pairing__requests">
+              {observedEntries.map((entry) => (
+                <div className="settings-pairing__request" key={entry.id}>
+                  <span>{pairingEntryLabel(entry)}</span>
+                  <button
+                    className="button button--secondary"
+                    disabled={busyId === entry.id}
+                    type="button"
+                    onClick={() => void decide(entry, "approve")}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="button button--ghost"
+                    disabled={busyId === entry.id}
+                    type="button"
+                    onClick={() => void decide(entry, "reject")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+function pairingEntryLabel(entry: MessagingPairingEntry): string {
+  if (entry.scope === "bucket") {
+    return `${entry.observedChat?.title ?? entry.observedChat?.id ?? "Chat"} wants group access`;
+  }
+  const actor =
+    entry.observedActor?.displayName
+    ?? entry.observedActor?.username
+    ?? entry.observedActor?.id
+    ?? "User";
+  return `${actor} wants access`;
 }
 
 function AuthorizedListField(props: {

@@ -46,10 +46,19 @@ import type {
   SetThreadReactionResponse,
   GetGhStatusRequest,
   GhStatus,
+  ApproveMessagingPairingRequest,
+  ApproveMessagingPairingResponse,
+  GenerateMessagingPairingTokenRequest,
+  GenerateMessagingPairingTokenResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
+  ListMessagingPairingRequestsRequest,
+  ListMessagingPairingRequestsResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  MessagingPairingEntry,
+  RejectMessagingPairingRequest,
+  RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
@@ -139,10 +148,15 @@ import {
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+  MESSAGING_APPROVE_PAIRING_CHANNEL,
+  MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
+  MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
+  MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -448,6 +462,22 @@ const desktopApi = Object.freeze({
     request?: ListMessagingActivityRequest,
   ): Promise<ListMessagingActivityResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_ACTIVITY_CHANNEL, request),
+  generateMessagingPairingToken: async (
+    request: GenerateMessagingPairingTokenRequest,
+  ): Promise<GenerateMessagingPairingTokenResponse> =>
+    await ipcRenderer.invoke(MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL, request),
+  listMessagingPairingRequests: async (
+    request?: ListMessagingPairingRequestsRequest,
+  ): Promise<ListMessagingPairingRequestsResponse> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL, request),
+  approveMessagingPairing: async (
+    request: ApproveMessagingPairingRequest,
+  ): Promise<ApproveMessagingPairingResponse> =>
+    await ipcRenderer.invoke(MESSAGING_APPROVE_PAIRING_CHANNEL, request),
+  rejectMessagingPairing: async (
+    request: RejectMessagingPairingRequest,
+  ): Promise<RejectMessagingPairingResponse> =>
+    await ipcRenderer.invoke(MESSAGING_REJECT_PAIRING_CHANNEL, request),
   openMessagingActivityWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   },
@@ -473,6 +503,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onMessagingPairingChanged: (
+    callback: (event: { at: number; entry: MessagingPairingEntry }) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { at: number; entry: MessagingPairingEntry },
+    ) => callback(payload);
+    ipcRenderer.on(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   platform: process.platform,

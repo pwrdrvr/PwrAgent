@@ -23,6 +23,7 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
+import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
 import type { SlackMessagingConfig } from "./slack-config.ts";
 import {
   actionsForSlackIntent,
@@ -535,6 +536,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
     const text = strippedText.trim();
+    const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
     const command = strippedText === rawText
       ? parseCommand(text)
       : parseBareCommand(text);
@@ -544,6 +546,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       actor,
       channel,
       kind,
+      pairing: isPairingMessage,
       routingState,
       teamId: ids.teamId,
     })) return;
@@ -977,9 +980,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
+    pairing?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
   }): boolean {
+    if (params.pairing) return true;
+
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
     if (
       allowedTeams?.length

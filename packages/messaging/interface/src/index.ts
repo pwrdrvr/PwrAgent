@@ -52,6 +52,10 @@ export const MESSAGING_INBOUND_EVENT_KINDS = [
   "lifecycle",
 ] as const;
 
+export const MESSAGING_PAIRING_COMMAND = "pwragent_pair";
+export const MESSAGING_PAIRING_TOKEN_PATTERN =
+  /^[1-9A-HJ-NP-Za-km-z]{32}$/;
+
 export const MESSAGING_DELIVERY_OUTCOMES = [
   "presented",
   "updated",
@@ -72,6 +76,20 @@ export type MessagingInboundEventKind =
 export type MessagingDeliveryOutcome =
   (typeof MESSAGING_DELIVERY_OUTCOMES)[number];
 export type MessagingStreamingResponseMode = "inherit" | "enabled" | "disabled";
+
+export function extractMessagingPairingToken(text: string): string | undefined {
+  const parts = text.trim().split(/\s+/);
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    if (parts[index]?.toLowerCase() !== MESSAGING_PAIRING_COMMAND) {
+      continue;
+    }
+    const candidate = parts[index + 1] ?? "";
+    if (MESSAGING_PAIRING_TOKEN_PATTERN.test(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
 
 export type MessagingChannelKind =
   | "telegram"

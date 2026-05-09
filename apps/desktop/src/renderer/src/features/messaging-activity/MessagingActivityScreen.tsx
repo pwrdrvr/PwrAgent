@@ -12,12 +12,14 @@ const KIND_LABEL: Record<MessagingActivityKind, string> = {
   "inbound-routed": "Routed",
   "inbound-rejected": "Rejected",
   "inbound-ignored": "Ignored",
+  pairing: "Pairing",
   outbound: "Sent",
 };
 const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "muted"> = {
   "inbound-routed": "ok",
   "inbound-rejected": "error",
   "inbound-ignored": "warning",
+  pairing: "warning",
   outbound: "muted",
 };
 
@@ -108,7 +110,7 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
         className="messaging-activity__aside"
         title="Received but ignored"
         emptyLabel="No rejected or ignored inbound messages — your authorization list is doing its job."
-        kinds={["inbound-rejected", "inbound-ignored"]}
+        kinds={["inbound-rejected", "inbound-ignored", "pairing"]}
         groups={groups}
       />
     </section>
@@ -283,6 +285,7 @@ function groupByKind(
     "inbound-routed": [],
     "inbound-rejected": [],
     "inbound-ignored": [],
+    pairing: [],
     outbound: [],
   };
   for (const entry of entries) {

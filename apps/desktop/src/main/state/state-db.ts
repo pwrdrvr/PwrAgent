@@ -123,6 +123,25 @@ CREATE INDEX idx_messaging_activity_log_thread
   ON messaging_activity_log(thread_id);
 `;
 
+const SCHEMA_V3 = `
+CREATE TABLE messaging_pairing_tokens (
+  entry_id      TEXT PRIMARY KEY,
+  token_hmac    TEXT NOT NULL UNIQUE,
+  platform      TEXT NOT NULL,
+  instance_id   TEXT NOT NULL,
+  scope         TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  generated_at  INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  observed_at   INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX idx_messaging_pairing_platform_expires
+  ON messaging_pairing_tokens(platform, instance_id, expires_at);
+CREATE INDEX idx_messaging_pairing_status
+  ON messaging_pairing_tokens(status, expires_at);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 /**
@@ -175,6 +194,12 @@ export class StateDb {
         db.pragma("user_version = 2");
       })();
     }
+    if ((db.pragma("user_version", { simple: true }) as number) < 3) {
+      db.transaction(() => {
+        db.exec(SCHEMA_V3);
+        db.pragma("user_version = 3");
+      })();
+    }
 
     return new StateDb(db);
   }
@@ -211,6 +236,11 @@ export class StateDb {
         .run(now);
       this.db
         .prepare("DELETE FROM callback_handles WHERE expires_at < ?")
+        .run(now);
+      this.db
+        .prepare(
+          "UPDATE messaging_pairing_tokens SET status = 'expired' WHERE status IN ('pending', 'observed') AND expires_at < ?",
+        )
         .run(now);
       this.db
         .prepare("DELETE FROM deliveries WHERE created_at < ?")

@@ -49,6 +49,14 @@ export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
 export const MESSAGING_SET_ENABLED_CHANNEL = "messaging:set-enabled";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
+export const MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL =
+  "messaging:generate-pairing-token";
+export const MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL =
+  "messaging:list-pairing-requests";
+export const MESSAGING_APPROVE_PAIRING_CHANNEL = "messaging:approve-pairing";
+export const MESSAGING_REJECT_PAIRING_CHANNEL = "messaging:reject-pairing";
+export const MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL =
+  "messaging:pairing-changed";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate
