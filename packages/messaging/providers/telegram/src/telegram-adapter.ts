@@ -1565,19 +1565,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       value: action.value,
     });
     if (this.options.store && intent.audit) {
+      const now = this.now();
       await this.options.store.upsertCallbackHandle({
-        id: `telegram-callback:${handle}`,
+        id: telegramCallbackRecordId(handle, intent),
         actionId: action.id,
-        allowedActorIds: [intent.audit.actor.platformUserId],
-        bindingId: intent.bindingId,
+        allowedActorIds: callbackAllowedActorIds(intent),
+        bindingId: callbackBindingId(intent),
         channel: intent.audit.channel,
-        createdAt: this.now(),
-        expiresAt: this.now() + 15 * 60 * 1000,
+        createdAt: now,
+        expiresAt: now + 15 * 60 * 1000,
         handle,
         pendingIntentId: intent.id,
         browseSessionId: browseSessionIdForIntent(intent),
         surface: intent.targetSurface,
-        updatedAt: this.now(),
+        updatedAt: now,
         value: action.value,
       });
     }
@@ -2333,6 +2334,35 @@ function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | unde
   return intent.kind === "thread_picker" || intent.kind === "project_picker"
     ? intent.browseSessionId
     : undefined;
+}
+
+function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
+  return intent.allowedActorIds && intent.allowedActorIds.length > 0
+    ? intent.allowedActorIds
+    : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function telegramCallbackRecordId(
+  handle: string,
+  intent: MessagingSurfaceIntent,
+): string {
+  const conversation = intent.audit?.channel.conversation;
+  const deliveryScope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        intent.audit?.channel.channel ?? "telegram",
+        conversation?.id ?? null,
+        conversation?.parentId ?? null,
+        intent.audit?.bindingId ?? intent.bindingId ?? null,
+      ]),
+    )
+    .digest("base64url")
+    .slice(0, 18);
+  return `telegram-callback:${handle}:${deliveryScope}`;
 }
 
 /**

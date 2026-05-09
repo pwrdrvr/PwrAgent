@@ -364,7 +364,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     const text = clampSlackMessage(markdownToSlackMrkdwn(rawText));
     const actions = actionsForSlackIntent(intent);
     const callbackBuilder = this.buildCallbackValueBuilder({
-      actorId: intent.audit?.actor.platformUserId ?? this.authorizedActorIds[0] ?? "",
+      allowedActorIds: callbackAllowedActorIds(
+        intent,
+        this.authorizedActorIds[0] ?? "",
+      ),
+      bindingId: callbackBindingId(intent),
       channelRef: target.channelRef,
       intent,
     });
@@ -834,7 +838,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private buildCallbackValueBuilder(params: {
-    actorId: string;
+    allowedActorIds: string[];
+    bindingId?: string;
     channelRef: MessagingChannelRef;
     intent: MessagingSurfaceIntent;
   }): (action: MessagingSurfaceAction) => string {
@@ -847,9 +852,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       const sig = this.signCallbackValue(handle, params.intent.id, issuedAt);
       void this.callbackHandleStore
         .upsertCallbackHandle({
-          id: `slack-callback:${handle}`,
+          id: slackCallbackRecordId(handle, params),
           actionId: action.id,
-          allowedActorIds: [params.actorId],
+          allowedActorIds: params.allowedActorIds,
+          bindingId: params.bindingId,
           channel: params.channelRef,
           createdAt: issuedAt,
           updatedAt: issuedAt,
@@ -1444,6 +1450,43 @@ function readSlackSurfaceState(
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
   };
+}
+
+function callbackAllowedActorIds(
+  intent: MessagingSurfaceIntent,
+  fallbackActorId: string,
+): string[] {
+  if (intent.allowedActorIds && intent.allowedActorIds.length > 0) {
+    return intent.allowedActorIds;
+  }
+  const actorId = intent.audit?.actor.platformUserId ?? fallbackActorId;
+  return actorId ? [actorId] : ["unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function slackCallbackRecordId(
+  handle: string,
+  params: {
+    bindingId?: string;
+    channelRef: MessagingChannelRef;
+  },
+): string {
+  const conversation = params.channelRef.conversation;
+  const deliveryScope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        params.channelRef.channel,
+        conversation.id,
+        conversation.parentId ?? null,
+        params.bindingId ?? null,
+      ]),
+    )
+    .digest("base64url")
+    .slice(0, 18);
+  return `slack-callback:${handle}:${deliveryScope}`;
 }
 
 function readSlackAttachmentState(

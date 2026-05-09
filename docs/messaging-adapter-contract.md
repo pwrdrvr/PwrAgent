@@ -62,8 +62,14 @@ Interactive callbacks should use short opaque platform handles:
 
 - Telegram `callback_data` is byte-limited, so never embed semantic action data.
 - Discord component `custom_id` should likewise carry only a compact handle.
+- Slack button `value` and Mattermost `integration.context` should carry or wrap
+  the same opaque handle, plus any provider authenticity/routing breadcrumbs.
 - The full pending intent remains in `MessagingStore` with binding, actor, TTL,
   and audit context.
+- Callback handle records are scoped per delivery. Persist the delivered
+  conversation, the full `allowedActorIds` set, and
+  `intent.audit?.bindingId ?? intent.bindingId`; a single intent/action may be
+  delivered to multiple bindings with the same platform handle.
 
 ## Rendering Policy
 
@@ -285,7 +291,9 @@ To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
    Apply defensive caps from the adapter's own `capabilityProfile`.
 6. Store platform-specific details only in `MessagingAdapterState`.
 7. Use short callback handles and resolve them back to semantic actions
-   inside the adapter.
+   inside the adapter. Persist delivery-scoped callback records with the full
+   actor set and routed binding id so restart, fan-out, and rebind cleanup paths
+   behave consistently.
 8. **Implement `validateCredentials` per the contract above.** Add a
    `<Channel>CredentialValidationConfig` type to
    `packages/messaging/interface/src/index.ts` and extend
@@ -293,8 +301,9 @@ To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
    `apps/desktop/src/main/messaging/messaging-runtime.ts`.
 9. Add tests for command normalization, authorization by stable ID, callbacks,
    markdown/code rendering, long text chunking, unsupported inbound media,
-   restart-safe binding behavior, capability-profile reads in formatting,
-   AND the `validateCredentials` ok / failed / unset paths.
+   restart-safe binding behavior, callback fan-out/rebind persistence,
+   capability-profile reads in formatting, AND the `validateCredentials` ok /
+   failed / unset paths.
 10. Document any capability gaps as adapter degradation or as profile fields
     the new platform leaves unset, not as workflow branches.
 

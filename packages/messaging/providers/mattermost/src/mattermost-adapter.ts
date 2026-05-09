@@ -1495,7 +1495,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const callbackContextBuilder = await this.buildCallbackContextBuilder({
       intent,
       channelRef: target.channelRef,
-      actorId: target.actorId,
+      allowedActorIds: callbackAllowedActorIds(intent, target.actorId),
+      bindingId: callbackBindingId(intent),
     });
 
     const buttons = buildMattermostActions({
@@ -2016,7 +2017,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async buildCallbackContextBuilder(params: {
     intent: MessagingSurfaceIntent;
     channelRef: MessagingChannelRef;
-    actorId: string;
+    allowedActorIds: string[];
+    bindingId?: string;
   }): Promise<(action: MessagingSurfaceAction) => Record<string, unknown>> {
     return (action: MessagingSurfaceAction) => {
       const handle = `${this.channel}:${createHash("sha256")
@@ -2032,9 +2034,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       const now = this.now();
       void this.callbackHandleStore
         .upsertCallbackHandle({
-          id: `mattermost-callback:${handle}`,
+          id: mattermostCallbackRecordId(handle, params),
           actionId: action.id,
-          allowedActorIds: [params.actorId],
+          allowedActorIds: params.allowedActorIds,
+          bindingId: params.bindingId,
           channel: params.channelRef,
           createdAt: now,
           updatedAt: now,
@@ -2375,6 +2378,43 @@ function surfaceRefForPost(
     id: postId,
     state: { opaque },
   };
+}
+
+function callbackAllowedActorIds(
+  intent: MessagingSurfaceIntent,
+  fallbackActorId: string,
+): string[] {
+  if (intent.allowedActorIds && intent.allowedActorIds.length > 0) {
+    return intent.allowedActorIds;
+  }
+  const actorId = intent.audit?.actor.platformUserId ?? fallbackActorId;
+  return actorId ? [actorId] : ["unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function mattermostCallbackRecordId(
+  handle: string,
+  params: {
+    bindingId?: string;
+    channelRef: MessagingChannelRef;
+  },
+): string {
+  const conversation = params.channelRef.conversation;
+  const deliveryScope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        params.channelRef.channel,
+        conversation.id,
+        conversation.parentId ?? null,
+        params.bindingId ?? null,
+      ]),
+    )
+    .digest("base64url")
+    .slice(0, 18);
+  return `mattermost-callback:${handle}:${deliveryScope}`;
 }
 
 function stringField(value: unknown): string | undefined {
