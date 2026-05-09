@@ -3498,10 +3498,16 @@ textarea,
 }
 
 .thread-view__layout.has-pinned-context-rail {
-  /* When the rail is pinned open it claims real layout width — keep
-     the small 24px breathing room here so the rail's left border
-     doesn't kiss the message column. */
-  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 24px);
+  /* When the rail is pinned (manually or auto-pinned via the wide
+     breakpoint), the chat area sits flush against the rail's left
+     border (issue #240). The transcript / composer are themselves
+     max-width-capped + centered (`.transcript-list__content`,
+     `.composer > *`), so the visual breathing room between the
+     message column and the rail comes from the centered chat
+     column's right margin — no extra layout padding needed. The
+     rail's `border-left: 1px solid var(--border-subtle)` already
+     provides the visual divider. */
+  padding-right: min(var(--context-rail-width, 380px), 42vw);
 }
 
 .thread-view__layout.is-resizing-context-rail {
