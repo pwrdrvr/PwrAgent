@@ -77,7 +77,7 @@ export function MessagingSettings(props: {
       <SettingsPanelHead
         eyebrow="Messaging"
         title="Connected chat platforms"
-        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, nothing can use that entry. Check the Messaging Activity window for rejected IDs to add here."
+        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
       />
 
       {runtimeMessaging.overrideActive && runtimeMessaging.disabled ? (

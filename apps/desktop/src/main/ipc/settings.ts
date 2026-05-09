@@ -75,7 +75,9 @@ async function applyLatestMessagingRuntimeConfig(
   const runtime = getDesktopMessagingRuntime();
   const runtimeOverride = resolveRuntimeMessagingOverride();
   await runtime.applyConfig(
-    await loadDesktopMessagingConfigFromSettings(service, process.env),
+    await loadDesktopMessagingConfigFromSettings(service, process.env, {
+      logStartupEligibility: true,
+    }),
     {
       allowStart: !runtimeOverride.disabled || runtime.isEnabled(),
     },

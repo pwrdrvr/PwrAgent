@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_SERVER_URL_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
@@ -19,20 +22,37 @@ import {
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 
+const messagingLog = vi.hoisted(() => ({
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => messagingLog),
+}));
+
 const tempRoots: string[] = [];
 
 afterEach(() => {
+  messagingLog.error.mockClear();
+  messagingLog.info.mockClear();
+  messagingLog.warn.mockClear();
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 describe("desktop messaging config", () => {
-  it("enables configured channels only when tokens and authorized actors are present", () => {
+  it("enables configured channels when credentials are present before actor discovery", () => {
     const config = loadDesktopMessagingConfig({
       [TELEGRAM_BOT_TOKEN_ENV]: " tg-token ",
       [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "user-1, user-2, user-1",
       [DISCORD_BOT_TOKEN_ENV]: "discord-token",
+      [MATTERMOST_BOT_TOKEN_ENV]: "mattermost-token",
+      [MATTERMOST_SERVER_URL_ENV]: "https://chat.example.com",
+      [MATTERMOST_CALLBACK_BASE_URL_ENV]:
+        "https://pwragent.example.com/messaging/mattermost/callback",
     });
 
     expect(config).toEqual({
@@ -49,6 +69,25 @@ describe("desktop messaging config", () => {
           { id: "user-2", displayName: "" },
         ],
         authorizedSupergroupIds: [],
+      },
+      discord: {
+        channel: "discord",
+        enabled: true,
+        botToken: "discord-token",
+        applicationId: undefined,
+        streamingResponses: false,
+        authorizedActorIds: [],
+        authorizedGuildIds: [],
+      },
+      mattermost: {
+        channel: "mattermost",
+        enabled: true,
+        botToken: "mattermost-token",
+        serverUrl: "https://chat.example.com",
+        callbackBaseUrl:
+          "https://pwragent.example.com/messaging/mattermost/callback",
+        streamingResponses: false,
+        authorizedActorIds: [],
       },
     });
   });
@@ -137,6 +176,83 @@ describe("desktop messaging config", () => {
         authorizedGuildIds: [],
       },
     });
+  });
+
+  it("loads settings providers with credentials before authorized IDs are configured", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        "",
+        "[messaging.discord]",
+        "enabled = true",
+        "",
+        "[messaging.mattermost]",
+        "enabled = true",
+        'server_url = "https://chat.example.com"',
+        'callback_base_url = "https://pwragent.example.com/messaging/mattermost/callback"',
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
+    await secretStore.setSecret("discordBotToken", "settings-discord-token");
+    await secretStore.setSecret(
+      "mattermostBotToken",
+      "settings-mattermost-token",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {}, {
+      logStartupEligibility: true,
+    });
+
+    expect(config).toMatchObject({
+      telegram: {
+        channel: "telegram",
+        botToken: "settings-telegram-token",
+        authorizedActorIds: [],
+      },
+      discord: {
+        channel: "discord",
+        botToken: "settings-discord-token",
+        authorizedActorIds: [],
+      },
+      mattermost: {
+        channel: "mattermost",
+        botToken: "settings-mattermost-token",
+        authorizedActorIds: [],
+      },
+    });
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram: enabled with no authorized user IDs configured",
+      ),
+      { channel: "telegram" },
+    );
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "discord: enabled with no authorized user IDs configured",
+      ),
+      { channel: "discord" },
+    );
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "mattermost: enabled with no authorized user IDs configured",
+      ),
+      { channel: "mattermost" },
+    );
+    expect(messagingLog.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("no authorized user IDs configured"),
+      expect.anything(),
+    );
   });
 
   it("honors the persisted master messaging switch before building providers", async () => {
