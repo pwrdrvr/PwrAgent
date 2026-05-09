@@ -228,6 +228,43 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("routes leading app mentions as commands", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "<@U0BOTUSERID> help status",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        args: ["status"],
+        rawText: "/help status",
+      }),
+    ]);
+  });
+
   it("uses users.info display names for DM labels when users:read is granted", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -421,6 +458,74 @@ describe("SlackAdapter", () => {
             title: "Alice",
           }),
         }),
+      }),
+    ]);
+  });
+
+  it("resolves callback buttons after restart when no Slack signing secret is configured", async () => {
+    const { signingSecret: _signingSecret, ...config } = baseConfig;
+    const store = fakeStore();
+    const spies: { posted: unknown[] } = { posted: [] };
+    const firstAdapter = new SlackAdapter({
+      config,
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await firstAdapter.deliver({
+      id: "status-after-restart",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Still valid?",
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "resume", label: "Resume", style: "primary" }],
+    });
+    const posted = spies.posted[0] as {
+      blocks: Array<{
+        elements?: Array<{ action_id?: string; value?: string }>;
+      }>;
+    };
+    const button = posted.blocks.flatMap((block) => block.elements ?? [])[0]!;
+
+    const socket = fakeSocket();
+    const secondAdapter = new SlackAdapter({
+      config,
+      callbackHandleStore: store,
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const delivered: MessagingInboundEvent[] = [];
+    await secondAdapter.start(async (event) => {
+      delivered.push(event);
+    });
+
+    await socket.emitEvent("interactive", {
+      ack: async () => undefined,
+      body: {
+        type: "block_actions",
+        user: { id: "U012ABCDEF0", username: "alice" },
+        team: { id: "T012ABCDEF0" },
+        channel: { id: "D012ABCDEF0", name: "directmessage" },
+        message: { ts: "1712023032.123456" },
+        actions: [button],
+      },
+    });
+
+    expect(delivered).toEqual([
+      expect.objectContaining({
+        kind: "callback",
+        actionId: "resume",
       }),
     ]);
   });

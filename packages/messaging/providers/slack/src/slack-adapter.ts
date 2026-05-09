@@ -282,7 +282,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.callbackHandleStore = options.callbackHandleStore;
     this.authorizedActorIds = options.config.authorizedActorIds.map((actor) => actor.id);
     this.signingSecret =
-      options.config.signingSecret?.trim() || randomBytes(32).toString("hex");
+      options.config.signingSecret?.trim()
+      || options.config.appToken?.trim()
+      || options.config.botToken.trim()
+      || randomBytes(32).toString("hex");
     this.api = options.api ?? createSlackApi(options.config.botToken);
     this.socketClient =
       options.socketClient
@@ -525,8 +528,12 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: ids.ts,
     });
     const routingState = this.routingStateForChannel(channel);
-    const text = stripBotMention(event.text ?? "", this.botUserId).trim();
-    const command = parseCommand(text);
+    const rawText = event.text ?? "";
+    const strippedText = stripBotMention(rawText, this.botUserId);
+    const text = strippedText.trim();
+    const command = strippedText === rawText
+      ? parseCommand(text)
+      : parseBareCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
     if (!this.authorizeInbound({
@@ -562,7 +569,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         routingState,
         command: command.command,
         args: command.args,
-        rawText: text,
+        rawText: strippedText === rawText ? text : `/${text}`,
       });
       return;
     }
@@ -1364,6 +1371,12 @@ function parseCommand(text: string): { command: string; args: string[] } | undef
   const [commandWithSlash, ...args] = trimmed.split(/\s+/);
   const command = commandWithSlash?.replace(/^\//, "");
   return command ? { command, args } : undefined;
+}
+
+function parseBareCommand(text: string): { command: string; args: string[] } | undefined {
+  const trimmed = text.trim();
+  if (!/^[A-Za-z0-9_]+(?:\s|$)/.test(trimmed)) return undefined;
+  return parseCommand(`/${trimmed}`);
 }
 
 function readSlackSurfaceState(
