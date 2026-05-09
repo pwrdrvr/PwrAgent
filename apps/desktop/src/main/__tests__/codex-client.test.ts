@@ -1431,7 +1431,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("surfaces the locally observed branch when protocol metadata omits the branch name", async () => {
+  it("keeps protocol branch metadata separate from the locally observed branch", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1457,7 +1457,7 @@ describe("CodexAppServerClient", () => {
 
     expect(thread).toMatchObject({
       id: "thread-2",
-      gitBranch: "main",
+      gitBranch: undefined,
       observedGitBranch: "main",
     });
 

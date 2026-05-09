@@ -18,6 +18,7 @@ export function ThreadMetaChips({
   thread,
 }: ThreadMetaChipsProps) {
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
+  const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const linkedDirectoryChips = includeLinkedDirectories
     ? thread.linkedDirectories.length > 0
       ? linkedDirectoryMode === "kind"
@@ -137,12 +138,15 @@ export function ThreadMetaChips({
 
       {linkedDirectoryChips}
 
-      {thread.gitBranch ? (
-        <span className="thread-row__chip thread-row__chip--mono">
+      {branchChip ? (
+        <span
+          className="thread-row__chip thread-row__chip--mono"
+          title={thread.gitBranch ? undefined : `Current branch: ${branchChip}`}
+        >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <BranchIcon size={12} />
           </span>
-          {thread.gitBranch}
+          {branchChip}
         </span>
       ) : null}
 

@@ -155,6 +155,19 @@ describe("ThreadRow chip flow", () => {
     expect(onSelectThread).toHaveBeenCalledOnce();
   });
 
+  it("renders an observed branch chip without treating it as expected branch drift", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitBranch: undefined,
+        observedGitBranch: "fix/current",
+      },
+    });
+
+    expect(screen.getByText("fix/current")).toBeInTheDocument();
+    expect(screen.queryByText("now fix/current")).not.toBeInTheDocument();
+  });
+
   it("orders chips: meta → PR → bindings → reactions → add-reaction", () => {
     const threadWithEverything: NavigationThreadSummary = {
       ...baseThread,
