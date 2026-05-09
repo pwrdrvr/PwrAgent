@@ -162,6 +162,27 @@ async function createBranchDriftFixture(): Promise<{
   };
 }
 
+function readThreadPayload(homeDir: string): Record<string, unknown> {
+  const dbPath = path.join(
+    homeDir,
+    ".pwragent",
+    "profiles",
+    "default",
+    "state",
+    "state.db",
+  );
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .prepare("SELECT payload FROM threads WHERE thread_id = ?")
+      .get("codex:thread-branch-drift") as { payload: string } | undefined;
+    expect(row).toBeDefined();
+    return JSON.parse(row!.payload) as Record<string, unknown>;
+  } finally {
+    db.close();
+  }
+}
+
 test("keeps the branch drift warning open after refreshing observed checkout state", async () => {
   const fixture = await createBranchDriftFixture();
   const app = await launchElectronApp({
@@ -178,33 +199,92 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("codex/expected-branch");
     await expect(dialog).toContainText("codex/current-branch");
+    await expect(dialog).toContainText("I'll switch back");
+    await expect(dialog).toContainText("Keep current branch");
+    await expect(
+      app.window.getByRole("button", {
+        name: "Keep warning. I'll switch back to codex/expected-branch",
+      }),
+    ).toBeVisible();
+    await expect(
+      app.window.getByRole("button", {
+        name: "Use current branch. Continue on codex/current-branch",
+      }),
+    ).toBeVisible();
 
     await app.window.waitForTimeout(7_000);
 
     await expect(dialog).toBeVisible();
 
-    const dbPath = path.join(
-      fixture.homeDir,
-      ".pwragent",
-      "profiles",
-      "default",
-      "state",
-      "state.db",
-    );
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const row = db
-        .prepare("SELECT payload FROM threads WHERE thread_id = ?")
-        .get("codex:thread-branch-drift") as { payload: string } | undefined;
-      expect(row).toBeDefined();
-      const thread = JSON.parse(row!.payload);
-      expect(thread).toMatchObject({
-        gitBranch: "codex/expected-branch",
-        observedGitBranch: "codex/current-branch",
-      });
-    } finally {
-      db.close();
-    }
+    expect(readThreadPayload(fixture.homeDir)).toMatchObject({
+      gitBranch: "codex/expected-branch",
+      observedGitBranch: "codex/current-branch",
+    });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("keeps the branch drift indicator when the user keeps the warning", async () => {
+  const fixture = await createBranchDriftFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      HOME: fixture.homeDir,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", {
+        name: "Keep warning. I'll switch back to codex/expected-branch",
+      })
+      .click();
+
+    await expect(
+      app.window.getByRole("dialog", { name: "Thread branch changed" }),
+    ).toBeHidden();
+    await expect(app.window.getByText(/Branch warning:/)).toBeVisible();
+    expect(readThreadPayload(fixture.homeDir)).toMatchObject({
+      gitBranch: "codex/expected-branch",
+      observedGitBranch: "codex/current-branch",
+      retainedBranchDriftPairs: [
+        {
+          expectedBranch: "codex/expected-branch",
+          observedBranch: "codex/current-branch",
+        },
+      ],
+    });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("updates the expected branch when the user accepts the current branch", async () => {
+  const fixture = await createBranchDriftFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      HOME: fixture.homeDir,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", {
+        name: "Use current branch. Continue on codex/current-branch",
+      })
+      .click();
+
+    await expect(
+      app.window.getByRole("dialog", { name: "Thread branch changed" }),
+    ).toBeHidden();
+    expect(readThreadPayload(fixture.homeDir)).toMatchObject({
+      gitBranch: "codex/current-branch",
+      observedGitBranch: "codex/current-branch",
+    });
   } finally {
     await app.close();
     await fixture.cleanup();

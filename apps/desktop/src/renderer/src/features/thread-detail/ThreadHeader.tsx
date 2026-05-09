@@ -1,6 +1,7 @@
-import type {
-  MessagingChannelKind,
-  NavigationThreadSummary,
+import {
+  isBranchDrifted,
+  type MessagingChannelKind,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -25,6 +26,10 @@ function missingDirectoryPath(thread: NavigationThreadSummary): string | undefin
 
 export function ThreadHeader(props: ThreadHeaderProps) {
   const missingPath = missingDirectoryPath(props.thread);
+  const branchDrifted = isBranchDrifted(
+    props.thread.gitBranch,
+    props.thread.observedGitBranch,
+  );
 
   return (
     <header className="thread-header">
@@ -44,6 +49,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           <p className="thread-header__warning" role="alert">
             This thread is linked to a directory that no longer exists:{" "}
             <code>{missingPath}</code>
+          </p>
+        ) : null}
+        {branchDrifted ? (
+          <p className="thread-header__warning" role="status">
+            Branch warning: this thread expects <code>{props.thread.gitBranch}</code>, but the
+            worktree is on <code>{props.thread.observedGitBranch}</code>.
           </p>
         ) : null}
       </div>

@@ -753,6 +753,19 @@ export function ThreadView(props: ThreadViewProps) {
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
 
+  useEffect(() => {
+    if (!branchDriftDialog) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !branchDriftBusy) {
+        setBranchDriftDialog(undefined);
+      }
+    };
+
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [branchDriftBusy, branchDriftDialog]);
+
   const branchDriftRetained = (
     thread: NavigationThreadSummary,
     expectedBranch: string,
@@ -1651,38 +1664,83 @@ export function ThreadView(props: ThreadViewProps) {
             className="workspace-handoff-dialog"
             role="dialog"
           >
-            <h2 id="branch-drift-title">Thread branch changed</h2>
+            <div className="workspace-handoff-dialog__header">
+              <h2 id="branch-drift-title">Thread branch changed</h2>
+              <button
+                aria-label="Close branch warning"
+                className="workspace-handoff-dialog__close"
+                disabled={branchDriftBusy}
+                type="button"
+                onClick={() => {
+                  setBranchDriftDialog(undefined);
+                }}
+              >
+                x
+              </button>
+            </div>
             <p>
-              This thread was working on branch{" "}
-              <strong>{branchDriftDialog.expectedBranch}</strong> and now has moved to branch{" "}
-              <strong>{branchDriftDialog.observedBranch}</strong>.
+              The worktree is already on a different branch. PwrAgent will not change git state
+              for you.
             </p>
-            <p>
-              Some context understood by the agent may have changed. Asking the agent to
-              continue with a change that is no longer available on the current branch will not
-              work.
-            </p>
-            <dl className="workspace-handoff-dialog__summary">
+            <dl className="workspace-handoff-dialog__branch-path">
               <div>
-                <dt>Expected branch</dt>
+                <dt>Thread expects</dt>
                 <dd>{branchDriftDialog.expectedBranch}</dd>
               </div>
+              <span aria-hidden="true" className="workspace-handoff-dialog__branch-arrow">
+                -&gt;
+              </span>
               <div>
-                <dt>Current branch</dt>
+                <dt>Worktree is on</dt>
                 <dd>{branchDriftDialog.observedBranch}</dd>
               </div>
             </dl>
+            <p>
+              If earlier turns made commits on{" "}
+              <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
+              on <code>{branchDriftDialog.observedBranch}</code>. Continuing now operates on the
+              current branch.
+            </p>
+            <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
+              <section>
+                <h3>I'll switch back</h3>
+                <p>
+                  Keep the warning because the thread should still expect{" "}
+                  <code>{branchDriftDialog.expectedBranch}</code>.
+                </p>
+                <p>
+                  Next: switch the worktree back to{" "}
+                  <code>{branchDriftDialog.expectedBranch}</code> yourself.
+                </p>
+              </section>
+              <section>
+                <h3>Keep current branch</h3>
+                <p>
+                  Treat <code>{branchDriftDialog.observedBranch}</code> as the branch this thread
+                  should use from now on.
+                </p>
+                <p>
+                  Next: start the next turn on{" "}
+                  <code>{branchDriftDialog.observedBranch}</code> with no warning.
+                </p>
+              </section>
+            </div>
             {branchDriftError ? (
               <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
             ) : null}
             <div className="workspace-handoff-dialog__actions">
               <button
-                className="button-secondary"
+                aria-label={
+                  branchDriftDialog.reason === "turn"
+                    ? `Cancel turn. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                    : `Keep warning. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                }
+                className="button-secondary workspace-handoff-dialog__action"
                 disabled={branchDriftBusy}
                 title={
                   branchDriftDialog.reason === "turn"
-                    ? "Cancel this send and leave the expected branch unchanged."
-                    : "Keep the detected branch warning visible so you can switch back to the expected branch."
+                    ? `Cancel this send and keep the warning for ${branchDriftDialog.expectedBranch}.`
+                    : `Keep the warning so you can switch back to ${branchDriftDialog.expectedBranch}.`
                 }
                 type="button"
                 onClick={async () => {
@@ -1714,12 +1772,14 @@ export function ThreadView(props: ThreadViewProps) {
                   }
                 }}
               >
-                {branchDriftDialog.reason === "turn"
-                  ? "Cancel"
-                  : "Retain Expected Branch"}
+                <span>
+                  {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
+                </span>
+                <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
               </button>
               <button
-                className="button-primary"
+                aria-label={`Use current branch. Continue on ${branchDriftDialog.observedBranch}`}
+                className="button-primary workspace-handoff-dialog__action"
                 disabled={branchDriftBusy}
                 type="button"
                 onClick={async () => {
@@ -1744,7 +1804,8 @@ export function ThreadView(props: ThreadViewProps) {
                   }
                 }}
               >
-                Update Expected Branch
+                <span>Use Current Branch</span>
+                <small>Continue on {branchDriftDialog.observedBranch}</small>
               </button>
             </div>
           </div>

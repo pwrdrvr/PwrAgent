@@ -2782,11 +2782,23 @@ describe("ThreadView", () => {
     );
 
     const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+    expect(dialog).toHaveTextContent(/Thread expects\s*feature\/old/);
+    expect(dialog).toHaveTextContent(/Worktree is on\s*main/);
+    expect(dialog).toHaveTextContent("I'll switch back");
+    expect(dialog).toHaveTextContent("Keep current branch");
     expect(dialog).toHaveTextContent(
-      "This thread was working on branch feature/old and now has moved to branch main",
+      "If earlier turns made commits on feature/old, those commits may not be visible on main",
     );
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Keep warning. I'll switch back to feature/old",
+      }),
+    ).toBeInTheDocument();
+    const useCurrentBranchButton = within(dialog).getByRole("button", {
+      name: "Use current branch. Continue on main",
+    });
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Update Expected Branch" }));
+    fireEvent.click(useCurrentBranchButton);
 
     await waitFor(() => {
       expect(updateThreadExpectedBranch).toHaveBeenCalledWith({
@@ -2796,6 +2808,70 @@ describe("ThreadView", () => {
       });
     });
     expect(refreshNavigation).toHaveBeenCalled();
+  });
+
+  it("can dismiss the branch drift dialog while keeping a visible drift indicator", async () => {
+    const updateThreadExpectedBranch = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      branch: "main",
+      updatedAt: Date.now(),
+    }));
+    const retainThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      expectedBranch: "feature/old",
+      observedBranch: "main",
+      retainedAt: Date.now(),
+    }));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{
+          retainThreadBranchDrift,
+          updateThreadExpectedBranch,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-branch",
+          title: "Branch drift",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "feature/old",
+          observedGitBranch: "main",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close branch warning" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Thread branch changed" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(updateThreadExpectedBranch).not.toHaveBeenCalled();
+    expect(retainThreadBranchDrift).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Branch warning: this thread expects feature/old, but the worktree is on main.",
+    );
   });
 
   it("checks branch drift on selection and focus without background polling", async () => {
