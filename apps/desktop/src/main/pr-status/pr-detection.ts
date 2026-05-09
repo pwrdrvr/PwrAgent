@@ -1,8 +1,13 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type {
   LinkedDirectorySummary,
   PrSummary,
 } from "@pwragent/shared";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
+
+const execFileAsync = promisify(execFile);
+const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths
@@ -31,11 +36,17 @@ export async function detectPullRequestsForThread(params: {
   }
 
   const results = await Promise.all(
-    dirs.map((cwd) =>
-      params.fetcher
-        .fetchAllPullRequestsForBranch({ cwd, branch })
-        .catch(() => []),
-    ),
+    dirs.map(async (cwd) => {
+      const branches = await resolvePrLookupBranches({ branch, cwd });
+      const prsByBranch = await Promise.all(
+        branches.map((lookupBranch) =>
+          params.fetcher
+            .fetchAllPullRequestsForBranch({ cwd, branch: lookupBranch })
+            .catch(() => []),
+        ),
+      );
+      return prsByBranch.flat();
+    }),
   );
 
   const seenByUrl = new Map<string, PrSummary>();
@@ -47,6 +58,46 @@ export async function detectPullRequestsForThread(params: {
     }
   }
   return [...seenByUrl.values()];
+}
+
+async function resolvePrLookupBranches(params: {
+  branch: string;
+  cwd: string;
+}): Promise<string[]> {
+  if (params.branch !== "HEAD") {
+    return [params.branch];
+  }
+
+  const branchesAtHead = await readLocalBranchesPointingAtHead(params.cwd);
+  return branchesAtHead.length > 0 ? branchesAtHead : ["HEAD"];
+}
+
+async function readLocalBranchesPointingAtHead(cwd: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "for-each-ref",
+        "--points-at",
+        "HEAD",
+        "--format=%(refname:short)",
+        "refs/heads",
+      ],
+      {
+        cwd,
+        maxBuffer: 64 * 1024,
+        timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+      },
+    );
+    return uniqueNonEmpty(
+      stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && line !== "HEAD"),
+    );
+  } catch {
+    return [];
+  }
 }
 
 /**

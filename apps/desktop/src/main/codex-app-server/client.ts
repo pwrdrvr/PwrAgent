@@ -2848,10 +2848,6 @@ function resolveDisplayGitBranch(params: {
   gitBranch?: string;
   observedGitBranch?: string;
 }): string | undefined {
-  if (params.observedGitBranch === "HEAD") {
-    return "HEAD";
-  }
-
   return params.gitBranch ?? params.observedGitBranch;
 }
 

@@ -460,9 +460,11 @@ class DesktopAppServerService {
       threadId: request.threadId,
     });
     const existingPrs = existing?.prs ?? [];
+    const branch = request.branch.trim();
     // Terminal-state short-circuit: once a PR is merged or closed, we
-    // never re-query gh for that thread. The chip is frozen at its
-    // terminal color and we just hand back what's persisted.
+    // do not need to re-query gh for the same branch/directory lookup.
+    // A different lookup can mean the thread moved to a new branch after
+    // merging an older PR, so stale terminal chips must not block it.
     //
     // No log here on purpose — this path runs on every navigation
     // refresh tick (once a minute per renderer) for every thread with
@@ -474,7 +476,7 @@ class DesktopAppServerService {
     const hasTerminalPr = existingPrs.some(
       (pr) => pr.state === "merged" || pr.state === "closed",
     );
-    if (hasTerminalPr) {
+    if (hasTerminalPr && branch !== "HEAD" && existing?.prsRefreshKey === requestKey) {
       return {
         backend,
         threadId: request.threadId,
@@ -484,7 +486,6 @@ class DesktopAppServerService {
       };
     }
 
-    const branch = request.branch.trim();
     if (!branch || request.directoryPaths.length === 0) {
       return {
         backend,

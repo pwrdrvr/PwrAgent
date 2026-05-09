@@ -172,4 +172,31 @@ describe("usePullRequestRefresh", () => {
       directoryPaths: ["/repo"],
     });
   });
+
+  it("uses the observed branch for PR refresh when it differs from the expected branch", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+        selectedThread: buildThread({
+          gitBranch: "feat/old",
+          observedGitBranch: "fix/new-pr",
+          prs: [],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        branch: "fix/new-pr",
+        directoryPaths: ["/repo"],
+      });
+    });
+  });
 });

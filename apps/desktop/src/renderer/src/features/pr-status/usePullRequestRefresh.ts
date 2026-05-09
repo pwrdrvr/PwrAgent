@@ -32,7 +32,7 @@ export function usePullRequestRefresh(params: {
   const refresh = useCallback(
     (thread: NavigationThreadSummary): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
-      const branch = thread.gitBranch?.trim();
+      const branch = resolvePullRequestLookupBranch(thread);
       if (!branch) return;
       const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
       if (directoryPaths.length === 0) return;
@@ -116,7 +116,7 @@ export function usePullRequestRefresh(params: {
 }
 
 function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undefined {
-  const branch = thread.gitBranch?.trim();
+  const branch = resolvePullRequestLookupBranch(thread);
   if (!branch) return undefined;
 
   const directoryPaths = resolveFetchableDirectoryPaths(thread.linkedDirectories);
@@ -127,6 +127,12 @@ function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undef
     branch,
     directoryPaths,
   });
+}
+
+function resolvePullRequestLookupBranch(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  return thread.observedGitBranch?.trim() || thread.gitBranch?.trim() || undefined;
 }
 
 function prSummariesEqual(

@@ -3018,10 +3018,10 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not flag drift when observed branch is HEAD (restored archived snapshot)", async () => {
+  it("flags drift when a thread is still detached at HEAD after a turn", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-archived",
-      title: "Restored from archive",
+      title: "Detached after work",
       titleSource: "explicit",
       linkedDirectories: [
         {
@@ -3033,7 +3033,6 @@ describe("DesktopBackendRegistry", () => {
       ],
       source: "codex",
       gitBranch: "feature/work-from-archive",
-      // Worktree was restored to a snapshot ref → detached HEAD.
       observedGitBranch: "HEAD",
       updatedAt: 2,
     };
@@ -3065,8 +3064,9 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(response).toMatchObject({
+      expectedBranch: "feature/work-from-archive",
       observedBranch: "HEAD",
-      drifted: false,
+      drifted: true,
     });
 
     await registry.close();
