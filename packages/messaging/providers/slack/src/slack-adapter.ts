@@ -1437,7 +1437,10 @@ function normalizeSlackConversationTitle(value: string | undefined): string | un
 }
 
 function normalizeSlackThreadTitle(value: string | undefined): string | undefined {
-  const normalized = value?.replace(/\s+/g, " ").trim();
+  const normalized = value
+    ?.replace(/:[A-Za-z0-9_+-]+:/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalized) return undefined;
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
 }

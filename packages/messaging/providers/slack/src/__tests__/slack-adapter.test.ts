@@ -540,7 +540,7 @@ describe("SlackAdapter", () => {
           G012ABCDEF0: "agents-private",
         },
         replies: {
-          "G012ABCDEF0:1712023030.000000": "Root message for this Slack thread",
+          "G012ABCDEF0:1712023030.000000": ":thread: Root message for this Slack thread",
         },
       }),
       socketClient: socket,
