@@ -1,5 +1,7 @@
 import type {
   MessagingAuditContext,
+  MessagingCallbackHandleRecord,
+  MessagingCallbackHandleStore,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
 } from "@pwragent/messaging-interface";
@@ -262,6 +264,120 @@ describe("discord adapter", () => {
         ],
       }),
     );
+  });
+
+  it("resolves persisted component handles after an adapter restart", async () => {
+    const store = createCallbackHandleStore();
+    let createdRequest: Parameters<DiscordApi["createMessage"]>[1] | undefined;
+    const createMessage = vi.fn(async (channelId: string, request) => {
+      createdRequest = request;
+      return {
+        channel_id: channelId,
+        id: "message-2",
+      };
+    });
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+      store,
+    });
+
+    await adapter.deliver({
+      audit: {
+        action: "intent.deliver",
+        actor: {
+          displayName: "Harold",
+          platformUserId: TEST_USER_ID,
+          username: "huntharo",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: TEST_CHANNEL_ID,
+            kind: "channel",
+            parentId: TEST_GUILD_ID,
+          },
+        },
+        occurredAt: 1234,
+      },
+      actions: [
+        {
+          id: "permissions",
+          label: "Permissions",
+          value: { mode: "review" },
+        },
+      ],
+      createdAt: 1234,
+      id: "status-1",
+      kind: "status",
+      status: "waiting",
+      text: "Ready",
+    });
+
+    const customId = createdRequest?.components?.[0]?.components[0]?.custom_id;
+    expect(customId).toMatch(/^dc:/);
+    expect(store.upsertCallbackHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "permissions",
+        allowedActorIds: [TEST_USER_ID],
+        handle: customId,
+        value: { mode: "review" },
+      }),
+    );
+
+    const events: MessagingInboundEvent[] = [];
+    const gateway = new TestDiscordGateway();
+    const createInteractionResponse = vi.fn(async () => {});
+    const restartedAdapter = new DiscordAdapter({
+      api: createApi({ createInteractionResponse }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      now: () => 1235,
+      store,
+    });
+    await restartedAdapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await gateway.emit({
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        channel_id: TEST_CHANNEL_ID,
+        data: {
+          custom_id: customId,
+        },
+        guild_id: TEST_GUILD_ID,
+        id: TEST_MESSAGE_ID,
+        token: "token_ABC.123",
+        type: 3,
+        user: {
+          id: TEST_USER_ID,
+          username: "huntharo",
+        },
+      },
+    });
+
+    expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+      type: 6,
+    });
+    expect(events).toEqual([
+      expect.objectContaining({
+        actionId: "permissions",
+        kind: "callback",
+        value: { mode: "review" },
+      }),
+    ]);
+    await restartedAdapter.stop();
   });
 
   describe("stripDiscordBotMention", () => {
@@ -812,6 +928,32 @@ function discordAudit(): MessagingAuditContext {
       },
     },
     occurredAt: 1234,
+  };
+}
+
+function createCallbackHandleStore(): MessagingCallbackHandleStore {
+  const records = new Map<string, MessagingCallbackHandleRecord>();
+  return {
+    resolveCallbackHandle: vi.fn(async ({ actorId, channel, handle, now = Date.now() }) => {
+      const record = records.get(handle);
+      if (!record || record.expiresAt <= now) {
+        return undefined;
+      }
+      if (!record.allowedActorIds.includes(actorId)) {
+        return undefined;
+      }
+      if (
+        record.channel.channel !== channel.channel
+        || record.channel.conversation.id !== channel.conversation.id
+      ) {
+        return undefined;
+      }
+      return record;
+    }),
+    upsertCallbackHandle: vi.fn(async (record: MessagingCallbackHandleRecord) => {
+      records.set(record.handle, record);
+      return record;
+    }),
   };
 }
 

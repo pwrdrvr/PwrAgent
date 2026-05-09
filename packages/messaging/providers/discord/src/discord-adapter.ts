@@ -25,6 +25,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingCallbackHandleStore,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -235,6 +236,7 @@ type DiscordAdapterOptions = {
   gateway?: DiscordGatewayConnection;
   logger?: DiscordProviderLogger;
   now?: () => number;
+  store?: MessagingCallbackHandleStore;
 };
 
 export type DiscordProviderAdapter = {
@@ -427,12 +429,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     try {
+      const callbackHandleWrites: Promise<unknown>[] = [];
       const components = buildDiscordComponents(
         actionsForDiscordIntent(intent),
-        (action) => this.createCustomId(intent, action),
+        (action) => this.createCustomId(intent, action, callbackHandleWrites),
         intent.actionLayout,
         this.capabilityProfile,
       );
+      await Promise.all(callbackHandleWrites);
       const imageUpload = uploadableImagePart(intent);
       const imageUrl = imageUpload ? undefined : this.firstImageUrl(intent);
       const files = [...uploadableFileParts(intent), ...(imageUpload ? [imageUpload] : [])];
@@ -864,11 +868,20 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const binding = this.componentBindings.get(customId);
     const channel = await this.channelFromDiscord(
       interaction.channel_id,
       interaction.guild_id,
     );
+    const binding = this.componentBindings.get(customId);
+    const persistedBinding =
+      !binding && this.options.store
+        ? await this.options.store.resolveCallbackHandle({
+            actorId: actor.id,
+            channel,
+            handle: customId,
+            now: this.now(),
+          })
+        : undefined;
     await listener({
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
@@ -884,8 +897,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           },
         },
       },
-      actionId: binding?.actionId,
-      value: binding?.value,
+      actionId: binding?.actionId ?? persistedBinding?.actionId,
+      value: binding?.value ?? persistedBinding?.value,
       receivedAt: this.now(),
       routingState: this.routingStateFromDiscord(
         interaction.channel_id,
@@ -1124,6 +1137,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private createCustomId(
     intent: MessagingSurfaceIntent,
     action: MessagingSurfaceAction,
+    pendingWrites?: Promise<unknown>[],
   ): string {
     const customId = `dc:${createHash("sha256")
       .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
@@ -1137,6 +1151,36 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       actionId: action.id,
       value: action.value,
     });
+    if (this.options.store && intent.audit) {
+      const now = this.now();
+      const write = this.options.store
+        .upsertCallbackHandle({
+          id: `discord-callback:${customId}`,
+          actionId: action.id,
+          allowedActorIds: [intent.audit.actor.platformUserId],
+          bindingId: intent.bindingId,
+          browseSessionId: browseSessionIdForIntent(intent),
+          channel: intent.audit.channel,
+          createdAt: now,
+          expiresAt: now + 15 * 60 * 1000,
+          handle: customId,
+          pendingIntentId: intent.id,
+          surface: intent.targetSurface,
+          updatedAt: now,
+          value: action.value,
+        })
+        .catch((error) => {
+          this.options.logger?.warn?.("discord callback handle persist failed", {
+            error: error instanceof Error ? error.message : String(error),
+            handle: customId,
+          });
+        });
+      if (pendingWrites) {
+        pendingWrites.push(write);
+      } else {
+        void write;
+      }
+    }
     return customId;
   }
 
@@ -1754,10 +1798,26 @@ function attachmentKindFromDiscordMimeType(
 export function createDiscordAdapter(
   config: DiscordMessagingConfig,
   logger?: DiscordProviderLogger,
+): DiscordAdapter;
+export function createDiscordAdapter(
+  config: DiscordMessagingConfig,
+  store?: MessagingCallbackHandleStore,
+  logger?: DiscordProviderLogger,
+): DiscordAdapter;
+export function createDiscordAdapter(
+  config: DiscordMessagingConfig,
+  storeOrLogger?: MessagingCallbackHandleStore | DiscordProviderLogger,
+  logger?: DiscordProviderLogger,
 ): DiscordAdapter {
+  const store =
+    storeOrLogger && "resolveCallbackHandle" in storeOrLogger
+      ? storeOrLogger
+      : undefined;
+  const resolvedLogger = store ? logger : storeOrLogger;
   return new DiscordAdapter({
     config,
-    logger,
+    logger: resolvedLogger as DiscordProviderLogger | undefined,
+    store,
   });
 }
 
@@ -2156,6 +2216,12 @@ function isDiscordThreadConversation(
 function sanitizeDiscordThreadName(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
   return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
+}
+
+function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.kind === "thread_picker" || intent.kind === "project_picker"
+    ? intent.browseSessionId
+    : undefined;
 }
 
 function discordChannelIsThread(channel: unknown): boolean {
