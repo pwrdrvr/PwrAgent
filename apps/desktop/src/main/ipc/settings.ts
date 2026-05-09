@@ -165,8 +165,20 @@ async function resolveMessagingContact(
         ),
       );
     }
-    case "slack":
-      return unsupportedLookup(request);
+    case "slack": {
+      if (request.kind !== "user" && request.kind !== "workspace") {
+        return unsupportedLookup(request);
+      }
+      const botToken = service.resolveSlackBotTokenSync();
+      if (!botToken) return { status: "unset", id };
+      const provider = await import("@pwragent/messaging-provider-slack");
+      return sanitizeMessagingContactLookupResponse(
+        await provider.resolveContact(
+          { botToken },
+          { id, kind: request.kind },
+        ),
+      );
+    }
   }
 }
 

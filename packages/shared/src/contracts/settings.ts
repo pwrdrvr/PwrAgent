@@ -48,7 +48,8 @@ export type DesktopMessagingContactLookupPlatform =
 export type DesktopMessagingContactLookupKind =
   | "user"
   | "supergroup"
-  | "guild";
+  | "guild"
+  | "workspace";
 
 export type DesktopMessagingContactLookupRequest = {
   platform: DesktopMessagingContactLookupPlatform;

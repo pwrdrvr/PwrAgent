@@ -534,6 +534,64 @@ describe("SettingsScreen", () => {
     ).toHaveValue("Harold (@huntharo)");
   });
 
+  it("looks up Slack authorized user display names", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: {
+          ...snapshot.messaging.slack,
+          authorizedUserIds: {
+            value: [{ id: "U079K80HTGS", displayName: "" }],
+            source: "config",
+          },
+        },
+      },
+    });
+    const resolveMessagingContact = vi.fn(async () => ({
+      status: "ok" as const,
+      id: "U079K80HTGS",
+      displayName: "Harold Hunt",
+      handle: "@hhunt",
+    }));
+    const desktopApi = {
+      resolveMessagingContact,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Lookup Authorized User IDs row 1",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(resolveMessagingContact).toHaveBeenCalledWith({
+        platform: "slack",
+        kind: "user",
+        id: "U079K80HTGS",
+      });
+    });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            authorizedUserIds: [{ id: "U079K80HTGS", displayName: "Harold Hunt" }],
+          },
+        },
+      });
+    });
+  });
+
   it("sanitizes manually entered messaging display names before saving", async () => {
     const settings = createSettingsState();
 

@@ -725,7 +725,13 @@ PWRAGENT_MESSAGING_SLACK_SLASH_COMMAND_PREFIX=pwragent_         # optional
 ```
 
 Authorize on stable Slack user IDs (`U…` or enterprise `W…`), not display names
-or handles. Workspace allowlisting uses Slack team IDs (`T…`).
+or handles. Workspace allowlisting uses Slack team IDs (`T…`). Leaving the
+workspace list empty means "accept events from any workspace installation of
+this Slack app." That is fine for a non-distributed one-workspace app, but if
+the app is ever distributed or installed into another workspace, the same Socket
+Mode app token can receive events for those installations. Add your expected
+`T…` workspace ID to make the desktop bot reject events from any other
+workspace before user authorization.
 
 ## Chat SDK Decision
 

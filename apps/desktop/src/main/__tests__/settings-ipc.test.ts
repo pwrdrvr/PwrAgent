@@ -12,6 +12,7 @@ const providerMocks = vi.hoisted(() => ({
   resolveTelegramContact: vi.fn(),
   resolveDiscordContact: vi.fn(),
   resolveMattermostContact: vi.fn(),
+  resolveSlackContact: vi.fn(),
 }));
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async () => undefined),
@@ -71,6 +72,10 @@ vi.mock("@pwragent/messaging-provider-mattermost", () => ({
   resolveContact: providerMocks.resolveMattermostContact,
 }));
 
+vi.mock("@pwragent/messaging-provider-slack", () => ({
+  resolveContact: providerMocks.resolveSlackContact,
+}));
+
 describe("settings ipc", () => {
   afterEach(() => {
     for (const root of tempRoots.splice(0)) {
@@ -85,6 +90,7 @@ describe("settings ipc", () => {
     providerMocks.resolveTelegramContact.mockReset();
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.resolveMattermostContact.mockReset();
+    providerMocks.resolveSlackContact.mockReset();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     runtimeMock.applyConfig.mockClear();
     runtimeMock.isEnabled.mockClear();
@@ -253,6 +259,7 @@ describe("settings ipc", () => {
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "telegram-token");
+    await secretStore.setSecret("slackBotToken", "slack-token");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
       env: {},
@@ -289,6 +296,31 @@ describe("settings ipc", () => {
     expect(providerMocks.resolveTelegramContact).toHaveBeenCalledExactlyOnceWith(
       { botToken: "telegram-token" },
       { id: "8460800771", kind: "user" },
+    );
+
+    providerMocks.resolveSlackContact.mockResolvedValue({
+      status: "ok",
+      id: "U079K80HTGS",
+      displayName: "Harold Hunt",
+      handle: "@hhunt",
+    });
+    await expect(
+      handlers.get(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL)?.(
+        {},
+        {
+          platform: "slack",
+          kind: "user",
+          id: "U079K80HTGS",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "ok",
+      displayName: "Harold Hunt",
+      handle: "@hhunt",
+    });
+    expect(providerMocks.resolveSlackContact).toHaveBeenCalledExactlyOnceWith(
+      { botToken: "slack-token" },
+      { id: "U079K80HTGS", kind: "user" },
     );
   });
 });

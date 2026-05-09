@@ -529,7 +529,13 @@ export class SlackAdapter implements SlackProviderAdapter {
     const command = parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
-    if (!this.authorizeInbound({ actor, channel, kind, routingState })) return;
+    if (!this.authorizeInbound({
+      actor,
+      channel,
+      kind,
+      routingState,
+      teamId: ids.teamId,
+    })) return;
 
     if (event.files?.length) {
       await this.listener({
@@ -609,7 +615,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: ids.ts,
     });
     const routingState = this.routingStateForChannel(channel, ids.ts);
-    if (!this.authorizeInbound({ actor, channel, kind: "callback", routingState })) {
+    if (!this.authorizeInbound({
+      actor,
+      channel,
+      kind: "callback",
+      routingState,
+      teamId: ids.teamId,
+    })) {
       return;
     }
 
@@ -665,7 +677,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: ids.ts,
     });
     const routingState = this.routingStateForChannel(channel);
-    if (!this.authorizeInbound({ actor, channel, kind: "command", routingState })) {
+    if (!this.authorizeInbound({
+      actor,
+      channel,
+      kind: "command",
+      routingState,
+      teamId: ids.teamId,
+    })) {
       return;
     }
     const command = body.command.replace(/^\//, "");
@@ -946,7 +964,24 @@ export class SlackAdapter implements SlackProviderAdapter {
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
     routingState?: MessagingAdapterState;
+    teamId?: string;
   }): boolean {
+    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
+    if (
+      allowedTeams?.length
+      && (!params.teamId || !allowedTeams.includes(params.teamId))
+    ) {
+      this.emitInboundRejected({
+        id: this.newEventId("slack-rejected"),
+        kind: params.kind,
+        actor: params.actor,
+        channel: params.channel,
+        receivedAt: this.now(),
+        reason: "unauthorized-conversation",
+        ...(params.routingState ? { routingState: params.routingState } : {}),
+      });
+      return false;
+    }
     if (!this.authorizedActorIds.includes(params.actor.platformUserId)) {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),

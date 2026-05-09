@@ -714,6 +714,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "user",
+            )}
             label="Authorized User IDs"
             sub="Slack user IDs that can DM or mention the bot."
             help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
@@ -732,6 +737,11 @@ export function MessagingSettings(props: {
           />
           <AuthorizedListField
             disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "workspace",
+            )}
             label="Authorized Workspaces"
             sub="Optional Slack workspace/team IDs allowed for this bot."
             help="Slack workspace IDs start with T, e.g. T012ABCDEF0."

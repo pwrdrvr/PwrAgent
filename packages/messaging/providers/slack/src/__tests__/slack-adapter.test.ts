@@ -316,6 +316,49 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("rejects events from workspaces outside the authorized team list", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedTeamIds: [{ id: "TALLOWED123", displayName: "Allowed" }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "TOTHER12345",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "unauthorized-conversation",
+        actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+      }),
+    ]);
+  });
+
   it("routes Block Kit callbacks from DMs back to the original DM handle", async () => {
     const socket = fakeSocket();
     const store = fakeStore();
