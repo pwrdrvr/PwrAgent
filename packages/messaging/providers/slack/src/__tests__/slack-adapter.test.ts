@@ -265,6 +265,52 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("deduplicates app_mention and message events for the same Slack post", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    const event = {
+      channel: "C012ABCDEF0",
+      channel_type: "channel",
+      team: "T012ABCDEF0",
+      ts: "1712023032.123456",
+      user: "U012ABCDEF0",
+      text: "<@U0BOTUSERID> help",
+    };
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        ...event,
+        type: "app_mention",
+      },
+    });
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        ...event,
+        type: "message",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        rawText: "/help",
+      }),
+    ]);
+  });
+
   it("strips the configured prefix from Slack slash commands", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({

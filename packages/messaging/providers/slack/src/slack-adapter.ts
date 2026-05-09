@@ -46,6 +46,8 @@ import {
 
 const SLACK_CALLBACK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SLACK_SIGNED_VALUE_VERSION = 1;
+const SLACK_INBOUND_EVENT_DEDUPE_TTL_MS = 5 * 60 * 1000;
+const SLACK_INBOUND_EVENT_DEDUPE_MAX = 200;
 
 export type SlackProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -266,6 +268,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly socketClient: SlackSocketClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly conversationTitleCache = new Map<string, string | undefined>();
+  private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
   private botUserId: string | undefined;
@@ -516,6 +519,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: event.ts ?? event.event_ts,
     });
     if (!ids) return;
+    if (this.isDuplicateMessageEvent(event, ids)) return;
 
     const actor = await this.actorForSlackUser(ids.userId);
     const channel = await this.channelRefForSlack({
@@ -1269,6 +1273,39 @@ export class SlackAdapter implements SlackProviderAdapter {
         threadTs: params.threadTs,
         title: part.description ?? part.name,
       });
+    }
+  }
+
+  private isDuplicateMessageEvent(
+    event: SlackMessageEvent,
+    ids: { channelId: string; teamId?: string; ts: string; userId: string },
+  ): boolean {
+    const now = this.now();
+    this.pruneRecentInboundMessageEvents(now);
+    const key = [
+      ids.teamId ?? "",
+      ids.channelId,
+      ids.userId,
+      ids.ts,
+      event.thread_ts ?? "",
+      event.text ?? "",
+      (event.files ?? []).map((file) => file.id ?? "").join(","),
+    ].join("\u001f");
+    if (this.recentInboundMessageEvents.has(key)) {
+      return true;
+    }
+    this.recentInboundMessageEvents.set(key, now);
+    return false;
+  }
+
+  private pruneRecentInboundMessageEvents(now: number): void {
+    for (const [key, seenAt] of this.recentInboundMessageEvents) {
+      if (
+        now - seenAt > SLACK_INBOUND_EVENT_DEDUPE_TTL_MS
+        || this.recentInboundMessageEvents.size > SLACK_INBOUND_EVENT_DEDUPE_MAX
+      ) {
+        this.recentInboundMessageEvents.delete(key);
+      }
     }
   }
 
