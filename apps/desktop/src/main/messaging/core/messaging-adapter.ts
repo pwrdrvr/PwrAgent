@@ -26,6 +26,7 @@ import type {
   SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ThreadMessagingBindingTransition,
 } from "@pwragent/shared";
 import type {
   MessagingDeliveryResult,
@@ -93,6 +94,11 @@ export type MessagingBackendBridge = {
   setThreadModelSettings?(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
+  recordMessagingBindingTransition?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    transition: ThreadMessagingBindingTransition;
+  }): Promise<void>;
   submitServerRequest?(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;

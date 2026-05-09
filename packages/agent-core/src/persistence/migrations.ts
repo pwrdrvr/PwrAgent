@@ -4,6 +4,8 @@ import type {
   DirectoryLaunchpadOverlayState,
   NavigationLaunchpadDefaults,
   ThreadExecutionMode,
+  ThreadMessagingBindingTransition,
+  ThreadMessagingBindingTransitionAction,
   ThreadOverlayState,
   ThreadPermissionTransition,
   ThreadPermissionTransitionStatus,
@@ -155,6 +157,59 @@ function migratePermissionTransitionLog(
         queueId:
           typeof record.queueId === "string" ? record.queueId : undefined,
         note: typeof record.note === "string" ? record.note : undefined,
+      },
+    ];
+  });
+  return entries.length > 0 ? entries : undefined;
+}
+
+function isMessagingBindingTransitionAction(
+  value: unknown,
+): value is ThreadMessagingBindingTransitionAction {
+  return value === "bound" || value === "unbound";
+}
+
+function migrateMessagingBindingTransitionLog(
+  value: unknown,
+): ThreadOverlayState["messagingBindingTransitionLog"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.flatMap((item): ThreadMessagingBindingTransition[] => {
+    const record = asRecord(item);
+    if (
+      !record ||
+      typeof record.id !== "string" ||
+      typeof record.bindingId !== "string" ||
+      typeof record.platform !== "string" ||
+      typeof record.occurredAt !== "number" ||
+      !isMessagingBindingTransitionAction(record.action)
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: record.id,
+        action: record.action,
+        bindingId: record.bindingId,
+        platform: record.platform as ThreadMessagingBindingTransition["platform"],
+        conversationKind:
+          typeof record.conversationKind === "string"
+            ? (record.conversationKind as ThreadMessagingBindingTransition["conversationKind"])
+            : undefined,
+        conversationTitle:
+          typeof record.conversationTitle === "string"
+            ? record.conversationTitle
+            : undefined,
+        parentTitle:
+          typeof record.parentTitle === "string"
+            ? record.parentTitle
+            : undefined,
+        ancestorTitle:
+          typeof record.ancestorTitle === "string"
+            ? record.ancestorTitle
+            : undefined,
+        occurredAt: record.occurredAt,
       },
     ];
   });
@@ -385,6 +440,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               : [],
             permissionTransitionLog: migratePermissionTransitionLog(
               threadRecord.permissionTransitionLog,
+            ),
+            messagingBindingTransitionLog: migrateMessagingBindingTransitionLog(
+              threadRecord.messagingBindingTransitionLog,
             ),
             reactions: migrateThreadReactions(threadRecord.reactions),
           } satisfies ThreadOverlayState,

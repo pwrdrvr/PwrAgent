@@ -1539,6 +1539,9 @@ export function ThreadView(props: ThreadViewProps) {
             <TranscriptList
               entries={props.transcriptEntries}
               permissionTransitions={selectedThread!.permissionTransitionLog}
+              messagingBindingTransitions={
+                selectedThread!.messagingBindingTransitionLog
+              }
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
               applications={props.applications}

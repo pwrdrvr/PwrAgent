@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { MessagingController } from "./core/messaging-controller";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
@@ -411,6 +412,7 @@ export class DesktopMessagingRuntime {
     const notifiedPlatform = await this.dispatchRevokeToControllers(binding);
     if (!notifiedPlatform) {
       await store.revokeBinding({ bindingId: binding.id });
+      await this.recordBindingUnbound(binding);
       this.broadcastBindingsChanged();
     }
 
@@ -458,6 +460,7 @@ export class DesktopMessagingRuntime {
 
     for (const binding of fallbackBindings) {
       await store.revokeBinding({ bindingId: binding.id });
+      await this.recordBindingUnbound(binding);
     }
     if (fallbackBindings.length > 0) {
       this.broadcastBindingsChanged();
@@ -739,6 +742,36 @@ export class DesktopMessagingRuntime {
       }
     }
     return false;
+  }
+
+  private async recordBindingUnbound(binding: MessagingBindingRecord): Promise<void> {
+    if (!this.options.backendBridge.recordMessagingBindingTransition) {
+      return;
+    }
+    const conversation = binding.channel.conversation;
+    try {
+      await this.options.backendBridge.recordMessagingBindingTransition({
+        backend: binding.backend,
+        threadId: binding.threadId,
+        transition: {
+          id: randomUUID(),
+          action: "unbound",
+          bindingId: binding.id,
+          platform: binding.channel.channel,
+          conversationKind: conversation.kind,
+          conversationTitle: conversation.title,
+          parentTitle: conversation.parentTitle,
+          ancestorTitle: conversation.ancestorTitle,
+          occurredAt: Date.now(),
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging binding-transition audit failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
   }
 
   private broadcastBindingsChanged(): void {

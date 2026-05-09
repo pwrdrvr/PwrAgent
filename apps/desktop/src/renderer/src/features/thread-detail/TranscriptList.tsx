@@ -16,8 +16,10 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   DesktopApplicationsSnapshot,
-  ThreadPermissionTransition
+  ThreadMessagingBindingTransition,
+  ThreadPermissionTransition,
 } from "@pwragent/shared";
+import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThinkingScanner } from "./ThinkingScanner";
@@ -59,6 +61,7 @@ type TranscriptListProps = {
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   permissionTransitions?: ThreadPermissionTransition[];
+  messagingBindingTransitions?: ThreadMessagingBindingTransition[];
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
   threadId?: string;
@@ -325,13 +328,17 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectPermissionTransitions(entries, props.permissionTransitions);
+    return injectMessagingBindingTransitions(
+      injectPermissionTransitions(entries, props.permissionTransitions),
+      props.messagingBindingTransitions,
+    );
   }, [
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
+    props.messagingBindingTransitions,
     props.permissionTransitions,
   ]);
   const transcriptRenderItems = useMemo(

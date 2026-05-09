@@ -146,6 +146,7 @@ export function materializeNavigationThreads(params: {
       queuedExecutionMode: overlay?.queuedExecutionMode,
       queuedExecutionModeAt: overlay?.queuedExecutionModeAt,
       permissionTransitionLog: overlay?.permissionTransitionLog,
+      messagingBindingTransitionLog: overlay?.messagingBindingTransitionLog,
       model: overlay?.model ?? thread.model,
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
@@ -247,6 +248,19 @@ export function buildNavigationSnapshotHash(params: {
           note: entry.note ?? null,
         }),
       ),
+      messagingBindingTransitionLog: (
+        thread.messagingBindingTransitionLog ?? []
+      ).map((entry) => ({
+        id: entry.id,
+        action: entry.action,
+        bindingId: entry.bindingId,
+        platform: entry.platform,
+        conversationKind: entry.conversationKind ?? null,
+        conversationTitle: entry.conversationTitle ?? null,
+        parentTitle: entry.parentTitle ?? null,
+        ancestorTitle: entry.ancestorTitle ?? null,
+        occurredAt: entry.occurredAt,
+      })),
       model: thread.model ?? null,
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,
