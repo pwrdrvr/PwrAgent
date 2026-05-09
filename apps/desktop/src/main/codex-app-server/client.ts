@@ -384,6 +384,23 @@ function pickRawString(
   return undefined;
 }
 
+function pickStringAllowEmpty(
+  record: Record<string, unknown> | null | undefined,
+  keys: string[]
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function pickNumber(
   record: Record<string, unknown>,
   keys: string[]
@@ -1674,6 +1691,25 @@ function extractDiffText(change: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function extractFileChangeText(params: {
+  change: Record<string, unknown>;
+  changeKind: Record<string, unknown> | null;
+  changeType: "add" | "delete" | "update";
+}): string | undefined {
+  if (params.changeType === "add" || params.changeType === "delete") {
+    return (
+      pickStringAllowEmpty(params.changeKind, ["content"]) ??
+      pickStringAllowEmpty(params.change, ["content"]) ??
+      extractDiffText(params.change)
+    );
+  }
+
+  return (
+    pickStringAllowEmpty(params.changeKind, ["unified_diff", "unifiedDiff"]) ??
+    extractDiffText(params.change)
+  );
+}
+
 function summarizeDiff(diff: string): { additions: number; removals: number } {
   let additions = 0;
   let removals = 0;
@@ -1700,6 +1736,30 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
   }
 
   return { additions, removals };
+}
+
+function countContentLines(content: string): number {
+  if (content.length === 0) {
+    return 0;
+  }
+
+  const lineCount = content.split("\n").length;
+  return content.endsWith("\n") ? lineCount - 1 : lineCount;
+}
+
+function summarizeFileChangeText(
+  changeType: "add" | "delete" | "update",
+  text: string
+): { additions: number; removals: number } {
+  if (changeType === "add") {
+    return { additions: countContentLines(text), removals: 0 };
+  }
+
+  if (changeType === "delete") {
+    return { additions: 0, removals: countContentLines(text) };
+  }
+
+  return summarizeDiff(text);
 }
 
 function formatCommandLabel(command: string | undefined): string {
@@ -2053,8 +2113,9 @@ function summarizeActivityItems(
         const changeType = normalizeFileChangeKind(
           pickString(changeKind ?? {}, ["type"]) ?? pickString(change, ["kind"])
         );
-        const diff = extractDiffText(change);
-        const diffSummary = diff ? summarizeDiff(diff) : undefined;
+        const diff = extractFileChangeText({ change, changeKind, changeType });
+        const diffSummary =
+          diff !== undefined ? summarizeFileChangeText(changeType, diff) : undefined;
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
@@ -2066,7 +2127,7 @@ function summarizeActivityItems(
           }`,
           path: changePath,
           status: itemStatus,
-          ...(diff && diffSummary
+          ...(diff !== undefined && diffSummary
             ? {
                 fileDiff: {
                   kind: changeType,

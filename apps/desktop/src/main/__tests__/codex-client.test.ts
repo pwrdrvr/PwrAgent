@@ -1669,6 +1669,146 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("counts added, removed, and updated FileChange variants from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-file-change-counts", {
+      thread: {
+        id: "thread-file-change-counts",
+        turns: [
+          {
+            id: "turn-file-change-counts",
+            status: "completed",
+            startedAt: 1_763_500_100,
+            items: [
+              {
+                type: "fileChange",
+                id: "item-file-change",
+                status: "completed",
+                changes: [
+                  {
+                    path: "/repo/new-file.ts",
+                    kind: {
+                      type: "add",
+                      content: "first\nsecond\nthird\n"
+                    }
+                  },
+                  {
+                    path: "/repo/removed-file.ts",
+                    kind: {
+                      type: "delete",
+                      content: "old first\nold second"
+                    }
+                  },
+                  {
+                    path: "/repo/updated-file.ts",
+                    kind: {
+                      type: "update",
+                      unified_diff: [
+                        "--- a/updated-file.ts",
+                        "+++ b/updated-file.ts",
+                        "@@ -1,4 +1,6 @@",
+                        " unchanged",
+                        "-removed one",
+                        "-removed two",
+                        "+added one",
+                        "+added two",
+                        "+added three",
+                        "+added four"
+                      ].join("\n"),
+                      move_path: null
+                    }
+                  },
+                  {
+                    path: "/repo/empty-file.ts",
+                    kind: {
+                      type: "add",
+                      content: ""
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-file-change-counts"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "activity",
+        id: "activity-item-file-change",
+        summary: "Edited 4 files, +7, -4",
+        createdAt: 1_763_500_100_000,
+        status: "completed",
+        turn: {
+          id: "turn-file-change-counts",
+          startedAt: 1_763_500_100_000,
+          status: "completed"
+        },
+        details: [
+          expect.objectContaining({
+            label: "Add new-file.ts",
+            fileDiff: {
+              kind: "add",
+              diff: "first\nsecond\nthird\n",
+              additions: 3,
+              removals: 0
+            }
+          }),
+          expect.objectContaining({
+            label: "Delete removed-file.ts",
+            fileDiff: {
+              kind: "delete",
+              diff: "old first\nold second",
+              additions: 0,
+              removals: 2
+            }
+          }),
+          expect.objectContaining({
+            label: "Update updated-file.ts",
+            fileDiff: {
+              kind: "update",
+              diff: [
+                "--- a/updated-file.ts",
+                "+++ b/updated-file.ts",
+                "@@ -1,4 +1,6 @@",
+                " unchanged",
+                "-removed one",
+                "-removed two",
+                "+added one",
+                "+added two",
+                "+added three",
+                "+added four"
+              ].join("\n"),
+              additions: 4,
+              removals: 2
+            }
+          }),
+          expect.objectContaining({
+            label: "Add empty-file.ts",
+            fileDiff: {
+              kind: "add",
+              diff: "",
+              additions: 0,
+              removals: 0
+            }
+          })
+        ]
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("extracts thread status from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-idle-status", {
