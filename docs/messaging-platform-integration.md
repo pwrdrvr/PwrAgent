@@ -160,15 +160,20 @@ Discord and Mattermost rate-limit API requests/routes, and Telegram documents
 edit calls as Bot API requests while its public send-message limits do not
 guarantee edits are exempt.
 
-Telegram-specific guidance:
+Observed edit-rate behavior from May 9, 2026 probes:
+
+| Platform / surface | Probe | Result | Operational guidance |
+| --- | --- | --- | --- |
+| Telegram supergroup | One new bot message, then one edit per second in the same PwrDrvr supergroup. | 19 edits succeeded; edit 20 returned 429 with `retry_after=36`. | Treat sends and edits as consuming the same practical supergroup write budget. Telegram is the tightest provider for active agent turns. |
+| Telegram two-supergroup fan-out | Same pattern run concurrently in the PwrDrvr and GifGrid supergroups. | Each supergroup accepted one message plus 19 edits without a shared bot-wide 20/minute ceiling. | Active PwrAgent threads should usually be bound to separate Telegram supergroups. |
+| Slack DM | One new bot message in the existing `hhunt` DM, then 60 edits at one edit per second. | Passed without a 429. | Slack edits are more permissive than Telegram in this DM, but new messages should still be budgeted conservatively because `chat.postMessage` has its own special limits. |
+| Discord DM and guild channel | One new bot message in the `huntharo2` DM and one in `huntharo-claw / #general`, then 60 edits at one edit per second on both messages. | Passed without a 429. Discord returned an edit bucket of 5 requests / 1 second. | Discord edits are much less restrictive than Telegram, but still count as REST requests and can hit route/global buckets. |
+| Mattermost | Not probed as a provider-global claim. | Rate limits are server-configured. | Use the target Mattermost server's `RateLimitSettings` rather than assuming a public SaaS limit. |
+
+Telegram-specific binding guidance:
 
 - Treat Telegram sends and edits as consuming the same practical supergroup
-  write budget. In a May 9, 2026 live probe, one bot message plus 19 one-second
-  edits in a PwrDrvr supergroup succeeded, and the next edit received a 429
-  with `retry_after=36`.
-- The same probe pattern run concurrently in two different supergroups
-  completed independently: each supergroup accepted one message plus 19 edits
-  without hitting a shared bot-wide 20/minute ceiling.
+  write budget.
 - Active PwrAgent threads should usually be bound to separate Telegram
   supergroups. Binding multiple active threads to topics in the same supergroup
   is likely to exhaust that supergroup's budget, trigger PwrAgent Slow Mode,
