@@ -384,6 +384,23 @@ function pickRawString(
   return undefined;
 }
 
+function pickStringAllowEmpty(
+  record: Record<string, unknown> | null | undefined,
+  keys: string[]
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function pickNumber(
   record: Record<string, unknown>,
   keys: string[]
@@ -1674,6 +1691,34 @@ function extractDiffText(change: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+type FileChangeText = {
+  source: "content" | "diff";
+  text: string;
+};
+
+function extractFileChangeText(params: {
+  change: Record<string, unknown>;
+  changeKind: Record<string, unknown> | null;
+  changeType: "add" | "delete" | "update";
+}): FileChangeText | undefined {
+  if (params.changeType === "add" || params.changeType === "delete") {
+    const content =
+      pickStringAllowEmpty(params.changeKind, ["content"]) ??
+      pickStringAllowEmpty(params.change, ["content"]);
+    if (content !== undefined) {
+      return { source: "content", text: content };
+    }
+
+    const diff = extractDiffText(params.change);
+    return diff !== undefined ? { source: "diff", text: diff } : undefined;
+  }
+
+  const diff =
+    pickStringAllowEmpty(params.changeKind, ["unified_diff", "unifiedDiff"]) ??
+    extractDiffText(params.change);
+  return diff !== undefined ? { source: "diff", text: diff } : undefined;
+}
+
 function summarizeDiff(diff: string): { additions: number; removals: number } {
   let additions = 0;
   let removals = 0;
@@ -1700,6 +1745,77 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
   }
 
   return { additions, removals };
+}
+
+function countContentLines(content: string): number {
+  return splitFileContentLines(content).length;
+}
+
+function splitFileContentLines(content: string): string[] {
+  if (content.length === 0) {
+    return [];
+  }
+
+  const lines = content.split("\n");
+  if (content.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
+function summarizeFileChangeText(params: {
+  changeType: "add" | "delete" | "update",
+  text: FileChangeText;
+}): { additions: number; removals: number } {
+  if (params.text.source === "diff") {
+    return summarizeDiff(params.text.text);
+  }
+
+  if (params.changeType === "add") {
+    return { additions: countContentLines(params.text.text), removals: 0 };
+  }
+
+  if (params.changeType === "delete") {
+    return { additions: 0, removals: countContentLines(params.text.text) };
+  }
+
+  return summarizeDiff(params.text.text);
+}
+
+function buildContentDiff(params: {
+  changeType: "add" | "delete" | "update";
+  content: string;
+  path?: string;
+}): string {
+  if (params.changeType === "update") {
+    return params.content;
+  }
+
+  const lines = splitFileContentLines(params.content);
+  const path = params.path?.replace(/^\/+/, "") ?? "file";
+  const hunkLineCount = lines.length;
+  const header =
+    params.changeType === "add"
+      ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]
+      : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
+  const prefix = params.changeType === "add" ? "+" : "-";
+  return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function buildFileChangeDiff(params: {
+  changeType: "add" | "delete" | "update";
+  text: FileChangeText;
+  path?: string;
+}): string {
+  if (params.text.source === "diff") {
+    return params.text.text;
+  }
+
+  return buildContentDiff({
+    changeType: params.changeType,
+    content: params.text.text,
+    path: params.path
+  });
 }
 
 function formatCommandLabel(command: string | undefined): string {
@@ -2053,8 +2169,19 @@ function summarizeActivityItems(
         const changeType = normalizeFileChangeKind(
           pickString(changeKind ?? {}, ["type"]) ?? pickString(change, ["kind"])
         );
-        const diff = extractDiffText(change);
-        const diffSummary = diff ? summarizeDiff(diff) : undefined;
+        const changeText = extractFileChangeText({ change, changeKind, changeType });
+        const diffSummary =
+          changeText !== undefined
+            ? summarizeFileChangeText({ changeType, text: changeText })
+            : undefined;
+        const diff =
+          changeText !== undefined
+            ? buildFileChangeDiff({
+                changeType,
+                text: changeText,
+                path: changePath
+              })
+            : undefined;
         changedFiles += 1;
         changedFileAdditions += diffSummary?.additions ?? 0;
         changedFileRemovals += diffSummary?.removals ?? 0;
@@ -2066,7 +2193,7 @@ function summarizeActivityItems(
           }`,
           path: changePath,
           status: itemStatus,
-          ...(diff && diffSummary
+          ...(diff !== undefined && diffSummary
             ? {
                 fileDiff: {
                   kind: changeType,
