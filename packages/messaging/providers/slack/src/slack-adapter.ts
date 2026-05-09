@@ -532,7 +532,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: event.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+    });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
     const text = strippedText.trim();
@@ -628,7 +630,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: body.message?.thread_ts ?? body.container?.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel, ids.ts);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+      ts: ids.ts,
+    });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -690,7 +695,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       threadTs: body.thread_ts,
       ts: ids.ts,
     });
-    const routingState = this.routingStateForChannel(channel);
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+    });
     if (!this.authorizeInbound({
       actor,
       channel,
@@ -1072,7 +1079,10 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private routingStateForChannel(
     channel: MessagingChannelRef,
-    ts?: string,
+    options: {
+      teamId?: string;
+      ts?: string;
+    } = {},
   ): MessagingAdapterState {
     return {
       opaque: {
@@ -1080,7 +1090,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         ...(channel.conversation.parentId
           ? { threadTs: channel.conversation.parentId }
           : {}),
-        ...(ts ? { ts } : {}),
+        ...(options.teamId ? { teamId: options.teamId } : {}),
+        ...(options.ts ? { ts: options.ts } : {}),
       },
     };
   }
