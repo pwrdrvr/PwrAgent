@@ -644,6 +644,32 @@ function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
   };
 }
 
+function getMarkdownBlockPrefixLength(
+  node: ProseMirrorNode,
+  parent: ProseMirrorNode | null,
+  childIndex: number,
+): number {
+  if (parent?.type.name === "doc" && node.type.name === "heading") {
+    const level = typeof node.attrs.level === "number" ? node.attrs.level : 1;
+    return `${"#".repeat(Math.min(Math.max(level, 1), 6))} `.length;
+  }
+
+  if (parent?.type.name === "bulletList" && node.type.name === "listItem") {
+    return `${childIndex > 0 ? "\n" : ""}- `.length;
+  }
+
+  if (parent?.type.name === "orderedList" && node.type.name === "listItem") {
+    const start = typeof parent.attrs.start === "number" ? parent.attrs.start : 1;
+    return `${childIndex > 0 ? "\n" : ""}${start + childIndex}. `.length;
+  }
+
+  if (parent?.type.name === "listItem" && childIndex > 0) {
+    return "\n  ".length;
+  }
+
+  return 0;
+}
+
 function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   position: number,
@@ -679,18 +705,38 @@ function getDraftIndexAtPosition(
         found = true;
         return false;
       }
-      return true;
+    }
+
+    if (mode === "markdown") {
+      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      if (prefixLength > 0) {
+        if (position <= pos + 1) {
+          index += prefixLength;
+          found = true;
+          return false;
+        }
+        index += prefixLength;
+      }
     }
 
     if (node.isText) {
       const text = node.text ?? "";
       const end = pos + text.length;
-      if (position <= end) {
-        index += Math.max(0, Math.min(text.length, position - pos));
+      const delimiters =
+        mode === "markdown"
+          ? getMarkdownMarkDelimiters(node)
+          : { prefix: "", suffix: "" };
+      if (position < end) {
+        index += delimiters.prefix.length + Math.max(0, position - pos);
         found = true;
         return false;
       }
-      index += text.length;
+      if (position === end) {
+        index += delimiters.prefix.length + text.length + delimiters.suffix.length;
+        found = true;
+        return false;
+      }
+      index += delimiters.prefix.length + text.length + delimiters.suffix.length;
       return false;
     }
 
@@ -754,17 +800,35 @@ function getPositionAtDraftIndex(
         index += codeBlock.totalLength;
         return false;
       }
-      return true;
+    }
+
+    if (mode === "markdown") {
+      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      if (prefixLength > 0) {
+        if (draftIndex <= index + prefixLength) {
+          position = pos + 1;
+          found = true;
+          return false;
+        }
+        index += prefixLength;
+      }
     }
 
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      if (draftIndex <= index + textLength) {
-        position = pos + Math.max(0, draftIndex - index);
+      const delimiters =
+        mode === "markdown"
+          ? getMarkdownMarkDelimiters(node)
+          : { prefix: "", suffix: "" };
+      const totalLength =
+        delimiters.prefix.length + textLength + delimiters.suffix.length;
+      if (draftIndex <= index + totalLength) {
+        const textIndex = draftIndex - index - delimiters.prefix.length;
+        position = pos + Math.max(0, Math.min(textLength, textIndex));
         found = true;
         return false;
       }
-      index += textLength;
+      index += totalLength;
       return false;
     }
 

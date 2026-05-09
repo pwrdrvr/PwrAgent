@@ -621,6 +621,54 @@ test("directory launchpad Tiptap composer preserves pasted paragraph breaks", as
   }
 });
 
+test("directory launchpad skill autocomplete honors markdown offsets after formatted blocks", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const { root: tiptapInput, textbox } = getLaunchpadComposer(app);
+    await textbox.focus();
+    await textbox.evaluate((element) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.setData(
+        "text/html",
+        "<h2>heading</h2><p>$ce:b</p>",
+      );
+      dataTransfer.setData("text/plain", "## heading\n\n$ce:b");
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          clipboardData: dataTransfer,
+        }),
+      );
+    });
+
+    await expect(tiptapInput).toHaveAttribute("data-value", "## heading\n\n$ce:b");
+    const listbox = app.window.getByRole("listbox", { name: "Skills" });
+    await expect(listbox).toBeVisible();
+    const brainstormOption = listbox.getByRole("button", {
+      name: /\$ce:brainstorm/i,
+    });
+    await expect(brainstormOption).toBeVisible();
+
+    await app.window.keyboard.press("Enter");
+    await expect(listbox).toBeHidden();
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", {
+        hasText: "$ce:brainstorm",
+      }),
+    ).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", "## heading\n\n");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad Tiptap composer selects focused skills as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({    fixturePath: fixture.fixturePath,
