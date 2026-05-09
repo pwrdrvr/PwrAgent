@@ -56,6 +56,7 @@ export type SlackProviderLogger = {
 
 export type SlackApi = {
   authTest(): Promise<SlackAuthTestResult>;
+  conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
   deleteMessage(params: { channel: string; ts: string }): Promise<void>;
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
@@ -92,6 +93,11 @@ export type SlackAuthTestResult = {
 export type SlackMessageResult = {
   channel?: string;
   ts?: string;
+};
+
+export type SlackConversationInfo = {
+  id?: string;
+  name?: string;
 };
 
 export type SlackFileInfo = {
@@ -249,8 +255,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly signingSecret: string;
   private readonly socketClient: SlackSocketClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly conversationTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
   private botUserId: string | undefined;
+  private conversationInfoLookupDisabled = false;
   private userInfoLookupDisabled = false;
   private listener: SlackInboundListener | undefined;
   private started = false;
@@ -495,7 +503,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!ids) return;
 
     const actor = await this.actorForSlackUser(ids.userId);
-    const channel = this.channelRefForSlack({
+    const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: undefined,
       channelType: event.channel_type,
@@ -580,7 +588,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       ids.userId,
       body.user?.name ?? body.user?.username,
     );
-    const channel = this.channelRefForSlack({
+    const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: body.channel?.name,
       peerTitle: actor.displayName ?? actor.username,
@@ -636,7 +644,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     if (!ids || !body.command) return;
     const actor = await this.actorForSlackUser(ids.userId, body.user_name);
-    const channel = this.channelRefForSlack({
+    const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
       channelName: body.channel_name,
       peerTitle: actor.displayName ?? actor.username,
@@ -958,7 +966,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     return true;
   }
 
-  private channelRefForSlack(params: {
+  private async channelRefForSlack(params: {
     channelId: string;
     channelName?: string;
     channelType?: string;
@@ -966,22 +974,27 @@ export class SlackAdapter implements SlackProviderAdapter {
     teamId?: string;
     threadTs?: string;
     ts: string;
-  }): MessagingChannelRef {
+  }): Promise<MessagingChannelRef> {
     const isThread = Boolean(params.threadTs && params.threadTs !== params.ts);
     const kind: MessagingConversationKind = isThread
       ? "thread"
       : params.channelType === "im" || params.channelId.startsWith("D")
         ? "dm"
         : "channel";
+    const channelTitle =
+      kind === "dm"
+        ? params.peerTitle
+        : normalizeSlackConversationTitle(params.channelName)
+          ?? (await this.lookupSlackConversationTitle(params.channelId));
     return {
       channel: this.channel,
       conversation: {
         id: params.channelId,
         kind,
-        ...(kind === "dm" && params.peerTitle ? { title: params.peerTitle } : {}),
+        ...(kind === "dm" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
-        ...(kind !== "dm" && params.channelName ? { title: params.channelName } : {}),
-        ...(isThread && params.channelName ? { parentTitle: params.channelName } : {}),
+        ...(kind === "channel" && channelTitle ? { title: channelTitle } : {}),
+        ...(isThread && channelTitle ? { parentTitle: channelTitle } : {}),
       },
     };
   }
@@ -1053,6 +1066,41 @@ export class SlackAdapter implements SlackProviderAdapter {
         });
       }
       this.userDisplayNameCache.set(userId, undefined);
+      return undefined;
+    }
+  }
+
+  private async lookupSlackConversationTitle(
+    channelId: string,
+  ): Promise<string | undefined> {
+    if (this.conversationTitleCache.has(channelId)) {
+      return this.conversationTitleCache.get(channelId);
+    }
+    if (this.conversationInfoLookupDisabled || !this.api.conversationsInfo) {
+      this.conversationTitleCache.set(channelId, undefined);
+      return undefined;
+    }
+
+    try {
+      const conversation = await this.api.conversationsInfo({ channel: channelId });
+      const title = normalizeSlackConversationTitle(conversation?.name);
+      this.conversationTitleCache.set(channelId, title);
+      return title;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.conversationInfoLookupDisabled = true;
+        this.logger.warn?.("slack conversation lookup unavailable", {
+          reason: "missing_scope",
+          requiredScopes: requiredConversationReadScopes(channelId),
+        });
+      } else {
+        this.logger.warn?.("slack conversation lookup failed", {
+          reason,
+          channelHash: createHash("sha256").update(channelId).digest("hex").slice(0, 8),
+        });
+      }
+      this.conversationTitleCache.set(channelId, undefined);
       return undefined;
     }
   }
@@ -1144,6 +1192,10 @@ export function createSlackApi(botToken: string): SlackApi {
   return {
     async authTest() {
       return (await client.auth.test()) as SlackAuthTestResult;
+    },
+    async conversationsInfo(params) {
+      const response = await client.conversations.info(params);
+      return response.channel as SlackConversationInfo | undefined;
     },
     async deleteMessage(params) {
       await client.chat.delete(params);
@@ -1263,6 +1315,21 @@ function kindForSlackMime(mimeType: string | undefined): MessagingAttachmentDesc
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
   return "file";
+}
+
+function normalizeSlackConversationTitle(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  const lower = normalized.toLowerCase();
+  if (lower === "privategroup" || lower === "directmessage") return undefined;
+  return normalized;
+}
+
+function requiredConversationReadScopes(channelId: string): string {
+  if (channelId.startsWith("C")) return "channels:read";
+  if (channelId.startsWith("D")) return "im:read";
+  if (channelId.startsWith("G")) return "groups:read or mpim:read";
+  return "channels:read/groups:read/im:read/mpim:read";
 }
 
 function safeEqual(left: string, right: string): boolean {

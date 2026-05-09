@@ -47,6 +47,7 @@ function conversationKey(channel: MessagingChannelRef): string {
 }
 
 function fakeApi(spies: {
+  conversations?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
   updated?: unknown[];
@@ -58,6 +59,10 @@ function fakeApi(spies: {
       user_id: "U0BOTUSERID",
       team: "PwrDrvr",
       team_id: "T012ABCDEF0",
+    }),
+    conversationsInfo: async (params) => ({
+      id: params.channel,
+      name: spies.conversations?.[params.channel],
     }),
     deleteMessage: async (params) => {
       spies.deleted?.push(params);
@@ -370,5 +375,52 @@ describe("SlackAdapter", () => {
         }),
       }),
     ]);
+  });
+
+  it("uses conversations.info names for private-channel threads", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        conversations: {
+          G012ABCDEF0: "agents-private",
+        },
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "group",
+        team: "T012ABCDEF0",
+        thread_ts: "1712023030.000000",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "thread reply",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "G012ABCDEF0",
+            kind: "thread",
+            parentId: "1712023030.000000",
+            parentTitle: "agents-private",
+          }),
+        }),
+      }),
+    ]);
+    expect(events[0]?.channel.conversation.title).toBeUndefined();
   });
 });

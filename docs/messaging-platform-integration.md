@@ -682,6 +682,11 @@ Minimum bot scopes for the current adapter shape:
 - `chat:write` for outbound messages and updates.
 - `channels:history`, `groups:history`, `im:history`, and `mpim:history` for the
   conversation types you allow.
+- `channels:read`, `groups:read`, `im:read`, and `mpim:read` are optional but
+  recommended for conversation labels. Slack events and Block Kit interactions
+  do not reliably include channel names, especially for private channels; with
+  the matching read scope, PwrAgent can call `conversations.info` and label
+  binding chips with the real channel name.
 - `files:read` for inbound file downloads.
 - `files:write` for outbound file delivery.
 - `users:read` is optional but recommended. Slack message events include the
