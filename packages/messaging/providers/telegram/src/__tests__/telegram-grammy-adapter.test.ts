@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   adaptGrammyBot,
+  TelegramAdapter,
   type TelegramEditMessageTextRequest,
   type TelegramGrammyBotLike,
+  type TelegramBotApi,
   type TelegramPinChatMessageRequest,
   type TelegramSendChatActionRequest,
   type TelegramSendDocumentRequest,
@@ -10,6 +12,12 @@ import {
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
 } from "../telegram-adapter.ts";
+import type {
+  MessagingCallbackHandleRecord,
+  MessagingCallbackHandleStore,
+  MessagingInboundEvent,
+  MessagingStatusIntent,
+} from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
   it("maps object-shaped adapter calls to grammY positional API calls", async () => {
@@ -129,6 +137,194 @@ describe("adaptGrammyBot", () => {
   });
 });
 
+describe("TelegramAdapter callback persistence", () => {
+  it("persists routed actor and binding metadata in callback handles", async () => {
+    const store = fakeCallbackStore();
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store,
+    });
+
+    await adapter.deliver({
+      id: "status-1",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Choose",
+      allowedActorIds: ["user-1", "user-2"],
+      audit: {
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-1", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "permissions", label: "Permissions" }],
+    });
+
+    expect(store.records).toHaveLength(1);
+    expect(store.records[0]).toMatchObject({
+      actionId: "permissions",
+      allowedActorIds: ["user-1", "user-2"],
+      bindingId: "binding-1",
+      channel: {
+        conversation: { id: "chat-1" },
+      },
+    });
+  });
+
+  it("keeps fan-out callback records scoped per routed binding", async () => {
+    const store = fakeCallbackStore();
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store,
+    });
+    const baseIntent: Omit<MessagingStatusIntent, "audit" | "bindingId"> = {
+      id: "fanout-status",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Queued",
+      allowedActorIds: ["user-1"],
+      actions: [{ id: "cancel", label: "Cancel" }],
+    };
+
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-1", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-2",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-2", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(store.records).toHaveLength(2);
+    expect(store.records[0]?.handle).toBe(store.records[1]?.handle);
+    expect(store.records[0]?.id).not.toBe(store.records[1]?.id);
+    expect(store.records.map((record) => record.bindingId)).toEqual([
+      "binding-1",
+      "binding-2",
+    ]);
+  });
+
+  it("validates live callbacks against persisted callback actor scope", async () => {
+    const store = fakeCallbackStore();
+    let sentRequest: TelegramSendMessageRequest | undefined;
+    const api: TelegramBotApi = {
+      ...fakeTelegramApi(),
+      sendMessage: async (request) => {
+        sentRequest = request;
+        return {
+          chat: {
+            id: Number(request.chat_id),
+            type: "private",
+          },
+          message_id: 200,
+        };
+      },
+    };
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [
+          { id: "42", displayName: "" },
+          { id: "99", displayName: "" },
+        ],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store,
+    });
+
+    await adapter.deliver({
+      id: "status-1",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Choose",
+      allowedActorIds: ["42"],
+      audit: {
+        actor: { platformUserId: "42" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "42", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "permissions", label: "Permissions" }],
+    });
+
+    const callbackData =
+      sentRequest?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^tg:/);
+
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleUpdate({
+      update_id: 99,
+      callback_query: {
+        id: "callback-1",
+        data: callbackData,
+        from: {
+          id: 99,
+          first_name: "Other",
+        },
+        message: {
+          chat: {
+            id: 42,
+            type: "private",
+          },
+          message_id: 200,
+          text: "Choose",
+        },
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actionId: undefined,
+        kind: "callback",
+        value: undefined,
+      }),
+    ]);
+  });
+});
+
 function createGrammyBot(): TelegramGrammyBotLike & {
   api: {
     answerCallbackQuery: ReturnType<typeof vi.fn>;
@@ -237,5 +433,68 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         ) => true,
       ),
     },
+  };
+}
+
+function fakeCallbackStore(): MessagingCallbackHandleStore & {
+  records: MessagingCallbackHandleRecord[];
+} {
+  const records: MessagingCallbackHandleRecord[] = [];
+  return {
+    records,
+    resolveCallbackHandle: async (params) =>
+      records.find(
+        (record) =>
+          record.handle === params.handle
+          && record.allowedActorIds.includes(params.actorId)
+          && record.channel.conversation.id === params.channel.conversation.id,
+      ),
+    upsertCallbackHandle: async (record) => {
+      records.push(record);
+      return record;
+    },
+  };
+}
+
+function fakeTelegramApi(): TelegramBotApi {
+  return {
+    answerCallbackQuery: async () => true,
+    deleteWebhook: async () => true,
+    editForumTopic: async () => true,
+    editMessageText: async (request) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: request.message_id,
+    }),
+    getFile: async () => ({ file_path: "documents/file.txt" }),
+    getMe: async () => ({ id: 123, is_bot: true, username: "TestBot" }),
+    getWebhookInfo: async () => ({ url: "" }),
+    pinChatMessage: async () => true,
+    sendChatAction: async () => true,
+    sendDocument: async (request) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 202,
+    }),
+    sendMessage: async (request) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 200,
+    }),
+    sendPhoto: async (request) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 201,
+    }),
+    setMyCommands: async () => true,
+    unpinChatMessage: async () => true,
   };
 }

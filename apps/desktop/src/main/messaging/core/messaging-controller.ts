@@ -4042,8 +4042,14 @@ export class MessagingController {
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
   ): MessagingSurfaceIntent {
+    const allowedActorIds = binding?.authorizedActorIds ?? (
+      event ? [event.actor.platformUserId] : undefined
+    );
+
     if (intent.audit || (!binding && !event)) {
-      return intent;
+      return allowedActorIds && !intent.allowedActorIds
+        ? { ...intent, allowedActorIds }
+        : intent;
     }
 
     const channel = binding?.channel ?? event?.channel;
@@ -4075,6 +4081,7 @@ export class MessagingController {
               },
             }
           : {}),
+      ...(allowedActorIds ? { allowedActorIds } : {}),
     };
   }
 

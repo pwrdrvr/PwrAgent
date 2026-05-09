@@ -151,12 +151,14 @@ describe("SlackAdapter", () => {
       text: "Pick **one**",
       audit: {
         actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
         channel: {
           channel: "slack",
           conversation: { id: "C012ABCDEF0", kind: "channel" },
         },
         occurredAt: 1,
       },
+      allowedActorIds: ["U012ABCDEF0", "U099OTHER"],
       actions: [{ id: "resume-thread", label: "Resume", style: "primary" }],
     };
 
@@ -168,6 +170,11 @@ describe("SlackAdapter", () => {
       },
     });
     expect(store.records).toHaveLength(1);
+    expect(store.records[0]).toMatchObject({
+      actionId: "resume-thread",
+      allowedActorIds: ["U012ABCDEF0", "U099OTHER"],
+      bindingId: "slack-binding-1",
+    });
     expect(spies.posted[0]).toMatchObject({
       channel: "C012ABCDEF0",
       text: "Pick *one*",
@@ -184,6 +191,60 @@ describe("SlackAdapter", () => {
         }),
       ],
     });
+  });
+
+  it("keeps fan-out callback records scoped per routed binding", async () => {
+    const store = fakeStore();
+    const spies: { posted: unknown[] } = { posted: [] };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const baseIntent: MessagingSurfaceIntent = {
+      id: "fanout-status",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Queued",
+      allowedActorIds: ["U012ABCDEF0"],
+      actions: [{ id: "cancel", label: "Cancel" }],
+    };
+
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "C012ABCDEF0", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+    });
+    await adapter.deliver({
+      ...baseIntent,
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "binding-2",
+        channel: {
+          channel: "slack",
+          conversation: { id: "C099OTHER", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(store.records).toHaveLength(2);
+    expect(store.records[0]?.handle).toBe(store.records[1]?.handle);
+    expect(store.records[0]?.id).not.toBe(store.records[1]?.id);
+    expect(store.records.map((record) => record.bindingId)).toEqual([
+      "binding-1",
+      "binding-2",
+    ]);
   });
 
   it("normalizes Socket Mode message events", async () => {

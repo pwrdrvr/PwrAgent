@@ -13,7 +13,6 @@ import type {
   MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
-  MessagingJsonValue,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -51,11 +50,6 @@ const TELEGRAM_STREAM_GROUP_FAST_INTERVAL_MS = 1_000;
 const TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS = 2_000;
 const TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS = 3_100;
 const TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS = 100;
-
-type TelegramCallbackBinding = {
-  actionId: string;
-  value?: MessagingJsonValue;
-};
 
 type TelegramDeliveryTarget = {
   chatId: number | string;
@@ -398,7 +392,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     },
   };
 
-  private callbackBindings = new Map<string, TelegramCallbackBinding>();
   private defaultBot?: TelegramBotLike;
   /**
    * The bot's `@username` as returned by `getMe()`, lower-cased once
@@ -1182,11 +1175,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     });
 
     const channel = this.channelFromMessage(message);
-    const binding = callbackQuery.data
-      ? this.callbackBindings.get(callbackQuery.data)
-      : undefined;
     const persistedBinding =
-      !binding && callbackQuery.data && this.options.store
+      callbackQuery.data && this.options.store
         ? await this.options.store.resolveCallbackHandle({
             actorId: String(callbackQuery.from.id),
             channel,
@@ -1195,7 +1185,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           })
         : undefined;
     this.options.logger?.debug(
-      `telegram inbound callback update=${updateId} callback=${callbackQuery.id} chat=${message.chat.id} actor=${callbackQuery.from.id} action=${binding?.actionId ?? persistedBinding?.actionId ?? "unresolved"}`,
+      `telegram inbound callback update=${updateId} callback=${callbackQuery.id} chat=${message.chat.id} actor=${callbackQuery.from.id} action=${persistedBinding?.actionId ?? "unresolved"}`,
     );
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
@@ -1211,8 +1201,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           },
         },
       },
-      actionId: binding?.actionId ?? persistedBinding?.actionId,
-      value: binding?.value ?? persistedBinding?.value,
+      actionId: persistedBinding?.actionId,
+      value: persistedBinding?.value,
       receivedAt: this.now(),
       routingState: this.routingStateFromMessage(message),
     });
@@ -1560,24 +1550,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       throw new Error("Telegram callback handle exceeds callback_data limit.");
     }
 
-    this.callbackBindings.set(handle, {
-      actionId: action.id,
-      value: action.value,
-    });
     if (this.options.store && intent.audit) {
+      const now = this.now();
       await this.options.store.upsertCallbackHandle({
-        id: `telegram-callback:${handle}`,
+        id: telegramCallbackRecordId(handle, intent),
         actionId: action.id,
-        allowedActorIds: [intent.audit.actor.platformUserId],
-        bindingId: intent.bindingId,
+        allowedActorIds: callbackAllowedActorIds(intent),
+        bindingId: callbackBindingId(intent),
         channel: intent.audit.channel,
-        createdAt: this.now(),
-        expiresAt: this.now() + 15 * 60 * 1000,
+        createdAt: now,
+        expiresAt: now + 15 * 60 * 1000,
         handle,
         pendingIntentId: intent.id,
         browseSessionId: browseSessionIdForIntent(intent),
         surface: intent.targetSurface,
-        updatedAt: this.now(),
+        updatedAt: now,
         value: action.value,
       });
     }
@@ -2333,6 +2320,35 @@ function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | unde
   return intent.kind === "thread_picker" || intent.kind === "project_picker"
     ? intent.browseSessionId
     : undefined;
+}
+
+function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
+  return intent.allowedActorIds && intent.allowedActorIds.length > 0
+    ? intent.allowedActorIds
+    : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function telegramCallbackRecordId(
+  handle: string,
+  intent: MessagingSurfaceIntent,
+): string {
+  const conversation = intent.audit?.channel.conversation;
+  const deliveryScope = createHash("sha256")
+    .update(
+      JSON.stringify([
+        intent.audit?.channel.channel ?? "telegram",
+        conversation?.id ?? null,
+        conversation?.parentId ?? null,
+        intent.audit?.bindingId ?? intent.bindingId ?? null,
+      ]),
+    )
+    .digest("base64url")
+    .slice(0, 18);
+  return `telegram-callback:${handle}:${deliveryScope}`;
 }
 
 /**

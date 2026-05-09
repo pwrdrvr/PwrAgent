@@ -102,9 +102,9 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
     async load() {
       const module = await import("@pwragent/messaging-provider-discord");
       return {
-        createAdapter({ config, logger }) {
+        createAdapter({ config, logger, store }) {
           return config.discord
-            ? module.createDiscordAdapter(config.discord, logger)
+            ? module.createDiscordAdapter(config.discord, store, logger)
             : undefined;
         },
       };
