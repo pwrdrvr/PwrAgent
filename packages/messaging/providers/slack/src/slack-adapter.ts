@@ -581,7 +581,15 @@ export class SlackAdapter implements SlackProviderAdapter {
       handle: signed.handle,
       now: this.now(),
     });
-    if (!record) return;
+    if (!record) {
+      this.logger.warn?.("slack callback handle unresolved", {
+        actorId: actor.platformUserId,
+        channelId: channel.conversation.id,
+        conversationKind: channel.conversation.kind,
+        handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+      });
+      return;
+    }
 
     await this.listener({
       id: this.newEventId("slack-callback"),
@@ -942,7 +950,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     const isThread = Boolean(params.threadTs && params.threadTs !== params.ts);
     const kind: MessagingConversationKind = isThread
       ? "thread"
-      : params.channelType === "im"
+      : params.channelType === "im" || params.channelId.startsWith("D")
         ? "dm"
         : "channel";
     return {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SlackAdapter, type SlackApi, type SlackSocketClient } from "../slack-adapter.ts";
 import type {
+  MessagingChannelRef,
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingInboundEvent,
@@ -22,12 +23,27 @@ function fakeStore(): MessagingCallbackHandleStore & {
   const records: MessagingCallbackHandleRecord[] = [];
   return {
     records,
-    resolveCallbackHandle: async () => records[0],
+    resolveCallbackHandle: async (params) =>
+      records.find(
+        (record) =>
+          record.handle === params.handle &&
+          record.allowedActorIds.includes(params.actorId) &&
+          conversationKey(record.channel) === conversationKey(params.channel),
+      ),
     upsertCallbackHandle: async (record) => {
       records.push(record);
       return record;
     },
   };
+}
+
+function conversationKey(channel: MessagingChannelRef): string {
+  return [
+    channel.channel,
+    channel.conversation.kind,
+    channel.conversation.parentId ?? "",
+    channel.conversation.id,
+  ].join(":");
 }
 
 function fakeApi(spies: {
@@ -221,6 +237,71 @@ describe("SlackAdapter", () => {
         kind: "command",
         reason: "unauthorized-actor",
         actor: expect.objectContaining({ platformUserId: "U099ZZZZZZZ" }),
+      }),
+    ]);
+  });
+
+  it("routes Block Kit callbacks from DMs back to the original DM handle", async () => {
+    const socket = fakeSocket();
+    const store = fakeStore();
+    const spies: { posted: unknown[] } = { posted: [] };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const delivered: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      delivered.push(event);
+    });
+
+    await adapter.deliver({
+      id: "resume-prompt",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Resume?",
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      actions: [{ id: "resume", label: "Resume", style: "primary" }],
+    });
+    const posted = spies.posted[0] as {
+      blocks: Array<{
+        elements?: Array<{ action_id?: string; value?: string }>;
+      }>;
+    };
+    const button = posted.blocks.flatMap((block) => block.elements ?? [])[0]!;
+
+    await socket.emitEvent("interactive", {
+      ack: async () => undefined,
+      body: {
+        type: "block_actions",
+        user: { id: "U012ABCDEF0", username: "alice" },
+        team: { id: "T012ABCDEF0" },
+        channel: { id: "D012ABCDEF0" },
+        message: { ts: "1712023032.123456" },
+        actions: [button],
+      },
+    });
+
+    expect(delivered).toEqual([
+      expect.objectContaining({
+        kind: "callback",
+        actionId: "resume",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "D012ABCDEF0",
+            kind: "dm",
+          }),
+        }),
       }),
     ]);
   });
