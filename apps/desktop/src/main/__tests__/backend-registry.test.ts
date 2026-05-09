@@ -133,10 +133,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       branch,
+      expectedBranch,
     }: {
       backend: "codex" | "grok";
       threadId: string;
       branch?: string;
+      expectedBranch?: string;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -145,8 +147,24 @@ function createOverlayStoreMock(params?: {
         executionMode: "default",
         extraLinkedDirectories: [],
       };
+      const previousObservedBranch = current.observedGitBranch?.trim();
+      const nextObservedBranch = branch?.trim();
+      const fallbackExpectedBranch =
+        !current.gitBranch?.trim() &&
+        previousObservedBranch &&
+        nextObservedBranch &&
+        previousObservedBranch !== nextObservedBranch
+          ? previousObservedBranch
+          : undefined;
+      const requestedExpectedBranch =
+        expectedBranch?.trim() && expectedBranch.trim() !== nextObservedBranch
+          ? expectedBranch.trim()
+          : undefined;
       const next = {
         ...current,
+        gitBranch: current.gitBranch?.trim()
+          ? current.gitBranch
+          : requestedExpectedBranch ?? fallbackExpectedBranch,
         observedGitBranch: branch,
       } as ThreadOverlayState;
       overlays.set(key, next);
@@ -2960,6 +2978,60 @@ describe("DesktopBackendRegistry", () => {
       expectedBranch: "feat/thread-workspace-handoff-plan",
       observedBranch: "feat/thread-workspace-handoff-plan",
       drifted: false,
+    });
+
+    await registry.close();
+  });
+
+  it("preserves the renderer expected branch when a fresh thread list reports a new branch", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Moved thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      gitBranch: "fix/steering-composer-navigation",
+      observedGitBranch: "fix/steering-composer-navigation",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "full-access",
+          observedGitBranch: "fix/queued-composer-navigation",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.checkThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "fix/queued-composer-navigation",
+      threadId: "thread-1",
+    });
+
+    expect(response).toMatchObject({
+      expectedBranch: "fix/queued-composer-navigation",
+      observedBranch: "fix/steering-composer-navigation",
+      drifted: true,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "fix/queued-composer-navigation",
+      observedGitBranch: "fix/steering-composer-navigation",
     });
 
     await registry.close();

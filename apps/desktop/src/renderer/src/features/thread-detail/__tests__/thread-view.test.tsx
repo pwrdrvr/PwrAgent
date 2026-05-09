@@ -2852,6 +2852,11 @@ describe("ThreadView", () => {
       await waitFor(() => {
         expect(checkThreadBranchDrift).toHaveBeenCalledTimes(1);
       });
+      expect(checkThreadBranchDrift).toHaveBeenLastCalledWith({
+        backend: "codex",
+        expectedBranch: "feature/old",
+        threadId: "thread-branch",
+      });
       expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30_000);
 
       await act(async () => {
@@ -2860,6 +2865,11 @@ describe("ThreadView", () => {
 
       await waitFor(() => {
         expect(checkThreadBranchDrift).toHaveBeenCalledTimes(2);
+      });
+      expect(checkThreadBranchDrift).toHaveBeenLastCalledWith({
+        backend: "codex",
+        expectedBranch: "feature/old",
+        threadId: "thread-branch",
       });
     } finally {
       setIntervalSpy.mockRestore();

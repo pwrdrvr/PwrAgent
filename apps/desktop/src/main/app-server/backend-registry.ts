@@ -2377,10 +2377,13 @@ export class DesktopBackendRegistry {
       callerReason: "branch-drift",
       threadId: params.threadId,
     });
-    const expectedBranch = resolveExpectedThreadBranch({
-      overlay,
-      thread,
-    });
+    const requestedExpectedBranch = params.expectedBranch?.trim();
+    const expectedBranch =
+      requestedExpectedBranch ||
+      resolveExpectedThreadBranch({
+        overlay,
+        thread,
+      });
     const sourcePath = resolveThreadGitSourcePath(
       thread,
       overlay?.extraLinkedDirectories ?? [],
@@ -2390,13 +2393,14 @@ export class DesktopBackendRegistry {
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
+    const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
+
     await this.overlayStore.setThreadObservedBranch({
       backend: params.backend,
       threadId: params.threadId,
       branch: normalizedObservedBranch,
+      expectedBranch: drifted ? expectedBranch : undefined,
     });
-
-    const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
 
     backendRegistryLog.debug("checked thread branch drift", {
       backend: params.backend,

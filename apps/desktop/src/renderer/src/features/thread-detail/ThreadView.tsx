@@ -826,6 +826,7 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       const result = await props.desktopApi.checkThreadBranchDrift({
         backend: thread.source,
+        expectedBranch: thread.gitBranch,
         threadId: thread.id,
       });
       // Stale-closure guard: user navigated away mid-IPC.
