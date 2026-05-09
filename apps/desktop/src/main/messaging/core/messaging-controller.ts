@@ -4014,60 +4014,75 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
-    const scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent);
-    if (this.deliveryBudget) {
-      let admission = this.deliveryBudget.admit({ priority, scope });
-      while (admission.outcome === "deferred") {
-        await sleepUntil(admission.retryAt, this.now);
-        admission = this.deliveryBudget.admit({ priority, scope });
+    while (true) {
+      if (this.deliveryBudget) {
+        let admission = this.deliveryBudget.admit({ priority, scope });
+        while (admission.outcome === "deferred") {
+          await sleepUntil(admission.retryAt, this.now);
+          admission = this.deliveryBudget.admit({ priority, scope });
+        }
+        if (admission.outcome !== "admitted") {
+          this.logger.debug?.("messaging delivery budget skipped intent", {
+            bindingId: binding?.id ?? intent.bindingId,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: admission.outcome,
+            priority,
+            reason: admission.outcome === "dropped" ? admission.reason : undefined,
+            scopeId: scope?.id,
+          });
+          return {
+            channel: binding?.channel.channel ?? routedIntent.audit?.channel.channel ?? this.options.channel ?? "custom",
+            deliveredAt: this.now(),
+            outcome: "discarded",
+          };
+        }
       }
-      if (admission.outcome !== "admitted") {
-        this.logger.debug?.("messaging delivery budget skipped intent", {
+      const result = await this.options.adapter.deliver(routedIntent);
+      if (this.deliveryBudget && result.rateLimit) {
+        scope = result.rateLimit.scope;
+        this.deliveryBudget.recordRateLimit(result.rateLimit);
+        this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
           bindingId: binding?.id ?? intent.bindingId,
           intentId: routedIntent.id,
           intentKind: routedIntent.kind,
-          outcome: admission.outcome,
           priority,
-          reason: admission.outcome === "dropped" ? admission.reason : undefined,
-          scopeId: scope?.id,
+          retryAfterMs: result.rateLimit.retryAfterMs,
+          scopeId: result.rateLimit.scope.id,
         });
-        return {
-          channel: binding?.channel.channel ?? routedIntent.audit?.channel.channel ?? this.options.channel ?? "custom",
-          deliveredAt: this.now(),
-          outcome: "discarded",
-        };
+        continue;
       }
-    }
-    const result = await this.options.adapter.deliver(routedIntent);
-    await this.options.store.recordDelivery({
-      ...result,
-      id: `delivery:${routedIntent.id}:${randomUUID()}`,
-      bindingId: binding?.id ?? intent.bindingId,
-      intentId: routedIntent.id,
-    });
-    this.recordOutboundActivity(routedIntent, binding, result);
-    if (
-      binding &&
-      result.channel === binding.channel.channel &&
-      isPermanentMessagingTargetFailure(result)
-    ) {
-      await this.options.store.revokeBinding({
-        bindingId: binding.id,
-        revokedAt: this.now(),
+      await this.options.store.recordDelivery({
+        ...result,
+        id: `delivery:${routedIntent.id}:${randomUUID()}`,
+        bindingId: binding?.id ?? intent.bindingId,
+        intentId: routedIntent.id,
       });
-      await this.recordBindingTransition("unbound", binding);
-      this.notifyBindingChanged("permanent-delivery-failure");
-      this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
-        bindingId: binding.id,
-        channel: binding.channel.channel,
-        conversationId: binding.channel.conversation.id,
-        errorMessage: result.errorMessage,
-        outcome: result.outcome,
-        threadId: binding.threadId,
-      });
+      this.recordOutboundActivity(routedIntent, binding, result);
+      if (
+        binding &&
+        result.channel === binding.channel.channel &&
+        isPermanentMessagingTargetFailure(result)
+      ) {
+        await this.options.store.revokeBinding({
+          bindingId: binding.id,
+          revokedAt: this.now(),
+        });
+        await this.recordBindingTransition("unbound", binding);
+        this.notifyBindingChanged("permanent-delivery-failure");
+        this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
+          bindingId: binding.id,
+          channel: binding.channel.channel,
+          conversationId: binding.channel.conversation.id,
+          errorMessage: result.errorMessage,
+          outcome: result.outcome,
+          threadId: binding.threadId,
+        });
+      }
+      return result;
     }
-    return result;
   }
 
   private async deliverToolActivityForBackendEvent(

@@ -21,7 +21,9 @@ import type {
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
   MessagingChannelRef,
+  MessagingClientRateLimitStrategy,
   MessagingConversationKind,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
@@ -129,7 +131,9 @@ export type MattermostProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "mattermost";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -214,6 +218,7 @@ type MattermostSurfaceOpaqueState = {
 
 export class MattermostAdapter implements MattermostProviderAdapter {
   readonly channel = "mattermost" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       // Mattermost docs are silent on the per-attachment / per-post hard
@@ -602,6 +607,34 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef }).targetSurface;
+    const targetOpaque = targetSurface?.state?.opaque as
+      | MattermostSurfaceOpaqueState
+      | undefined;
+    const audit = (intent as { audit?: { channel?: MessagingChannelRef } }).audit;
+    const channelRef = audit?.channel;
+    const channelId = targetOpaque?.channelId ?? channelRef?.conversation.id;
+    if (!channelId) {
+      return undefined;
+    }
+    const rootId =
+      targetOpaque?.rootId
+      ?? (channelRef?.conversation.kind === "thread"
+        ? channelRef.conversation.parentId
+        : undefined);
+    return {
+      platform: this.channel,
+      id: rootId
+        ? `mattermost:thread:${channelId}:${rootId}`
+        : `mattermost:channel:${channelId}`,
+      kind: rootId ? "thread" : "channel",
+      label: rootId ? "Mattermost thread" : "Mattermost channel",
+      ...(rootId ? { parentId: channelId } : {}),
+      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+    };
   }
 
   async downloadAttachment(

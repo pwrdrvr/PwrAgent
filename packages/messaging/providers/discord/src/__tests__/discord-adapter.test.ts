@@ -62,6 +62,57 @@ describe("discord adapter", () => {
     );
   });
 
+  it("returns structured rate-limit feedback when Discord REST rejects a send", async () => {
+    const rateLimitError = Object.assign(new Error("Too Many Requests"), {
+      retryAfter: 2,
+    });
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        createMessage: vi.fn().mockRejectedValue(rateLimitError),
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+    const observed: unknown[] = [];
+    adapter.onRateLimit((info) => {
+      observed.push(info);
+    });
+
+    await expect(
+      adapter.deliver({
+        audit: discordAudit(),
+        createdAt: 1234,
+        id: "message-1",
+        kind: "message",
+        role: "assistant",
+        parts: [{ type: "text", text: "Final answer" }],
+      }),
+    ).resolves.toMatchObject({
+      channel: "discord",
+      deliveredAt: 1234,
+      errorMessage: "Too Many Requests",
+      outcome: "failed",
+      rateLimit: {
+        retryAfterMs: 2000,
+        scope: {
+          id: "discord:channel:channel-1",
+        },
+      },
+    });
+    expect(observed).toEqual([
+      expect.objectContaining({
+        retryAfterMs: 2000,
+        scope: expect.objectContaining({
+          id: "discord:channel:channel-1",
+        }),
+      }),
+    ]);
+  });
+
   it("returns a failed delivery when updating a stale message fails", async () => {
     const adapter = new DiscordAdapter({
       api: createApi({

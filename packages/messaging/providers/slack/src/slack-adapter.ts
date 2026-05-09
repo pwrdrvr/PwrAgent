@@ -10,6 +10,7 @@ import type {
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
   MessagingChannelRef,
+  MessagingClientRateLimitStrategy,
   MessagingConversationKind,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
@@ -139,6 +140,7 @@ export type SlackProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "slack";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -215,6 +217,7 @@ type SlackSlashCommandPayload = {
 
 export class SlackAdapter implements SlackProviderAdapter {
   readonly channel = "slack" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       // Slack Block Kit actions blocks allow at most 25 elements.
@@ -450,12 +453,13 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       };
     } catch (error) {
-      this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target);
       return {
         outcome: "failed",
         channel: this.channel,
         deliveredAt: this.now(),
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -759,19 +763,22 @@ export class SlackAdapter implements SlackProviderAdapter {
         errorMessage: "Slack dismiss target is missing",
       };
     }
+    const channelId = target.channelId;
     try {
-      await this.api.deleteMessage({ channel: target.channelId, ts: target.ts });
+      await this.api.deleteMessage({ channel: channelId, ts: target.ts });
       return {
         outcome: "dismissed",
         channel: this.channel,
         deliveredAt: this.now(),
       };
     } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(error, { channelId });
       return {
         outcome: "failed",
         channel: this.channel,
         deliveredAt: this.now(),
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -824,11 +831,13 @@ export class SlackAdapter implements SlackProviderAdapter {
         },
       };
     } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(error, target);
       return {
         outcome: "failed",
         channel: this.channel,
         deliveredAt: this.now(),
         errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -881,17 +890,19 @@ export class SlackAdapter implements SlackProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: { channelId: string },
-  ): void {
+  ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);
     if (retryAfterMs === undefined) {
-      return;
+      return undefined;
     }
-    this.emitRateLimit({
+    const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
       retryAfterMs,
       message: error instanceof Error ? error.message : String(error),
       observedAt: this.now(),
-    });
+    };
+    this.emitRateLimit(info);
+    return info;
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
@@ -1409,7 +1420,7 @@ export function createSlackAdapter(
 }
 
 export function createSlackApi(botToken: string): SlackApi {
-  const client = new WebClient(botToken);
+  const client = new WebClient(botToken, { rejectRateLimitedCalls: true });
   return {
     async authTest() {
       return (await client.auth.test()) as SlackAuthTestResult;

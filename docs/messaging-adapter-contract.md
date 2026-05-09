@@ -165,6 +165,14 @@ provider-neutral: platform, stable scope id, kind, optional label, optional
 provider bucket id, and conservative write budget hints. Do not leak provider
 SDK error objects through these hooks.
 
+Outbound rate-limit retries are owned by the desktop delivery budget, not by
+provider SDKs. Adapters that use SDKs with built-in 429 queues must configure
+those SDKs to reject/surface rate-limit responses before constructing the
+adapter. Set `clientRateLimitStrategy` to `externalized` when the SDK has been
+configured this way, `direct` when calls go straight to the platform without a
+hidden retry queue, or `sdk-managed` only as a temporary diagnostic state. Do
+not ship a new provider with `sdk-managed`; fix or wrap the client first.
+
 The controller budgets all outbound intent kinds against the resolved scope:
 final assistant messages, user prompts, command replies, status updates, tool
 updates, and stream updates. Provider 429 feedback puts that scope into a
@@ -172,6 +180,13 @@ cool-off window, then slow mode. In slow mode, obsolete low-priority traffic
 such as non-final stream updates, routine status edits, and intermediate tool
 progress can be dropped; final turn results and interactive prompts are
 reserved and deferred when possible.
+
+If a send attempt is rejected with a rate-limit error, `deliver()` should return
+a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. The
+controller records that feedback and re-runs admission for the same intent. A
+low-priority intent that would not be admitted under the new cool-off/slow-mode
+state is discarded instead of being queued for retry; reserved priority intents
+wait for the external budget window to reopen.
 
 The runtime reports a platform as `degraded` while a rate-limit or reconnect
 reason is active. `degraded` means connected but constrained. Fatal startup or

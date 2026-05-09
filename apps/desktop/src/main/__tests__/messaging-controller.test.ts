@@ -19,6 +19,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingSurfaceAction,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
@@ -31,6 +32,7 @@ import {
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
@@ -1961,6 +1963,73 @@ describe("MessagingController", () => {
       },
     });
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+  });
+
+  it("rechecks budget admission after a provider rate-limit rejection", async () => {
+    let now = 1000;
+    let rejectNextStream = false;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliver: async (intent) => {
+        attempts.push(intent);
+        if (rejectNextStream && intent.kind === "stream_update") {
+          return {
+            channel: "telegram" as const,
+            deliveredAt: now,
+            errorMessage: "Too Many Requests",
+            outcome: "failed" as const,
+            rateLimit: {
+              scope,
+              retryAfterMs: 5_000,
+              observedAt: now,
+              message: "Too Many Requests",
+            },
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin
+            ? "pinned" as const
+            : "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    attempts.length = 0;
+    rejectNextStream = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(attempts).toEqual([
+      expect.objectContaining({
+        kind: "stream_update",
+        text: "Hello",
+      }),
+    ]);
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {
@@ -4068,12 +4137,14 @@ describe("MessagingController", () => {
 });
 
 async function createHarness(options?: {
+  deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
+  resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   /**
    * Set to `false` to construct the controller WITHOUT an
    * `onBindingChanged` callback. Used by tests that verify the
@@ -4111,6 +4182,9 @@ async function createHarness(options?: {
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
+      : {}),
+    ...(options?.resolveDeliveryScope
+      ? { resolveDeliveryScope: options.resolveDeliveryScope }
       : {}),
     deliver: vi.fn(
       options?.deliver ??
@@ -4265,6 +4339,7 @@ async function createHarness(options?: {
     adapter,
     authorizedActorIds: ["user-1"],
     backend,
+    deliveryBudget: options?.deliveryBudget,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),

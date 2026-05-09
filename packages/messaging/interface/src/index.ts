@@ -151,6 +151,16 @@ export type MessagingRateLimitInfo = {
   observedAt?: number;
 };
 
+/**
+ * Describes where outbound 429 retry ownership lives for a provider client.
+ * `sdk-managed` is diagnostic only; shipped adapters should externalize SDK
+ * queues or use direct calls so the desktop budget can preserve priority slots.
+ */
+export type MessagingClientRateLimitStrategy =
+  | "externalized"
+  | "direct"
+  | "sdk-managed";
+
 export type MessagingReconnectInfo =
   | {
       state: "started";
@@ -662,6 +672,13 @@ export type MessagingDeliveryResult = {
   channel: MessagingChannelKind;
   surface?: MessagingSurfaceRef;
   errorMessage?: string;
+  /**
+   * Structured provider rate-limit feedback for this delivery attempt.
+   * When present, the desktop controller should feed it back through
+   * its external admission budget instead of letting provider SDKs own
+   * hidden retry queues.
+   */
+  rateLimit?: MessagingRateLimitInfo;
   deliveredAt: number;
 };
 

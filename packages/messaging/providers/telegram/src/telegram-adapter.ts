@@ -12,6 +12,7 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingFilePart,
+  MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingRateLimitInfo,
@@ -340,6 +341,7 @@ export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -365,6 +367,7 @@ export type TelegramProviderAdapter = {
 
 export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       maxActions: 100,
@@ -640,9 +643,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return await this.deliverSurface(intent);
     } catch (error) {
       const target = this.resolveTarget(intent);
-      if (target) {
-        this.emitRateLimitFromError(error, target);
-      }
+      const rateLimit = target
+        ? this.emitRateLimitFromError(error, target)
+        : undefined;
       this.options.logger?.warn?.(
         `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
       );
@@ -651,6 +654,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
       };
     }
@@ -965,14 +969,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         };
       }
       const retryAfterMs = telegramRetryAfterMs(error);
+      let rateLimit: MessagingRateLimitInfo | undefined;
       if (retryAfterMs !== undefined) {
         this.blockStreamRateLimitTarget(target, retryAfterMs);
-        this.emitRateLimit({
+        rateLimit = {
           scope: this.rateLimitScopeForTarget(target),
           retryAfterMs,
           message: errorMessage(error),
           observedAt: this.now(),
-        });
+        };
+        this.emitRateLimit(rateLimit);
         this.options.logger?.warn?.(
           `telegram stream update rate limited retryAfterMs=${retryAfterMs} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
         );
@@ -982,6 +988,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1987,17 +1994,19 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: TelegramDeliveryTarget,
-  ): void {
+  ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = telegramRetryAfterMs(error);
     if (retryAfterMs === undefined) {
-      return;
+      return undefined;
     }
-    this.emitRateLimit({
+    const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
       retryAfterMs,
       message: errorMessage(error),
       observedAt: this.now(),
-    });
+    };
+    this.emitRateLimit(info);
+    return info;
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {

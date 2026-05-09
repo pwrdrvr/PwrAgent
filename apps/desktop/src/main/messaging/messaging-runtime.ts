@@ -26,6 +26,7 @@ import type {
   MessagingBindingRecord,
   MessagingCapabilityProfile,
   MessagingChannelKind,
+  MessagingClientRateLimitStrategy,
   MessagingCredentialValidationResult,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
@@ -60,6 +61,7 @@ export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
+  clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -701,6 +703,12 @@ export class DesktopMessagingRuntime {
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorizedActorIdSet = new Set(authorizedActorIds);
     const deliveryBudget = new MessagingDeliveryBudget();
+    if (adapter.clientRateLimitStrategy === "sdk-managed") {
+      messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
+        channel: adapter.channel,
+        clientRateLimitStrategy: adapter.clientRateLimitStrategy,
+      });
+    }
     const controller = new MessagingController({
       adapter,
       attachmentPolicy: config.attachmentPolicy,

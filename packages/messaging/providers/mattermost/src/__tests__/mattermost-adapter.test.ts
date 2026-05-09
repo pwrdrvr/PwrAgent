@@ -172,6 +172,7 @@ describe("MattermostAdapter — capability profile", () => {
       websocketClient: fakeWebSocketClient(),
     });
     expect(adapter.channel).toBe("mattermost");
+    expect(adapter.clientRateLimitStrategy).toBe("direct");
   });
 
   it("emits rejected activity for unauthorized actionable posts", async () => {

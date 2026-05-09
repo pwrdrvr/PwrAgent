@@ -28,6 +28,7 @@ import type {
   MessagingRateLimitInfo,
   MessagingCallbackHandleStore,
   MessagingRejectedInboundEvent,
+  MessagingClientRateLimitStrategy,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -240,6 +241,7 @@ export type DiscordProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -256,6 +258,7 @@ export type DiscordProviderAdapter = {
 
 export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       maxActions: 25,
@@ -551,7 +554,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       };
     } catch (error) {
       const message = errorMessage(error);
-      this.emitRateLimitFromError(error, target);
+      const rateLimit = this.emitRateLimitFromError(error, target);
       this.options.logger?.warn?.(
         `discord deliver failed kind=${intent.kind} channel=${target.channelId} error=${message}`,
       );
@@ -560,6 +563,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: message,
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
       };
     }
@@ -636,11 +640,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         surface: this.surfaceForMessage(message, target),
       };
     } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(error, target);
       return {
         channel: this.channel,
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1289,17 +1295,19 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private emitRateLimitFromError(
     error: unknown,
     target: { channelId: string; guildId?: string },
-  ): void {
+  ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);
     if (retryAfterMs === undefined) {
-      return;
+      return undefined;
     }
-    this.emitRateLimit({
+    const info: MessagingRateLimitInfo = {
       scope: this.rateLimitScopeForTarget(target),
       retryAfterMs,
       message: errorMessage(error),
       observedAt: this.now(),
-    });
+    };
+    this.emitRateLimit(info);
+    return info;
   }
 
   private emitRateLimit(info: MessagingRateLimitInfo): void {
@@ -1881,7 +1889,10 @@ class DiscordRestApi implements DiscordApi {
   private readonly rest: REST;
 
   constructor(botToken: string) {
-    this.rest = new REST({ version: "10" }).setToken(botToken);
+    this.rest = new REST({
+      rejectOnRateLimit: () => true,
+      version: "10",
+    }).setToken(botToken);
   }
 
   async createApplicationCommand(

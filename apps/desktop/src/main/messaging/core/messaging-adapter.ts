@@ -35,6 +35,7 @@ import type {
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
   MessagingCapabilityProfile,
+  MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingActorIdentity,
   MessagingAdapterState,
@@ -62,6 +63,7 @@ export type MessagingConversationTitleUpdateResult = {
 
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
+  clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
