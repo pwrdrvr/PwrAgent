@@ -27,7 +27,7 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
     ).toBeVisible();
     await expect(
       app.window.getByRole("button", {
-        name: "Use current branch. Continue on codex/current-branch",
+        name: "Accept current branch as correct. Continue working on codex/current-branch without further warnings",
       }),
     ).toBeVisible();
 
@@ -93,7 +93,7 @@ test("updates the expected branch when the user accepts the current branch", asy
   try {
     await app.window
       .getByRole("button", {
-        name: "Use current branch. Continue on codex/current-branch",
+        name: "Accept current branch as correct. Continue working on codex/current-branch without further warnings",
       })
       .click();
 

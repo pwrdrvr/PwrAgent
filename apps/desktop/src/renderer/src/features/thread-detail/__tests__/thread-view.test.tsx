@@ -2795,7 +2795,7 @@ describe("ThreadView", () => {
       }),
     ).toBeInTheDocument();
     const useCurrentBranchButton = within(dialog).getByRole("button", {
-      name: "Use current branch. Continue on main",
+      name: "Accept current branch as correct. Continue working on main without further warnings",
     });
 
     fireEvent.click(useCurrentBranchButton);

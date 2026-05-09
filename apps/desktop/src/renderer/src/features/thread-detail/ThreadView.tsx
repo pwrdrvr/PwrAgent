@@ -1730,8 +1730,7 @@ export function ThreadView(props: ThreadViewProps) {
             <p>
               If earlier turns made commits on{" "}
               <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
-              on <code>{branchDriftDialog.observedBranch}</code>. Continuing now operates on the
-              current branch.
+              on <code>{branchDriftDialog.observedBranch}</code>.
             </p>
             <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
               <div className="workspace-handoff-dialog__choice">
@@ -1806,7 +1805,7 @@ export function ThreadView(props: ThreadViewProps) {
                   </p>
                 </section>
                 <button
-                  aria-label={`Use current branch. Continue on ${branchDriftDialog.observedBranch}`}
+                  aria-label={`Accept current branch as correct. Continue working on ${branchDriftDialog.observedBranch} without further warnings`}
                   className="button button--primary workspace-handoff-dialog__action"
                   disabled={branchDriftBusy}
                   type="button"
@@ -1832,8 +1831,11 @@ export function ThreadView(props: ThreadViewProps) {
                     }
                   }}
                 >
-                  <span>Use Current Branch</span>
-                  <small>Continue on {branchDriftDialog.observedBranch}</small>
+                  <span>Accept Current Branch as Correct</span>
+                  <small>
+                    Continue working on {branchDriftDialog.observedBranch} without further
+                    warnings
+                  </small>
                 </button>
               </div>
             </div>
