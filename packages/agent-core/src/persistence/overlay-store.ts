@@ -503,6 +503,7 @@ export class OverlayStore {
   async setThreadObservedBranch(params: {
     backend: ThreadOverlayState["backend"];
     branch?: string;
+    expectedBranch?: string;
     threadId: string;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
@@ -515,19 +516,23 @@ export class OverlayStore {
       };
       const previousObservedBranch = current.observedGitBranch?.trim();
       const nextObservedBranch = params.branch?.trim();
-      const legacyHandoffExpectedBranch =
+      const fallbackExpectedBranch =
         !current.gitBranch?.trim() &&
         previousObservedBranch &&
         nextObservedBranch &&
-        previousObservedBranch !== nextObservedBranch &&
-        hasHandoffWorkspace(current.extraLinkedDirectories)
+        previousObservedBranch !== nextObservedBranch
           ? previousObservedBranch
+          : undefined;
+      const requestedExpectedBranch =
+        params.expectedBranch?.trim() &&
+        params.expectedBranch.trim() !== nextObservedBranch
+          ? params.expectedBranch.trim()
           : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         gitBranch: current.gitBranch?.trim()
           ? current.gitBranch
-          : legacyHandoffExpectedBranch,
+          : requestedExpectedBranch ?? fallbackExpectedBranch,
         observedGitBranch: params.branch,
       };
       data.threads[threadKey] = nextState;
@@ -677,14 +682,4 @@ export class OverlayStore {
     await writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
     await rename(tempPath, this.filePath);
   }
-}
-
-function hasHandoffWorkspace(
-  directories: ThreadOverlayState["extraLinkedDirectories"] = [],
-): boolean {
-  return directories.some(
-    (directory) =>
-      directory.id.startsWith("pwragent-handoff:") ||
-      directory.id.startsWith("pwragnt-handoff:"),  // legacy prefix
-  );
 }

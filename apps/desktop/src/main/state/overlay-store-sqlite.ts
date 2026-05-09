@@ -480,6 +480,7 @@ export class SqliteOverlayStore {
   async setThreadObservedBranch(params: {
     backend: ThreadOverlayState["backend"];
     branch?: string;
+    expectedBranch?: string;
     threadId: string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -491,19 +492,23 @@ export class SqliteOverlayStore {
     };
     const previousObservedBranch = current.observedGitBranch?.trim();
     const nextObservedBranch = params.branch?.trim();
-    const legacyHandoffExpectedBranch =
+    const fallbackExpectedBranch =
       !current.gitBranch?.trim() &&
       previousObservedBranch &&
       nextObservedBranch &&
-      previousObservedBranch !== nextObservedBranch &&
-      hasHandoffWorkspace(current.extraLinkedDirectories)
+      previousObservedBranch !== nextObservedBranch
         ? previousObservedBranch
+        : undefined;
+    const requestedExpectedBranch =
+      params.expectedBranch?.trim() &&
+      params.expectedBranch.trim() !== nextObservedBranch
+        ? params.expectedBranch.trim()
         : undefined;
     const nextState: ThreadOverlayState = {
       ...current,
       gitBranch: current.gitBranch?.trim()
         ? current.gitBranch
-        : legacyHandoffExpectedBranch,
+        : requestedExpectedBranch ?? fallbackExpectedBranch,
       observedGitBranch: params.branch,
     };
     this.putThread(threadKey, nextState);
@@ -696,12 +701,6 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
     directory.id.startsWith("pwragent-handoff:") ||
     directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
   );
-}
-
-function hasHandoffWorkspace(
-  directories: ThreadOverlayState["extraLinkedDirectories"] = [],
-): boolean {
-  return directories.some(isHandoffDirectory);
 }
 
 export type OverlayStoreLike = Pick<

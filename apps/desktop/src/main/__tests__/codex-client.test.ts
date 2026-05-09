@@ -1431,7 +1431,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("surfaces the locally observed branch when protocol metadata omits the branch name", async () => {
+  it("keeps protocol branch metadata separate from the locally observed branch", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1457,7 +1457,7 @@ describe("CodexAppServerClient", () => {
 
     expect(thread).toMatchObject({
       id: "thread-2",
-      gitBranch: "main",
+      gitBranch: undefined,
       observedGitBranch: "main",
     });
 
@@ -1497,7 +1497,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("shows HEAD for detached worktrees even when session metadata still names a source branch", async () => {
+  it("keeps the protocol branch when a workspace is detached at HEAD", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1525,7 +1525,7 @@ describe("CodexAppServerClient", () => {
 
     expect(thread).toMatchObject({
       id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
-      gitBranch: "HEAD",
+      gitBranch: "codex/plan-slidev-theme-extraction",
       observedGitBranch: "HEAD",
     });
 

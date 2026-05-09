@@ -187,20 +187,9 @@ describe("OverlayStore", () => {
     });
   });
 
-  it("promotes legacy observed handoff branch metadata before recording checkout drift", async () => {
+  it("promotes legacy observed branch metadata before recording checkout drift", async () => {
     const store = await createStore();
 
-    await store.addLinkedDirectory({
-      backend: "codex",
-      threadId: "thread-1",
-      directory: {
-        id: "pwragent-handoff:codex:thread-1",
-        kind: "worktree",
-        label: "repo",
-        path: "/repo",
-        worktreePath: "/repo/.worktrees/repo-feature",
-      },
-    });
     await store.setThreadObservedBranch({
       backend: "codex",
       threadId: "thread-1",
@@ -218,6 +207,24 @@ describe("OverlayStore", () => {
       backend: "codex",
       threadId: "thread-1",
       branch: "feature/current",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "feature/expected",
+      observedGitBranch: "feature/current",
+    });
+  });
+
+  it("uses the caller supplied expected branch when recording checkout drift", async () => {
+    const store = await createStore();
+
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feature/current",
+      expectedBranch: "feature/expected",
     });
 
     await expect(

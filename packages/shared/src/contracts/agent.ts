@@ -162,6 +162,7 @@ export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
 export type CheckThreadBranchDriftRequest = {
   backend: AppServerBackendKind;
+  expectedBranch?: string;
   threadId: ThreadIdentifier;
 };
 

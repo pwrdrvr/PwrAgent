@@ -2844,17 +2844,6 @@ type EnrichedCodexThread = AppServerThreadSummary & {
   gitOriginUrl?: string;
 };
 
-function resolveDisplayGitBranch(params: {
-  gitBranch?: string;
-  observedGitBranch?: string;
-}): string | undefined {
-  if (params.observedGitBranch === "HEAD") {
-    return "HEAD";
-  }
-
-  return params.gitBranch ?? params.observedGitBranch;
-}
-
 function hydrateMissingLinkedDirectoriesFromSiblingRepos(
   threads: EnrichedCodexThread[]
 ): EnrichedCodexThread[] {
@@ -3708,10 +3697,7 @@ export class CodexAppServerClient {
         return {
           ...thread,
           projectKey,
-          gitBranch: resolveDisplayGitBranch({
-            gitBranch: thread.gitBranch,
-            observedGitBranch: enrichment.observedGitBranch,
-          }),
+          gitBranch: thread.gitBranch,
           linkedDirectories: enrichment.linkedDirectories,
           observedGitBranch: enrichment.observedGitBranch,
           source: "codex" as const

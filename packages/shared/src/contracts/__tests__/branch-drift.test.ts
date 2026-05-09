@@ -23,8 +23,8 @@ describe("isBranchDrifted", () => {
     expect(isBranchDrifted("HEAD", "fix/release-skill-squash-merge")).toBe(true);
   });
 
-  it("returns false when observed is HEAD and expected is a named branch", () => {
-    expect(isBranchDrifted("main", "HEAD")).toBe(false);
+  it("returns true when observed is HEAD and expected is a named branch", () => {
+    expect(isBranchDrifted("main", "HEAD")).toBe(true);
   });
 
   it("returns false when both are HEAD", () => {

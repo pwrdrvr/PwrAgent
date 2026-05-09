@@ -67,6 +67,49 @@ function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
   return directories.map(normalizeLinkedDirectoryKind).some(isHandoffDirectory);
 }
 
+function resolveNavigationGitBranch(params: {
+  overlay?: ThreadOverlayState;
+  thread: AppServerThreadSummary;
+}): string | undefined {
+  const overlayBranch = params.overlay?.gitBranch?.trim();
+  if (overlayBranch) {
+    return overlayBranch;
+  }
+
+  const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
+  const threadObservedBranch = params.thread.observedGitBranch?.trim();
+  if (
+    overlayObservedBranch &&
+    threadObservedBranch &&
+    overlayObservedBranch !== threadObservedBranch
+  ) {
+    return overlayObservedBranch;
+  }
+
+  if (
+    overlayObservedBranch &&
+    hasHandoffWorkspace(params.overlay?.extraLinkedDirectories ?? [])
+  ) {
+    return overlayObservedBranch;
+  }
+
+  return params.thread.gitBranch;
+}
+
+function resolveNavigationObservedBranch(params: {
+  overlay?: ThreadOverlayState;
+  thread: AppServerThreadSummary;
+}): string | undefined {
+  const overlayBranch = params.overlay?.gitBranch?.trim();
+  const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
+
+  if (overlayBranch && overlayObservedBranch) {
+    return overlayObservedBranch;
+  }
+
+  return params.thread.observedGitBranch ?? params.overlay?.observedGitBranch;
+}
+
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
@@ -90,17 +133,14 @@ export function materializeNavigationThreads(params: {
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
-    const overlayGitBranch =
-      overlay?.gitBranch ??
-      (overlay?.observedGitBranch && hasHandoffWorkspace(overlay.extraLinkedDirectories)
-        ? overlay.observedGitBranch
-        : undefined);
+    const gitBranch = resolveNavigationGitBranch({ overlay, thread });
+    const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
     const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
 
     return {
       ...thread,
-      gitBranch: overlayGitBranch ?? thread.gitBranch,
-      observedGitBranch: overlay?.observedGitBranch ?? thread.observedGitBranch,
+      gitBranch,
+      observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
       queuedExecutionMode: overlay?.queuedExecutionMode,
