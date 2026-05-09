@@ -1158,7 +1158,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           id: discordCallbackRecordId(customId, intent),
           actionId: action.id,
           allowedActorIds: callbackAllowedActorIds(intent),
-          bindingId: intent.bindingId,
+          bindingId: callbackBindingId(intent),
           browseSessionId: browseSessionIdForIntent(intent),
           channel: intent.audit.channel,
           createdAt: now,
@@ -2228,6 +2228,10 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
   return intent.allowedActorIds && intent.allowedActorIds.length > 0
     ? intent.allowedActorIds
     : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
 }
 
 function discordCallbackRecordId(

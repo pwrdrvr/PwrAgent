@@ -305,6 +305,7 @@ describe("discord adapter", () => {
             parentId: TEST_GUILD_ID,
           },
         },
+        bindingId: "binding-1",
         occurredAt: 1234,
       },
       allowedActorIds: [TEST_USER_ID, TEST_OTHER_USER_ID],
@@ -328,6 +329,7 @@ describe("discord adapter", () => {
       expect.objectContaining({
         actionId: "permissions",
         allowedActorIds: [TEST_USER_ID, TEST_OTHER_USER_ID],
+        bindingId: "binding-1",
         handle: customId,
         value: { mode: "review" },
       }),
@@ -440,7 +442,6 @@ describe("discord adapter", () => {
         },
         occurredAt: 1234,
       },
-      bindingId: "binding-1",
     });
     await adapter.deliver({
       ...baseIntent,
@@ -458,7 +459,6 @@ describe("discord adapter", () => {
         },
         occurredAt: 1234,
       },
-      bindingId: "binding-2",
     });
 
     const firstCustomId =
@@ -468,6 +468,18 @@ describe("discord adapter", () => {
     expect(firstCustomId).toMatch(/^dc:/);
     expect(secondCustomId).toBe(firstCustomId);
     expect(store.upsertCallbackHandle).toHaveBeenCalledTimes(2);
+    expect(store.upsertCallbackHandle).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        bindingId: "binding-1",
+      }),
+    );
+    expect(store.upsertCallbackHandle).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        bindingId: "binding-2",
+      }),
+    );
 
     const events: MessagingInboundEvent[] = [];
     const gateway = new TestDiscordGateway();
