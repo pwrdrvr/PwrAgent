@@ -948,6 +948,95 @@ describe("Composer", () => {
     });
   });
 
+  it("restores a pending steer after switching thread props away and back", async () => {
+    const draftStore = createComposerDraftStore();
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const baseProps = {
+      activeTurnId: "turn-1",
+      backends: [
+        {
+          ...backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                supportsReasoning: true,
+                supportsSteering: true,
+              },
+            ],
+          }),
+          capabilities: {
+            ...backendSummary("codex").capabilities,
+            steerTurn: true,
+          },
+        },
+      ],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        steerTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+    };
+    const threadA = {
+      id: "thread-1",
+      title: "Steerable thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadB = {
+      ...threadA,
+      id: "thread-2",
+      title: "Another thread",
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        thread={threadA}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Keep steering through prop navigation" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+
+    expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
+      "Keep steering through prop navigation"
+    );
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadB}
+      />
+    );
+    expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
+
+    rerender(
+      <Composer
+        {...baseProps}
+        thread={threadA}
+      />
+    );
+
+    expect(screen.getByLabelText("Pending steer message")).toHaveTextContent(
+      "Keep steering through prop navigation"
+    );
+    expect(steerTurn).not.toHaveBeenCalled();
+  });
+
   it("sends a restored pending steer as the next turn when the active turn cleared while away", async () => {
     const draftStore = createComposerDraftStore();
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({

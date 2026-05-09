@@ -1320,7 +1320,6 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setPendingSteer(undefined);
   }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
 
   useEffect(() => {
