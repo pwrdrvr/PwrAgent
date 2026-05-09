@@ -3,7 +3,10 @@ import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
 } from "../index";
-import { MESSAGING_SURFACE_INTENT_KINDS } from "../index";
+import {
+  MESSAGING_SURFACE_INTENT_KINDS,
+  extractMessagingPairingToken,
+} from "../index";
 
 type FakeProvider = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
@@ -70,5 +73,12 @@ describe("messaging interface package", () => {
     ]);
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("message");
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("stream_update");
+  });
+
+  it("extracts pairing tokens from text and slash command forms", () => {
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+
+    expect(extractMessagingPairingToken(`pwragent_pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`/pwragent_pair ${token}`)).toBe(token);
   });
 });

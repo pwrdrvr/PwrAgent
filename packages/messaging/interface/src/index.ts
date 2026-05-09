@@ -80,7 +80,8 @@ export type MessagingStreamingResponseMode = "inherit" | "enabled" | "disabled";
 export function extractMessagingPairingToken(text: string): string | undefined {
   const parts = text.trim().split(/\s+/);
   for (let index = 0; index < parts.length - 1; index += 1) {
-    if (parts[index]?.toLowerCase() !== MESSAGING_PAIRING_COMMAND) {
+    const commandCandidate = parts[index]?.replace(/^\//, "");
+    if (commandCandidate?.toLowerCase() !== MESSAGING_PAIRING_COMMAND) {
       continue;
     }
     const candidate = parts[index + 1] ?? "";
