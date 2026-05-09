@@ -46,6 +46,17 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  SLACK_APP_TOKEN_ENV,
+  SLACK_AUTHORIZED_USER_IDS_ENV,
+  SLACK_AUTHORIZED_WORKSPACES_ENV,
+  SLACK_BOT_TOKEN_ENV,
+  SLACK_ENABLED_ENV,
+  SLACK_INBOUND_MODE_ENV,
+  SLACK_REGISTER_SLASH_COMMANDS_ENV,
+  SLACK_SIGNING_SECRET_ENV,
+  SLACK_SLASH_COMMAND_PREFIX_ENV,
+  SLACK_STREAMING_RESPONSES_ENV,
+  SLACK_WORKSPACE_URL_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -123,6 +134,21 @@ export class DesktopSettingsService {
     const mattermostHmacSecret = await this.readSecretState(
       "mattermostHmacSecret",
       MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+      secretStorage.available,
+    );
+    const slackBotToken = await this.readSecretState(
+      "slackBotToken",
+      SLACK_BOT_TOKEN_ENV,
+      secretStorage.available,
+    );
+    const slackAppToken = await this.readSecretState(
+      "slackAppToken",
+      SLACK_APP_TOKEN_ENV,
+      secretStorage.available,
+    );
+    const slackSigningSecret = await this.readSecretState(
+      "slackSigningSecret",
+      SLACK_SIGNING_SECRET_ENV,
       secretStorage.available,
     );
     const grokApiKey = await this.readSecretState(
@@ -285,6 +311,46 @@ export class DesktopSettingsService {
             MATTERMOST_AUTHORIZED_USER_IDS_ENV,
           ),
         },
+        slack: {
+          enabled: this.resolveBoolean(
+            config.messaging?.slack?.enabled,
+            false,
+            SLACK_ENABLED_ENV,
+          ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.slack?.streamingResponses,
+            false,
+            SLACK_STREAMING_RESPONSES_ENV,
+          ),
+          botToken: slackBotToken,
+          appToken: slackAppToken,
+          signingSecret: slackSigningSecret,
+          workspaceUrl: this.resolveString(
+            config.messaging?.slack?.workspaceUrl,
+            SLACK_WORKSPACE_URL_ENV,
+          ),
+          inboundMode: this.resolveSlackInboundMode(
+            config.messaging?.slack?.inboundMode,
+          ),
+          slashCommandPrefix: this.resolveStringWithDefault(
+            config.messaging?.slack?.slashCommandPrefix,
+            "pwragent_",
+            SLACK_SLASH_COMMAND_PREFIX_ENV,
+          ),
+          registerSlashCommands: this.resolveBoolean(
+            config.messaging?.slack?.registerSlashCommands,
+            false,
+            SLACK_REGISTER_SLASH_COMMANDS_ENV,
+          ),
+          authorizedUserIds: this.resolveList(
+            config.messaging?.slack?.authorizedUserIds,
+            SLACK_AUTHORIZED_USER_IDS_ENV,
+          ),
+          authorizedWorkspaces: this.resolveList(
+            config.messaging?.slack?.authorizedWorkspaces,
+            SLACK_AUTHORIZED_WORKSPACES_ENV,
+          ),
+        },
       },
       models: {
         codex: {
@@ -373,6 +439,18 @@ export class DesktopSettingsService {
       ?? this.readConfig().config.messaging?.mattermost?.serverUrl
       ?? undefined
     );
+  }
+
+  resolveSlackBotTokenSync(): string | undefined {
+    return this.resolveSecretSync("slackBotToken", SLACK_BOT_TOKEN_ENV);
+  }
+
+  resolveSlackAppTokenSync(): string | undefined {
+    return this.resolveSecretSync("slackAppToken", SLACK_APP_TOKEN_ENV);
+  }
+
+  resolveSlackSigningSecretSync(): string | undefined {
+    return this.resolveSecretSync("slackSigningSecret", SLACK_SIGNING_SECRET_ENV);
   }
 
   resolveGrokApiKeySync(): string | undefined {
@@ -581,6 +659,27 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSlackInboundMode(
+    configValue: "socket" | "events" | undefined,
+  ): DesktopSettingsValue<"socket" | "events"> {
+    const envValue = readEnvString(this.env, SLACK_INBOUND_MODE_ENV);
+    if (envValue === "socket" || envValue === "events") {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? "socket",
+      source: configValue === undefined ? "default" : "config",
+      ...(envValue !== undefined
+        ? { error: `Invalid Slack inbound mode for ${SLACK_INBOUND_MODE_ENV}` }
+        : {}),
     };
   }
 

@@ -1,5 +1,6 @@
 import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
 import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
+import type { SlackMessagingConfig } from "@pwragent/messaging-provider-slack";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
 import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
@@ -25,6 +26,17 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  SLACK_APP_TOKEN_ENV,
+  SLACK_AUTHORIZED_USER_IDS_ENV,
+  SLACK_AUTHORIZED_WORKSPACES_ENV,
+  SLACK_BOT_TOKEN_ENV,
+  SLACK_ENABLED_ENV,
+  SLACK_INBOUND_MODE_ENV,
+  SLACK_REGISTER_SLASH_COMMANDS_ENV,
+  SLACK_SIGNING_SECRET_ENV,
+  SLACK_SLASH_COMMAND_PREFIX_ENV,
+  SLACK_STREAMING_RESPONSES_ENV,
+  SLACK_WORKSPACE_URL_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -55,6 +67,17 @@ export {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  SLACK_APP_TOKEN_ENV,
+  SLACK_AUTHORIZED_USER_IDS_ENV,
+  SLACK_AUTHORIZED_WORKSPACES_ENV,
+  SLACK_BOT_TOKEN_ENV,
+  SLACK_ENABLED_ENV,
+  SLACK_INBOUND_MODE_ENV,
+  SLACK_REGISTER_SLASH_COMMANDS_ENV,
+  SLACK_SIGNING_SECRET_ENV,
+  SLACK_SLASH_COMMAND_PREFIX_ENV,
+  SLACK_STREAMING_RESPONSES_ENV,
+  SLACK_WORKSPACE_URL_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -68,6 +91,7 @@ export type DesktopMessagingConfig = {
   enabled?: boolean;
   inputDebounceMs?: number;
   mattermost?: MattermostMessagingConfig;
+  slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
@@ -79,6 +103,9 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveTelegramBotTokenSync"
   | "resolveMattermostBotTokenSync"
   | "resolveMattermostHmacSecretSync"
+  | "resolveSlackAppTokenSync"
+  | "resolveSlackBotTokenSync"
+  | "resolveSlackSigningSecretSync"
 >;
 
 export type DesktopMessagingConfigLoadOptions = {
@@ -114,6 +141,22 @@ export function loadDesktopMessagingConfig(
   const mattermostRegisterSlashCommandsEnv = readEnvBoolean(
     env,
     MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  ).value;
+  const slackBotToken = readEnv(env, SLACK_BOT_TOKEN_ENV);
+  const slackAppToken = readEnv(env, SLACK_APP_TOKEN_ENV);
+  const slackSigningSecret = readEnv(env, SLACK_SIGNING_SECRET_ENV);
+  const slackWorkspaceUrl = readEnv(env, SLACK_WORKSPACE_URL_ENV);
+  const slackInboundMode = normalizeSlackRuntimeInboundMode(
+    readSlackInboundMode(env[SLACK_INBOUND_MODE_ENV]),
+  );
+  const slackAuthorizedActorIds = parseContactList(env[SLACK_AUTHORIZED_USER_IDS_ENV]);
+  const slackAuthorizedWorkspaces = parseContactList(
+    env[SLACK_AUTHORIZED_WORKSPACES_ENV],
+  );
+  const slackSlashCommandPrefix = readEnv(env, SLACK_SLASH_COMMAND_PREFIX_ENV);
+  const slackRegisterSlashCommandsEnv = readEnvBoolean(
+    env,
+    SLACK_REGISTER_SLASH_COMMANDS_ENV,
   ).value;
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
@@ -180,6 +223,32 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
+    ...(slackBotToken
+      && slackAppToken
+      ? {
+          slack: {
+            channel: "slack" as const,
+            enabled: true,
+            botToken: slackBotToken,
+            appToken: slackAppToken,
+            ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
+            ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
+            inboundMode: slackInboundMode,
+            ...(slackSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: slackSlashCommandPrefix }
+              : {}),
+            ...(slackRegisterSlashCommandsEnv !== undefined
+              ? { registerSlashCommands: slackRegisterSlashCommandsEnv }
+              : {}),
+            streamingResponses: readEnvBoolean(
+              env,
+              SLACK_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
+            authorizedActorIds: slackAuthorizedActorIds,
+            authorizedTeamIds: slackAuthorizedWorkspaces,
+          },
+        }
+      : {}),
   };
 }
 
@@ -200,6 +269,12 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostHmacSecret =
     envConfig.mattermost?.callbackHmacSecret
     ?? settings.resolveMattermostHmacSecretSync();
+  const slackBotToken =
+    envConfig.slack?.botToken ?? settings.resolveSlackBotTokenSync();
+  const slackAppToken =
+    envConfig.slack?.appToken ?? settings.resolveSlackAppTokenSync();
+  const slackSigningSecret =
+    envConfig.slack?.signingSecret ?? settings.resolveSlackSigningSecretSync();
   const telegramAuthorizedActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
@@ -215,6 +290,12 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostAuthorizedActorIds =
     envConfig.mattermost?.authorizedActorIds
     ?? snapshot.messaging.mattermost.authorizedUserIds.value;
+  const slackAuthorizedActorIds =
+    envConfig.slack?.authorizedActorIds
+    ?? snapshot.messaging.slack.authorizedUserIds.value;
+  const slackAuthorizedTeamIds =
+    envConfig.slack?.authorizedTeamIds
+    ?? snapshot.messaging.slack.authorizedWorkspaces.value;
   const mattermostServerUrlRaw =
     envConfig.mattermost?.serverUrl
     || snapshot.messaging.mattermost.serverUrl.value
@@ -239,6 +320,20 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostRegisterSlashCommands =
     envConfig.mattermost?.registerSlashCommands
     ?? snapshot.messaging.mattermost.registerSlashCommands.value;
+  const slackWorkspaceUrl =
+    envConfig.slack?.workspaceUrl
+    || snapshot.messaging.slack.workspaceUrl.value
+    || undefined;
+  const slackInboundMode = normalizeSlackRuntimeInboundMode(
+    envConfig.slack?.inboundMode ?? snapshot.messaging.slack.inboundMode.value,
+    log,
+  );
+  const slackSlashCommandPrefix =
+    envConfig.slack?.slashCommandPrefix
+    ?? snapshot.messaging.slack.slashCommandPrefix.value;
+  const slackRegisterSlashCommands =
+    envConfig.slack?.registerSlashCommands
+    ?? snapshot.messaging.slack.registerSlashCommands.value;
   const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
     imageProfile: snapshot.messaging.attachments.imageProfile.value,
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
@@ -265,6 +360,12 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.mattermost,
     env,
     MATTERMOST_ENABLED_ENV,
+  );
+  const slackEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.slack.enabled.value,
+    envConfig.slack,
+    env,
+    SLACK_ENABLED_ENV,
   );
 
   const telegramConfig = messagingEnabled && buildChannelConfig({
@@ -344,6 +445,36 @@ export async function loadDesktopMessagingConfigFromSettings(
         }
       : {};
 
+  const slackConfig =
+    messagingEnabled
+    && buildChannelConfig({
+      log,
+      channel: "slack",
+      enabled: slackEnabled,
+      hasToken: Boolean(slackBotToken) && Boolean(slackAppToken),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: slackAuthorizedActorIds.length,
+    })
+      ? {
+          slack: {
+            channel: "slack" as const,
+            enabled: true,
+            botToken: slackBotToken!,
+            appToken: slackAppToken!,
+            ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
+            ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
+            inboundMode: slackInboundMode,
+            ...(slackSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: slackSlashCommandPrefix }
+              : {}),
+            registerSlashCommands: slackRegisterSlashCommands,
+            streamingResponses: snapshot.messaging.slack.streamingResponses.value,
+            authorizedActorIds: slackAuthorizedActorIds,
+            authorizedTeamIds: slackAuthorizedTeamIds,
+          },
+        }
+      : {};
+
   return {
     enabled: messagingEnabled,
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
@@ -352,6 +483,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     ...telegramConfig,
     ...discordConfig,
     ...mattermostConfig,
+    ...slackConfig,
   };
 }
 
@@ -454,6 +586,22 @@ export function redactDesktopMessagingConfig(
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
         }
       : undefined,
+    slack: config.slack
+      ? {
+          channel: config.slack.channel,
+          enabled: config.slack.enabled !== false,
+          botToken: "[REDACTED]",
+          appToken: config.slack.appToken ? "[REDACTED]" : undefined,
+          signingSecret: config.slack.signingSecret ? "[REDACTED]" : undefined,
+          workspaceUrl: config.slack.workspaceUrl,
+          inboundMode: config.slack.inboundMode ?? "socket",
+          slashCommandPrefix: config.slack.slashCommandPrefix ?? "[default]",
+          registerSlashCommands: config.slack.registerSlashCommands ?? false,
+          streamingResponses: config.slack.streamingResponses ?? false,
+          authorizedActorCount: config.slack.authorizedActorIds.length,
+          authorizedWorkspaceCount: config.slack.authorizedTeamIds?.length ?? 0,
+        }
+      : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
 }
@@ -469,6 +617,25 @@ function readEnv(
   fallback?: string,
 ): string | undefined {
   return env[primary]?.trim() || (fallback ? env[fallback]?.trim() : undefined);
+}
+
+function readSlackInboundMode(value: string | undefined): "socket" | "events" | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "socket" || normalized === "events" ? normalized : undefined;
+}
+
+function normalizeSlackRuntimeInboundMode(
+  value: "socket" | "events" | undefined,
+  log?: Pick<ReturnType<typeof getMainLogger>, "warn">,
+): "socket" {
+  if (value === "events") {
+    log?.warn("slack Events API inbound mode is not implemented; using Socket Mode", {
+      channel: "slack",
+      configuredInboundMode: "events",
+      runtimeInboundMode: "socket",
+    });
+  }
+  return "socket";
 }
 
 function parseContactList(value: string | undefined): Array<{

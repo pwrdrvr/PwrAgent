@@ -36,6 +36,7 @@
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
     "@pwragent/messaging-provider-mattermost": "workspace:*",
+    "@pwragent/messaging-provider-slack": "workspace:*",
     "@pwragent/messaging-provider-telegram": "workspace:*",
     "@pwragent/shared": "workspace:*",
     "@tiptap/extension-mention": "^3.22.5",

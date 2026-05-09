@@ -29,6 +29,7 @@ export default defineConfig(({ command }) => {
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",
             "@pwragent/messaging-provider-mattermost",
+            "@pwragent/messaging-provider-slack",
             "@pwragent/messaging-provider-telegram"
           ]
         })

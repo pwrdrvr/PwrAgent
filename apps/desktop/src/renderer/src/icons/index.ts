@@ -5,6 +5,7 @@ export { FolderIcon } from "./FolderIcon";
 export { MattermostIcon } from "./MattermostIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
+export { SlackIcon } from "./SlackIcon";
 export { SmileyIcon } from "./SmileyIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";

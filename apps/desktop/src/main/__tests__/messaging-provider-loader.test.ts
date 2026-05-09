@@ -139,12 +139,18 @@ function createRegistry(
           config.mattermost ? createAdapter("mattermost") : undefined,
       })),
     },
+    slack: {
+      load: vi.fn(async () => ({
+        createAdapter: ({ config }: { config: DesktopMessagingConfig }) =>
+          config.slack ? createAdapter("slack") : undefined,
+      })),
+    },
     ...overrides,
   };
 }
 
 function createAdapter(
-  channel: "telegram" | "discord" | "mattermost",
+  channel: "telegram" | "discord" | "mattermost" | "slack",
 ): DesktopMessagingAdapter {
   return {
     authorizedActorIds: [`${channel}-user`],

@@ -1092,7 +1092,11 @@ export type MattermostCredentialValidationConfig = {
  * `getChat`, Discord REST `GET /users/{id}` / `GET /guilds/{id}`,
  * and Mattermost REST `GET /api/v4/users/{id}`.
  */
-export type MessagingContactLookupKind = "user" | "supergroup" | "guild";
+export type MessagingContactLookupKind =
+  | "user"
+  | "supergroup"
+  | "guild"
+  | "workspace";
 
 export type MessagingContactLookupRequest = {
   id: string;

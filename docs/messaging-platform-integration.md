@@ -1,7 +1,7 @@
 # Messaging Platform Integration
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram, Discord, or Mattermost user can choose a thread, bind
+allowlisted Telegram, Discord, Mattermost, or Slack user can choose a thread, bind
 the current conversation, and send free-form text into that thread. The
 workflow logic is shared; the providers only own transport, formatting,
 callback handles, and platform limits.
@@ -502,12 +502,6 @@ Pin the same value across desktop instances if you ever run multiple
 clients pointed at the same Mattermost workspace; otherwise each
 client's buttons only validate against its own keyring.
 
-> **Note for future-you:** When the Settings UI lands, the desktop
-> will mint and persist the HMAC in macOS Keychain on first run.
-> Until then, env-var pinning is the only stable path. Without it,
-> "buttons stop working after restart" is the most common confused
-> bug report against this adapter.
-
 ### 4. Validate (smoke test checklist)
 
 After the bot is bound, the tunnel is up, and the env vars (including
@@ -642,6 +636,106 @@ should succeed before moving to the next:
     `integration.context.hmac` value. PwrAgent logs
     `mattermost callback HMAC verification failed` and responds 200
     (no info leak). No dispatch happens.
+
+## Slack Setup
+
+Slack is supported with **Socket Mode** as the v1 inbound transport. PwrAgent
+opens an outbound WebSocket to Slack, so desktop users do not need a public
+callback URL or tunnel. Slack's Events API / signed HTTP request path is modeled
+in settings for a future mode, but the adapter currently starts only in Socket
+Mode.
+
+### 1. Create a Slack app
+
+Create one Slack app per PwrAgent desktop bot identity. For a single
+user's desktop app, that means one Slack app named for that user or
+machine (for example, `PwrAgent - hhunt`). If twenty people each run
+their own PwrAgent desktop instance, the safest current deployment is
+twenty Slack apps. Do not share one app token / bot token across many
+desktop instances unless you intentionally want every instance to
+connect as the same bot and risk duplicate event handling.
+
+In Slack's app configuration UI:
+
+1. Create an app for the target workspace.
+2. Go to **Socket Mode first**. Turn on **Enable Socket Mode** before opening
+   Event Subscriptions or Interactivity & Shortcuts. This order is important:
+   if Event Subscriptions or Interactivity is configured first, Slack steers the
+   app toward the older POST Request URL flow, which requires a public callback
+   endpoint and is not the supported PwrAgent v1 path.
+3. In Socket Mode, create an app-level token with the `connections:write` scope.
+   A clear token name is `PwrAgent Socket Mode`. Slack app tokens start with
+   `xapp-`; this is the value for PwrAgent's App Token field.
+4. Add a bot user and install the app to the workspace. Slack bot tokens start
+   with `xoxb-`; this is the value for PwrAgent's Bot Token field.
+5. After Socket Mode is enabled, open Event Subscriptions, enable events, and
+   subscribe the app to message events your deployment needs
+   (`message.channels`, `message.groups`, `message.im`, `message.mpim`, and
+   `app_mention`). With Socket Mode enabled, Slack should show that no Request
+   URL is needed.
+6. After Socket Mode is enabled, open Interactivity & Shortcuts and enable
+   interactivity for Block Kit button clicks. Again, no public Request URL is
+   needed for the Socket Mode path.
+
+Minimum bot scopes for the current adapter shape:
+
+- `chat:write` for outbound messages and updates.
+- `channels:history`, `groups:history`, `im:history`, and `mpim:history` for the
+  conversation types you allow. These history scopes also let PwrAgent fetch
+  the root message for a Slack thread so binding chips can show
+  `#channel/root message` instead of a generic `#channel/Thread` label.
+- `channels:read`, `groups:read`, `im:read`, and `mpim:read` are optional but
+  recommended for conversation labels. Slack events and Block Kit interactions
+  do not reliably include channel names, especially for private channels; with
+  the matching read scope, PwrAgent can call `conversations.info` and label
+  binding chips with the real channel name.
+- `files:read` for inbound file downloads.
+- `files:write` for outbound file delivery.
+- `users:read` is optional but recommended. Slack message events include the
+  sender's stable user ID, but not their display name; with `users:read`,
+  PwrAgent can call `users.info` and label DM bindings / Messaging Activity with
+  the person's Slack profile name. Without it, authorization still works, but
+  the UI falls back to user IDs or generic DM labels.
+- `commands` only if you configure Slack slash commands for the app.
+
+### 2. Configure PwrAgent
+
+**Path A — Desktop Settings UI.** Open Settings → Messaging → Slack. Fill in Bot
+Token and App Token, then leave Inbound Mode set to Socket Mode. Signing Secret
+is optional for Socket Mode, but recommended because PwrAgent uses it as a
+stable local secret for Block Kit button payload validation; use the value from
+Slack **Basic Information → App Credentials → Signing Secret**. Authorized Slack
+user IDs and optional workspace/team IDs can be added immediately if you already
+know them. If you do not, leave the authorized user list empty, enable Slack, DM
+or mention the bot, then open Messaging Activity. PwrAgent starts the adapter in
+discovery mode, discards the unauthorized inbound message, and logs the Slack
+user ID there so you can copy it into the allowlist. The connection-test button
+calls Slack `auth.test` with the bot token.
+
+**Path B — Environment variables.** Env vars override Settings UI values when
+both are present.
+
+```bash
+PWRAGENT_MESSAGING_SLACK_ENABLED=true
+PWRAGENT_MESSAGING_SLACK_BOT_TOKEN=xoxb-...
+PWRAGENT_MESSAGING_SLACK_APP_TOKEN=xapp-...
+PWRAGENT_MESSAGING_SLACK_SIGNING_SECRET=...                    # optional in Socket Mode
+PWRAGENT_MESSAGING_SLACK_AUTHORIZED_USER_IDS=U012ABCDEF0,U099ZZZZZZZ
+PWRAGENT_MESSAGING_SLACK_AUTHORIZED_WORKSPACES=T012ABCDEF0   # optional
+PWRAGENT_MESSAGING_SLACK_WORKSPACE_URL=https://example.slack.com # optional
+PWRAGENT_MESSAGING_SLACK_STREAMING_RESPONSES=false              # optional
+PWRAGENT_MESSAGING_SLACK_REGISTER_SLASH_COMMANDS=false          # reserved
+PWRAGENT_MESSAGING_SLACK_SLASH_COMMAND_PREFIX=pwragent_         # optional
+```
+
+Authorize on stable Slack user IDs (`U…` or enterprise `W…`), not display names
+or handles. Workspace allowlisting uses Slack team IDs (`T…`). Leaving the
+workspace list empty means "accept events from any workspace installation of
+this Slack app." That is fine for a non-distributed one-workspace app, but if
+the app is ever distributed or installed into another workspace, the same Socket
+Mode app token can receive events for those installations. Add your expected
+`T…` workspace ID to make the desktop bot reject events from any other
+workspace before user authorization.
 
 ## Chat SDK Decision
 

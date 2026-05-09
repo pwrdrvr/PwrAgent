@@ -73,6 +73,19 @@ function createSnapshot(
         registerSlashCommands: { value: false, source: "default" },
         authorizedUserIds: { value: [], source: "default" },
       },
+      slack: {
+        enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
+        botToken: { configured: false, source: "unset", writable: true },
+        appToken: { configured: false, source: "unset", writable: true },
+        signingSecret: { configured: false, source: "unset", writable: true },
+        workspaceUrl: { value: "", source: "default" },
+        inboundMode: { value: "socket", source: "default" },
+        slashCommandPrefix: { value: "pwragent_", source: "default" },
+        registerSlashCommands: { value: false, source: "default" },
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedWorkspaces: { value: [], source: "default" },
+      },
       attachments: {
         imageProfile: { value: "medium", source: "default" },
         maxAttachmentBytes: { value: 10485760, source: "default" },
@@ -236,8 +249,8 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
-    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(3);
-    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(3);
+    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(4);
+    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(4);
     fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -388,10 +401,10 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Server URL")).toBeInTheDocument();
     expect(screen.getByText("Callback Base URL")).toBeInTheDocument();
-    expect(screen.getByText("Register slash commands")).toBeInTheDocument();
+    expect(screen.getAllByText("Register slash commands").length).toBeGreaterThan(0);
     // The slash command prefix field should be disabled while
     // registerSlashCommands is off.
-    const prefixInput = screen.getByLabelText("Slash command prefix");
+    const prefixInput = screen.getAllByLabelText("Slash command prefix")[0]!;
     expect(prefixInput).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText("Server URL"), {
@@ -409,7 +422,7 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Register slash commands" }),
+      screen.getAllByRole("switch", { name: "Register slash commands" })[0]!,
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -519,6 +532,112 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByLabelText("Authorized User IDs display name 1"),
     ).toHaveValue("Harold (@huntharo)");
+  });
+
+  it("looks up Slack authorized user display names", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: {
+          ...snapshot.messaging.slack,
+          authorizedUserIds: {
+            value: [{ id: "U079K80HTGS", displayName: "" }],
+            source: "config",
+          },
+        },
+      },
+    });
+    const resolveMessagingContact = vi.fn(async () => ({
+      status: "ok" as const,
+      id: "U079K80HTGS",
+      displayName: "Harold Hunt",
+      handle: "@hhunt",
+    }));
+    const desktopApi = {
+      resolveMessagingContact,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Lookup Authorized User IDs row 1",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(resolveMessagingContact).toHaveBeenCalledWith({
+        platform: "slack",
+        kind: "user",
+        id: "U079K80HTGS",
+      });
+    });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            authorizedUserIds: [{ id: "U079K80HTGS", displayName: "Harold Hunt" }],
+          },
+        },
+      });
+    });
+  });
+
+  it("allows replacing the Slack signing secret while Socket Mode is selected", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const signingSecretInput = screen.getByLabelText("Signing Secret");
+    const signingSecretControls = signingSecretInput.closest(".settings-secret");
+    expect(signingSecretInput).toBeEnabled();
+    expect(signingSecretControls).not.toBeNull();
+
+    fireEvent.change(signingSecretInput, {
+      target: { value: "slack-signing-secret" },
+    });
+    fireEvent.click(
+      within(signingSecretControls as HTMLElement).getByRole("button", {
+        name: "Replace",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "slackSigningSecret",
+        "slack-signing-secret",
+      );
+    });
+  });
+
+  it("does not offer the unimplemented Slack Events API inbound mode", () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: "Socket Mode" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
   });
 
   it("sanitizes manually entered messaging display names before saving", async () => {
@@ -720,7 +839,7 @@ describe("SettingsScreen", () => {
     const desktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => [
         {
-          platform: "telegram" as const,
+          platform: "slack" as const,
           health: "enabled" as const,
           changedAt: 0,
         },
@@ -764,6 +883,8 @@ describe("SettingsScreen", () => {
       expect(bar).not.toBeNull();
       // Specifically inside the title-bar strip, not the nav.
       expect(bar?.closest(".settings-titlebar")).not.toBeNull();
+      expect(bar?.querySelector("img")).not.toBeNull();
+      expect(bar?.querySelector(".messaging-status-chip__fallback")).toBeNull();
     });
   });
 

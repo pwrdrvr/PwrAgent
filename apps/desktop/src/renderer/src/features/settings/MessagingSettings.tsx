@@ -8,6 +8,8 @@ import {
 import {
   validateDiscordSnowflake,
   validateMattermostId,
+  validateSlackTeamId,
+  validateSlackUserId,
   sanitizeMessagingContactLabel,
   validateTelegramPositiveId,
   validateTelegramSupergroupId,
@@ -20,7 +22,7 @@ import {
   type DesktopSettingsSnapshot,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -59,10 +61,14 @@ export function MessagingSettings(props: {
   onSaveMattermost: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["mattermost"]>,
   ) => Promise<void>;
+  onSaveSlack: (
+    patch: NonNullable<DesktopSettingsSnapshot["messaging"]["slack"]>,
+  ) => Promise<void>;
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
   const mattermost = props.snapshot.messaging.mattermost;
+  const slack = props.snapshot.messaging.slack;
   const messagingEnabled = props.snapshot.messaging.enabled;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
@@ -564,6 +570,192 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
+        title="Slack"
+        chip={chipLabelForBotToken(slack.botToken)}
+        chipKind={chipKindForBotToken(slack.botToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={slack.enabled.value}
+            disabled={platformControlsDisabled}
+            label="Enabled"
+            sub="Turn the Slack adapter on or off independently of the global messaging switch."
+            source={sourceBadge(slack.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveSlack({
+                ...slack,
+                enabled: { ...slack.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !slack.botToken.writable}
+            label="Bot Token"
+            sub="Stored in the system keychain. Use a Slack bot token that starts with xoxb-."
+            secret="slackBotToken"
+            state={slack.botToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SecretField
+            disabled={props.saving || !slack.appToken.writable}
+            label="App Token"
+            sub="Stored in the system keychain. Required for Socket Mode; starts with xapp-."
+            secret="slackAppToken"
+            state={slack.appToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates the bot token with Slack auth.test."
+            control={
+              <SettingsTestBlock
+                kind="slack"
+                desktopApi={props.desktopApi}
+                icon={<SlackIcon size={14} />}
+                defaultName="Your bot"
+                defaultSub="auth.test"
+              />
+            }
+          />
+          <TextField
+            disabled={props.saving}
+            label="Workspace URL"
+            sub="Optional display URL for the Slack workspace."
+            help={<code>https://example.slack.com</code>}
+            source={optionalStringSourceBadge(slack.workspaceUrl)}
+            value={slack.workspaceUrl.value}
+            onSave={(workspaceUrl) => {
+              void props.onSaveSlack({
+                ...slack,
+                workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Inbound Mode"
+            sub="Socket Mode keeps Slack callbacks on an outbound WebSocket. Events API is reserved for a future HTTP callback path."
+            options={SLACK_INBOUND_MODE_OPTIONS}
+            source={sourceBadge(slack.inboundMode)}
+            value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
+            onChange={(inboundMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                inboundMode: { ...slack.inboundMode, value: inboundMode },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !slack.signingSecret.writable}
+            label="Signing Secret"
+            sub="Optional for Socket Mode button validation. Required for future Events API mode."
+            secret="slackSigningSecret"
+            state={slack.signingSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={slack.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses"
+            sub="Send partial assistant tokens as Slack message edits."
+            help={STREAMING_RESPONSES_WARNING}
+            source={sourceBadge(slack.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveSlack({
+                ...slack,
+                streamingResponses: {
+                  ...slack.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <ToggleField
+            checked={slack.registerSlashCommands.value}
+            disabled={props.saving}
+            label="Register slash commands"
+            sub="Reserved for Slack app command setup. Leave off unless your app is configured for PwrAgent slash commands."
+            source={sourceBadge(slack.registerSlashCommands)}
+            onChange={(registerSlashCommands) => {
+              void props.onSaveSlack({
+                ...slack,
+                registerSlashCommands: {
+                  ...slack.registerSlashCommands,
+                  value: registerSlashCommands,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving || !slack.registerSlashCommands.value}
+            label="Slash command prefix"
+            sub="Prefix prepended to canonical commands (default pwragent_ → /pwragent_help)."
+            source={optionalStringSourceBadge(slack.slashCommandPrefix)}
+            value={slack.slashCommandPrefix.value}
+            onSave={(slashCommandPrefix) => {
+              void props.onSaveSlack({
+                ...slack,
+                slashCommandPrefix: {
+                  ...slack.slashCommandPrefix,
+                  value: slashCommandPrefix,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "user",
+            )}
+            label="Authorized User IDs"
+            sub="Slack user IDs that can DM or mention the bot."
+            help="Slack user IDs start with U or W, e.g. U012ABCDEF0. Rejected Slack messages show the user ID in Messaging Activity."
+            source={optionalListSourceBadge(slack.authorizedUserIds)}
+            validateEntry={validateSlackUserIdEntry}
+            value={slack.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveSlack({
+                ...slack,
+                authorizedUserIds: {
+                  ...slack.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(
+              props.desktopApi,
+              "slack",
+              "workspace",
+            )}
+            label="Authorized Workspaces"
+            sub="Optional Slack workspace/team IDs allowed for this bot."
+            help="Slack workspace IDs start with T, e.g. T012ABCDEF0."
+            source={optionalListSourceBadge(slack.authorizedWorkspaces)}
+            validateEntry={validateSlackWorkspaceIdEntry}
+            value={slack.authorizedWorkspaces.value}
+            onSave={(authorizedWorkspaces) => {
+              void props.onSaveSlack({
+                ...slack,
+                authorizedWorkspaces: {
+                  ...slack.authorizedWorkspaces,
+                  value: authorizedWorkspaces,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
   );
 }
@@ -577,6 +769,13 @@ const TOOL_UPDATE_MODE_OPTIONS: Array<{
   { label: "Show Some", value: "show_some" },
   { label: "Show More", value: "show_more" },
   { label: "Show All", value: "show_all" },
+];
+
+const SLACK_INBOUND_MODE_OPTIONS: Array<{
+  label: string;
+  value: "socket" | "events";
+}> = [
+  { label: "Socket Mode", value: "socket" },
 ];
 
 const STREAMING_RESPONSES_WARNING =
@@ -1158,6 +1357,20 @@ function validateMattermostUserIdEntry(value: string): string | undefined {
   return validationMessage(validateMattermostId(value), "Mattermost user ID", {
     format: "Use the 26-character lowercase a-z0-9 Mattermost user ID.",
     length: "Mattermost user IDs are exactly 26 lowercase a-z0-9 characters.",
+  });
+}
+
+function validateSlackUserIdEntry(value: string): string | undefined {
+  return validationMessage(validateSlackUserId(value), "Slack user ID", {
+    format: "Use a Slack user ID starting with U or W, e.g. U012ABCDEF0.",
+    length: "Slack user IDs must be 64 characters or fewer.",
+  });
+}
+
+function validateSlackWorkspaceIdEntry(value: string): string | undefined {
+  return validationMessage(validateSlackTeamId(value), "Slack workspace ID", {
+    format: "Use a Slack workspace/team ID starting with T, e.g. T012ABCDEF0.",
+    length: "Slack workspace IDs must be 64 characters or fewer.",
   });
 }
 

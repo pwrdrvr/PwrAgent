@@ -97,6 +97,24 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.getAttribute("role")).toBe("button");
   });
 
+  it("renders Slack binding chips with the Slack icon", () => {
+    const slackBinding: MessagingThreadBindingSummary = {
+      ...telegramBinding,
+      bindingId: "binding-slack-1",
+      platform: "slack",
+    };
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [slackBinding],
+        reactions: [],
+      },
+    });
+    const bindingChip = container.querySelector(".thread-row__chip--binding");
+    expect(bindingChip?.querySelector("img")).not.toBeNull();
+    expect(bindingChip?.textContent).not.toContain("sl");
+  });
+
   it("does not invoke onSelectThread when a binding chip is clicked", () => {
     const { container, onSelectThread, onUnbindMessagingBinding } = renderRow();
     const bindingChip = container.querySelector(
