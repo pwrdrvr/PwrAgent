@@ -164,6 +164,7 @@ export class DesktopMessagingRuntime {
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
+  private lifecycleQueue: Promise<void> = Promise.resolve();
   /**
    * Listeners notified whenever any controller mutates a binding
    * (create / refresh metadata / sync title / detach / revoke). The
@@ -183,11 +184,19 @@ export class DesktopMessagingRuntime {
   ) {}
 
   async start(): Promise<void> {
-    const config = await this.loadConfig({ logStartupEligibility: true });
-    await this.applyConfig(config);
+    await this.enqueueLifecycle(async () => {
+      const config = await this.loadConfig({ logStartupEligibility: true });
+      await this.applyConfigNow(config);
+    });
   }
 
   async stop(): Promise<void> {
+    await this.enqueueLifecycle(async () => {
+      await this.stopNow();
+    });
+  }
+
+  private async stopNow(): Promise<void> {
     if (!this.started) {
       return;
     }
@@ -216,8 +225,17 @@ export class DesktopMessagingRuntime {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    await this.enqueueLifecycle(async () => {
+      await this.applyConfigNow(config, options);
+    });
+  }
+
+  private async applyConfigNow(
+    config: DesktopMessagingConfig,
+    options: { allowStart?: boolean } = {},
+  ): Promise<void> {
     if (config.enabled === false) {
-      await this.stop();
+      await this.stopNow();
       return;
     }
 
@@ -251,25 +269,28 @@ export class DesktopMessagingRuntime {
         stoppedChannels.push(channel);
       }
     }
+    this.syncRunningAdapterLists();
 
-    const startedChannels: MessagingChannelKind[] = [];
-    const failedChannels: MessagingChannelKind[] = [];
-    for (const [channel, adapter] of nextAdapters.entries()) {
-      if (this.runningAdapters.has(channel)) {
-        continue;
-      }
+    const startResults = await Promise.all(
+      [...nextAdapters.entries()].map(async ([channel, adapter]) => {
+        if (this.runningAdapters.has(channel)) {
+          return { channel, started: false, unchanged: true };
+        }
 
-      const started = await this.startRunningAdapter({
-        adapter,
-        config,
-        store,
-      });
-      if (started) {
-        startedChannels.push(channel);
-      } else {
-        failedChannels.push(channel);
-      }
-    }
+        const started = await this.startRunningAdapter({
+          adapter,
+          config,
+          store,
+        });
+        return { channel, started, unchanged: false };
+      }),
+    );
+    const startedChannels = startResults
+      .filter((result) => result.started)
+      .map((result) => result.channel);
+    const failedChannels = startResults
+      .filter((result) => !result.unchanged && !result.started)
+      .map((result) => result.channel);
 
     this.syncRunningAdapterLists();
 
@@ -300,7 +321,9 @@ export class DesktopMessagingRuntime {
   async applyLatestConfig(
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
-    await this.applyConfig(await this.loadConfig(), options);
+    await this.enqueueLifecycle(async () => {
+      await this.applyConfigNow(await this.loadConfig(), options);
+    });
   }
 
   isEnabled(): boolean {
@@ -503,6 +526,17 @@ export class DesktopMessagingRuntime {
     }
   }
 
+  private async enqueueLifecycle(
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const run = this.lifecycleQueue.catch(() => undefined).then(operation);
+    this.lifecycleQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    await run;
+  }
+
   private async startRunningAdapter(params: {
     adapter: DesktopMessagingAdapter;
     config: DesktopMessagingConfig;
@@ -542,6 +576,7 @@ export class DesktopMessagingRuntime {
           reason: event.reason,
         });
       });
+      this.setPlatformHealth(adapter.channel, "unknown");
       await adapter.start?.(async (event) => {
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
@@ -616,6 +651,7 @@ export class DesktopMessagingRuntime {
       unsubscribeInboundRejected,
       unsubscribeRuntimeError,
     });
+    this.syncRunningAdapterLists();
     this.setPlatformHealth(adapter.channel, "enabled");
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,

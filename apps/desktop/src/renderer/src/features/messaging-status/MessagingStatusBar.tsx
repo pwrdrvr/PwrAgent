@@ -25,7 +25,7 @@ const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
   suspended: "Suspended",
   errored: "Errored",
-  unknown: "Unknown",
+  unknown: "Loading",
 };
 
 /**
@@ -90,6 +90,7 @@ function PlatformChip(props: {
   const className = `messaging-status-chip messaging-status-chip--${status.health}${
     active ? " is-active" : ""
   }`;
+  const blink = active || status.health === "unknown";
   const content = (
     <>
       {Icon ? (
@@ -101,7 +102,7 @@ function PlatformChip(props: {
       )}
       <span
         className={`status-dot status-dot--${dotTone(status.health)}${
-          active ? " status-dot--blink" : ""
+          blink ? " status-dot--blink" : ""
         }`}
         aria-hidden="true"
       />
@@ -148,7 +149,7 @@ function dotTone(
     case "errored":
       return "error";
     case "unknown":
-      return "warning";
+      return "suspended";
   }
 }
 

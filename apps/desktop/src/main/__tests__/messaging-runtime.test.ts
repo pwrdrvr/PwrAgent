@@ -584,6 +584,223 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("starts adapters in parallel and reports pending adapters as loading", async () => {
+    await prepareRuntimeStore();
+    const telegramStart = createDeferred<void>();
+    const slowTelegramAdapter = createAdapter("telegram");
+    slowTelegramAdapter.start.mockImplementation(async (listener) => {
+      slowTelegramAdapter.listener = listener;
+      await telegramStart.promise;
+    });
+    const workingDiscordAdapter = createAdapter("discord");
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [slowTelegramAdapter, workingDiscordAdapter],
+      backendBridge: bridge,
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    const startPromise = runtime.start();
+    await flushMicrotasks();
+
+    expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "unknown",
+      }),
+    );
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "telegram",
+          health: "unknown",
+        }),
+        expect.objectContaining({
+          platform: "discord",
+          health: "enabled",
+        }),
+      ]),
+    );
+    await workingDiscordAdapter.listener?.(
+      buildCallbackEvent(
+        "bind:codex:thread-1",
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        "discord",
+      ),
+    );
+    workingDiscordAdapter.delivered.length = 0;
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Discord is already online" }],
+          },
+        },
+      },
+    });
+
+    expect(
+      workingDiscordAdapter.delivered.find((intent) => intent.kind === "message"),
+    ).toMatchObject({ kind: "message" });
+
+    telegramStart.resolve();
+    await startPromise;
+
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "telegram",
+          health: "enabled",
+        }),
+      ]),
+    );
+  });
+
+  it("serializes stop requests behind pending startup", async () => {
+    await prepareRuntimeStore();
+    const telegramStart = createDeferred<void>();
+    const slowTelegramAdapter = createAdapter("telegram");
+    slowTelegramAdapter.start.mockImplementation(async (listener) => {
+      slowTelegramAdapter.listener = listener;
+      await telegramStart.promise;
+    });
+    const workingDiscordAdapter = createAdapter("discord");
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [slowTelegramAdapter, workingDiscordAdapter],
+      backendBridge: createBackendBridge(),
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    const startPromise = runtime.start();
+    await flushMicrotasks();
+    const stopPromise = runtime.stop();
+    await flushMicrotasks();
+
+    expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
+    expect(slowTelegramAdapter.stop).not.toHaveBeenCalled();
+
+    telegramStart.resolve();
+    await Promise.all([startPromise, stopPromise]);
+
+    expect(slowTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(workingDiscordAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.isEnabled()).toBe(false);
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "telegram",
+          health: "suspended",
+        }),
+        expect.objectContaining({
+          platform: "discord",
+          health: "suspended",
+        }),
+      ]),
+    );
+  });
+
+  it("serializes config changes behind pending startup", async () => {
+    await prepareRuntimeStore();
+    const firstTelegramStart = createDeferred<void>();
+    const firstTelegramAdapter = createAdapter("telegram");
+    firstTelegramAdapter.start.mockImplementation(async (listener) => {
+      firstTelegramAdapter.listener = listener;
+      await firstTelegramStart.promise;
+    });
+    const secondTelegramAdapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.botToken === "telegram-token-2"
+          ? secondTelegramAdapter
+          : firstTelegramAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token-1",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    const startPromise = runtime.start();
+    await flushMicrotasks();
+    const applyPromise = runtime.applyConfig({
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token-2",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+    await flushMicrotasks();
+
+    expect(firstTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(secondTelegramAdapter.start).not.toHaveBeenCalled();
+
+    firstTelegramStart.resolve();
+    await Promise.all([startPromise, applyPromise]);
+
+    expect(firstTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(secondTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "enabled",
+      }),
+    ]);
+  });
+
   it("isolates backend event delivery failures between adapters", async () => {
     await prepareRuntimeStore();
     const failingAdapter = createAdapter("telegram", {
@@ -1319,6 +1536,26 @@ async function prepareRuntimeStore(): Promise<void> {
     "../messaging/desktop-messaging-store"
   );
   resetDesktopMessagingStoreForTests();
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
 }
 
 function createAdapter(

@@ -24,6 +24,7 @@ const registerSettingsIpcHandlersMock = vi.fn();
 const disposeSettingsIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
+const mainLogErrorMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
@@ -125,6 +126,7 @@ vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
   getMainLogger: vi.fn(() => ({
     info: mainLogInfoMock,
+    error: mainLogErrorMock,
   })),
 }));
 
@@ -173,6 +175,7 @@ describe("bootstrapApp", () => {
     disposeSettingsIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     mainLogInfoMock.mockReset();
+    mainLogErrorMock.mockReset();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -229,6 +232,38 @@ describe("bootstrapApp", () => {
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates the first window without waiting for messaging startup", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    messagingRuntimeStartMock.mockReturnValue(new Promise(() => {}));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(messagingRuntimeStartMock).toHaveBeenCalledTimes(1);
+    expect(registerMessagingStatusIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+  });
+
+  it("logs unexpected background messaging startup failures", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    messagingRuntimeStartMock.mockRejectedValue(new Error("config load failed"));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(mainLogErrorMock).toHaveBeenCalledWith(
+      "messaging runtime failed during background startup",
+      expect.objectContaining({
+        error: "config load failed",
+      }),
+    );
   });
 
   it("reuses the same startup CPU profiler on app activate", async () => {
