@@ -75,10 +75,14 @@ describe("messaging interface package", () => {
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("stream_update");
   });
 
-  it("extracts pairing tokens from text and slash command forms", () => {
+  it("extracts pairing tokens from plain text, mention, and legacy forms", () => {
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
 
+    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`@PwrAgentBot pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`please pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`pwragent_pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`/pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`/pwragent_pair ${token}`)).toBe(token);
   });
 });

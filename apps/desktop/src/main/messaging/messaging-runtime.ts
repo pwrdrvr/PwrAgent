@@ -34,7 +34,9 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   extractMessagingPairingToken,
+  isMessagingPairingCommand,
   MESSAGING_PAIRING_COMMAND,
+  MESSAGING_PAIRING_TOKEN_PATTERN,
 } from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
@@ -1254,8 +1256,11 @@ function tokenFromInboundEvent(event: MessagingInboundEvent): string | undefined
   if (event.kind === "text") {
     return extractMessagingPairingToken(event.text);
   }
-  if (event.kind === "command" && event.command === MESSAGING_PAIRING_COMMAND) {
-    return event.args[0];
+  if (event.kind === "command" && isMessagingPairingCommand(event.command)) {
+    const candidate = event.args[0];
+    return candidate && MESSAGING_PAIRING_TOKEN_PATTERN.test(candidate)
+      ? candidate
+      : undefined;
   }
   if (event.kind === "media" && event.text) {
     return extractMessagingPairingToken(event.text);

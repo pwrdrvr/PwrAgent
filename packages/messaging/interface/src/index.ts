@@ -52,7 +52,11 @@ export const MESSAGING_INBOUND_EVENT_KINDS = [
   "lifecycle",
 ] as const;
 
-export const MESSAGING_PAIRING_COMMAND = "pwragent_pair";
+export const MESSAGING_PAIRING_COMMAND = "pair";
+export const MESSAGING_PAIRING_COMMAND_ALIASES = [
+  MESSAGING_PAIRING_COMMAND,
+  "pwragent_pair",
+] as const;
 export const MESSAGING_PAIRING_TOKEN_PATTERN =
   /^[1-9A-HJ-NP-Za-km-z]{32}$/;
 
@@ -81,7 +85,7 @@ export function extractMessagingPairingToken(text: string): string | undefined {
   const parts = text.trim().split(/\s+/);
   for (let index = 0; index < parts.length - 1; index += 1) {
     const commandCandidate = parts[index]?.replace(/^\//, "");
-    if (commandCandidate?.toLowerCase() !== MESSAGING_PAIRING_COMMAND) {
+    if (!isMessagingPairingCommand(commandCandidate)) {
       continue;
     }
     const candidate = parts[index + 1] ?? "";
@@ -90,6 +94,12 @@ export function extractMessagingPairingToken(text: string): string | undefined {
     }
   }
   return undefined;
+}
+
+export function isMessagingPairingCommand(command: string | undefined): boolean {
+  if (!command) return false;
+  const normalized = command.replace(/^\//, "").toLowerCase();
+  return MESSAGING_PAIRING_COMMAND_ALIASES.some((alias) => alias === normalized);
 }
 
 export type MessagingChannelKind =

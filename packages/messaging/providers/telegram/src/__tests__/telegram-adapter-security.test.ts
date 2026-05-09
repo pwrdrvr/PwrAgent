@@ -36,7 +36,7 @@ describe("TelegramAdapter inbound security boundary", () => {
           first_name: "Mallory",
         },
         message_id: 199,
-        text: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
       },
     });
 
@@ -50,7 +50,7 @@ describe("TelegramAdapter inbound security boundary", () => {
           }),
         }),
         kind: "text",
-        text: "pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
       }),
     );
     expect(rejectedEvents).toEqual([]);
@@ -93,7 +93,7 @@ describe("TelegramAdapter inbound security boundary", () => {
           first_name: "Mallory",
         },
         message_id: 200,
-        text: "/pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        text: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
       },
     });
 
@@ -107,9 +107,68 @@ describe("TelegramAdapter inbound security boundary", () => {
             kind: "channel",
           }),
         }),
-        command: "pwragent_pair",
+        command: "pair",
         kind: "command",
-        rawText: "/pwragent_pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        rawText: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      }),
+    );
+    expect(rejectedEvents).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "telegram inbound ignored unauthorized actor",
+      expect.anything(),
+    );
+  });
+
+  it("dispatches mention pairing commands from unauthorized actors before allowlist checks", async () => {
+    const listener = vi.fn();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      bot: fakeBot(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001234567890", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      logger,
+      pollOnStart: false,
+    });
+    const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejectedEvents.push(event);
+    });
+    await adapter.start(listener);
+
+    await adapter.handleUpdate({
+      update_id: 101,
+      message: {
+        chat: {
+          id: -1009999999999,
+          title: "Untrusted",
+          type: "supergroup",
+        },
+        from: {
+          id: 99,
+          first_name: "Mallory",
+        },
+        message_id: 201,
+        text: "@PwrAgentBot pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      },
+    });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ platformUserId: "99" }),
+        args: ["123456789ABCDEFGHJKLMNPQRSTUVWXY"],
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "-1009999999999",
+            kind: "channel",
+          }),
+        }),
+        command: "pair",
+        kind: "command",
+        rawText: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
       }),
     );
     expect(rejectedEvents).toEqual([]);
