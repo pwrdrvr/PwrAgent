@@ -720,6 +720,65 @@ describe("SettingsScreen", () => {
     expect(screen.getByDisplayValue("Harold Hunt")).toBeInTheDocument();
   });
 
+  it("labels Telegram topic pairing request IDs distinctly", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+    const observedEntry = {
+      id: "pairing-topic-1",
+      platform: "telegram" as const,
+      instanceId: "default",
+      scope: "bucket" as const,
+      status: "observed" as const,
+      generatedAt: 1,
+      expiresAt: 2,
+      observedAt: 1,
+      observedActor: {
+        id: "8460800771",
+        displayName: "Harold Hunt",
+      },
+      observedChat: {
+        id: "5642",
+        kind: "topic" as const,
+        title: "Release",
+        parentId: "-1003841603622",
+        parentTitle: "PwrDrvr",
+        bucketId: "-1003841603622",
+      },
+    };
+    const desktopApi = {
+      listMessagingPairingRequests: vi.fn(async (request) => ({
+        entries: request?.platform === "telegram" ? [observedEntry] : [],
+      })),
+      onMessagingPairingChanged: vi.fn(() => () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const request = await screen.findByText("Release wants group access");
+    const requestCard = request.closest(".settings-pairing__request");
+    expect(requestCard).not.toBeNull();
+    expect(requestCard).toHaveTextContent("Topic ID 5642");
+    expect(requestCard).toHaveTextContent("Supergroup ID -1003841603622");
+    expect(requestCard).not.toHaveTextContent("Chat ID 5642");
+    expect(requestCard).not.toHaveTextContent("Bucket ID -1003841603622");
+  });
+
   it("looks up Slack authorized user display names", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({

@@ -1128,6 +1128,80 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    const { token } = runtime.generatePairingToken({
+      platform: "telegram",
+      scope: "bucket",
+    });
+
+    await adapter.listener?.({
+      id: "telegram:update:1:message:2",
+      kind: "command",
+      actor: {
+        platformUserId: "8460800771",
+        displayName: "Harold Hunt",
+        username: "huntharo",
+      },
+      args: [token],
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "5642",
+          kind: "topic",
+          parentId: "-1003841603622",
+          title: "Release",
+          parentTitle: "PwrDrvr",
+        },
+      },
+      command: "pair",
+      rawText: `/pair ${token}`,
+      receivedAt: 1000,
+      routingState: {
+        opaque: {
+          chatId: -1003841603622,
+          messageThreadId: 5642,
+        },
+      },
+    });
+
+    const observed = runtime.listPairingRequests({ platform: "telegram" }).entries[0];
+    expect(observed).toMatchObject({
+      status: "observed",
+      observedChat: {
+        id: "5642",
+        kind: "topic",
+        parentId: "-1003841603622",
+        bucketId: "-1003841603622",
+      },
+    });
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT conversation_id, actor_id, payload
+         FROM messaging_activity_log
+         WHERE kind = ? AND summary = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("pairing", "Observed pairing token") as
+        | { actor_id: string; conversation_id: string; payload: string }
+        | undefined;
+
+    expect(row).toMatchObject({
+      actor_id: "8460800771",
+      conversation_id: "5642",
+    });
+    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+      conversationKind: "topic",
+      conversationParentId: "-1003841603622",
+      conversationBucketId: "-1003841603622",
+      actorUsername: "huntharo",
+    });
+  });
+
   it("emits health=suspended for each running adapter when stopped", async () => {
     const { runtime } = await createRuntimeHarness();
     await runtime.start();

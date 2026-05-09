@@ -1062,6 +1062,11 @@ export class DesktopMessagingRuntime {
           instanceId: entry.instanceId,
           expiresAt: entry.expiresAt,
           failureReason: entry.failureReason,
+          conversationKind: entry.observedChat?.kind,
+          conversationParentId: entry.observedChat?.parentId,
+          conversationParentTitle: entry.observedChat?.parentTitle,
+          conversationBucketId: entry.observedChat?.bucketId,
+          actorUsername: entry.observedActor?.username,
         },
       });
     } catch (error) {
