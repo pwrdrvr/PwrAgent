@@ -15,6 +15,15 @@ import type { DesktopSettingsState } from "../useDesktopSettings";
 
 afterEach(() => {
   cleanup();
+  Object.defineProperty(window, "pwragent", {
+    configurable: true,
+    value: undefined,
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
+  vi.restoreAllMocks();
 });
 
 function createSnapshot(
@@ -532,6 +541,70 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByLabelText("Authorized User IDs display name 1"),
     ).toHaveValue("Harold (@huntharo)");
+  });
+
+  it("copies generated pairing messages through the clipboard fallback", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          enabled: { value: true, source: "config" },
+        },
+      },
+    });
+    const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const bridgeCopy = vi.fn(async () => {
+      throw new Error("bridge clipboard unavailable");
+    });
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+    const desktopApi = {
+      copyText: bridgeCopy,
+      generateMessagingPairingToken: vi.fn(async () => ({
+        entry: {
+          id: "pairing-1",
+          platform: "telegram" as const,
+          instanceId: "default",
+          scope: "user_dm" as const,
+          status: "pending" as const,
+          generatedAt: 1,
+          expiresAt: 2,
+        },
+        expiresAt: 2,
+        message: pairingMessage,
+        token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      })),
+      listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      onMessagingPairingChanged: vi.fn(() => () => undefined),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
+    expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => {
+      expect(bridgeCopy).toHaveBeenCalledWith(pairingMessage);
+    });
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(pairingMessage);
+    });
   });
 
   it("looks up Slack authorized user display names", async () => {

@@ -27,6 +27,7 @@ import {
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { DiscordIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -1045,6 +1046,16 @@ function PairingTokenField(props: {
     }
   };
 
+  const copyMessage = async () => {
+    if (!message) return;
+    setError(undefined);
+    try {
+      await copyText(message, props.desktopApi);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
   const observedEntries = entries.filter((entry) => entry.status === "observed");
 
   return (
@@ -1088,7 +1099,7 @@ function PairingTokenField(props: {
               <button
                 className="button button--ghost"
                 type="button"
-                onClick={() => void props.desktopApi?.copyText?.(message)}
+                onClick={() => void copyMessage()}
               >
                 Copy
               </button>
