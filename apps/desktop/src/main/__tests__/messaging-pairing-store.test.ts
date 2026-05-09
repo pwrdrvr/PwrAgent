@@ -98,4 +98,26 @@ describe("MessagingPairingStore", () => {
       observedActor: { id: "user-1", displayName: "Alice" },
     });
   });
+
+  it("parameterizes token lookups", () => {
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWX";
+    const entry = store.create({
+      token,
+      platform: "telegram",
+      instanceId: "default",
+      scope: "user_dm",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+    });
+
+    expect(
+      store.findMatchingPending({
+        token: "' OR 1=1 --",
+        platform: "telegram",
+        instanceId: "default",
+        now: 1_500,
+      }),
+    ).toBeUndefined();
+    expect(store.get(entry.id)).toMatchObject({ id: entry.id, status: "pending" });
+  });
 });

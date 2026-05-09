@@ -59,6 +59,7 @@ export const MESSAGING_PAIRING_COMMAND_ALIASES = [
 ] as const;
 export const MESSAGING_PAIRING_TOKEN_PATTERN =
   /^[1-9A-HJ-NP-Za-km-z]{32}$/;
+export const MESSAGING_PAIRING_SCAN_MAX_CHARS = 512;
 
 export const MESSAGING_DELIVERY_OUTCOMES = [
   "presented",
@@ -82,24 +83,53 @@ export type MessagingDeliveryOutcome =
 export type MessagingStreamingResponseMode = "inherit" | "enabled" | "disabled";
 
 export function extractMessagingPairingToken(text: string): string | undefined {
-  const parts = text.trim().split(/\s+/);
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const commandCandidate = parts[index]?.replace(/^\//, "");
-    if (!isMessagingPairingCommand(commandCandidate)) {
-      continue;
+  let previousToken: string | undefined;
+  for (const token of pairingScanTokens(text)) {
+    if (previousToken && isMessagingPairingCommand(previousToken)) {
+      if (MESSAGING_PAIRING_TOKEN_PATTERN.test(token)) {
+        return token;
+      }
     }
-    const candidate = parts[index + 1] ?? "";
-    if (MESSAGING_PAIRING_TOKEN_PATTERN.test(candidate)) {
-      return candidate;
-    }
+    previousToken = token;
   }
   return undefined;
+}
+
+function* pairingScanTokens(text: string): Generator<string> {
+  const scanLength = Math.min(text.length, MESSAGING_PAIRING_SCAN_MAX_CHARS);
+  let tokenStart: number | undefined;
+  for (let index = 0; index < scanLength; index += 1) {
+    const char = text.charCodeAt(index);
+    if (isAsciiWhitespace(char)) {
+      if (tokenStart !== undefined) {
+        yield text.slice(tokenStart, index);
+        tokenStart = undefined;
+      }
+      continue;
+    }
+    tokenStart ??= index;
+  }
+  if (tokenStart !== undefined) {
+    const token = text.slice(tokenStart, scanLength);
+    if (scanLength === text.length || text.charCodeAt(scanLength) <= 0x20) {
+      yield token;
+    }
+  }
 }
 
 export function isMessagingPairingCommand(command: string | undefined): boolean {
   if (!command) return false;
   const normalized = command.replace(/^\//, "").toLowerCase();
   return MESSAGING_PAIRING_COMMAND_ALIASES.some((alias) => alias === normalized);
+}
+
+function isAsciiWhitespace(charCode: number): boolean {
+  return charCode === 0x20
+    || charCode === 0x09
+    || charCode === 0x0a
+    || charCode === 0x0b
+    || charCode === 0x0c
+    || charCode === 0x0d;
 }
 
 export type MessagingChannelKind =
