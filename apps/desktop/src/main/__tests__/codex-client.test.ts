@@ -1719,6 +1719,31 @@ describe("CodexAppServerClient", () => {
                     }
                   },
                   {
+                    path: "/repo/patch-added-file.ts",
+                    kind: {
+                      type: "add"
+                    },
+                    diff: [
+                      "--- /dev/null",
+                      "+++ b/patch-added-file.ts",
+                      "@@ -0,0 +1,2 @@",
+                      "+patch added one",
+                      "+patch added two"
+                    ].join("\n")
+                  },
+                  {
+                    path: "/repo/patch-deleted-file.ts",
+                    kind: {
+                      type: "delete"
+                    },
+                    diff: [
+                      "--- a/patch-deleted-file.ts",
+                      "+++ /dev/null",
+                      "@@ -1,1 +0,0 @@",
+                      "-patch deleted one"
+                    ].join("\n")
+                  },
+                  {
                     path: "/repo/empty-file.ts",
                     kind: {
                       type: "add",
@@ -1746,7 +1771,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "activity",
         id: "activity-item-file-change",
-        summary: "Edited 4 files, +7, -4",
+        summary: "Edited 6 files, +9, -5",
         createdAt: 1_763_500_100_000,
         status: "completed",
         turn: {
@@ -1759,7 +1784,14 @@ describe("CodexAppServerClient", () => {
             label: "Add new-file.ts",
             fileDiff: {
               kind: "add",
-              diff: "first\nsecond\nthird\n",
+              diff: [
+                "--- /dev/null",
+                "+++ b/repo/new-file.ts",
+                "@@ -0,0 +1,3 @@",
+                "+first",
+                "+second",
+                "+third"
+              ].join("\n"),
               additions: 3,
               removals: 0
             }
@@ -1768,7 +1800,13 @@ describe("CodexAppServerClient", () => {
             label: "Delete removed-file.ts",
             fileDiff: {
               kind: "delete",
-              diff: "old first\nold second",
+              diff: [
+                "--- a/repo/removed-file.ts",
+                "+++ /dev/null",
+                "@@ -1,2 +0,0 @@",
+                "-old first",
+                "-old second"
+              ].join("\n"),
               additions: 0,
               removals: 2
             }
@@ -1794,10 +1832,43 @@ describe("CodexAppServerClient", () => {
             }
           }),
           expect.objectContaining({
+            label: "Add patch-added-file.ts",
+            fileDiff: {
+              kind: "add",
+              diff: [
+                "--- /dev/null",
+                "+++ b/patch-added-file.ts",
+                "@@ -0,0 +1,2 @@",
+                "+patch added one",
+                "+patch added two"
+              ].join("\n"),
+              additions: 2,
+              removals: 0
+            }
+          }),
+          expect.objectContaining({
+            label: "Delete patch-deleted-file.ts",
+            fileDiff: {
+              kind: "delete",
+              diff: [
+                "--- a/patch-deleted-file.ts",
+                "+++ /dev/null",
+                "@@ -1,1 +0,0 @@",
+                "-patch deleted one"
+              ].join("\n"),
+              additions: 0,
+              removals: 1
+            }
+          }),
+          expect.objectContaining({
             label: "Add empty-file.ts",
             fileDiff: {
               kind: "add",
-              diff: "",
+              diff: [
+                "--- /dev/null",
+                "+++ b/repo/empty-file.ts",
+                "@@ -0,0 +1,0 @@"
+              ].join("\n"),
               additions: 0,
               removals: 0
             }
