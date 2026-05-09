@@ -18,6 +18,9 @@ const runtimeMock = vi.hoisted(() => ({
   isEnabled: vi.fn(() => false),
   requestCredentialValidation: vi.fn(),
 }));
+const messagingConfigMocks = vi.hoisted(() => ({
+  loadDesktopMessagingConfigFromSettings: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -42,6 +45,19 @@ vi.mock("../app-server/backend-registry", () => ({
 vi.mock("../messaging/messaging-runtime", () => ({
   getDesktopMessagingRuntime: vi.fn(() => runtimeMock),
 }));
+
+vi.mock("../messaging/messaging-config", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../messaging/messaging-config")
+  >();
+  return {
+    ...actual,
+    loadDesktopMessagingConfigFromSettings:
+      messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockImplementation(
+        actual.loadDesktopMessagingConfigFromSettings,
+      ),
+  };
+});
 
 vi.mock("@pwragent/messaging-provider-telegram", () => ({
   resolveContact: providerMocks.resolveTelegramContact,
@@ -69,6 +85,7 @@ describe("settings ipc", () => {
     providerMocks.resolveTelegramContact.mockReset();
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.resolveMattermostContact.mockReset();
+    messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     runtimeMock.applyConfig.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.requestCredentialValidation.mockReset();
@@ -186,10 +203,12 @@ describe("settings ipc", () => {
     runtimeMock.isEnabled.mockReturnValue(false);
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
       env: {},
-      secretStore: new MemoryDesktopSecretStore(),
+      secretStore,
       now: () => 20,
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
@@ -211,9 +230,20 @@ describe("settings ipc", () => {
     );
 
     expect(runtimeMock.applyConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ enabled: true }),
+      expect.objectContaining({
+        enabled: true,
+        telegram: expect.objectContaining({
+          botToken: "settings-telegram-token",
+          authorizedActorIds: [],
+        }),
+      }),
       { allowStart: false },
     );
+    expect(
+      messagingConfigMocks.loadDesktopMessagingConfigFromSettings,
+    ).toHaveBeenCalledWith(service, process.env, {
+      logStartupEligibility: true,
+    });
   });
 
   it("resolves messaging contacts through provider packages", async () => {

@@ -163,9 +163,12 @@ not written to `messaging-state.json`.
 
 ## Configuration
 
-Messaging is disabled unless a channel has both credentials and authorized actor
-IDs. Use stable platform user IDs, not usernames, display names, or guild
-nicknames.
+Messaging starts a channel once its required credentials are configured. Use
+stable platform user IDs, not usernames, display names, or guild nicknames, for
+authorization. An empty authorized-user list is a discovery state: the adapter
+connects, inbound messages are discarded, and actionable rejected messages are
+logged in Messaging Activity so the operator can copy the stable actor ID into
+settings.
 
 For local development, the preferred path is:
 
@@ -217,9 +220,10 @@ The debounce setting can also be written as `input_debounce_ms` under
 `[messaging]` in the desktop config TOML. Use `0` to disable the pre-start wait
 while keeping active-turn queueing enabled.
 
-The authorized ID variables are comma-separated lists. Bot tokens are redacted
-from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
-accepts `DISCORD_BOT_TOKEN` as local migration fallbacks.
+The authorized ID variables are comma-separated lists and may be empty during
+first-run discovery. Bot tokens are redacted from runtime logs. Telegram also
+accepts `TELEGRAM_BOT_TOKEN` and Discord also accepts `DISCORD_BOT_TOKEN` as
+local migration fallbacks.
 
 The TOML equivalents are `streaming_responses = true` under
 `[messaging.telegram]` or `[messaging.discord]`. Both providers default to
@@ -441,7 +445,7 @@ smoke test in development.
 
 Two paths — pick whichever fits your deployment. The settings landed in [PR #199](https://github.com/pwrdrvr/PwrAgent/pull/199); see that PR for the full integration if you're adding a new provider.
 
-**Path A — Desktop Settings UI (recommended for desktop users).** Open Settings → Messaging → Mattermost. Fill in the bot token (Keychain), server URL, callback base URL, callback port, authorized user IDs, and the optional slash-command toggles. The `Test` button on the Bot Token row hits `<serverUrl>/api/v4/users/me` with the token to confirm both pieces. Slash commands are off by default — see "Slash command registration" below.
+**Path A — Desktop Settings UI (recommended for desktop users).** Open Settings → Messaging → Mattermost. Fill in the bot token (Keychain), server URL, callback base URL, callback port, and the optional slash-command toggles. Add authorized user IDs immediately if you already know them. If you do not, leave the list empty, send the bot an actionable message, then open Messaging Activity; PwrAgent discards the unauthorized inbound message and logs the Mattermost user ID there so you can copy it into the allowlist. The `Test` button on the Bot Token row hits `<serverUrl>/api/v4/users/me` with the token to confirm both pieces. Slash commands are off by default — see "Slash command registration" below.
 
 **Path B — Environment variables (headless / CI / Docker).** Set the variables before launching. Env vars override Settings UI values when both are present; the UI surfaces this with a `overriddenByEnv` badge per field.
 

@@ -122,7 +122,7 @@ export function loadDesktopMessagingConfig(
     inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
     toolUpdateDefaultMode: "show_some",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
-    ...(telegramBotToken && telegramAuthorizedActorIds.length > 0
+    ...(telegramBotToken
       ? {
           telegram: {
             channel: "telegram" as const,
@@ -137,7 +137,7 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
-    ...(discordBotToken && discordAuthorizedActorIds.length > 0
+    ...(discordBotToken
       ? {
           discord: {
             channel: "discord" as const,
@@ -156,7 +156,6 @@ export function loadDesktopMessagingConfig(
     ...(mattermostBotToken
       && mattermostServerUrl
       && mattermostCallbackBaseUrl
-      && mattermostAuthorizedActorIds.length > 0
       ? {
           mattermost: {
             channel: "mattermost" as const,
@@ -358,7 +357,9 @@ export async function loadDesktopMessagingConfigFromSettings(
 
 /**
  * Evaluate whether a messaging channel can start, logging the decision clearly.
- * Returns true only when the channel is enabled, has a token, and has authorized actors.
+ * Returns true when the channel is enabled and has credentials. An empty actor
+ * allowlist is allowed so first-time setup can receive and audit rejected
+ * messages; the controller and adapters still discard every inbound action.
  */
 function buildChannelConfig(params: {
   log: ReturnType<typeof getMainLogger>;
@@ -393,12 +394,12 @@ function buildChannelConfig(params: {
 
   if (authorizedActorCount === 0) {
     if (logStartupEligibility) {
-      log.error(
-        `${channel}: enabled but no authorized user IDs configured — cannot start`,
+      log.warn(
+        `${channel}: enabled with no authorized user IDs configured — starting in discovery mode; inbound messages will be discarded and logged in Messaging Activity`,
         { channel },
       );
     }
-    return false;
+    return true;
   }
 
   if (logStartupEligibility) {

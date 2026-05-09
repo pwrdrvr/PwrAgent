@@ -125,7 +125,10 @@ export function registerMessagingStatusIpcHandlers(): void {
           await loadDesktopMessagingConfigFromSettings(
             getDesktopSettingsService(),
             process.env,
-            { messagingEnabledOverride: true },
+            {
+              logStartupEligibility: true,
+              messagingEnabledOverride: true,
+            },
           ),
           { allowStart: true },
         );
