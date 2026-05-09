@@ -13,6 +13,7 @@ import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
@@ -3429,6 +3430,7 @@ export class MessagingController {
       bindingId: binding.id,
       revokedAt: this.now(),
     });
+    await this.recordBindingTransition("unbound", binding);
     this.notifyBindingChanged("detach");
     await this.deliver(
       buildConfirmationIntent({
@@ -3759,11 +3761,50 @@ export class MessagingController {
     }
   }
 
+  private async recordBindingTransition(
+    action: ThreadMessagingBindingTransition["action"],
+    binding: MessagingBindingRecord,
+    occurredAt: number = this.now(),
+  ): Promise<void> {
+    if (!this.options.backend.recordMessagingBindingTransition) {
+      return;
+    }
+    const conversation = binding.channel.conversation;
+    const transition: ThreadMessagingBindingTransition = {
+      id: randomUUID(),
+      action,
+      bindingId: binding.id,
+      platform: binding.channel.channel,
+      conversationKind: conversation.kind,
+      conversationTitle: conversation.title,
+      parentTitle: conversation.parentTitle,
+      ancestorTitle: conversation.ancestorTitle,
+      occurredAt,
+    };
+    try {
+      await this.options.backend.recordMessagingBindingTransition({
+        backend: binding.backend,
+        threadId: binding.threadId,
+        transition,
+      });
+    } catch (error) {
+      this.logger.debug?.("messaging binding-transition audit failed", {
+        action,
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
+  }
+
   private async bindChannelToThread(
     event: MessagingInboundCallbackEvent,
     target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
   ): Promise<MessagingBindingRecord> {
     const now = this.now();
+    const previousBinding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
     const binding: MessagingBindingRecord = {
       id: `binding:${buildMessagingConversationKey(event.channel)}:${target.backend}:${target.threadId}`,
       channel: event.channel,
@@ -3775,7 +3816,31 @@ export class MessagingController {
       updatedAt: now,
       displayName: event.actor.displayName ?? event.actor.username,
     };
+    if (
+      previousBinding &&
+      (previousBinding.backend !== binding.backend ||
+        previousBinding.threadId !== binding.threadId)
+    ) {
+      await this.options.store.revokeBinding({
+        bindingId: previousBinding.id,
+        revokedAt: now,
+      });
+    }
     const upserted = await this.options.store.upsertBinding(binding);
+    if (
+      previousBinding &&
+      (previousBinding.backend !== upserted.backend ||
+        previousBinding.threadId !== upserted.threadId)
+    ) {
+      await this.recordBindingTransition("unbound", previousBinding, now);
+    }
+    if (
+      !previousBinding ||
+      previousBinding.backend !== upserted.backend ||
+      previousBinding.threadId !== upserted.threadId
+    ) {
+      await this.recordBindingTransition("bound", upserted, now);
+    }
     // Retire any channel-scoped pending intents that pre-date this
     // bind. Without this, the resume browser's pending intent (and any
     // other pre-binding picker intent) survives the bind, and the next
@@ -3938,6 +4003,7 @@ export class MessagingController {
         bindingId: binding.id,
         revokedAt: this.now(),
       });
+      await this.recordBindingTransition("unbound", binding);
       this.notifyBindingChanged("permanent-delivery-failure");
       this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
         bindingId: binding.id,

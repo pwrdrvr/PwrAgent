@@ -43,6 +43,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * `MAX_PERMISSION_TRANSITION_LOG_ENTRIES` with oldest-first eviction.
    */
   permissionTransitionLog?: ThreadPermissionTransition[];
+  /**
+   * Per-thread messaging binding transition log. Persisted via the
+   * overlay store so bind/unbind actions appear inline in the chat
+   * transcript after the navigation snapshot refreshes.
+   */
+  messagingBindingTransitionLog?: ThreadMessagingBindingTransition[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -384,6 +390,12 @@ export type ThreadOverlayState = {
    * represent the lifecycle of one queued change.
    */
   permissionTransitionLog?: ThreadPermissionTransition[];
+  /**
+   * Per-thread messaging binding transition audit log. Persisted to
+   * the overlay store and rendered as synthetic transcript activity
+   * entries for channel bind/unbind actions.
+   */
+  messagingBindingTransitionLog?: ThreadMessagingBindingTransition[];
 };
 
 /**
@@ -424,6 +436,34 @@ export type ThreadPermissionTransition = {
    * flush failures.
    */
   note?: string;
+};
+
+/**
+ * Maximum number of messaging binding transition entries retained per
+ * thread. Kept separate from permission transitions so either audit
+ * stream can roll independently without evicting the other.
+ */
+export const MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES = 100;
+
+export type ThreadMessagingBindingTransitionAction = "bound" | "unbound";
+
+/**
+ * One entry in the per-thread messaging binding audit log. The title
+ * fields mirror `MessagingThreadBindingSummary` so renderer code can
+ * format the same conversation breadcrumb without inspecting adapter
+ * routing state.
+ */
+export type ThreadMessagingBindingTransition = {
+  id: string;
+  action: ThreadMessagingBindingTransitionAction;
+  bindingId: string;
+  platform: MessagingChannelKind;
+  conversationKind?: MessagingConversationKind;
+  conversationTitle?: string;
+  parentTitle?: string;
+  ancestorTitle?: string;
+  /** Epoch ms. */
+  occurredAt: number;
 };
 
 export type ThreadBranchDriftPair = {

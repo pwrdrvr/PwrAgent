@@ -106,6 +106,34 @@ describe("TranscriptList", () => {
     vi.restoreAllMocks();
   });
 
+  it("renders messaging binding transitions without transcript history", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        messagingBindingTransitions={[
+          {
+            id: "bind-1",
+            action: "bound",
+            bindingId: "binding-1",
+            platform: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "PwrDrvr/Topic",
+            parentTitle: "PwrDrvr",
+            occurredAt: 1_000,
+          },
+        ]}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.queryByText("No thread history yet.")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Channel bound: Telegram - PwrDrvr / PwrDrvr/Topic")
+    ).toBeInTheDocument();
+  });
+
   it("renders transcript history and exposes incremental history loading when available", () => {
     const loadOlder = vi.fn(async () => undefined);
 
