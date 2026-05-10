@@ -15,6 +15,7 @@ const baseConfig = {
   appToken: "xapp-test",
   signingSecret: "test-signing-secret",
   authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Alice" }],
+  authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "PwrDrvr" }],
 };
 
 function fakeStore(): MessagingCallbackHandleStore & {
@@ -646,6 +647,46 @@ describe("SlackAdapter", () => {
         channel: "C012ABCDEF0",
         channel_type: "channel",
         team: "TOTHER12345",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "unauthorized-conversation",
+        actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+      }),
+    ]);
+  });
+
+  it("rejects group DM events when the authorized workspace list is empty", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
         ts: "1712023032.123456",
         user: "U012ABCDEF0",
         text: "/status",

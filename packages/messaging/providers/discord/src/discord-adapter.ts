@@ -64,6 +64,7 @@ import {
 
 const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
+const DISCORD_CHANNEL_TYPE_DM = 1;
 
 type FetchLike = (url: string) => Promise<{
   arrayBuffer(): Promise<ArrayBuffer>;
@@ -1097,7 +1098,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     message: DiscordMessageCreateDispatch,
     options: { actionable: boolean },
   ): boolean {
-    if (!this.isAuthorizedGuild(message.guild_id, "message")) {
+    if (
+      !this.isAuthorizedDiscordConversation({
+        channelType: message.channel_type,
+        guildId: message.guild_id,
+        surface: "message",
+      })
+    ) {
       if (options.actionable) {
         this.emitInboundRejected(this.rejectedEventFromMessage(message, {
           kind: "command",
@@ -1128,7 +1135,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
   ): boolean {
-    if (!this.isAuthorizedGuild(interaction.guild_id, "interaction")) {
+    if (
+      !this.isAuthorizedDiscordConversation({
+        channelType: interaction.channel_type,
+        guildId: interaction.guild_id,
+        surface: "interaction",
+      })
+    ) {
       this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
         reason: "unauthorized-conversation",
       }));
@@ -1155,18 +1168,29 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     );
   }
 
-  private isAuthorizedGuild(
-    guildId: string | undefined,
-    surface: "interaction" | "message",
-  ): boolean {
+  private isAuthorizedDiscordConversation(params: {
+    channelType?: number;
+    guildId: string | undefined;
+    surface: "interaction" | "message";
+  }): boolean {
+    const { channelType, guildId, surface } = params;
     if (!guildId) {
-      return true;
+      const isDm = channelType === DISCORD_CHANNEL_TYPE_DM;
+      if (isDm) {
+        return true;
+      }
+      const logKey = `non-guild:${channelType ?? "unknown"}`;
+      if (!this.unauthorizedGuildLogKeys.has(logKey)) {
+        this.unauthorizedGuildLogKeys.add(logKey);
+        this.options.logger?.warn?.("discord inbound ignored unauthorized non-guild conversation", {
+          channelType: channelType ?? null,
+          surface,
+        });
+      }
+      return false;
     }
     const authorized = this.options.config.authorizedGuildIds ?? [];
-    if (
-      authorized.length === 0
-      || authorized.some((contact) => contact.id === guildId)
-    ) {
+    if (authorized.some((contact) => contact.id === guildId)) {
       return true;
     }
     if (!this.unauthorizedGuildLogKeys.has(guildId)) {
@@ -1660,7 +1684,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channel: this.basicChannelRef(
         message.channel_id,
         message.guild_id,
-        message.guild_id ? "channel" : "dm",
+        this.discordConversationKind(message.guild_id, message.channel_type),
       ),
       receivedAt: this.now(),
       reason: options.reason,
@@ -1684,7 +1708,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channel: this.basicChannelRef(
         interaction.channel_id,
         interaction.guild_id,
-        interaction.guild_id ? "channel" : "dm",
+        this.discordConversationKind(interaction.guild_id, interaction.channel_type),
       ),
       receivedAt: this.now(),
       reason: options.reason,
@@ -1712,6 +1736,15 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         ...(guildId ? { parentId: guildId } : {}),
       },
     };
+  }
+
+  private discordConversationKind(
+    guildId: string | undefined,
+    channelType?: number,
+  ): "dm" | "channel" {
+    return !guildId && channelType === DISCORD_CHANNEL_TYPE_DM
+      ? "dm"
+      : "channel";
   }
 
   private emitInboundRejected(event: MessagingRejectedInboundEvent): void {

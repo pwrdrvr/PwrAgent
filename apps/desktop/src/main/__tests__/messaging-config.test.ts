@@ -80,6 +80,8 @@ describe("desktop messaging config", () => {
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.mattermost).sort()).toEqual([
       "authorizedActorIds",
+      "authorizedConversationIds",
+      "authorizedTeamIds",
       "botToken",
       "callbackBaseUrl",
       "callbackHmacSecret",

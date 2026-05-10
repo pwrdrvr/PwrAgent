@@ -140,6 +140,8 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
   },
   mattermost: {
     authorizedActorIds: "authorization",
+    authorizedConversationIds: "authorization",
+    authorizedTeamIds: "authorization",
     botToken: "connection",
     callbackBaseUrl: "connection",
     callbackHmacSecret: "connection",
@@ -811,6 +813,10 @@ function authorizationUpdateForChannelConfig(
     case "mattermost":
       return {
         authorizedActorIds: contactIds(config.mattermost?.authorizedActorIds),
+        authorizedConversationIds: contactIds(
+          config.mattermost?.authorizedConversationIds,
+        ),
+        authorizedWorkspaceIds: contactIds(config.mattermost?.authorizedTeamIds),
       };
     case "slack":
       return {

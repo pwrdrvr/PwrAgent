@@ -35,6 +35,7 @@ const DISCORD_USER_ID = "1480556454498009355";
 const DISCORD_OTHER_USER_ID = "1480556454498009356";
 const DISCORD_INTERACTION_ID = "1480556454498009357";
 const DISCORD_ATTACHMENT_ID = "1480556454498009358";
+const DISCORD_AUTHORIZED_GUILD_IDS = [{ id: DISCORD_GUILD_ID, displayName: "" }];
 
 afterEach(async () => {
   await Promise.all(
@@ -76,6 +77,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
     });
@@ -112,6 +114,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
     });
@@ -144,6 +147,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
     });
@@ -171,6 +175,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway,
       now: () => 1000,
@@ -349,6 +354,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -397,6 +403,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
         streamingResponses: true,
       },
       gateway: createGateway(),
@@ -632,6 +639,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -694,6 +702,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -760,6 +769,7 @@ describe("DiscordAdapter", () => {
           channel: "discord",
           botToken: "discord-token",
           authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+          authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
         },
         gateway: createGateway(),
         now: () => 1000,
@@ -830,6 +840,7 @@ describe("DiscordAdapter", () => {
           channel: "discord",
           botToken: "discord-token",
           authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+          authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
         },
         gateway: createGateway(),
         now: () => 1000,
@@ -1028,6 +1039,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway,
     });
@@ -1082,6 +1094,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       gateway,
     });
@@ -1116,6 +1129,7 @@ describe("DiscordAdapter", () => {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+        authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
       },
       now: () => 1000,
     });
@@ -1204,6 +1218,7 @@ async function createControllerHarness(options: {
       channel: "discord",
       botToken: "discord-token",
       authorizedActorIds: [{ id: DISCORD_USER_ID, displayName: "" }],
+      authorizedGuildIds: DISCORD_AUTHORIZED_GUILD_IDS,
     },
     gateway,
     now: () => 1000,

@@ -1115,8 +1115,23 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
     if (
-      allowedTeams?.length
-      && (!params.teamId || !allowedTeams.includes(params.teamId))
+      params.teamId !== undefined
+      && !allowedTeams?.includes(params.teamId)
+    ) {
+      this.emitInboundRejected({
+        id: this.newEventId("slack-rejected"),
+        kind: params.kind,
+        actor: params.actor,
+        channel: params.channel,
+        receivedAt: this.now(),
+        reason: "unauthorized-conversation",
+        ...(params.routingState ? { routingState: params.routingState } : {}),
+      });
+      return false;
+    }
+    if (
+      params.teamId === undefined
+      && params.channel.conversation.kind !== "dm"
     ) {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
