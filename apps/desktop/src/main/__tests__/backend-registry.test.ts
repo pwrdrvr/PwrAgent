@@ -2420,6 +2420,65 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not synthesize completion from in-progress replay text", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-1",
+            role: "assistant",
+            text: "Partial replay text.",
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Desktop-originated turn" }],
+    });
+    await waitForCondition(() => codexClient.lastReadThreadParams !== undefined);
+    await flushAsync();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        notification: expect.objectContaining({
+          method: "turn/started",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+          }),
+        }),
+      }),
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("emits server request resolution when a pending request is submitted externally", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

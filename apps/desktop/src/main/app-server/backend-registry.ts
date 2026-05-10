@@ -147,6 +147,7 @@ function assistantOutputForTurn(
       entry?.type === "message" &&
       entry.role === "assistant" &&
       entry.turn?.id === turnId &&
+      entry.turn.status === "completed" &&
       entry.text.trim()
     ) {
       return [{ type: "text", text: entry.text }];
