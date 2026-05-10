@@ -159,9 +159,13 @@ describe("MessagingController", () => {
         expect.objectContaining({ id: "browse:new:workspace:worktree" }),
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
+        expect.objectContaining({ id: "browse:new:streaming" }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
       ]),
+    });
+    expect(readyIntent).toMatchObject({
+      body: expect.stringContaining("Streaming: off"),
     });
     expect(readyIntent).toMatchObject({
       browseSessionId: expect.stringMatching(/^browse:/),
@@ -202,11 +206,67 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("threadDisplay");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
+      delivery: expect.objectContaining({
+        mode: "update",
+      }),
       text: expect.stringContaining("Project: PwrAgent"),
     });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Thread started",
+      }),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
+  });
+
+  it("updates the ready prompt into the first status card without exhausting the DM budget", async () => {
+    let now = 0;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 1, intervalMs: 1000, reserved: 0 },
+    };
+    const budgetEvents: Array<
+      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+    > = [];
+    const harness = await createHarness({
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      now: () => now,
+      onDeliveryBudgetEvent: (event) => budgetEvents.push(event),
+      resolveDeliveryScope: () => scope,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    now = 2000;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    now = 4000;
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Thread started",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({ mode: "update" }),
+    });
+    expect(budgetEvents).toEqual([]);
   });
 
   it("starts a new messaging thread in a new worktree from the selected base branch", async () => {
@@ -662,13 +722,13 @@ describe("MessagingController", () => {
         }),
         expect.objectContaining({
           id: "status:streaming",
-          label: "Stream: Default",
+          label: "Stream: Off",
           fallbackText: "stream",
         }),
       ]),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Streaming: Default"),
+      text: expect.stringContaining("Streaming: Off"),
     });
   });
 
@@ -712,17 +772,59 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:streaming" }),
     );
 
-    const bindingAfterDefault = await harness.store.findActiveBindingForChannel(
+    const bindingAfterReenable = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/resume").channel,
     );
-    expect(bindingAfterDefault?.preferences?.streamingResponses).toBe("inherit");
+    expect(bindingAfterReenable?.preferences?.streamingResponses).toBe("enabled");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Streaming: Default"),
+      text: expect.stringContaining("Streaming: On"),
       actions: expect.arrayContaining([
-        expect.objectContaining({ label: "Stream: Default" }),
+        expect.objectContaining({ label: "Stream: On" }),
       ]),
     });
+  });
+
+  it("shows and toggles the effective streaming default from the new-thread screen", async () => {
+    const harness = await createHarness({ streamingResponsesDefault: true });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Streaming: on"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:streaming",
+          label: "Stream: on",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:streaming" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Start with streams off"));
+
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(binding?.preferences?.streamingResponses).toBe("disabled");
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "new-thread-1",
+      }),
+    );
   });
 
   it("updates the resume picker and removes actions when selecting a thread", async () => {
@@ -4985,6 +5087,7 @@ async function createHarness(options?: {
   channel?: MessagingChannelKind;
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  streamingResponsesDefault?: boolean;
   /**
    * Set to `false` to construct the controller WITHOUT an
    * `onBindingChanged` callback. Used by tests that verify the
@@ -5199,6 +5302,7 @@ async function createHarness(options?: {
       ? {}
       : { onBindingChanged }),
     store,
+    streamingResponsesDefault: options?.streamingResponsesDefault,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef = controller;

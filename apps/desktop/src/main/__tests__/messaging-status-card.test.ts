@@ -67,13 +67,47 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Reasoning: high");
     expect(intent.text).toContain("Fast mode: on");
     expect(intent.text).toContain("Permissions: Full Access");
-    expect(intent.text).toContain("Streaming: Default");
+    expect(intent.text).toContain("Streaming: Off");
     expect(intent.text).toContain("Context usage: unavailable");
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
         id: "status:streaming",
-        label: "Stream: Default",
+        label: "Stream: Off",
         fallbackText: "stream",
+      }),
+    );
+  });
+
+  it("renders inherited streaming as on when the channel default is on", () => {
+    const binding = {
+      id: "binding-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      createdAt: 1000,
+      threadId: "thread-1",
+      updatedAt: 1000,
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-1",
+      createdAt: 1000,
+      binding,
+      streamingResponsesDefault: true,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Streaming: On");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:streaming",
+        label: "Stream: On",
       }),
     );
   });

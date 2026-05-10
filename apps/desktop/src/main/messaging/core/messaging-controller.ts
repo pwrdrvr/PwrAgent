@@ -285,6 +285,7 @@ export type MessagingControllerOptions = {
   pendingIntentTtlMs?: number;
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
+  streamingResponsesDefault?: boolean;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   deliveryBudget?: MessagingDeliveryBudget;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
@@ -312,6 +313,7 @@ export class MessagingController {
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
+  private readonly streamingResponsesDefault: boolean;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
@@ -336,6 +338,7 @@ export class MessagingController {
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
     this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
+    this.streamingResponsesDefault = options.streamingResponsesDefault ?? false;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
       now: this.now,
@@ -2562,6 +2565,25 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:streaming") {
+      const streamingResponses = nextMessagingStreamingResponseMode(
+        nextSession.preferences?.streamingResponses ?? "inherit",
+        this.streamingResponsesDefault,
+      );
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            streamingResponses,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
     if (actionId === "browse:new:model") {
       await this.presentNewThreadModelPicker(
         nextSession,
@@ -2793,7 +2815,12 @@ export class MessagingController {
     const directory = session.selectedProject
       ? directoryForProjectSelection(snapshot, session.selectedProject)
       : undefined;
-    const options = newThreadOptionsForSession(session, snapshot, directory);
+    const options = newThreadOptionsForSession(
+      session,
+      snapshot,
+      directory,
+      this.streamingResponsesDefault,
+    );
     await this.options.store.upsertBrowseSession(session);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -2844,6 +2871,12 @@ export class MessagingController {
           label: options.fastMode ? "Fast: on" : "Fast: off",
           style: "secondary",
           fallbackText: "fast",
+        },
+        {
+          id: "browse:new:streaming",
+          label: options.streamingResponses ? "Stream: on" : "Stream: off",
+          style: "secondary",
+          fallbackText: "stream",
         },
         {
           id: "browse:new:model",
@@ -3122,7 +3155,12 @@ export class MessagingController {
     const project = bundle.session.selectedProject;
     const directory = directoryForProjectSelection(navigation, project);
     const preferences = bundle.session.preferences;
-    const options = newThreadOptionsForSession(bundle.session, navigation, directory);
+    const options = newThreadOptionsForSession(
+      bundle.session,
+      navigation,
+      directory,
+      this.streamingResponsesDefault,
+    );
     const started = await this.options.backend.startThread({
       backend: navigation.launchpadDefaults.backend,
       cwd: directory?.path ?? project.path,
@@ -3143,9 +3181,16 @@ export class MessagingController {
       backend: started.backend,
       threadId: started.threadId,
     });
-    const updatedBinding = preferences
+    let updatedBinding = preferences
       ? await this.updateBindingPreferences(binding, preferences)
       : binding;
+    if (bundle.session.surface) {
+      updatedBinding = await this.options.store.upsertBinding({
+        ...updatedBinding,
+        statusSurface: bundle.session.surface,
+        updatedAt: this.now(),
+      });
+    }
     const optimisticNavigation = navigationWithStartedThread({
       backend: started.backend,
       directory,
@@ -3158,25 +3203,6 @@ export class MessagingController {
       workMode: options.workMode,
     });
     await this.options.store.deleteBrowseSession(bundle.session.id);
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("new-thread-bound"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        delivery: bundle.session.surface
-          ? {
-              mode: "update",
-              replaceMarkup: true,
-            }
-          : undefined,
-        title: "Thread started",
-        body: `Started and bound a new thread for ${project.label}.`,
-        fallbackText: "Started the thread with your first instruction.",
-        targetSurface: bundle.session.surface,
-      }),
-      undefined,
-      event,
-    );
     await this.startPreparedInput({
       binding: updatedBinding,
       input: prepared.input,
@@ -4103,7 +4129,10 @@ export class MessagingController {
   ): Promise<void> {
     const currentMode = resolveMessagingStreamingResponseMode(binding);
     const updatedBinding = await this.updateBindingPreferences(binding, {
-      streamingResponses: nextMessagingStreamingResponseMode(currentMode),
+      streamingResponses: nextMessagingStreamingResponseMode(
+        currentMode,
+        this.streamingResponsesDefault,
+      ),
     });
     await this.renderBindingStatus(updatedBinding, event);
   }
@@ -4365,6 +4394,7 @@ export class MessagingController {
       handoff: this.options.backend.handoffThreadWorkspace
         ? handoffContextForBinding(binding, snapshot)
         : undefined,
+      streamingResponsesDefault: this.streamingResponsesDefault,
       threadState: resolveMessagingThreadState({
         activeTurn,
         binding,
@@ -5414,6 +5444,7 @@ type NewThreadOptionsSummary = {
   fastMode: boolean;
   model: string;
   reasoningEffort: string;
+  streamingResponses: boolean;
   workMode: LaunchpadWorkMode;
 };
 
@@ -5421,8 +5452,10 @@ function newThreadOptionsForSession(
   session: MessagingBrowseSessionRecord,
   navigation: NavigationSnapshot,
   directory: NavigationDirectorySummary | undefined,
+  streamingResponsesDefault: boolean,
 ): NewThreadOptionsSummary {
   const workMode = session.workMode ?? navigation.launchpadDefaults.workMode ?? "local";
+  const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   return {
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
     executionMode:
@@ -5435,6 +5468,10 @@ function newThreadOptionsForSession(
       session.preferences?.reasoningEffort ??
       navigation.launchpadDefaults.reasoningEffort ??
       "medium",
+    streamingResponses:
+      streamingMode === "inherit"
+        ? streamingResponsesDefault
+        : streamingMode === "enabled",
     workMode,
   };
 }
@@ -5452,6 +5489,7 @@ function newThreadPromptGateBody(
     `Model: ${options.model}`,
     `Reasoning: ${options.reasoningEffort}`,
     `Fast mode: ${options.fastMode ? "on" : "off"}`,
+    `Streaming: ${options.streamingResponses ? "on" : "off"}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");

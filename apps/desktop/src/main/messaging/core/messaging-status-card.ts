@@ -51,6 +51,7 @@ export function buildBindingStatusIntent(params: {
   createdAt: number;
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
+  streamingResponsesDefault?: boolean;
   threadState: MessagingResolvedThreadState;
   toolUpdateMode?: MessagingToolUpdateMode;
 }): MessagingStatusIntent {
@@ -89,6 +90,10 @@ export function buildBindingStatusIntent(params: {
     params.toolUpdateMode,
   );
   const streamingMode = resolveMessagingStreamingResponseMode(params.binding);
+  const streamingLabel = formatMessagingStreamingResponseModeLabel(
+    streamingMode,
+    params.streamingResponsesDefault,
+  );
 
   return {
     id: params.id,
@@ -115,7 +120,7 @@ export function buildBindingStatusIntent(params: {
       "Plan mode: unavailable",
       `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-      `Streaming: ${formatMessagingStreamingResponseModeLabel(streamingMode)}`,
+      `Streaming: ${streamingLabel}`,
       "Context usage: unavailable",
       "Account: unavailable",
       "Rate limits: unavailable",
@@ -132,6 +137,7 @@ export function buildBindingStatusIntent(params: {
       queuedExecutionMode,
       reasoning,
       streamingMode,
+      streamingResponsesDefault: params.streamingResponsesDefault,
       toolUpdateMode,
     }),
   };
@@ -145,6 +151,7 @@ function buildStatusActions(params: {
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
   streamingMode: MessagingStreamingResponseMode;
+  streamingResponsesDefault?: boolean;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
@@ -205,7 +212,10 @@ function buildStatusActions(params: {
     },
     {
       id: "status:streaming",
-      label: `Stream: ${formatMessagingStreamingResponseModeLabel(params.streamingMode)}`,
+      label: `Stream: ${formatMessagingStreamingResponseModeLabel(
+        params.streamingMode,
+        params.streamingResponsesDefault,
+      )}`,
       style: "secondary",
       fallbackText: "stream",
       priority: 10,
@@ -313,23 +323,25 @@ export function resolveMessagingStreamingResponseMode(
 
 export function nextMessagingStreamingResponseMode(
   mode: MessagingStreamingResponseMode,
+  streamingResponsesDefault = false,
 ): MessagingStreamingResponseMode {
   switch (mode) {
     case "inherit":
-      return "enabled";
+      return streamingResponsesDefault ? "disabled" : "enabled";
     case "enabled":
       return "disabled";
     case "disabled":
-      return "inherit";
+      return "enabled";
   }
 }
 
 export function formatMessagingStreamingResponseModeLabel(
   mode: MessagingStreamingResponseMode,
+  streamingResponsesDefault = false,
 ): string {
   switch (mode) {
     case "inherit":
-      return "Default";
+      return streamingResponsesDefault ? "On" : "Off";
     case "disabled":
       return "Off";
     case "enabled":
