@@ -146,10 +146,12 @@ jobs:
           git diff --name-only "$base" "$head" > changed-files.txt
 
           relevant=false
+          matched_path=""
           while IFS= read -r path; do
             case "$path" in
-              packages/agent-core/*|packages/shared/*|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc|.github/workflows/ci.yml)
+              packages/agent-core/*|packages/shared/src/contracts/normalized-app-server.ts|packages/shared/src/contracts/navigation.ts|packages/shared/src/thread-titles.ts|packages/shared/src/index.ts|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc|.github/workflows/ci.yml)
                 relevant=true
+                matched_path="$path"
                 break
                 ;;
             esac
@@ -158,6 +160,7 @@ jobs:
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
 
           if [[ "$relevant" == "true" ]]; then
+            echo "Live agent-core input changed: $matched_path"
             echo "Live agent-core inputs changed; running live smoke test."
           else
             {
@@ -165,7 +168,7 @@ jobs:
               echo
               echo "Skipped live agent-core smoke test because no agent-core inputs changed."
               echo
-              echo "Relevant inputs: \`packages/agent-core/**\`, \`packages/shared/**\`, root dependency/test config, and this workflow."
+              echo "Relevant inputs: \`packages/agent-core/**\`, shared files imported by agent-core, root dependency/test config, and this workflow."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
