@@ -2789,12 +2789,17 @@ export class MessagingController {
       return;
     }
 
+    const directory = directoryForProjectSelection(navigation, project);
     await this.presentNewThreadPromptGate(
       {
         ...session,
         mode: "new_thread_options",
         pageIndex: 0,
-        workMode: session.workMode ?? navigation.launchpadDefaults.workMode ?? "local",
+        workMode:
+          session.workMode ??
+          directory?.launchpad?.workMode ??
+          navigation.launchpadDefaults.workMode ??
+          "local",
         branchName: session.branchName,
         selectedProject: project,
         updatedAt: this.now(),
@@ -5468,7 +5473,11 @@ function newThreadOptionsForSession(
   directory: NavigationDirectorySummary | undefined,
   streamingResponsesDefault: boolean,
 ): NewThreadOptionsSummary {
-  const workMode = session.workMode ?? navigation.launchpadDefaults.workMode ?? "local";
+  const workMode =
+    session.workMode ??
+    directory?.launchpad?.workMode ??
+    navigation.launchpadDefaults.workMode ??
+    "local";
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   return {
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
