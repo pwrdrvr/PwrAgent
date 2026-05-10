@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   restart-pwragent-dev.zsh schedule [--root PATH] [--delay SECONDS] [--log PATH] [--dry-run]
-  restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run]
+  restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run] [--detach-start]
 
 Schedules or performs a local PwrAgent dev restart. The restart stops processes
 that match the target checkout path plus the bounded parent dev-server chain,
@@ -41,6 +41,7 @@ root="/Users/huntharo/github/PwrAgnt"
 delay="30"
 log_path=""
 dry_run="false"
+detach_start="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +62,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       dry_run="true"
+      shift
+      ;;
+    --detach-start)
+      detach_start="true"
       shift
       ;;
     *)
@@ -155,7 +160,7 @@ stop_matches() {
 
 schedule_restart() {
   local command
-  command="sleep $(shell_quote "$delay"); $(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path")"
+  command="sleep $(shell_quote "$delay"); $(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path") --detach-start"
   [[ "$dry_run" == "true" ]] && command="$command --dry-run"
 
   log_line "schedule root=$root delay=${delay}s log=$log_path dryRun=$dry_run"
@@ -168,6 +173,7 @@ schedule_restart() {
 
   if command -v launchctl >/dev/null 2>&1; then
     local label="com.pwragent.dev.restart.$(date +%s)"
+    command="$command; launchctl remove $(shell_quote "$label") >/dev/null 2>&1 || true"
     if launchctl submit -l "$label" -- /bin/zsh -lc "$command"; then
       log_line "submitted launchctl label=$label"
       return 0
@@ -194,6 +200,12 @@ restart_now() {
   stop_matches KILL
 
   log_line "starting pnpm dev in $root"
+  if [[ "$detach_start" == "true" ]]; then
+    nohup /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev" >> "$log_path" 2>&1 &
+    log_line "started detached pnpm dev pid=$!"
+    return 0
+  fi
+
   exec /bin/zsh -lc "cd $(shell_quote "$root") && pnpm dev"
 }
 
