@@ -1,6 +1,10 @@
 import { createHmac } from "node:crypto";
+import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MessagingCallbackHandleRecord } from "@pwragent/messaging-interface";
+import type {
+  MessagingCallbackHandleRecord,
+  MessagingInboundEvent,
+} from "@pwragent/messaging-interface";
 import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
 
@@ -17,6 +21,27 @@ describe("LineAdapter", () => {
     const signature = createHmac("sha256", "secret").update(body).digest("base64");
     expect(verifyLineSignature(body, signature, "secret")).toBe(true);
     expect(verifyLineSignature(body, signature, "wrong")).toBe(false);
+  });
+
+  it("rejects unsigned webhook bodies before JSON parsing", async () => {
+    const port = await getFreePort();
+    const listener = vi.fn();
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+    });
+    adapters.push(adapter);
+    await adapter.start(listener);
+
+    const response = await fetch(`http://127.0.0.1:${port}/`, {
+      body: "{",
+      method: "POST",
+      headers: { "x-line-signature": "bad" },
+    });
+
+    expect(response.status).toBe(401);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("delivers text and action chips as LINE push messages", async () => {
@@ -64,13 +89,195 @@ describe("LineAdapter", () => {
     expect(store.upsertCallbackHandle).toHaveBeenCalledWith(
       expect.objectContaining({
         actionId: "confirm:yes",
+        allowedActorIds: ["U0123456789abcdef0123456789abcdef"],
+        bindingId: undefined,
         handle: expect.stringMatching(/^line:/),
       }),
     );
   });
+
+  it("persists callback handles with audit fallback actor and binding scope", async () => {
+    const api = createApi();
+    const store = createCallbackStore();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: store,
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    await adapter.deliver({
+      id: "intent-1",
+      bindingId: "stale-binding",
+      kind: "confirmation",
+      title: "Confirm",
+      body: "Run it?",
+      actions: [{ id: "confirm:yes", label: "Approve" }],
+      audit: {
+        actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "line",
+          conversation: {
+            id: "C0123456789abcdef0123456789abcdef",
+            kind: "channel",
+            parentId: "parent-1",
+          },
+        },
+        occurredAt: 1234,
+      },
+      createdAt: 1234,
+    });
+
+    expect(store.records).toHaveLength(1);
+    expect(store.records[0]).toMatchObject({
+      allowedActorIds: ["U0123456789abcdef0123456789abcdef"],
+      bindingId: "binding-1",
+      channel: {
+        conversation: {
+          id: "C0123456789abcdef0123456789abcdef",
+          kind: "channel",
+          parentId: "parent-1",
+        },
+      },
+    });
+    expect(store.records[0]?.id).toContain(store.records[0]?.handle);
+  });
+
+  it("resolves persisted postbacks across adapter restarts", async () => {
+    const port = await getFreePort();
+    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const store = createCallbackStore();
+    const firstApi = createApi();
+    const firstAdapter = new LineAdapter({
+      api: firstApi,
+      callbackHandleStore: store,
+      config,
+      now: () => 1234,
+    });
+    adapters.push(firstAdapter);
+    await firstAdapter.deliver({
+      id: "intent-1",
+      kind: "confirmation",
+      title: "Confirm",
+      body: "Run it?",
+      actions: [{ id: "confirm:yes", label: "Approve", value: "yes" }],
+      audit: {
+        actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+        channel: {
+          channel: "line",
+          conversation: {
+            id: "U0123456789abcdef0123456789abcdef",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1234,
+      },
+      createdAt: 1234,
+    });
+    await firstAdapter.stop();
+
+    const postbackData = extractFirstPostbackData(firstApi);
+    const secondAdapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: store,
+      config,
+      now: () => 2234,
+    });
+    adapters.push(secondAdapter);
+    const events: MessagingInboundEvent[] = [];
+    await secondAdapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await postLineWebhook(port, config.channelSecret, {
+      events: [{
+        type: "postback",
+        webhookEventId: "event-1",
+        source: {
+          type: "user",
+          userId: "U0123456789abcdef0123456789abcdef",
+        },
+        postback: { data: postbackData },
+      }],
+    });
+    await waitFor(() => events.length === 1);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "callback",
+      actionId: "confirm:yes",
+      value: "yes",
+    });
+  });
+
+  it("normalizes group join lifecycle events without a source user id", async () => {
+    const port = await getFreePort();
+    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await postLineWebhook(port, config.channelSecret, {
+      events: [{
+        type: "join",
+        webhookEventId: "event-join",
+        source: {
+          type: "group",
+          groupId: "C0123456789abcdef0123456789abcdef",
+        },
+      }],
+    });
+    await waitFor(() => events.length === 1);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "lifecycle",
+      lifecycle: "bound",
+      actor: { isBot: true },
+      channel: {
+        channel: "line",
+        conversation: {
+          id: "C0123456789abcdef0123456789abcdef",
+          kind: "channel",
+        },
+      },
+    });
+  });
+
+  it("rejects attachments over the advertised download cap before fetching", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+    });
+    adapters.push(adapter);
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "123",
+        kind: "file",
+        name: "large.bin",
+        disposition: "available",
+        sizeBytes: 201 * 1024 * 1024,
+      },
+      maxBytes: 200 * 1024 * 1024,
+    })).rejects.toThrow(/download limit/);
+    expect(api.downloadMessageContent).not.toHaveBeenCalled();
+  });
 });
 
-function createConfig(): LineMessagingConfig {
+function createConfig(overrides: Partial<LineMessagingConfig> = {}): LineMessagingConfig {
   return {
     authorizedActorIds: [
       { id: "U0123456789abcdef0123456789abcdef", displayName: "Operator" },
@@ -79,10 +286,12 @@ function createConfig(): LineMessagingConfig {
     channel: "line",
     channelAccessToken: "token",
     channelSecret: "secret",
+    ...overrides,
   };
 }
 
 function createApi(): LineApi & {
+  downloadMessageContent: ReturnType<typeof vi.fn<LineApi["downloadMessageContent"]>>;
   pushMessage: ReturnType<typeof vi.fn<LineApi["pushMessage"]>>;
 } {
   return {
@@ -98,12 +307,76 @@ function createApi(): LineApi & {
 }
 
 function createCallbackStore() {
+  const records: MessagingCallbackHandleRecord[] = [];
   return {
-    resolveCallbackHandle: vi.fn(
-      async (): Promise<MessagingCallbackHandleRecord | undefined> => undefined,
+    records,
+    resolveCallbackHandle: vi.fn(async ({ actorId, channel, handle, now }) =>
+      records.find((record) =>
+        record.handle === handle
+        && record.allowedActorIds.includes(actorId)
+        && record.channel.channel === channel.channel
+        && record.channel.conversation.id === channel.conversation.id
+        && (!record.expiresAt || record.expiresAt > (now ?? Date.now())),
+      ),
     ),
     upsertCallbackHandle: vi.fn(
-      async (record: MessagingCallbackHandleRecord) => record,
+      async (record: MessagingCallbackHandleRecord) => {
+        records.push(record);
+        return record;
+      },
     ),
   };
+}
+
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => {
+        if (address && typeof address === "object") resolve(address.port);
+        else reject(new Error("failed to allocate a port"));
+      });
+    });
+  });
+}
+
+async function postLineWebhook(
+  port: number,
+  channelSecret: string,
+  body: unknown,
+): Promise<Response> {
+  const rawBody = JSON.stringify(body);
+  const signature = createHmac("sha256", channelSecret)
+    .update(rawBody)
+    .digest("base64");
+  return await fetch(`http://127.0.0.1:${port}/`, {
+    method: "POST",
+    body: rawBody,
+    headers: {
+      "content-type": "application/json",
+      "x-line-signature": signature,
+    },
+  });
+}
+
+function extractFirstPostbackData(api: ReturnType<typeof createApi>): string {
+  const messages = api.pushMessage.mock.calls[0]?.[0].messages ?? [];
+  const flex = messages.find((message) => message.type === "flex");
+  const row = flex?.type === "flex" ? flex.contents.footer?.contents[0] : undefined;
+  const button = row?.type === "box" ? row.contents[0] : undefined;
+  const data = button?.type === "button" ? button.action.data : undefined;
+  if (!data) throw new Error("missing LINE postback data");
+  return data;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error("timed out waiting for LINE webhook event");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

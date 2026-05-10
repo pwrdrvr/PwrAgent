@@ -4,6 +4,7 @@ import {
   LINE_ACTION_LABEL_LIMIT,
   buildLineActionBubble,
   clampLineMessage,
+  imageMessagesForLineIntent,
 } from "../line-formatting.ts";
 
 describe("LINE formatting", () => {
@@ -40,5 +41,22 @@ describe("LINE formatting", () => {
     expect(button?.type === "button" ? button.action.label : "").toBe(
       "Approve this very l…",
     );
+  });
+
+  it("renders https image parts as LINE image messages", () => {
+    expect(imageMessagesForLineIntent({
+      id: "intent-1",
+      kind: "message",
+      parts: [
+        { type: "text", text: "Result" },
+        { type: "image", url: "https://example.com/image.png", alt: "Preview" },
+        { type: "image", url: "data:image/png;base64,abc", alt: "Inline" },
+      ],
+      createdAt: 1,
+    })).toEqual([{
+      type: "image",
+      originalContentUrl: "https://example.com/image.png",
+      previewImageUrl: "https://example.com/image.png",
+    }]);
   });
 });

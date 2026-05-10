@@ -17,6 +17,12 @@ export type LineTextMessage = {
   text: string;
 };
 
+export type LineImageMessage = {
+  type: "image";
+  originalContentUrl: string;
+  previewImageUrl: string;
+};
+
 export type LineFlexMessage = {
   type: "flex";
   altText: string;
@@ -55,7 +61,7 @@ export type LineFlexComponent =
       weight?: "bold" | "regular";
     };
 
-export type LineMessage = LineFlexMessage | LineTextMessage;
+export type LineMessage = LineFlexMessage | LineImageMessage | LineTextMessage;
 
 export function actionsForLineIntent(
   intent: MessagingSurfaceIntent,
@@ -197,6 +203,20 @@ export function textForLineIntent(intent: MessagingSurfaceIntent): string {
   }
 }
 
+export function imageMessagesForLineIntent(
+  intent: MessagingSurfaceIntent,
+): LineImageMessage[] {
+  if (intent.kind !== "message") return [];
+  return intent.parts.flatMap((part) => {
+    if (part.type !== "image" || !isHttpsUrl(part.url)) return [];
+    return [{
+      type: "image" as const,
+      originalContentUrl: part.url,
+      previewImageUrl: part.url,
+    }];
+  });
+}
+
 export function clampLineMessage(text: string): string {
   return truncateLineText(text, LINE_MESSAGE_TEXT_LIMIT);
 }
@@ -236,4 +256,12 @@ function renderContentPart(part: MessagingContentPart): string {
     return part.alt ?? "";
   }
   return [part.name, part.description, part.url].filter(Boolean).join("\n");
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }

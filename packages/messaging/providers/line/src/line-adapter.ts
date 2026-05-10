@@ -31,6 +31,7 @@ import {
   actionsForLineIntent,
   buildLineActionBubble,
   clampLineMessage,
+  imageMessagesForLineIntent,
   textForLineIntent,
   type LineMessage,
 } from "./line-formatting.ts";
@@ -177,7 +178,7 @@ export class LineAdapter implements LineProviderAdapter {
     outboundAttachments: {
       maxUploadBytes: 10 * 1024 * 1024,
       supportsFileUpload: false,
-      supportsImageUpload: true,
+      supportsImageUpload: false,
       supportsRemoteImageUrl: true,
     },
   };
@@ -203,7 +204,7 @@ export class LineAdapter implements LineProviderAdapter {
     this.now = options.now ?? Date.now;
     this.authorizedActorIds = options.config.authorizedActorIds.map((actor) => actor.id);
     this.signingSecret = createHash("sha256")
-      .update(`${options.config.channelSecret}:${randomBytes(32).toString("hex")}`)
+      .update(options.config.channelSecret)
       .digest("hex");
     this.botUserId = options.config.botUserId;
     this.server = createServer((request, response) => {
@@ -288,22 +289,36 @@ export class LineAdapter implements LineProviderAdapter {
 
     const text = clampLineMessage(textForLineIntent(intent));
     const actions = actionsForLineIntent(intent);
+    const callbackHandleWrites: Promise<void>[] = [];
     const messages: LineMessage[] = [];
     if (text) {
       messages.push({ type: "text", text });
     }
-    const actionMessage = buildLineActionBubble({
-      actions,
-      buildPostbackData: this.buildPostbackDataBuilder({
-        allowedActorIds: intent.allowedActorIds ?? [],
-        bindingId: intent.bindingId,
-        channelRef: target.channelRef,
-        intent,
-      }),
-      capabilityProfile: this.capabilityProfile,
-      layout: intent.actionLayout,
-      title: text || intent.fallbackText || "PwrAgent",
-    });
+    messages.push(...imageMessagesForLineIntent(intent));
+    let actionMessage: LineMessage | undefined;
+    try {
+      actionMessage = buildLineActionBubble({
+        actions,
+        buildPostbackData: this.buildPostbackDataBuilder({
+          allowedActorIds: callbackAllowedActorIds(intent),
+          bindingId: callbackBindingId(intent),
+          callbackHandleWrites,
+          channelRef: target.channelRef,
+          intent,
+        }),
+        capabilityProfile: this.capabilityProfile,
+        layout: intent.actionLayout,
+        title: text || intent.fallbackText || "PwrAgent",
+      });
+      await Promise.all(callbackHandleWrites);
+    } catch (error) {
+      return {
+        channel: "line",
+        deliveredAt: this.now(),
+        outcome: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
     if (actionMessage) {
       messages.push(actionMessage);
     }
@@ -351,7 +366,18 @@ export class LineAdapter implements LineProviderAdapter {
     if (!messageId) {
       throw new Error("LINE attachment is missing a message id");
     }
+    const maxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
+    if (
+      maxBytes !== undefined
+      && request.attachment.sizeBytes !== undefined
+      && request.attachment.sizeBytes > maxBytes
+    ) {
+      throw new Error("LINE attachment exceeds the configured download limit");
+    }
     const data = await this.api.downloadMessageContent(messageId);
+    if (maxBytes !== undefined && data.byteLength > maxBytes) {
+      throw new Error("LINE attachment exceeds the configured download limit");
+    }
     return {
       data,
       fileName: request.attachment.name || `${messageId}.bin`,
@@ -419,7 +445,9 @@ export class LineAdapter implements LineProviderAdapter {
     if (!this.listener) return;
     const ids = this.validateInboundIds(event);
     if (!ids) return;
-    const actor = this.actorForLineUser(ids.userId);
+    const actor = ids.userId
+      ? this.actorForLineUser(ids.userId)
+      : this.actorForLifecycleEvent();
     const channel = this.channelRefForSource(event.source!, ids);
     const routingState = this.routingStateForChannel(channel, {
       messageId: ids.messageId,
@@ -435,8 +463,7 @@ export class LineAdapter implements LineProviderAdapter {
         return;
       case "follow":
       case "unfollow":
-      case "join":
-      case "leave":
+        if (!ids.userId) return;
         if (!this.authorizeInbound({ actor, channel, kind: "lifecycle", routingState })) {
           return;
         }
@@ -447,8 +474,23 @@ export class LineAdapter implements LineProviderAdapter {
           channel,
           receivedAt: this.now(),
           routingState,
+          lifecycle: event.type === "follow" ? "bound" : "detached",
+        });
+        return;
+      case "join":
+      case "leave":
+        if (!this.isAuthorizedConversation(channel)) {
+          return;
+        }
+        await this.listener({
+          id: ids.eventId,
+          kind: "lifecycle",
+          actor,
+          channel,
+          receivedAt: this.now(),
+          routingState,
           lifecycle:
-            event.type === "follow" || event.type === "join"
+            event.type === "join"
               ? "bound"
               : "detached",
         });
@@ -638,8 +680,11 @@ export class LineAdapter implements LineProviderAdapter {
     groupId?: string;
     messageId?: string;
     roomId?: string;
-    userId: string;
+    userId?: string;
   } | undefined {
+    if (!event.source) {
+      return undefined;
+    }
     const eventValidation = validateLineWebhookEventId(event.webhookEventId);
     if (!eventValidation.ok) {
       logLineInvalidIdentifier({
@@ -650,15 +695,19 @@ export class LineAdapter implements LineProviderAdapter {
       });
       return undefined;
     }
-    const userValidation = validateLineUserId(event.source?.userId);
-    if (!userValidation.ok) {
-      logLineInvalidIdentifier({
-        field: "user_id",
-        logger: this.logger,
-        reason: userValidation.reason,
-        value: event.source?.userId,
-      });
-      return undefined;
+    let userId: string | undefined;
+    if (event.source?.userId !== undefined || lineEventRequiresUserId(event)) {
+      const userValidation = validateLineUserId(event.source?.userId);
+      if (!userValidation.ok) {
+        logLineInvalidIdentifier({
+          field: "user_id",
+          logger: this.logger,
+          reason: userValidation.reason,
+          value: event.source?.userId,
+        });
+        return undefined;
+      }
+      userId = event.source?.userId;
     }
     let groupId: string | undefined;
     let roomId: string | undefined;
@@ -704,7 +753,7 @@ export class LineAdapter implements LineProviderAdapter {
     }
     return {
       eventId: event.webhookEventId!,
-      userId: event.source!.userId!,
+      ...(userId ? { userId } : {}),
       ...(groupId ? { groupId } : {}),
       ...(roomId ? { roomId } : {}),
       ...(messageId ? { messageId } : {}),
@@ -720,9 +769,17 @@ export class LineAdapter implements LineProviderAdapter {
     };
   }
 
+  private actorForLifecycleEvent(): MessagingActorIdentity {
+    return {
+      platformUserId: this.botUserId ?? "line:bot",
+      displayName: this.botUserId ? undefined : "LINE bot",
+      isBot: true,
+    };
+  }
+
   private channelRefForSource(
     source: NonNullable<LineWebhookEvent["source"]>,
-    ids: { groupId?: string; roomId?: string; userId: string },
+    ids: { groupId?: string; roomId?: string; userId?: string },
   ): MessagingChannelRef {
     if (source.type === "group" && ids.groupId) {
       const contact = this.config.authorizedGroupIds?.find((item) => item.id === ids.groupId);
@@ -749,7 +806,7 @@ export class LineAdapter implements LineProviderAdapter {
     return {
       channel: "line",
       conversation: {
-        id: ids.userId,
+        id: ids.userId ?? "line:unknown-user",
         kind: "dm",
         title: this.config.authorizedActorIds.find((item) => item.id === ids.userId)
           ?.displayName,
@@ -806,6 +863,7 @@ export class LineAdapter implements LineProviderAdapter {
   private buildPostbackDataBuilder(params: {
     allowedActorIds: string[];
     bindingId?: string;
+    callbackHandleWrites: Promise<void>[];
     channelRef: MessagingChannelRef;
     intent: MessagingSurfaceIntent;
   }): (action: MessagingSurfaceAction) => string {
@@ -815,8 +873,8 @@ export class LineAdapter implements LineProviderAdapter {
         .digest("base64url")
         .slice(0, 18)}`;
       const issuedAt = this.now();
-      const sig = this.signPostbackData(handle, params.intent.id, issuedAt);
-      void this.callbackHandleStore
+      const sig = this.signPostbackData(handle, issuedAt);
+      const write = this.callbackHandleStore
         .upsertCallbackHandle({
           id: lineCallbackRecordId(handle, params),
           actionId: action.id,
@@ -830,16 +888,11 @@ export class LineAdapter implements LineProviderAdapter {
           pendingIntentId: params.intent.id,
           ...(action.value !== undefined ? { value: action.value } : {}),
         })
-        .catch((error) => {
-          this.logger.warn?.("line callback handle persist failed", {
-            error: error instanceof Error ? error.message : String(error),
-            handle,
-          });
-        });
+        .then(() => undefined);
+      params.callbackHandleWrites.push(write);
       return JSON.stringify({
         v: LINE_SIGNED_VALUE_VERSION,
         h: handle,
-        i: params.intent.id,
         t: issuedAt,
         s: sig,
       });
@@ -848,7 +901,7 @@ export class LineAdapter implements LineProviderAdapter {
 
   private parseSignedPostbackData(
     value: unknown,
-  ): { handle: string; intentId: string; issuedAt: number } | undefined {
+  ): { handle: string; issuedAt: number } | undefined {
     if (typeof value !== "string") return undefined;
     let parsed: unknown;
     try {
@@ -858,7 +911,6 @@ export class LineAdapter implements LineProviderAdapter {
     }
     const record = parsed as {
       h?: unknown;
-      i?: unknown;
       s?: unknown;
       t?: unknown;
       v?: unknown;
@@ -866,25 +918,24 @@ export class LineAdapter implements LineProviderAdapter {
     if (
       record.v !== LINE_SIGNED_VALUE_VERSION
       || typeof record.h !== "string"
-      || typeof record.i !== "string"
       || typeof record.s !== "string"
       || typeof record.t !== "number"
     ) {
       return undefined;
     }
-    const expected = this.signPostbackData(record.h, record.i, record.t);
+    const expected = this.signPostbackData(record.h, record.t);
     if (!safeEqual(expected, record.s)) {
       this.logger.warn?.("line callback signature rejected", {
         handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
       });
       return undefined;
     }
-    return { handle: record.h, intentId: record.i, issuedAt: record.t };
+    return { handle: record.h, issuedAt: record.t };
   }
 
-  private signPostbackData(handle: string, intentId: string, issuedAt: number): string {
+  private signPostbackData(handle: string, issuedAt: number): string {
     return createHmac("sha256", this.signingSecret)
-      .update(JSON.stringify([handle, intentId, issuedAt]))
+      .update(JSON.stringify([handle, issuedAt]))
       .digest("base64url")
       .slice(0, 32);
   }
@@ -1018,9 +1069,30 @@ function stripSelfMention(
   return text.replace(/^@\S+\s*/, "").trimStart();
 }
 
+function lineEventRequiresUserId(event: LineWebhookEvent): boolean {
+  return (
+    event.type === "message"
+    || event.type === "postback"
+    || event.type === "follow"
+    || event.type === "unfollow"
+    || event.source?.type === "user"
+  );
+}
+
+function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
+  return intent.allowedActorIds && intent.allowedActorIds.length > 0
+    ? intent.allowedActorIds
+    : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
 function lineCallbackRecordId(
   handle: string,
   params: {
+    bindingId?: string;
     channelRef: MessagingChannelRef;
     intent: MessagingSurfaceIntent;
   },
@@ -1029,8 +1101,10 @@ function lineCallbackRecordId(
     .update(
       JSON.stringify([
         params.channelRef.channel,
+        params.channelRef.conversation.kind,
         params.channelRef.conversation.id,
-        params.intent.id,
+        params.channelRef.conversation.parentId ?? null,
+        params.bindingId ?? null,
       ]),
     )
     .digest("base64url")

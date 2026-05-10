@@ -795,3 +795,11 @@ Captured while implementing [issue #261](https://github.com/pwrdrvr/PwrAgent/iss
 - **The provider still needs signed opaque callback values.** Socket Mode authenticates transport, but the adapter stores only a compact handle in Block Kit button `value`; signing `{handle, intentId, issuedAt}` catches stale or tampered values before the callback-handle lookup.
 - **Slack has a real markdown dialect gap.** `slack-mrkdwn` is not CommonMark. The adapter needs a small boundary translator and tests for links/bold/escaping instead of forwarding producer markdown verbatim.
 - **Settings fan-out grows quickly for two-token providers.** Slack needs bot token + app token, optional signing secret, inbound mode, authorized users, and optional workspace IDs. The guide's settings table was accurate, but tests that construct full `DesktopSettingsSnapshot` fixtures also need an explicit default block.
+
+### Lessons from LINE
+
+Captured while hardening [issue #284](https://github.com/pwrdrvr/PwrAgent/issues/284).
+
+- **Webhook source fields vary by event type.** LINE group/room `join` and `leave` events do not necessarily include `source.userId`, even though message and postback events need a stable user for authorization. Validate IDs after branching on the event shape, and use a synthetic bot actor for bot lifecycle events when the platform does not supply a user actor.
+- **Signed platform webhooks do not replace restart-safe callback handles.** LINE signs the whole request with `X-Line-Signature`, but button `postback.data` still needs a stable adapter HMAC and persisted callback-handle record so buttons rendered before an app restart keep working.
+- **Advertised attachment capabilities must match the renderer.** If the adapter can only send HTTPS remote image URLs, set `supportsRemoteImageUrl: true` and avoid claiming byte-backed image/file upload support until the upload path exists and is capped in tests.
