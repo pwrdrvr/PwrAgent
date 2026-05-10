@@ -3,7 +3,7 @@ import type {
   MessagingActivityEntry,
   MessagingActivityKind,
 } from "@pwragent/shared";
-import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, LineIcon, MattermostIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -166,6 +166,8 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
           <DiscordIcon size={14} variant="white" />
         ) : entry.platform === "mattermost" ? (
           <MattermostIcon size={14} />
+        ) : entry.platform === "line" ? (
+          <LineIcon size={14} />
         ) : (
           <span>{entry.platform.slice(0, 2)}</span>
         )}

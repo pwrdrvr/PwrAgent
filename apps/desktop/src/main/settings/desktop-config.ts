@@ -89,6 +89,16 @@ export type DesktopSettingsConfig = {
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedWorkspaces?: AuthorizedContactConfig[];
     };
+    line?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      webhookUrl?: string;
+      callbackBaseUrl?: string;
+      botUserId?: string;
+      authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedGroups?: AuthorizedContactConfig[];
+      authorizedRooms?: AuthorizedContactConfig[];
+    };
   };
   models?: {
     codex?: {
@@ -445,6 +455,48 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
+  const line = patch.messaging?.line;
+  if (line?.enabled !== undefined) {
+    set(["messaging", "line", "enabled"], line.enabled);
+  }
+  if (line?.streamingResponses !== undefined) {
+    set(["messaging", "line", "streaming_responses"], line.streamingResponses);
+  }
+  if (line?.webhookUrl !== undefined) {
+    set(["messaging", "line", "webhook_url"], line.webhookUrl);
+  }
+  if (line?.callbackBaseUrl !== undefined) {
+    set(["messaging", "line", "callback_base_url"], line.callbackBaseUrl);
+  }
+  if (line?.botUserId !== undefined) {
+    set(["messaging", "line", "bot_user_id"], line.botUserId);
+  }
+  if (line?.authorizedUserIds !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "line"],
+      "authorized_user_ids",
+      "authorized_users",
+      line.authorizedUserIds,
+      ["authorized_user_ids_list"],
+    );
+  }
+  if (line?.authorizedGroups !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "line"],
+      "authorized_groups",
+      "authorized_groups",
+      line.authorizedGroups,
+    );
+  }
+  if (line?.authorizedRooms !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "line"],
+      "authorized_rooms",
+      "authorized_rooms",
+      line.authorizedRooms,
+    );
+  }
+
   if (patch.models?.codex?.path !== undefined) {
     set(["models", "codex", "path"], patch.models.codex.path);
   }
@@ -487,6 +539,7 @@ function normalizeDesktopConfig(
   const discord = tables["messaging.discord"];
   const mattermost = tables["messaging.mattermost"];
   const slack = tables["messaging.slack"];
+  const line = tables["messaging.line"];
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -579,6 +632,26 @@ function normalizeDesktopConfig(
           slack?.authorized_workspaces,
         ),
       },
+      line: {
+        enabled: readBoolean(line?.enabled),
+        streamingResponses: readBoolean(line?.streaming_responses),
+        webhookUrl: readString(line?.webhook_url),
+        callbackBaseUrl: readString(line?.callback_base_url),
+        botUserId: readString(line?.bot_user_id),
+        authorizedUserIds: readAuthorizedContacts(
+          line?.authorized_users,
+          line?.authorized_user_ids_list,
+          line?.authorized_user_ids,
+        ),
+        authorizedGroups: readAuthorizedContacts(
+          line?.authorized_groups_list,
+          line?.authorized_groups,
+        ),
+        authorizedRooms: readAuthorizedContacts(
+          line?.authorized_rooms_list,
+          line?.authorized_rooms,
+        ),
+      },
     },
     models: {
       codex: {
@@ -615,6 +688,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const discord = config.messaging?.discord;
   const mattermost = config.messaging?.mattermost;
   const slack = config.messaging?.slack;
+  const line = config.messaging?.line;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const enabled = config.messaging?.enabled;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
@@ -627,6 +701,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (discord && hasDefinedValue(discord))
     || (mattermost && hasDefinedValue(mattermost))
     || (slack && hasDefinedValue(slack))
+    || (line && hasDefinedValue(line))
   ) {
     pruned.messaging = {};
     if (enabled !== undefined) {
@@ -652,6 +727,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (slack && hasDefinedValue(slack)) {
       pruned.messaging.slack = slack;
+    }
+    if (line && hasDefinedValue(line)) {
+      pruned.messaging.line = line;
     }
   }
 

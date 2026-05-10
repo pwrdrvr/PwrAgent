@@ -265,6 +265,18 @@ Discord:
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
 - `PWRAGNT_MESSAGING_DISCORD_STREAMING_RESPONSES`
 
+LINE:
+
+- `PWRAGENT_MESSAGING_LINE_CHANNEL_ACCESS_TOKEN`
+- `PWRAGENT_MESSAGING_LINE_CHANNEL_SECRET`
+- `PWRAGENT_MESSAGING_LINE_WEBHOOK_URL`
+- `PWRAGENT_MESSAGING_LINE_CALLBACK_BASE_URL`
+- `PWRAGENT_MESSAGING_LINE_BOT_USER_ID`
+- `PWRAGENT_MESSAGING_LINE_AUTHORIZED_USER_IDS`
+- `PWRAGENT_MESSAGING_LINE_AUTHORIZED_GROUPS`
+- `PWRAGENT_MESSAGING_LINE_AUTHORIZED_ROOMS`
+- `PWRAGENT_MESSAGING_LINE_STREAMING_RESPONSES`
+
 Attachment policy:
 
 - `PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS`
@@ -283,10 +295,35 @@ local migration fallbacks.
 
 The TOML equivalents are `streaming_responses = true` under a provider section,
 for example `[messaging.telegram]`, `[messaging.discord]`,
-`[messaging.mattermost]`, or `[messaging.slack]`. Providers default to `false`;
+`[messaging.mattermost]`, `[messaging.slack]`, or `[messaging.line]`. Providers default to `false`;
 the Settings > Messaging toggles and environment overrides expose the same
 booleans. Binding-level `Stream: On` can opt a single binding into
 streaming without changing the provider default.
+
+## LINE setup
+
+LINE is webhook-only. Operators must expose PwrAgent's local listener through a
+public HTTPS URL and configure that URL in the LINE Developers console.
+
+1. Create or choose a LINE Messaging API channel in the LINE Developers console.
+2. Issue a long-lived channel access token and copy the channel secret.
+3. In PwrAgent Settings > Messaging > LINE, store the Channel Access Token and
+   Channel Secret in Keychain.
+4. Set Callback Base URL to the local listener/tunnel target. If the URL has an
+   explicit port, PwrAgent binds that port on `127.0.0.1`; otherwise it binds
+   `47822`.
+5. Configure Webhook URL in the LINE Developers console to the public HTTPS URL
+   that forwards to the Callback Base URL. Cloudflare Tunnel, Tailscale Funnel,
+   or ngrok all fit this shape.
+6. Add allowlisted LINE user IDs (`U` + 32 lowercase hex chars). Add group IDs
+   (`C...`) and room IDs (`R...`) when the bot should run in shared chats.
+7. Use the Connection test button to call `getBotInfo`; the returned bot user ID
+   can be stored for group mention filtering.
+
+Webhook requests are rejected before JSON parsing unless `X-Line-Signature`
+matches the HMAC-SHA256 of the raw request body keyed by the channel secret.
+LINE does not support bot message edits, so LINE streaming responses should stay
+off for v1; final assistant messages are posted as normal LINE messages.
 
 Discord slash commands are reconciled on adapter startup when an Application ID
 is configured. The reconciler reads existing commands and only creates, patches,

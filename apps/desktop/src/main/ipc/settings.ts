@@ -183,6 +183,9 @@ async function resolveMessagingContact(
         ),
       );
     }
+    case "line": {
+      return unsupportedLookup(request);
+    }
   }
 }
 
@@ -243,6 +246,8 @@ function getCredentialTester(
         resolveService().resolveMattermostServerUrlSync(),
       resolveSlackBotToken: () =>
         resolveService().resolveSlackBotTokenSync(),
+      resolveLineChannelAccessToken: () =>
+        resolveService().resolveLineChannelAccessTokenSync(),
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
         const snapshot = await resolveService().readSettings();

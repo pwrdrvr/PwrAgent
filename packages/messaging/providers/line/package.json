@@ -1,0 +1,19 @@
+{
+  "name": "@pwragent/messaging-provider-line",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^11.0.0",
+    "@pwragent/messaging-interface": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -18,6 +18,7 @@ const DISCORD_MIN_SNOWFLAKE_LENGTH = 17;
 const DISCORD_MAX_FUTURE_MS = 24n * 60n * 60n * 1000n;
 const MATTERMOST_ID_LENGTH = 26;
 const SLACK_MAX_ID_LENGTH = 64;
+const LINE_ID_LENGTH = 33;
 
 export function validateTelegramChatId(value: unknown): IdentifierValidationResult {
   return validateTelegramIntegerId(value, { allowNegative: true });
@@ -111,6 +112,18 @@ export function validateSlackChannelId(value: unknown): IdentifierValidationResu
   return validateSlackId(value, ["C", "G", "D"]);
 }
 
+export function validateLineUserId(value: unknown): IdentifierValidationResult {
+  return validateLinePrefixedHexId(value, "U");
+}
+
+export function validateLineGroupId(value: unknown): IdentifierValidationResult {
+  return validateLinePrefixedHexId(value, "C");
+}
+
+export function validateLineRoomId(value: unknown): IdentifierValidationResult {
+  return validateLinePrefixedHexId(value, "R");
+}
+
 function validateSlackId(
   value: unknown,
   prefixes: readonly string[],
@@ -130,6 +143,30 @@ function validateSlackId(
   for (let index = 1; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (!isAsciiDigit(code) && !isUppercaseAsciiLetter(code)) {
+      return { ok: false, reason: "format" };
+    }
+  }
+  return { ok: true };
+}
+
+function validateLinePrefixedHexId(
+  value: unknown,
+  prefix: "C" | "R" | "U",
+): IdentifierValidationResult {
+  if (typeof value !== "string") {
+    return { ok: false, reason: "type" };
+  }
+  if (value.length === 0) {
+    return { ok: false, reason: "empty" };
+  }
+  if (value.length !== LINE_ID_LENGTH) {
+    return { ok: false, reason: "length" };
+  }
+  if (value[0] !== prefix) {
+    return { ok: false, reason: "format" };
+  }
+  for (let index = 1; index < value.length; index += 1) {
+    if (!isLowercaseHex(value.charCodeAt(index))) {
       return { ok: false, reason: "format" };
     }
   }
@@ -187,6 +224,13 @@ function validateTelegramIntegerId(
 
 function isAsciiDigit(code: number): boolean {
   return code >= 0x30 && code <= 0x39;
+}
+
+function isLowercaseHex(code: number): boolean {
+  return (
+    (code >= 0x30 && code <= 0x39)
+    || (code >= 0x61 && code <= 0x66)
+  );
 }
 
 function isUppercaseAsciiLetter(code: number): boolean {

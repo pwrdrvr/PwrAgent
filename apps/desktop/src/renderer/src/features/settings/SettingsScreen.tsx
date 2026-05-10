@@ -13,6 +13,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
   buildDiscordPatchDelta,
+  buildLinePatchDelta,
   buildMattermostPatchDelta,
   buildSlackPatchDelta,
   buildTelegramPatchDelta,
@@ -297,6 +298,16 @@ function SettingsSectionBody(props: {
           if (delta === undefined) return;
           await props.settings.writeConfig({
             messaging: { slack: delta },
+          });
+        }}
+        onSaveLine={async (line) => {
+          const delta = buildLinePatchDelta(
+            props.snapshot.messaging.line,
+            line,
+          );
+          if (delta === undefined) return;
+          await props.settings.writeConfig({
+            messaging: { line: delta },
           });
         }}
       />

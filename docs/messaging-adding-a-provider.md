@@ -728,6 +728,8 @@ Concrete code references in the tree, kept current as adapters evolve:
 | `packages/messaging/providers/mattermost/src/mattermost-formatting.ts` | Multi-attachment auto-flow rendering. Action ID alphanumeric sanitization. |
 | `packages/messaging/providers/slack/src/slack-adapter.ts` | Socket Mode provider with Block Kit rendering, Slack mrkdwn translation, opaque callback handles in button `value`, and stable Slack ID validation. |
 | `packages/messaging/providers/slack/src/slack-formatting.ts` | Slack Block Kit action rows, button text limits, `slack-mrkdwn` conversion, and action-id sanitization. |
+| `packages/messaging/providers/line/src/line-adapter.ts` | Webhook-only provider with raw-body `X-Line-Signature` verification, Flex Message buttons, tight 20-character labels, 300-character postback data, and stable LINE ID validation. |
+| `packages/messaging/providers/line/src/line-formatting.ts` | Flex Message action bubbles and LINE's no-markdown/no-editing text model. |
 
 ## Evaluation rubric
 

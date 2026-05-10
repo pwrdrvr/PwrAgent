@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   validateDiscordSnowflake,
+  validateLineGroupId,
+  validateLineRoomId,
+  validateLineUserId,
   validateMattermostId,
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
@@ -21,6 +24,15 @@ describe("messaging ID validators", () => {
     expect(validateMattermostId("abcdefghijklmnopqrstu12345")).toEqual({
       ok: true,
     });
+    expect(validateLineUserId("U0123456789abcdef0123456789abcdef")).toEqual({
+      ok: true,
+    });
+    expect(validateLineGroupId("C0123456789abcdef0123456789abcdef")).toEqual({
+      ok: true,
+    });
+    expect(validateLineRoomId("R0123456789abcdef0123456789abcdef")).toEqual({
+      ok: true,
+    });
   });
 
   it("rejects username confusions and mixed-shape values", () => {
@@ -34,5 +46,8 @@ describe("messaging ID validators", () => {
     expect(validateDiscordSnowflake("8460800771").ok).toBe(false);
     expect(validateMattermostId("UserName").ok).toBe(false);
     expect(validateMattermostId("abcdefghijklmnopqrstu1234").ok).toBe(false);
+    expect(validateLineUserId("U0123456789ABCDEF0123456789ABCDEF").ok).toBe(false);
+    expect(validateLineGroupId("U0123456789abcdef0123456789abcdef").ok).toBe(false);
+    expect(validateLineRoomId("R0123456789abcdef0123456789abcde").ok).toBe(false);
   });
 });

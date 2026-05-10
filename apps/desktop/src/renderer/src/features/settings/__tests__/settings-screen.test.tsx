@@ -101,6 +101,18 @@ function createSnapshot(
         authorizedUserIds: { value: [], source: "default" },
         authorizedWorkspaces: { value: [], source: "default" },
       },
+      line: {
+        enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
+        channelAccessToken: { configured: false, source: "unset", writable: true },
+        channelSecret: { configured: false, source: "unset", writable: true },
+        webhookUrl: { value: "", source: "default" },
+        callbackBaseUrl: { value: "", source: "default" },
+        botUserId: { value: "", source: "default" },
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedGroups: { value: [], source: "default" },
+        authorizedRooms: { value: [], source: "default" },
+      },
       attachments: {
         imageProfile: { value: "medium", source: "default" },
         maxAttachmentBytes: { value: 10485760, source: "default" },
@@ -294,8 +306,8 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(4);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(4);
+    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
+    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
     fireEvent.click(
       screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
     );
@@ -459,7 +471,7 @@ describe("SettingsScreen", () => {
       screen.getByRole("heading", { name: "Mattermost" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Server URL")).toBeInTheDocument();
-    expect(screen.getByText("Callback Base URL")).toBeInTheDocument();
+    expect(screen.getAllByText("Callback Base URL").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Register slash commands").length).toBeGreaterThan(0);
     // The slash command prefix field should be disabled while
     // registerSlashCommands is off.

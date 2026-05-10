@@ -147,6 +147,18 @@ describe("App", () => {
           authorizedUserIds: { value: [], source: "default" },
           authorizedWorkspaces: { value: [], source: "default" },
         },
+        line: {
+          enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
+          channelAccessToken: { configured: false, source: "unset", writable: true },
+          channelSecret: { configured: false, source: "unset", writable: true },
+          webhookUrl: { value: "", source: "default" },
+          callbackBaseUrl: { value: "", source: "default" },
+          botUserId: { value: "", source: "default" },
+          authorizedUserIds: { value: [], source: "default" },
+          authorizedGroups: { value: [], source: "default" },
+          authorizedRooms: { value: [], source: "default" },
+        },
         attachments: {
           imageProfile: { value: "medium", source: "default" },
           maxAttachmentBytes: { value: 10485760, source: "default" },

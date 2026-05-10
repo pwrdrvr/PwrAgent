@@ -15,6 +15,7 @@ import type {
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import {
   DiscordIcon,
+  LineIcon,
   MattermostIcon,
   SlackIcon,
   SmileyIcon,
@@ -34,6 +35,7 @@ const PLATFORM_ICONS: Partial<
   discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
   slack: ({ size }) => <SlackIcon size={size} />,
+  line: ({ size }) => <LineIcon size={size} />,
 };
 
 const HOVER_PREFETCH_DELAY_MS = 750;

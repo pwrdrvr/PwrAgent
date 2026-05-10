@@ -40,6 +40,7 @@ export interface CredentialTesterDependencies {
   resolveDiscordBotToken: () => string | undefined;
   resolveMattermostBotToken: () => string | undefined;
   resolveSlackBotToken: () => string | undefined;
+  resolveLineChannelAccessToken: () => string | undefined;
   /** Returns the configured Mattermost server URL (settings/env merged).
    *  Used together with the bot token to target the `users/me` probe. */
   resolveMattermostServerUrl: () => string | undefined;
@@ -129,6 +130,7 @@ export class CredentialTester {
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
       resolveMattermostBotToken: dependencies.resolveMattermostBotToken,
       resolveSlackBotToken: dependencies.resolveSlackBotToken,
+      resolveLineChannelAccessToken: dependencies.resolveLineChannelAccessToken,
       resolveMattermostServerUrl: dependencies.resolveMattermostServerUrl,
       resolveGrokApiKey: dependencies.resolveGrokApiKey,
       resolveCodexCommand: dependencies.resolveCodexCommand,
@@ -195,6 +197,8 @@ export class CredentialTester {
         return await this.testMattermost(startedAt);
       case "slack":
         return await this.testSlack(startedAt);
+      case "line":
+        return await this.testLine(startedAt);
       default: {
         const exhaustive: never = kind;
         throw new Error(`unknown credential test kind: ${exhaustive as string}`);
@@ -257,6 +261,20 @@ export class CredentialTester {
       credential: { botToken },
     });
     return liftMessagingResult("slack", result);
+  }
+
+  private async testLine(
+    startedAt: number,
+  ): Promise<SettingsCredentialTestResult> {
+    const channelAccessToken = this.deps.resolveLineChannelAccessToken();
+    if (!channelAccessToken) {
+      return unset("line", startedAt);
+    }
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "line",
+      credential: { channelAccessToken },
+    });
+    return liftMessagingResult("line", result);
   }
 
   private async testGrok(
@@ -395,7 +413,7 @@ export class CredentialTester {
  * differ only in the `kind` field; everything else is preserved.
  */
 function liftMessagingResult(
-  kind: "telegram" | "discord" | "mattermost" | "slack",
+  kind: "telegram" | "discord" | "mattermost" | "slack" | "line",
   result: MessagingCredentialValidationResult,
 ): SettingsCredentialTestResult {
   return {
