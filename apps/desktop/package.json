@@ -28,6 +28,7 @@
     "pretest:e2e": "node scripts/rebuild-native-for-electron.mjs && pnpm build",
     "preview": "electron-vite preview",
     "test:e2e": "playwright test -c playwright.config.ts",
+    "inspect:e2e:branch-drift": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.config.ts e2e/thread-branch-drift.inspect.spec.ts --headed --timeout=0",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

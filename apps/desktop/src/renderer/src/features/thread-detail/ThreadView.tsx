@@ -1709,129 +1709,139 @@ export function ThreadView(props: ThreadViewProps) {
             <dl className="workspace-handoff-dialog__branch-path">
               <div>
                 <dt>Thread expects</dt>
-                <dd>{branchDriftDialog.expectedBranch}</dd>
+                <dd>
+                  <code className="workspace-handoff-dialog__branch-code">
+                    {branchDriftDialog.expectedBranch}
+                  </code>
+                </dd>
               </div>
               <span aria-hidden="true" className="workspace-handoff-dialog__branch-arrow">
                 -&gt;
               </span>
               <div>
                 <dt>Worktree is on</dt>
-                <dd>{branchDriftDialog.observedBranch}</dd>
+                <dd>
+                  <code className="workspace-handoff-dialog__branch-code">
+                    {branchDriftDialog.observedBranch}
+                  </code>
+                </dd>
               </div>
             </dl>
             <p>
               If earlier turns made commits on{" "}
               <code>{branchDriftDialog.expectedBranch}</code>, those commits may not be visible
-              on <code>{branchDriftDialog.observedBranch}</code>. Continuing now operates on the
-              current branch.
+              on <code>{branchDriftDialog.observedBranch}</code>.
             </p>
             <div className="workspace-handoff-dialog__comparison" aria-label="Branch choices">
-              <section>
-                <h3>I'll switch back</h3>
-                <p>
-                  Keep the warning because the thread should still expect{" "}
-                  <code>{branchDriftDialog.expectedBranch}</code>.
-                </p>
-                <p>
-                  Next: switch the worktree back to{" "}
-                  <code>{branchDriftDialog.expectedBranch}</code> yourself.
-                </p>
-              </section>
-              <section>
-                <h3>Keep current branch</h3>
-                <p>
-                  Treat <code>{branchDriftDialog.observedBranch}</code> as the branch this thread
-                  should use from now on.
-                </p>
-                <p>
-                  Next: start the next turn on{" "}
-                  <code>{branchDriftDialog.observedBranch}</code> with no warning.
-                </p>
-              </section>
+              <div className="workspace-handoff-dialog__choice">
+                <section className="workspace-handoff-dialog__choice-copy">
+                  <h3>I'll switch back</h3>
+                  <p>
+                    Keep the warning. This thread will continue to expect{" "}
+                    <code>{branchDriftDialog.expectedBranch}</code>.
+                  </p>
+                  <p>
+                    Next: switch the worktree back yourself.
+                  </p>
+                </section>
+                <button
+                  aria-label={
+                    branchDriftDialog.reason === "turn"
+                      ? `Cancel turn. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                      : `Keep warning. I'll switch back to ${branchDriftDialog.expectedBranch}`
+                  }
+                  className="button button--secondary workspace-handoff-dialog__action"
+                  disabled={branchDriftBusy}
+                  title={
+                    branchDriftDialog.reason === "turn"
+                      ? `Cancel this send and keep the warning for ${branchDriftDialog.expectedBranch}.`
+                      : `Keep the warning so you can switch back to ${branchDriftDialog.expectedBranch}.`
+                  }
+                  type="button"
+                  onClick={async () => {
+                    if (branchDriftDialog.reason === "turn") {
+                      setBranchDriftDialog(undefined);
+                      return;
+                    }
+
+                    if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
+                      setBranchDriftDialog(undefined);
+                      return;
+                    }
+
+                    setBranchDriftBusy(true);
+                    setBranchDriftError(undefined);
+                    try {
+                      await props.desktopApi.retainThreadBranchDrift({
+                        backend: selectedThread.source,
+                        threadId: selectedThread.id,
+                        expectedBranch: branchDriftDialog.expectedBranch,
+                        observedBranch: branchDriftDialog.observedBranch,
+                      });
+                      await props.onRefreshNavigation?.();
+                      setBranchDriftDialog(undefined);
+                    } catch (error) {
+                      setBranchDriftError(error instanceof Error ? error.message : String(error));
+                    } finally {
+                      setBranchDriftBusy(false);
+                    }
+                  }}
+                >
+                  <span>
+                    {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
+                  </span>
+                  <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
+                </button>
+              </div>
+              <div className="workspace-handoff-dialog__choice">
+                <section className="workspace-handoff-dialog__choice-copy">
+                  <h3>Keep current branch</h3>
+                  <p>
+                    Update this thread so it expects{" "}
+                    <code>{branchDriftDialog.observedBranch}</code> from now on.
+                  </p>
+                  <p>
+                    Next: start the next turn with no warning.
+                  </p>
+                </section>
+                <button
+                  aria-label={`Accept current branch as correct. Continue working on ${branchDriftDialog.observedBranch} without further warnings`}
+                  className="button button--primary workspace-handoff-dialog__action"
+                  disabled={branchDriftBusy}
+                  type="button"
+                  onClick={async () => {
+                    if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
+                      return;
+                    }
+
+                    setBranchDriftBusy(true);
+                    setBranchDriftError(undefined);
+                    try {
+                      await props.desktopApi.updateThreadExpectedBranch({
+                        backend: selectedThread.source,
+                        threadId: selectedThread.id,
+                        branch: branchDriftDialog.observedBranch,
+                      });
+                      await props.onRefreshNavigation?.();
+                      setBranchDriftDialog(undefined);
+                    } catch (error) {
+                      setBranchDriftError(error instanceof Error ? error.message : String(error));
+                    } finally {
+                      setBranchDriftBusy(false);
+                    }
+                  }}
+                >
+                  <span>Accept Current Branch as Correct</span>
+                  <small>
+                    Continue working on {branchDriftDialog.observedBranch} without further
+                    warnings
+                  </small>
+                </button>
+              </div>
             </div>
             {branchDriftError ? (
               <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
             ) : null}
-            <div className="workspace-handoff-dialog__actions">
-              <button
-                aria-label={
-                  branchDriftDialog.reason === "turn"
-                    ? `Cancel turn. I'll switch back to ${branchDriftDialog.expectedBranch}`
-                    : `Keep warning. I'll switch back to ${branchDriftDialog.expectedBranch}`
-                }
-                className="button-secondary workspace-handoff-dialog__action"
-                disabled={branchDriftBusy}
-                title={
-                  branchDriftDialog.reason === "turn"
-                    ? `Cancel this send and keep the warning for ${branchDriftDialog.expectedBranch}.`
-                    : `Keep the warning so you can switch back to ${branchDriftDialog.expectedBranch}.`
-                }
-                type="button"
-                onClick={async () => {
-                  if (branchDriftDialog.reason === "turn") {
-                    setBranchDriftDialog(undefined);
-                    return;
-                  }
-
-                  if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
-                    setBranchDriftDialog(undefined);
-                    return;
-                  }
-
-                  setBranchDriftBusy(true);
-                  setBranchDriftError(undefined);
-                  try {
-                    await props.desktopApi.retainThreadBranchDrift({
-                      backend: selectedThread.source,
-                      threadId: selectedThread.id,
-                      expectedBranch: branchDriftDialog.expectedBranch,
-                      observedBranch: branchDriftDialog.observedBranch,
-                    });
-                    await props.onRefreshNavigation?.();
-                    setBranchDriftDialog(undefined);
-                  } catch (error) {
-                    setBranchDriftError(error instanceof Error ? error.message : String(error));
-                  } finally {
-                    setBranchDriftBusy(false);
-                  }
-                }}
-              >
-                <span>
-                  {branchDriftDialog.reason === "turn" ? "Cancel Turn" : "Keep Warning"}
-                </span>
-                <small>I'll switch back to {branchDriftDialog.expectedBranch}</small>
-              </button>
-              <button
-                aria-label={`Use current branch. Continue on ${branchDriftDialog.observedBranch}`}
-                className="button-primary workspace-handoff-dialog__action"
-                disabled={branchDriftBusy}
-                type="button"
-                onClick={async () => {
-                  if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
-                    return;
-                  }
-
-                  setBranchDriftBusy(true);
-                  setBranchDriftError(undefined);
-                  try {
-                    await props.desktopApi.updateThreadExpectedBranch({
-                      backend: selectedThread.source,
-                      threadId: selectedThread.id,
-                      branch: branchDriftDialog.observedBranch,
-                    });
-                    await props.onRefreshNavigation?.();
-                    setBranchDriftDialog(undefined);
-                  } catch (error) {
-                    setBranchDriftError(error instanceof Error ? error.message : String(error));
-                  } finally {
-                    setBranchDriftBusy(false);
-                  }
-                }}
-              >
-                <span>Use Current Branch</span>
-                <small>Continue on {branchDriftDialog.observedBranch}</small>
-              </button>
-            </div>
           </div>
         </div>
       ) : null}
