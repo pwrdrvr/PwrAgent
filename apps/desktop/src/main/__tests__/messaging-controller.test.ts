@@ -438,7 +438,7 @@ describe("MessagingController", () => {
     );
   });
 
-  it("does not invent a worktree path in the optimistic status for messaging-started threads", async () => {
+  it("uses the materialized worktree path in the optimistic status for messaging-started threads", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
 
@@ -468,7 +468,7 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.not.stringContaining("Worktree: /repo/pwragent"),
+      text: expect.stringContaining("Worktree: /repo/pwragent/.worktrees/new-thread-1"),
     });
   });
 
@@ -5261,6 +5261,17 @@ async function createHarness(options?: {
         backend: request.launchpad?.backend ?? "codex",
         threadId: "new-thread-1",
         executionMode: request.launchpad?.executionMode ?? "default",
+        ...(request.launchpad?.workMode === "worktree"
+          ? {
+              linkedDirectory: {
+                id: request.launchpad.directoryKey,
+                kind: "worktree" as const,
+                label: request.launchpad.directoryLabel,
+                path: request.launchpad.directoryPath ?? request.launchpad.directoryKey,
+                worktreePath: "/repo/pwragent/.worktrees/new-thread-1",
+              },
+            }
+          : {}),
         workMode: request.launchpad?.workMode ?? "local",
       })),
   );

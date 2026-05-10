@@ -1554,7 +1554,7 @@ describe("DesktopBackendRegistry", () => {
       } as never,
     });
 
-    await registry.materializeDirectoryLaunchpad({
+    const response = await registry.materializeDirectoryLaunchpad({
       directoryKey: "directory:/repo/app",
       launchpad: {
         directoryKey: "directory:/repo/app",
@@ -1575,6 +1575,13 @@ describe("DesktopBackendRegistry", () => {
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
       worktreePath: "/repo/app/.worktrees/thread-1/app",
       threadId: "thread-1",
+    });
+    expect(response.linkedDirectory).toEqual({
+      id: "/repo/app",
+      kind: "worktree",
+      label: "app",
+      path: "/repo/app",
+      worktreePath: "/repo/app/.worktrees/thread-1/app",
     });
 
     await registry.close();
@@ -2312,7 +2319,18 @@ describe("DesktopBackendRegistry", () => {
       threadId: "thread-1",
       input: [{ type: "text", text: "Desktop-originated turn" }],
     });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+        },
+      },
+    });
 
+    await waitForCondition(() => events.length === 2);
     expect(events).toEqual([
       expect.objectContaining({
         backend: "codex",

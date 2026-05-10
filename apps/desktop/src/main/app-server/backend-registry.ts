@@ -1830,7 +1830,7 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     };
-    await this.emitCompletedTurnFromReplay({
+    this.scheduleCompletedTurnFromReplay({
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
@@ -1842,6 +1842,23 @@ export class DesktopBackendRegistry {
     });
 
     return response;
+  }
+
+  private scheduleCompletedTurnFromReplay(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): void {
+    setTimeout(() => {
+      void this.emitCompletedTurnFromReplay(params).catch((error: unknown) => {
+        backendRegistryLog.warn("failed to emit completed turn replay event", {
+          backend: params.backend,
+          threadId: params.threadId,
+          turnId: params.turnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 0);
   }
 
   private async emitCompletedTurnFromReplay(params: {
@@ -2874,18 +2891,19 @@ export class DesktopBackendRegistry {
             cwd: await this.createScratchProjectDirectory(),
           }
         : preparedWorkspace;
+    const linkedDirectories =
+      workspace.workMode === "worktree"
+        ? buildWorktreeLinkedDirectory({
+            label: launchpad.directoryLabel,
+            repositoryPath: workspace.repositoryPath ?? launchpad.directoryPath,
+            worktreePath: workspace.cwd,
+          })
+        : undefined;
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
       cwd: workspace.cwd,
-      linkedDirectories:
-        workspace.workMode === "worktree"
-          ? buildWorktreeLinkedDirectory({
-              label: launchpad.directoryLabel,
-              repositoryPath: workspace.repositoryPath ?? launchpad.directoryPath,
-              worktreePath: workspace.cwd,
-            })
-          : undefined,
+      linkedDirectories,
       model: launchpad.model,
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
@@ -2936,6 +2954,7 @@ export class DesktopBackendRegistry {
       threadId: startThreadResponse.threadId,
       turnId,
       executionMode: startThreadResponse.executionMode,
+      ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
     };
   }

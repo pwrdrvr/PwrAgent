@@ -3210,11 +3210,13 @@ export class MessagingController {
       backend: started.backend,
       directory,
       executionMode: started.executionMode,
+      linkedDirectory: materialized?.linkedDirectory,
       navigation,
       now: this.now(),
       preferences,
       project,
       threadId: started.threadId,
+      worktreePath: materialized?.linkedDirectory?.worktreePath,
       workMode: materialized?.workMode ?? options.workMode,
     });
     await this.options.store.deleteBrowseSession(bundle.session.id);
@@ -6058,6 +6060,7 @@ function navigationWithStartedThread(params: {
   backend: AppServerBackendKind;
   directory?: NavigationDirectorySummary;
   executionMode?: ThreadExecutionMode;
+  linkedDirectory?: LinkedDirectorySummary;
   navigation: NavigationSnapshot;
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
@@ -6077,7 +6080,7 @@ function navigationWithStartedThread(params: {
 
   const directoryPath = params.directory?.path ?? params.project.path;
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
-    ? {
+    ? params.linkedDirectory ?? {
         id: params.directory?.key ?? directoryPath,
         kind: params.workMode === "worktree" && params.worktreePath ? "worktree" : "local",
         label: params.directory?.label ?? params.project.label,
