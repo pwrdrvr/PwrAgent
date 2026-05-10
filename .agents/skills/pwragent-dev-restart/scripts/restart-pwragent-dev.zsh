@@ -159,26 +159,18 @@ stop_matches() {
 }
 
 schedule_restart() {
-  local command
-  command="sleep $(shell_quote "$delay"); $(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path") --detach-start"
-  [[ "$dry_run" == "true" ]] && command="$command --dry-run"
+  local command restart_command
+  restart_command="$(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path") --detach-start"
+  [[ "$dry_run" == "true" ]] && restart_command="$restart_command --dry-run"
+  command="sleep $(shell_quote "$delay"); nohup /bin/zsh -lc $(shell_quote "$restart_command") >> $(shell_quote "$log_path") 2>&1 &"
 
   log_line "schedule root=$root delay=${delay}s log=$log_path dryRun=$dry_run"
   log_line "scheduled command: $command"
 
   if [[ "$dry_run" == "true" ]]; then
+    log_line "restart command: $restart_command"
     log_candidates
     return 0
-  fi
-
-  if command -v launchctl >/dev/null 2>&1; then
-    local label="com.pwragent.dev.restart.$(date +%s)"
-    command="$command; launchctl remove $(shell_quote "$label") >/dev/null 2>&1 || true"
-    if launchctl submit -l "$label" -- /bin/zsh -lc "$command"; then
-      log_line "submitted launchctl label=$label"
-      return 0
-    fi
-    log_line "launchctl submit failed label=$label; falling back to nohup"
   fi
 
   nohup /bin/zsh -lc "$command" >> "$log_path" 2>&1 &
