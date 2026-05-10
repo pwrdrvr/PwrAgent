@@ -25,6 +25,8 @@ export type StartThreadRequest = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  workMode?: LaunchpadWorkMode;
+  branchName?: string;
 };
 
 export type StartThreadResponse = {

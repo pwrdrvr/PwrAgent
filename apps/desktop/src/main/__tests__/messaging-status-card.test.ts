@@ -67,13 +67,47 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Reasoning: high");
     expect(intent.text).toContain("Fast mode: on");
     expect(intent.text).toContain("Permissions: Full Access");
-    expect(intent.text).toContain("Streaming: Default");
+    expect(intent.text).toContain("Streaming: Off");
     expect(intent.text).toContain("Context usage: unavailable");
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
         id: "status:streaming",
-        label: "Stream: Default",
+        label: "Stream: Off",
         fallbackText: "stream",
+      }),
+    );
+  });
+
+  it("renders inherited streaming as on when the channel default is on", () => {
+    const binding = {
+      id: "binding-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      createdAt: 1000,
+      threadId: "thread-1",
+      updatedAt: 1000,
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-1",
+      createdAt: 1000,
+      binding,
+      streamingResponsesDefault: true,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Streaming: On");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:streaming",
+        label: "Stream: On",
       }),
     );
   });
@@ -382,8 +416,12 @@ describe("buildBindingStatusIntent", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Existing Branch",
+        }),
+        expect.objectContaining({
+          id: "handoff:create-detached",
+          label: "Create Detached Head",
         }),
       ]),
     });
@@ -422,6 +460,33 @@ describe("buildBindingStatusIntent", () => {
         }),
       ]),
     });
+  });
+
+  it("offers detached handoff without move-branch choices", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      leaveLocalBranches: [],
+    };
+    const overview = buildHandoffOverviewIntent({
+      id: "handoff-overview-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+
+    expect(overview.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:move-branch" }),
+    );
+    expect(overview.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:create-detached",
+        fallbackText: "1",
+        label: "Create Detached Head",
+        style: "primary",
+      }),
+    );
+    expect(overview.fallbackText).toContain("Reply with 1, Back, Refresh, or Cancel.");
   });
 
   it("paginates handoff branch picker choices", () => {
@@ -487,6 +552,7 @@ describe("buildBindingStatusIntent", () => {
         repositoryPath: "/repo/pwragent",
         sourceBranch: "feature/handoff",
         sourcePath: "/repo/pwragent",
+        strategy: "detached-changes",
         threadId: "thread-1",
       }),
     ).toEqual({
@@ -495,6 +561,7 @@ describe("buildBindingStatusIntent", () => {
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent",
+      strategy: "detached-changes",
       threadId: "thread-1",
     });
     expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();

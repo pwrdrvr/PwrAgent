@@ -724,6 +724,10 @@ export class DesktopMessagingRuntime {
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
       store,
+      streamingResponsesDefault: streamingResponsesDefaultForChannel(
+        config,
+        adapter.channel,
+      ),
       toolUpdateDefaultMode: async () =>
         (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
       onBindingChanged: () => this.broadcastBindingsChanged(),
@@ -1773,6 +1777,24 @@ function degradationKey(
   id: string,
 ): string {
   return `${platform}:${kind}:${id}`;
+}
+
+function streamingResponsesDefaultForChannel(
+  config: DesktopMessagingConfig,
+  channel: MessagingChannelKind,
+): boolean {
+  switch (channel) {
+    case "discord":
+      return config.discord?.streamingResponses ?? false;
+    case "mattermost":
+      return config.mattermost?.streamingResponses ?? false;
+    case "slack":
+      return config.slack?.streamingResponses ?? false;
+    case "telegram":
+      return config.telegram?.streamingResponses ?? false;
+    default:
+      return false;
+  }
 }
 
 function degradationTimerKey(

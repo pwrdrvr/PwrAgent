@@ -154,6 +154,18 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining("PwrAgent"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+        expect.objectContaining({ id: "browse:new:permissions" }),
+        expect.objectContaining({ id: "browse:new:fast" }),
+        expect.objectContaining({ id: "browse:new:streaming" }),
+        expect.objectContaining({ id: "browse:new:model" }),
+        expect.objectContaining({ id: "browse:new:reasoning" }),
+      ]),
+    });
+    expect(readyIntent).toMatchObject({
+      body: expect.stringContaining("Streaming: off"),
     });
     expect(readyIntent).toMatchObject({
       browseSessionId: expect.stringMatching(/^browse:/),
@@ -194,11 +206,225 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("threadDisplay");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
+      delivery: expect.objectContaining({
+        mode: "update",
+      }),
       text: expect.stringContaining("Project: PwrAgent"),
     });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Thread started",
+      }),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
+  });
+
+  it("updates the ready prompt into the first status card without exhausting the DM budget", async () => {
+    let now = 0;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 1, intervalMs: 1000, reserved: 0 },
+    };
+    const budgetEvents: Array<
+      Parameters<NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>>[0]
+    > = [];
+    const harness = await createHarness({
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      now: () => now,
+      onDeliveryBudgetEvent: (event) => budgetEvents.push(event),
+      resolveDeliveryScope: () => scope,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    now = 2000;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    now = 4000;
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Thread started",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({ mode: "update" }),
+    });
+    expect(budgetEvents).toEqual([]);
+  });
+
+  it("starts a new messaging thread in a new worktree from the selected base branch", async () => {
+    const harness = await createHarness({
+      navigation: {
+        ...buildNavigationSnapshot(),
+        directories: [
+          {
+            ...buildNavigationSnapshot().directories[0]!,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches: ["main", "release/v2", "feature/current"],
+            },
+          },
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:workspace:worktree",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: New Worktree"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:base-branch",
+          label: "Base: main",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:base-branch",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      title: "Pick base branch",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-base-branch",
+          label: "2. release/v2",
+          value: { branchName: "release/v2" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-base-branch",
+        value: { branchName: "release/v2" },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
+
+    expect(harness.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      cwd: "/repo/pwragent",
+      executionMode: "default",
+      fastMode: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      workMode: "worktree",
+      branchName: "release/v2",
+    });
+  });
+
+  it("paginates the new-thread base branch picker", async () => {
+    const branches = Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`);
+    const harness = await createHarness({
+      navigation: {
+        ...buildNavigationSnapshot(),
+        directories: [
+          {
+            ...buildNavigationSnapshot().directories[0]!,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches,
+            },
+          },
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:workspace:worktree" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:base-branch" }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    if (!firstPage || firstPage.kind !== "confirmation") {
+      throw new Error("Expected new-thread base branch picker");
+    }
+    expect(firstPage.body).toContain("Page 1/3.");
+    expect(
+      firstPage.actions.filter((action) => action.id === "browse:new:set-base-branch"),
+    ).toHaveLength(8);
+    expect(firstPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "browse:new:branches:next",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+
+    const nextPage = findAction(firstPage, "browse:new:branches:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: nextPage.id,
+        value: nextPage.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    if (!secondPage || secondPage.kind !== "confirmation") {
+      throw new Error("Expected second new-thread base branch picker page");
+    }
+    expect(secondPage.body).toContain("Page 2/3.");
+    expect(secondPage.actions[0]).toMatchObject({
+      id: "browse:new:set-base-branch",
+      label: "9. branch-8",
+    });
+    expect(secondPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "browse:new:branches:previous",
+        value: expect.objectContaining({ pageIndex: 0 }),
+      }),
+    );
   });
 
   it("cancels a pending new-thread prompt without creating a thread", async () => {
@@ -496,13 +722,13 @@ describe("MessagingController", () => {
         }),
         expect.objectContaining({
           id: "status:streaming",
-          label: "Stream: Default",
+          label: "Stream: Off",
           fallbackText: "stream",
         }),
       ]),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Streaming: Default"),
+      text: expect.stringContaining("Streaming: Off"),
     });
   });
 
@@ -546,17 +772,59 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:streaming" }),
     );
 
-    const bindingAfterDefault = await harness.store.findActiveBindingForChannel(
+    const bindingAfterReenable = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/resume").channel,
     );
-    expect(bindingAfterDefault?.preferences?.streamingResponses).toBe("inherit");
+    expect(bindingAfterReenable?.preferences?.streamingResponses).toBe("enabled");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Streaming: Default"),
+      text: expect.stringContaining("Streaming: On"),
       actions: expect.arrayContaining([
-        expect.objectContaining({ label: "Stream: Default" }),
+        expect.objectContaining({ label: "Stream: On" }),
       ]),
     });
+  });
+
+  it("shows and toggles the effective streaming default from the new-thread screen", async () => {
+    const harness = await createHarness({ streamingResponsesDefault: true });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Streaming: on"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:streaming",
+          label: "Stream: on",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:streaming" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Start with streams off"));
+
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(binding?.preferences?.streamingResponses).toBe("disabled");
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "new-thread-1",
+      }),
+    );
   });
 
   it("updates the resume picker and removes actions when selecting a thread", async () => {
@@ -4400,13 +4668,13 @@ describe("MessagingController", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Existing Branch",
         }),
       ]),
     });
 
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4486,7 +4754,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4530,6 +4798,85 @@ describe("MessagingController", () => {
       expect.objectContaining({
         id: "handoff:branches:previous",
         value: expect.objectContaining({ pageIndex: 0 }),
+      }),
+    );
+  });
+
+  it("runs a detached-head worktree handoff without asking for a leave-local branch", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const createDetached = findChoice(harness.delivered.at(-1), "handoff:create-detached");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: createDetached.id,
+        value: createDetached.value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Confirm new detached-head worktree."),
+    });
+
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValueOnce(
+      buildLocalHandoffNavigationSnapshot(),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: "/repo/pwragent",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragent",
+      threadId: "thread-1",
+    });
+  });
+
+  it("offers detached-head handoff for a local checkout with no alternate branches", async () => {
+    const harness = await createHarness();
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        branches: ["feature/handoff"],
+        handoffBranches: [],
+      },
+    };
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    const overview = harness.delivered.at(-1);
+    if (!overview || !("choices" in overview)) {
+      throw new Error("Expected handoff overview");
+    }
+    expect(overview.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:move-branch" }),
+    );
+    expect(overview.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:create-detached",
+        fallbackText: "1",
       }),
     );
   });
@@ -4598,7 +4945,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4638,7 +4985,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4769,10 +5116,12 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  navigation?: NavigationSnapshot;
   now?: () => number;
   channel?: MessagingChannelKind;
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  streamingResponsesDefault?: boolean;
   /**
    * Set to `false` to construct the controller WITHOUT an
    * `onBindingChanged` callback. Used by tests that verify the
@@ -4836,7 +5185,9 @@ async function createHarness(options?: {
       ? { setConversationTitle: options.setConversationTitle }
       : {}),
   };
-  const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const getNavigationSnapshot = vi.fn(
+    async () => options?.navigation ?? buildNavigationSnapshot(),
+  );
   const startThread = vi.fn(
     options?.startThread ??
       (async (request: StartThreadRequest) => ({
@@ -4985,6 +5336,7 @@ async function createHarness(options?: {
       ? {}
       : { onBindingChanged }),
     store,
+    streamingResponsesDefault: options?.streamingResponsesDefault,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef = controller;

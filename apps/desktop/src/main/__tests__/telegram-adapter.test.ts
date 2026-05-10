@@ -39,6 +39,50 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
+  it("uses a sliding minute delivery budget for direct messages", () => {
+    const adapter = new TelegramAdapter({
+      api: createApi() as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    const scope = adapter.resolveDeliveryScope({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      actions: [],
+      body: "Hello",
+      createdAt: 1000,
+      id: "intent-dm-budget",
+      kind: "confirmation",
+      title: "Hello",
+    });
+
+    expect(scope).toMatchObject({
+      id: "telegram:dm:777",
+      kind: "dm",
+      budget: {
+        limit: 60,
+        intervalMs: 60_000,
+      },
+    });
+  });
+
   it("registers a Telegram bot error handler for polling middleware failures", async () => {
     const api = createApi();
     const logger = {

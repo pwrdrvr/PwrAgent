@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  LaunchpadWorkMode,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
@@ -893,6 +894,8 @@ export type MessagingBrowseSessionRecord = {
   pageSize: number;
   preferences?: MessagingBindingPreferences;
   query?: string;
+  workMode?: LaunchpadWorkMode;
+  branchName?: string;
   selectedProject?: MessagingBrowseSelectedProject;
   surface?: MessagingSurfaceRef;
   updatedAt: number;
