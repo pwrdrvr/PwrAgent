@@ -1542,15 +1542,46 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    workMode?: NavigationLaunchpadDraft["workMode"];
+    branchName?: string;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
-    const { backend, executionMode = "default", linkedDirectories, ...request } = params;
+    const {
+      backend,
+      executionMode = "default",
+      linkedDirectories,
+      workMode,
+      branchName,
+      ...request
+    } = params;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
+    const requestedCwd = request.cwd?.trim();
+    const preparedWorkspace =
+      workMode === "worktree" && requestedCwd
+          ? await this.gitDirectoryService.prepareLaunchpadWorkspace({
+            backend,
+            branchName,
+            directoryKind: "directory",
+            directoryLabel: path.basename(requestedCwd) || requestedCwd,
+            directoryPath: requestedCwd,
+            workMode: "worktree",
+          })
+        : undefined;
     const cwd =
-      backend === "codex" && !request.cwd?.trim()
+      preparedWorkspace?.cwd ??
+      (backend === "codex" && !requestedCwd
         ? await this.createScratchProjectDirectory()
-        : request.cwd;
+        : request.cwd);
+    const effectiveLinkedDirectories =
+      linkedDirectories ??
+      (preparedWorkspace?.workMode === "worktree"
+        ? buildWorktreeLinkedDirectory({
+            label: path.basename(preparedWorkspace.repositoryPath ?? requestedCwd ?? ""),
+            repositoryPath: preparedWorkspace.repositoryPath ?? requestedCwd,
+            worktreePath: preparedWorkspace.cwd,
+          })
+        : undefined);
 
     const result = await this.getClient(backend, executionMode).startThread({
       ...request,
@@ -1573,12 +1604,22 @@ export class DesktopBackendRegistry {
         executionMode,
         ...modelSettings,
         linkedDirectories: (
-          linkedDirectories?.length ? linkedDirectories : buildLocalLinkedDirectory(cwd)
+          effectiveLinkedDirectories?.length
+            ? effectiveLinkedDirectories
+            : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
         gitBranch: cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined,
       },
     );
     this.invalidateThreadListCache(backend);
+
+    if (preparedWorkspace?.workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend,
+        threadId: result.threadId,
+        worktreePath: preparedWorkspace.cwd,
+      });
+    }
 
     if (backend === "codex") {
       await this.overlayStore.setThreadExecutionMode({

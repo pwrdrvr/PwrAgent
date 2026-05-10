@@ -177,12 +177,14 @@ export type NavigationLaunchpadImageAttachment = {
 
 export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
+  currentSha?: string;
   defaultBranch?: string;
   upstreamBranch?: string;
   ahead?: number;
   behind?: number;
   branches?: string[];
   handoffBranches?: string[];
+  hasUncommittedChanges?: boolean;
   syncState?:
     | "in-sync"
     | "ahead"

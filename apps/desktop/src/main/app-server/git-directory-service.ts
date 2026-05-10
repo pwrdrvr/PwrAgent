@@ -320,8 +320,12 @@ export class GitDirectoryService {
   private async loadDirectoryStatus(
     cwd: string,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
-    const [currentBranch, branchesOutput, remoteHead, worktreeList] = await Promise.all([
+    const [currentBranch, currentSha, dirtyStatus, branchesOutput, remoteHead, worktreeList] = await Promise.all([
       runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
+      runGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"]).catch(() => ""),
+      runGit(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(
+        () => "",
+      ),
       runGit(cwd, [
         "for-each-ref",
         "refs/heads",
@@ -355,9 +359,11 @@ export class GitDirectoryService {
     if (!upstreamBranch) {
       return {
         currentBranch,
+        currentSha: currentSha || undefined,
         defaultBranch,
         branches,
         handoffBranches,
+        hasUncommittedChanges: dirtyStatus.trim().length > 0,
         syncState: "untracked",
       };
     }
@@ -384,12 +390,14 @@ export class GitDirectoryService {
 
     return {
       currentBranch,
+      currentSha: currentSha || undefined,
       upstreamBranch,
       ahead,
       behind,
       defaultBranch,
       branches,
       handoffBranches,
+      hasUncommittedChanges: dirtyStatus.trim().length > 0,
       syncState,
     };
   }

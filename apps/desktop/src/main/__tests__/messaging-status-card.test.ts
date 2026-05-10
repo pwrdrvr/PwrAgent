@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   buildBindingStatusIntent,
+  buildHandoffBaseBranchPickerIntent,
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
@@ -382,8 +383,12 @@ describe("buildBindingStatusIntent", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Branch",
+        }),
+        expect.objectContaining({
+          id: "handoff:create-detached",
+          label: "Create Detached HEAD",
         }),
       ]),
     });
@@ -396,9 +401,9 @@ describe("buildBindingStatusIntent", () => {
     });
     expect(branchPicker.choices[0]).toMatchObject({
       id: "handoff:select-leave-branch",
-      label: "1. main",
+      label: "1. Detached HEAD",
       value: expect.objectContaining({
-        leaveLocalBranch: "main",
+        leaveLocalBranch: "HEAD",
       }),
     });
 
@@ -407,17 +412,46 @@ describe("buildBindingStatusIntent", () => {
       binding,
       context,
       createdAt: 1000,
-      leaveLocalBranch: "main",
+      leaveLocalBranch: "HEAD",
     });
     expect(confirmation).toMatchObject({
       kind: "confirmation",
       title: "Confirm Handoff",
-      body: expect.stringContaining("Leave Local on: main"),
+      body: expect.stringContaining("Leave Local on: Detached HEAD"),
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "handoff:confirm",
           value: expect.objectContaining({
-            leaveLocalBranch: "main",
+            leaveLocalBranch: "HEAD",
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it("builds a clean detached handoff base branch picker", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      hasUncommittedChanges: false,
+    };
+    const picker = buildHandoffBaseBranchPickerIntent({
+      id: "handoff-base-branch-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+
+    expect(picker).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("base branch"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "handoff:select-base-branch",
+          label: "1. main (default)",
+          value: expect.objectContaining({
+            baseBranch: "main",
+            strategy: "detached-changes",
           }),
         }),
       ]),
@@ -483,18 +517,22 @@ describe("buildBindingStatusIntent", () => {
     expect(
       handoffRequestFromValue({
         backend: "codex",
+        baseBranch: "main",
         direction: "local-to-worktree",
         repositoryPath: "/repo/pwragent",
         sourceBranch: "feature/handoff",
         sourcePath: "/repo/pwragent",
+        strategy: "detached-changes",
         threadId: "thread-1",
       }),
     ).toEqual({
       backend: "codex",
+      baseBranch: "main",
       direction: "local-to-worktree",
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent",
+      strategy: "detached-changes",
       threadId: "thread-1",
     });
     expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();
@@ -522,8 +560,12 @@ function buildBinding(): MessagingBindingRecord {
 function buildHandoffContext(): MessagingWorkspaceHandoffContext {
   return {
     backend: "codex",
+    baseBranches: ["main", "develop", "release"],
     branch: "feature/handoff",
-    leaveLocalBranches: ["main", "develop"],
+    currentSha: "abc123",
+    defaultBranch: "main",
+    hasUncommittedChanges: true,
+    leaveLocalBranches: ["HEAD", "main", "develop"],
     projectLabel: "PwrAgent",
     repositoryPath: "/repo/pwragent",
     threadId: "thread-1",

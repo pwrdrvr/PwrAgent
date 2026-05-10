@@ -69,11 +69,13 @@ import {
   directoryForProjectSelection,
   parseResumeCommandArgs,
   resumeBrowserPageSize,
+  selectBaseBranchFromValue,
   selectProjectFromValue,
   selectThreadFromValue,
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
+  buildHandoffBaseBranchPickerIntent,
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
@@ -2242,6 +2244,70 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:options") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          mode: "new_thread_options",
+          pageIndex: 0,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:new:toggle-workmode") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          mode: "new_thread_options",
+          newThreadWorkMode:
+            (nextSession.newThreadWorkMode ?? "local") === "worktree"
+              ? "local"
+              : "worktree",
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:new:base-branch") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          mode: "new_base_branch",
+          pageIndex: 0,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:new:select-base-branch") {
+      const selection = selectBaseBranchFromValue(event.value);
+      if (!selection) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          mode: "new_thread_options",
+          newThreadBranchName: selection.branch,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:new:start") {
+      if (!session.selectedProject) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.startNewThreadFromProject(event, session, navigation, session.selectedProject);
+      return;
+    }
     if (actionId === "browse:cancel") {
       await this.options.store.deleteBrowseSession(session.id);
       await this.deliver(
@@ -2271,7 +2337,16 @@ export class MessagingController {
         return;
       }
       if (session.launchAction === "start_new_thread") {
-        await this.startNewThreadFromProject(event, session, navigation, project);
+        await this.renderResumeBrowser(
+          {
+            ...nextSession,
+            mode: "new_thread_options",
+            pageIndex: 0,
+            selectedProject: project,
+          },
+          navigation,
+          event,
+        );
         return;
       }
       await this.renderResumeBrowser(
@@ -2411,9 +2486,18 @@ export class MessagingController {
 
     const directory = directoryForProjectSelection(navigation, project);
     const preferences = session.preferences;
+    const workMode = session.newThreadWorkMode ?? "local";
+    const branchName =
+      workMode === "worktree"
+        ? session.newThreadBranchName ??
+          directory?.gitStatus?.defaultBranch ??
+          directory?.gitStatus?.currentBranch
+        : undefined;
     const started = await this.options.backend.startThread({
       backend: navigation.launchpadDefaults.backend,
       cwd: directory?.path ?? project.path,
+      workMode,
+      branchName,
       executionMode: preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
       fastMode: preferences?.fastMode ?? navigation.launchpadDefaults.fastMode,
       model: preferences?.model ?? navigation.launchpadDefaults.model,
@@ -2428,16 +2512,24 @@ export class MessagingController {
     const updatedBinding = preferences
       ? await this.updateBindingPreferences(binding, preferences)
       : binding;
-    const optimisticNavigation = navigationWithStartedThread({
-      backend: started.backend,
-      directory,
-      executionMode: started.executionMode,
-      navigation,
-      now: this.now(),
-      preferences,
-      project,
-      threadId: started.threadId,
+    const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      filter: session.query,
     });
+    const statusNavigation = refreshedNavigation.threads.some(
+      (thread) => thread.source === started.backend && thread.id === started.threadId,
+    )
+      ? refreshedNavigation
+      : navigationWithStartedThread({
+          backend: started.backend,
+          directory,
+          executionMode: started.executionMode,
+          navigation,
+          now: this.now(),
+          preferences,
+          project,
+          threadId: started.threadId,
+        });
     await this.options.store.deleteBrowseSession(session.id);
     await this.deliver(
       buildConfirmationIntent({
@@ -2451,14 +2543,19 @@ export class MessagingController {
             }
           : undefined,
         title: "Thread started",
-        body: `Started and bound a new thread for ${project.label}.`,
+        body: [
+          `Started and bound a new thread for ${project.label}.`,
+          workMode === "worktree"
+            ? `Workspace: New Worktree${branchName ? ` from ${branchName}` : ""}.`
+            : "Workspace: Local.",
+        ].join("\n"),
         fallbackText: "Send a message to continue the new thread.",
         targetSurface: session.surface,
       }),
       undefined,
       event,
     );
-    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+    await this.renderBindingStatus(updatedBinding, event, statusNavigation);
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -2529,8 +2626,12 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    if (actionId === "handoff:local-to-worktree") {
+    if (actionId === "handoff:move-branch" || actionId === "handoff:local-to-worktree") {
       await this.presentHandoffBranchPicker(binding, event);
+      return;
+    }
+    if (actionId === "handoff:create-detached") {
+      await this.presentHandoffDetachedFlow(binding, event);
       return;
     }
     if (
@@ -2545,6 +2646,10 @@ export class MessagingController {
       return;
     }
     if (actionId === "handoff:worktree-to-local") {
+      await this.presentHandoffConfirmation(binding, event);
+      return;
+    }
+    if (actionId === "handoff:select-base-branch") {
       await this.presentHandoffConfirmation(binding, event);
       return;
     }
@@ -2688,6 +2793,58 @@ export class MessagingController {
     );
   }
 
+  private async presentHandoffDetachedFlow(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const context = handoffContextForBinding(binding, navigation);
+    const request = handoffRequestFromValue(event.value);
+    if (!context || context.workspaceKind !== "local" || !request) {
+      await this.deliverInvalidHandoffSelection(binding, event);
+      return;
+    }
+
+    if (context.hasUncommittedChanges !== false) {
+      await this.deliverAndStoreStatusSubmode(
+        {
+          ...buildHandoffConfirmationIntent({
+            id: this.newIntentId("handoff-confirm-detached"),
+            capabilityProfile: this.capabilityProfile,
+            binding,
+            context,
+            createdAt: this.now(),
+            strategy: "detached-changes",
+          }),
+          audit: this.buildHandoffAudit("handoff.confirmation.detached_current", binding, event),
+        },
+        binding,
+        event,
+      );
+      return;
+    }
+
+    await this.deliverAndStoreStatusSubmode(
+      {
+        ...buildHandoffBaseBranchPickerIntent({
+          id: this.newIntentId("handoff-base-branch"),
+          capabilityProfile: this.capabilityProfile,
+          binding,
+          context,
+          createdAt: this.now(),
+        }),
+        audit: this.buildHandoffAudit("handoff.base_branch_picker", binding, event),
+      },
+      binding,
+      event,
+    );
+  }
+
   private async presentHandoffConfirmation(
     binding: MessagingBindingRecord,
     event: MessagingInboundCallbackEvent,
@@ -2719,6 +2876,8 @@ export class MessagingController {
           binding,
           context,
           createdAt: this.now(),
+          strategy: request.strategy,
+          baseBranch: request.baseBranch,
           leaveLocalBranch: request.leaveLocalBranch,
         }),
         audit: this.buildHandoffAudit(
@@ -4564,14 +4723,19 @@ function handoffContextForBinding(
     (candidate, index, branches) =>
       candidate !== branch && branches.indexOf(candidate) === index,
   );
-  if (leaveLocalBranches.length === 0) {
+  const leaveChoices = ["HEAD", ...leaveLocalBranches];
+  if (leaveChoices.length === 0) {
     return undefined;
   }
 
   return {
     backend: binding.backend,
+    baseBranches: directorySummary?.gitStatus?.branches,
     branch,
-    leaveLocalBranches,
+    currentSha: directorySummary?.gitStatus?.currentSha,
+    defaultBranch: directorySummary?.gitStatus?.defaultBranch,
+    hasUncommittedChanges: directorySummary?.gitStatus?.hasUncommittedChanges,
+    leaveLocalBranches: leaveChoices,
     projectLabel: localDirectory.label,
     repositoryPath: localDirectory.path,
     threadId: binding.threadId,
@@ -4628,6 +4792,18 @@ function validateHandoffRequest(
     };
   }
   if (request.direction === "local-to-worktree") {
+    if (request.strategy === "detached-changes") {
+      if (
+        request.baseBranch &&
+        !(context.baseBranches ?? []).includes(request.baseBranch)
+      ) {
+        return {
+          valid: false,
+          reason: "That base branch is no longer available. Use /status to refresh.",
+        };
+      }
+      return { valid: true };
+    }
     if (!request.leaveLocalBranch) {
       return {
         valid: false,
@@ -4658,6 +4834,8 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     `Workspace: ${result.workMode === "worktree" ? "Worktree" : "Local"}`,
     `Target: ${result.targetPath}`,
     result.branch ? `Branch: ${result.branch}` : undefined,
+    result.baseBranch ? `Base branch: ${result.baseBranch}` : undefined,
+    !result.branch && result.baseSha ? `Detached at: ${result.baseSha}` : undefined,
     ...result.warnings.map((warning) => `Warning: ${warning}`),
   ]
     .filter((line): line is string => Boolean(line))

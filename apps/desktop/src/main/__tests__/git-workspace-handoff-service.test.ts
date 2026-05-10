@@ -97,6 +97,31 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("moves a local branch to a new worktree and leaves local detached", async () => {
+    const repoPath = await createRepo();
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      leaveLocalBranch: "HEAD",
+      now: 1250,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.branch).toBe("feature/handoff");
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe(
+      "feature/handoff",
+    );
+  });
+
   it("moves dirty local changes to a detached worktree and leaves local on the current branch", async () => {
     const repoPath = await createRepo();
     await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
@@ -141,6 +166,42 @@ describe("GitWorkspaceHandoffService", () => {
       false,
     );
     expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+  });
+
+  it("creates a clean detached worktree from the selected base branch", async () => {
+    const repoPath = await createRepo();
+    await git(repoPath, ["switch", "main"]);
+    await writeFile(path.join(repoPath, "main-only.txt"), "main\n", "utf8");
+    await git(repoPath, ["add", "main-only.txt"]);
+    await git(repoPath, ["commit", "-m", "main only"]);
+    await git(repoPath, ["switch", "feature/handoff"]);
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      baseBranch: "main",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 1750,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.strategy).toBe("detached-changes");
+    expect(result.baseBranch).toBe("main");
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(
+      await git(repoPath, ["rev-parse", "main"]),
+    );
+    await expect(readFile(path.join(result.targetPath, "main-only.txt"), "utf8")).resolves.toBe(
+      "main\n",
+    );
   });
 
   it("moves a dirty worktree branch back to local and archives the old worktree", async () => {

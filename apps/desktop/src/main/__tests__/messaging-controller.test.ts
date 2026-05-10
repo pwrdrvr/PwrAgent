@@ -144,6 +144,17 @@ describe("MessagingController", () => {
       }),
     );
 
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Workspace: Local"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:start",
+      }),
+    );
+
     expect(harness.startThread).toHaveBeenCalledWith({
       backend: "codex",
       cwd: "/repo/pwragent",
@@ -152,6 +163,8 @@ describe("MessagingController", () => {
       model: undefined,
       reasoningEffort: undefined,
       serviceTier: undefined,
+      workMode: "local",
+      branchName: undefined,
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
@@ -193,6 +206,11 @@ describe("MessagingController", () => {
           label: "PwrAgent",
           path: "/repo/pwragent",
         },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:start",
       }),
     );
     await harness.controller.handleInboundEvent(buildTextEvent("continue on the new thread"));
@@ -3952,13 +3970,13 @@ describe("MessagingController", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Branch",
         }),
       ]),
     });
 
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -3972,22 +3990,22 @@ describe("MessagingController", () => {
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "handoff:select-leave-branch",
-          label: "1. main",
+          label: "1. Detached HEAD",
         }),
       ]),
     });
 
-    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    const leaveDetached = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
-        actionId: leaveMain.id,
-        value: leaveMain.value,
+        actionId: leaveDetached.id,
+        value: leaveDetached.value,
       }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      body: expect.stringContaining("Leave Local on: main"),
+      body: expect.stringContaining("Leave Local on: Detached HEAD"),
     });
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
@@ -4005,10 +4023,11 @@ describe("MessagingController", () => {
     expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
       backend: "codex",
       direction: "local-to-worktree",
-      leaveLocalBranch: "main",
+      leaveLocalBranch: "HEAD",
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent",
+      strategy: "move-branch",
       threadId: "thread-1",
     });
     expect(harness.delivered.at(-2)).toMatchObject({
@@ -4038,7 +4057,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4076,7 +4095,7 @@ describe("MessagingController", () => {
     expect(secondPage.prompt).toContain("Page 2/3.");
     expect(secondPage.choices[0]).toMatchObject({
       id: "handoff:select-leave-branch",
-      label: "9. branch-9",
+      label: "9. branch-8",
     });
     expect(secondPage.choices).toContainEqual(
       expect.objectContaining({
@@ -4122,14 +4141,14 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
       backend: "codex",
       direction: "worktree-to-local",
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
       threadId: "thread-1",
-    });
+    }));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Directory: /repo/pwragent"),
@@ -4150,7 +4169,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4190,7 +4209,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,

@@ -13,6 +13,7 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingJsonValue,
   MessagingProjectPickerIntent,
+  MessagingSingleSelectIntent,
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
 } from "@pwragent/messaging-interface";
@@ -51,6 +52,9 @@ export type ResumeBrowserThreadSelection = {
 };
 
 export type ResumeBrowserProjectSelection = MessagingBrowseSelectedProject;
+export type ResumeBrowserBaseBranchSelection = {
+  branch: string;
+};
 
 export function parseResumeCommandArgs(args: string[]): ParsedResumeCommand {
   const tokens = normalizeOptionDashes(args.join(" "))
@@ -128,7 +132,13 @@ export function buildResumeIntent(params: {
   id: string;
   navigation: NavigationSnapshot;
   session: MessagingBrowseSessionRecord;
-}): MessagingThreadPickerIntent | MessagingProjectPickerIntent {
+}): MessagingThreadPickerIntent | MessagingProjectPickerIntent | MessagingSingleSelectIntent {
+  if (params.session.mode === "new_thread_options") {
+    return buildNewThreadOptionsIntent(params);
+  }
+  if (params.session.mode === "new_base_branch") {
+    return buildNewThreadBaseBranchPickerIntent(params);
+  }
   if (params.session.mode === "projects" || params.session.mode === "new_project") {
     return buildProjectPickerIntent(params);
   }
@@ -149,6 +159,16 @@ export function selectProjectFromValue(
     label: value.label,
     path: typeof value.path === "string" ? value.path : undefined,
   };
+}
+
+export function selectBaseBranchFromValue(
+  value: unknown,
+): ResumeBrowserBaseBranchSelection | undefined {
+  if (!isRecord(value) || typeof value.branch !== "string") {
+    return undefined;
+  }
+  const branch = value.branch.trim();
+  return branch ? { branch } : undefined;
 }
 
 export function selectThreadFromValue(
@@ -287,6 +307,144 @@ function buildProjectPickerIntent(params: {
     },
     prompt: projectPickerPromptText(params.session, page.totalPages, page.totalItems),
     targetSurface: params.session.surface,
+  };
+}
+
+function buildNewThreadOptionsIntent(params: {
+  createdAt: number;
+  id: string;
+  navigation: NavigationSnapshot;
+  session: MessagingBrowseSessionRecord;
+}): MessagingSingleSelectIntent {
+  const project = params.session.selectedProject;
+  const directory = project
+    ? directoryForProjectSelection(params.navigation, project)
+    : undefined;
+  const workMode = params.session.newThreadWorkMode ?? "local";
+  const baseBranch = params.session.newThreadBranchName ??
+    defaultBaseBranchForDirectory(directory);
+  const worktreeSelected = workMode === "worktree";
+  const projectLabel = project?.label ?? "selected project";
+  const choices: MessagingSurfaceAction[] = [
+    {
+      id: "browse:new:start",
+      label: worktreeSelected ? "Start New Worktree" : "Start in Local",
+      style: "primary",
+      fallbackText: "start",
+      priority: 1,
+    },
+    {
+      id: "browse:new:toggle-workmode",
+      label: worktreeSelected ? "Use Local" : "New Worktree",
+      style: "secondary",
+      fallbackText: worktreeSelected ? "local" : "worktree",
+      priority: 2,
+    },
+    ...(worktreeSelected
+      ? [
+          {
+            id: "browse:new:base-branch",
+            label: `Base Branch (${baseBranch ?? "default"})`,
+            style: "secondary" as const,
+            fallbackText: "base branch",
+            priority: 3,
+          },
+        ]
+      : []),
+    {
+      id: "browse:mode:new",
+      label: "Projects",
+      style: "navigation",
+      fallbackText: "projects",
+      priority: 4,
+    },
+    {
+      id: "browse:cancel",
+      label: "Cancel",
+      style: "secondary",
+      fallbackText: "cancel",
+      priority: 5,
+    },
+  ];
+
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.session.bindingId,
+    browseSessionId: params.session.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.session.surface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.session.surface,
+    fallbackText: [
+      newThreadOptionsPromptText(projectLabel, workMode, baseBranch),
+      `Reply Start, ${worktreeSelected ? "Local" : "Worktree"}, Projects, or Cancel.`,
+    ].join("\n"),
+    prompt: newThreadOptionsPromptText(projectLabel, workMode, baseBranch),
+    choices,
+  };
+}
+
+function buildNewThreadBaseBranchPickerIntent(params: {
+  createdAt: number;
+  id: string;
+  navigation: NavigationSnapshot;
+  session: MessagingBrowseSessionRecord;
+}): MessagingSingleSelectIntent {
+  const project = params.session.selectedProject;
+  const directory = project
+    ? directoryForProjectSelection(params.navigation, project)
+    : undefined;
+  const branches = branchChoicesForDirectory(directory);
+  const currentBranch = params.session.newThreadBranchName ??
+    defaultBaseBranchForDirectory(directory);
+  const choices: MessagingSurfaceAction[] = [
+    ...branches.map((branch, index) => ({
+      id: "browse:new:select-base-branch",
+      label: `${index + 1}. ${branch}${branch === currentBranch ? " (current)" : ""}`,
+      style: "secondary" as const,
+      fallbackText: String(index + 1),
+      priority: 10 + index,
+      value: {
+        branch,
+      },
+    })),
+    {
+      id: "browse:new:options",
+      label: "Back",
+      style: "navigation",
+      fallbackText: "back",
+      priority: 1,
+    },
+    {
+      id: "browse:cancel",
+      label: "Cancel",
+      style: "secondary",
+      fallbackText: "cancel",
+      priority: 2,
+    },
+  ];
+
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.session.bindingId,
+    browseSessionId: params.session.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.session.surface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.session.surface,
+    fallbackText: [
+      `Choose the base branch for the new worktree${project?.label ? ` in ${project.label}` : ""}.`,
+      ...branches.map((branch, index) => `${index + 1}. ${branch}`),
+      "Reply with a number, Back, or Cancel.",
+    ].join("\n"),
+    prompt: `Choose the base branch for the new worktree${project?.label ? ` in ${project.label}` : ""}.`,
+    choices,
   };
 }
 
@@ -515,6 +673,44 @@ function projectPickerFallbackText(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function newThreadOptionsPromptText(
+  projectLabel: string,
+  workMode: "local" | "worktree",
+  baseBranch: string | undefined,
+): string {
+  return [
+    `New thread: ${projectLabel}`,
+    `Workspace: ${workMode === "worktree" ? "New Worktree" : "Local"}`,
+    workMode === "worktree"
+      ? `Base branch: ${baseBranch ?? "repository default"}`
+      : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function defaultBaseBranchForDirectory(
+  directory: NavigationDirectorySummary | undefined,
+): string | undefined {
+  return (
+    directory?.gitStatus?.defaultBranch ??
+    directory?.gitStatus?.currentBranch ??
+    directory?.gitStatus?.branches?.[0]
+  );
+}
+
+function branchChoicesForDirectory(
+  directory: NavigationDirectorySummary | undefined,
+): string[] {
+  const branches = directory?.gitStatus?.branches ?? [];
+  const defaultBranch = defaultBaseBranchForDirectory(directory);
+  const ordered = [
+    defaultBranch,
+    ...branches.filter((branch) => branch !== defaultBranch),
+  ].filter((branch): branch is string => Boolean(branch));
+  return [...new Set(ordered)];
 }
 
 function formatThreadLabel(thread: NavigationThreadSummary): string {

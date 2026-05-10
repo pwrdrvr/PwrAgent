@@ -10,6 +10,7 @@ import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
+  LaunchpadWorkMode,
 } from "@pwragent/shared";
 // Re-export shared messaging primitives so consumers can pick either
 // import path without seeing two parallel declarations.
@@ -611,6 +612,7 @@ export type MessagingProjectPickerIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingSingleSelectIntent = MessagingBaseSurfaceIntent & {
   kind: "single_select";
+  browseSessionId?: string;
   prompt: string;
   choices: MessagingChoice[];
 };
@@ -867,7 +869,8 @@ export type MessagingBrowseMode =
   | "projects"
   | "project_threads"
   | "new_project"
-  | "new_thread_options";
+  | "new_thread_options"
+  | "new_base_branch";
 
 export type MessagingBrowseLaunchAction = "resume_thread" | "start_new_thread";
 
@@ -890,6 +893,8 @@ export type MessagingBrowseSessionRecord = {
   pageSize: number;
   preferences?: MessagingBindingPreferences;
   query?: string;
+  newThreadWorkMode?: LaunchpadWorkMode;
+  newThreadBranchName?: string;
   selectedProject?: MessagingBrowseSelectedProject;
   surface?: MessagingSurfaceRef;
   updatedAt: number;

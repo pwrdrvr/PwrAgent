@@ -227,6 +227,124 @@ describe("messaging resume browser", () => {
     expect(intent.prompt).not.toContain("1. PwrAgent");
     expect(intent.fallbackText).toContain("1. PwrAgent");
   });
+
+  it("renders new-thread workspace options after a project is selected", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot(),
+      session: buildBrowseSession({
+        launchAction: "start_new_thread",
+        mode: "new_thread_options",
+        selectedProject: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Workspace: Local"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:start", label: "Start in Local" }),
+        expect.objectContaining({ id: "browse:new:toggle-workmode", label: "New Worktree" }),
+      ]),
+    });
+  });
+
+  it("shows the default base branch when new-thread worktree mode is selected", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        directories: [
+          {
+            key: "directory:pwragent",
+            kind: "directory",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
+            threadKeys: ["codex:thread-1"],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 1000,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches: ["feature/current", "main", "release"],
+            },
+          },
+        ],
+      }),
+      session: buildBrowseSession({
+        launchAction: "start_new_thread",
+        mode: "new_thread_options",
+        newThreadWorkMode: "worktree",
+        selectedProject: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Base branch: main"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:base-branch",
+          label: "Base Branch (main)",
+        }),
+      ]),
+    });
+  });
+
+  it("renders a base-branch picker for new worktree threads", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        directories: [
+          {
+            key: "directory:pwragent",
+            kind: "directory",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
+            threadKeys: ["codex:thread-1"],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 1000,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches: ["feature/current", "main", "release"],
+            },
+          },
+        ],
+      }),
+      session: buildBrowseSession({
+        launchAction: "start_new_thread",
+        mode: "new_base_branch",
+        newThreadWorkMode: "worktree",
+        selectedProject: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "single_select",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:select-base-branch",
+          label: "1. main (current)",
+          value: { branch: "main" },
+        }),
+      ]),
+    });
+  });
 });
 
 function buildBrowseSession(

@@ -38,6 +38,7 @@ type HandoffParams = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
+  baseBranch?: string;
   now?: number;
 };
 
@@ -325,7 +326,11 @@ export class GitWorkspaceHandoffService {
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
+    if (leaveLocalBranch === "HEAD") {
+      await runGit(context.sourcePath, ["switch", "--detach"]);
+    } else {
+      await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
+    }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     await runGit(context.repositoryPath, ["worktree", "add", targetPath, context.branch]);
@@ -358,6 +363,7 @@ export class GitWorkspaceHandoffService {
     context: HandoffContext,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const baseSha = context.headSha;
+    const requestedBaseBranch = sanitizeBranchName(params.baseBranch ?? "");
     const storage = await this.resolveStorage();
     const targetPath = await computeWorktreePath({
       backend: context.backend,
@@ -375,12 +381,22 @@ export class GitWorkspaceHandoffService {
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    if (!sourceStash) {
+    const baseRef = sourceStash || !requestedBaseBranch ? baseSha : requestedBaseBranch;
+    if (sourceStash && requestedBaseBranch) {
+      warnings.push(
+        `Dirty changes were present; the detached worktree starts at ${baseSha} instead of ${requestedBaseBranch}.`,
+      );
+    } else if (!sourceStash && requestedBaseBranch) {
+      warnings.push(`The new worktree starts detached from ${requestedBaseBranch}.`);
+    } else if (!sourceStash) {
       warnings.push("No dirty non-ignored changes were available to move.");
     }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
-    await runGit(context.repositoryPath, ["worktree", "add", "--detach", targetPath, baseSha]);
+    await runGit(context.repositoryPath, ["worktree", "add", "--detach", targetPath, baseRef]);
+    const detachedBaseSha = trim(
+      (await runGit(targetPath, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout,
+    );
     const appliedSourceStash = await applyVerifyAndDropStash(targetPath, sourceStash);
 
     const linkedDirectory = this.buildLinkedDirectory({
@@ -395,7 +411,8 @@ export class GitWorkspaceHandoffService {
       direction: "local-to-worktree",
       strategy: "detached-changes",
       workMode: "worktree",
-      baseSha,
+      baseSha: detachedBaseSha,
+      baseBranch: requestedBaseBranch && !sourceStash ? requestedBaseBranch : undefined,
       repositoryPath: context.repositoryPath,
       targetPath,
       linkedDirectory,
