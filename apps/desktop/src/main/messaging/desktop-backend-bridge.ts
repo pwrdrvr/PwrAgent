@@ -13,6 +13,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
@@ -87,6 +89,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
     return await this.registry.handoffThreadWorkspace(request);
+  }
+
+  async materializeDirectoryLaunchpad(
+    request: MaterializeDirectoryLaunchpadRequest,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    return await this.registry.materializeDirectoryLaunchpad(request);
   }
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
