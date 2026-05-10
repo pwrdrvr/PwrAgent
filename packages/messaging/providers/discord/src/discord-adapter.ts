@@ -13,8 +13,10 @@ import {
   type User,
 } from "discord.js";
 import type {
+  MessagingAdapterAuthorizationUpdate,
   MessagingCapabilityProfile,
   MessagingAdapterState,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -248,6 +250,10 @@ export type DiscordProviderAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -331,6 +337,25 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.options.config.authorizedActorIds = discordContactsFromIds(
+      update.authorizedActorIds,
+      this.options.config.authorizedActorIds,
+    );
+    this.options.config.authorizedGuildIds = discordContactsFromIds(
+      update.authorizedConversationIds ?? [],
+      this.options.config.authorizedGuildIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.options.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
@@ -2311,6 +2336,14 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
   return intent.allowedActorIds && intent.allowedActorIds.length > 0
     ? intent.allowedActorIds
     : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function discordContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

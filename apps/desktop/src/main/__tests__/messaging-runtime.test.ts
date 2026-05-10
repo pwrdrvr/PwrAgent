@@ -1640,6 +1640,129 @@ describe("DesktopMessagingRuntime", () => {
     ]);
   });
 
+  it("hot-applies authorization changes without restarting the running adapter", async () => {
+    await prepareRuntimeStore();
+    const updateAuthorization = vi.fn(async () => undefined);
+    const telegramAdapter = createAdapter("telegram", {
+      updateAuthorization,
+      updateRenderingPreferences: vi.fn(async () => undefined),
+    });
+    const replacementTelegramAdapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.authorizedActorIds.length > 1
+          ? replacementTelegramAdapter
+          : telegramAdapter,
+      ];
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: bridge,
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+          authorizedSupergroupIds: [{ id: "-1001", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    vi.mocked(bridge.getNavigationSnapshot).mockClear();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [
+          { id: "user-1", displayName: "" },
+          { id: "user-2", displayName: "" },
+        ],
+        authorizedSupergroupIds: [
+          { id: "-1001", displayName: "" },
+          { id: "-1002", displayName: "" },
+        ],
+      },
+    });
+    await telegramAdapter.listener?.({
+      ...buildCommandEvent("/resume"),
+      actor: { platformUserId: "user-2" },
+    });
+
+    expect(telegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(telegramAdapter.stop).not.toHaveBeenCalled();
+    expect(telegramAdapter.updateAuthorization).toHaveBeenCalledWith({
+      authorizedActorIds: ["user-1", "user-2"],
+      authorizedConversationIds: ["-1001", "-1002"],
+    });
+    expect(replacementTelegramAdapter.start).not.toHaveBeenCalled();
+    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+    });
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "telegram: hot-applied messaging config",
+      expect.objectContaining({
+        channel: "telegram",
+        changedFields: [
+          "telegram.authorizedActorIds",
+          "telegram.authorizedSupergroupIds",
+        ],
+      }),
+    );
+  });
+
+  it("restarts on authorization changes when the adapter has no hot-update hook", async () => {
+    await prepareRuntimeStore();
+    const firstTelegramAdapter = createAdapter("telegram");
+    const secondTelegramAdapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.authorizedActorIds.length > 1
+          ? secondTelegramAdapter
+          : firstTelegramAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [
+          { id: "user-1", displayName: "" },
+          { id: "user-2", displayName: "" },
+        ],
+      },
+    });
+
+    expect(firstTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(secondTelegramAdapter.start).toHaveBeenCalledTimes(1);
+  });
+
   it("hot-applies config by stopping disabled channels and restarting changed credentials", async () => {
     await prepareRuntimeStore();
     const firstTelegramAdapter = createAdapter("telegram");

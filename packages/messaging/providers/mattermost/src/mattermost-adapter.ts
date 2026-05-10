@@ -14,6 +14,8 @@ import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/cli
 import type {
   MessagingActorIdentity,
   MessagingAdapterState,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -137,6 +139,10 @@ export type MattermostProviderAdapter = {
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   /**
    * Subscribe to fatal post-start runtime errors. Fires once per
    * runtime-error episode, NOT per transient websocket retry.
@@ -273,7 +279,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     },
   };
 
-  readonly authorizedActorIds: readonly string[];
+  private authorizedActorIdsValue: string[];
 
   private readonly client: Client4;
   private readonly websocketClient: WebSocketClient;
@@ -348,7 +354,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   constructor(options: MattermostAdapterOptions) {
     this.config = options.config;
-    this.authorizedActorIds = options.config.authorizedActorIds.map(
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
       (contact) => contact.id,
     );
     this.callbackHandleStore = options.callbackHandleStore;
@@ -380,6 +386,26 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         validSlashCommandTokens: this.slashCommandTokens,
         logger: this.logger,
       });
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.authorizedActorIdsValue;
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    this.config.authorizedActorIds = mattermostContactsFromIds(
+      update.authorizedActorIds,
+      this.config.authorizedActorIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   async start(listener: MattermostInboundListener): Promise<void> {
@@ -2465,6 +2491,14 @@ function callbackAllowedActorIds(
   }
   const actorId = intent.audit?.actor.platformUserId ?? fallbackActorId;
   return actorId ? [actorId] : ["unknown"];
+}
+
+function mattermostContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
