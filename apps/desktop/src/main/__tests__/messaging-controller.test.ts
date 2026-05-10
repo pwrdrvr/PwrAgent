@@ -327,6 +327,55 @@ describe("MessagingController", () => {
     );
   });
 
+  it("surfaces debounced new-thread creation failures", async () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const harness = await createHarness({
+      inputDebounceMs: 10,
+      logger,
+      startThread: async () => {
+        throw new Error("backend unavailable");
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(harness.startThread).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Thread could not start",
+      body: "backend unavailable",
+      recoverable: true,
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "messaging new-thread prompt failed",
+      expect.objectContaining({
+        error: "backend unavailable",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toBeUndefined();
+  });
+
   it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
     const harness = await createHarness();
     await harness.store.upsertBinding({
@@ -4700,6 +4749,7 @@ async function createHarness(options?: {
    */
   bindingChangedListener?: false;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 }): Promise<{
   controller: MessagingController;
@@ -4753,11 +4803,14 @@ async function createHarness(options?: {
       : {}),
   };
   const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
-  const startThread = vi.fn(async (request: StartThreadRequest) => ({
-    backend: request.backend,
-    threadId: "new-thread-1",
-    executionMode: request.executionMode ?? "default",
-  }));
+  const startThread = vi.fn(
+    options?.startThread ??
+      (async (request: StartThreadRequest) => ({
+        backend: request.backend,
+        threadId: "new-thread-1",
+        executionMode: request.executionMode ?? "default",
+      })),
+  );
   const startTurn = vi.fn(async (request: StartTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
