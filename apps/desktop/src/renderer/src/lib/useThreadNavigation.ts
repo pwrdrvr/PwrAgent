@@ -5,6 +5,7 @@ import type {
   AppServerReviewTarget,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
+  ArchiveThreadCleanupResult,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   NavigationDirectorySummary,
@@ -46,6 +47,21 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
   }
 
   return selectionKey.slice("launchpad:".length);
+}
+
+function formatArchiveCleanupFailure(
+  cleanup: ArchiveThreadCleanupResult[]
+): string | undefined {
+  const failures = cleanup.filter(
+    (item) => !item.removedWorktree || item.error || item.skippedReason
+  );
+  const firstFailure = failures[0];
+  if (!firstFailure) {
+    return undefined;
+  }
+
+  const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
+  return `Thread archived, but worktree cleanup failed for ${firstFailure.worktreePath}: ${reason}`;
 }
 
 function linkedDirectoriesEqual(
@@ -2229,10 +2245,14 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       );
 
       try {
-        await archiveThreadRequest({
+        const response = await archiveThreadRequest({
           backend: thread.source,
           threadId: thread.id,
         });
+        const cleanupFailure = formatArchiveCleanupFailure(response.cleanup);
+        if (cleanupFailure) {
+          setArchiveThreadError(cleanupFailure);
+        }
         await refresh();
       } catch (error) {
         suppressedArchivedThreadKeysRef.current.delete(threadKey);

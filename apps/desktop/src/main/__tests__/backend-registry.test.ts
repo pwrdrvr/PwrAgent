@@ -1,3 +1,8 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -18,8 +23,32 @@ import type {
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
+const execFileAsync = promisify(execFileCallback);
+
 async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 10,
+  });
+  return stdout.trim();
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
@@ -423,6 +452,7 @@ class MockBackendClient {
       modelListErrors?: Error[];
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
+      listThreadsError?: Error;
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -448,6 +478,9 @@ class MockBackendClient {
     this.listThreadsCallCount += 1;
     this.lastListThreadsDiagnostics = diagnostics;
     this.lastListThreadsParams = params;
+    if (this.options.listThreadsError) {
+      throw this.options.listThreadsError;
+    }
     return this.options.threads ?? [];
   }
 
@@ -2545,6 +2578,107 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.close();
+  });
+
+  it("refuses to archive when worktree cleanup metadata cannot be loaded", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      listThreadsError: new Error("thread list unavailable"),
+    });
+    const archiveWorktree = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    await expect(
+      registry.archiveThread({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).rejects.toThrow("Unable to load thread metadata for archive cleanup.");
+
+    expect(codexClient.lastArchiveThreadParams).toBeUndefined();
+    expect(archiveWorktree).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("removes a real Git worktree and unregisters it from the source repo when archiving a thread", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-archive-"));
+    const repoPath = path.join(root, "PwrAgnt");
+    const worktreeRoot = path.join(root, ".codex", "worktrees", "mozycyl1");
+    const worktreePath = path.join(worktreeRoot, "PwrAgnt");
+
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["config", "user.email", "test@example.com"]);
+      await git(repoPath, ["config", "user.name", "Test User"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+      await mkdir(worktreeRoot, { recursive: true });
+      await git(repoPath, ["worktree", "add", "-b", "feat/archive-cleanup", worktreePath, "main"]);
+      const resolvedWorktreePath = await realpath(worktreePath);
+
+      const thread: AppServerThreadSummary = {
+        id: "thread-1",
+        title: "Archive real worktree",
+        titleSource: "explicit",
+        linkedDirectories: [
+          {
+            id: `directory:${repoPath}`,
+            label: "PwrAgnt",
+            path: repoPath,
+            kind: "worktree",
+            worktreePath,
+          },
+        ],
+        source: "codex",
+        gitBranch: "feat/archive-cleanup",
+        updatedAt: 2,
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: [thread],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore: createOverlayStoreMock(),
+      });
+
+      const response = await registry.archiveThread({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      expect(response.cleanup).toEqual([
+        {
+          worktreePath: resolvedWorktreePath,
+          branch: "feat/archive-cleanup",
+          removedWorktree: true,
+          deletedBranch: false,
+        },
+      ]);
+      expect(await pathExists(resolvedWorktreePath)).toBe(false);
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(
+        resolvedWorktreePath,
+      );
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("hands off a local thread to a worktree and records the new workspace overlay", async () => {

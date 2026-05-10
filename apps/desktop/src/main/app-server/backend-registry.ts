@@ -1314,10 +1314,21 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
-    const thread = await this.findThreadForArchiveCleanup({
-      backend,
-      threadId: request.threadId,
-    });
+    let thread: AppServerThreadSummary;
+    try {
+      thread = await this.findThreadForArchiveCleanup({
+        backend,
+        threadId: request.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("archive cleanup metadata lookup failed", {
+        backend,
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error("Unable to load thread metadata for archive cleanup.");
+    }
+
     const result =
       backend === "codex"
         ? await this.withCodexThreadClient(request.threadId, async (client) =>
@@ -1325,12 +1336,10 @@ export class DesktopBackendRegistry {
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
-    const cleanup = thread
-      ? await this.archiveThreadWorktrees({
-          backend,
-          thread,
-        })
-      : [];
+    const cleanup = await this.archiveThreadWorktrees({
+      backend,
+      thread,
+    });
 
     return {
       backend,
@@ -3217,23 +3226,28 @@ export class DesktopBackendRegistry {
   private async findThreadForArchiveCleanup(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<AppServerThreadSummary | undefined> {
+  }): Promise<AppServerThreadSummary> {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
       callerReason: "archive-cleanup",
-    }).catch(() => []);
-    const archivedThreads = activeThreads.some((thread) => thread.id === params.threadId)
-      ? []
-      : await this.listThreads({
-          backend: params.backend,
-          archived: true,
-          callerReason: "archive-cleanup",
-        }).catch(() => []);
+    });
+    const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    if (activeThread) {
+      return activeThread;
+    }
 
-    return [...activeThreads, ...archivedThreads].find(
-      (thread) => thread.id === params.threadId,
-    );
+    const archivedThreads = await this.listThreads({
+      backend: params.backend,
+      archived: true,
+      callerReason: "archive-cleanup",
+    });
+    const archivedThread = archivedThreads.find((thread) => thread.id === params.threadId);
+    if (archivedThread) {
+      return archivedThread;
+    }
+
+    throw new Error("Thread metadata was not found.");
   }
 
   private async findThreadForWorkspaceHandoff(params: {
@@ -3424,6 +3438,13 @@ export class DesktopBackendRegistry {
             deletedBranch: false,
           };
         } catch (error) {
+          backendRegistryLog.warn("archive thread worktree cleanup failed", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: candidate.repositoryPath,
+            worktreePath: candidate.worktreePath,
+            error: error instanceof Error ? error.message : String(error),
+          });
           return {
             worktreePath: candidate.worktreePath,
             branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
