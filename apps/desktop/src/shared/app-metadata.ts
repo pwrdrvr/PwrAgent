@@ -8,6 +8,14 @@ export type AppMetadata = {
   nodeVersion: string;
 };
 
+export type AppLicenseDocumentKind = "license" | "third-party-licenses";
+
+export type AppLicenseDocument = {
+  kind: AppLicenseDocumentKind;
+  title: string;
+  content: string;
+};
+
 export type AppUpdateCheckResult =
   | { status: "skipped"; reason: string }
   | { status: "error"; message: string }

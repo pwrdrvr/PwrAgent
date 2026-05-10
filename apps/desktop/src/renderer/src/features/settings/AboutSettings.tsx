@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
+  AppLicenseDocument,
+  AppLicenseDocumentKind,
   AppMetadata,
   AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
@@ -17,6 +19,15 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
   const [updateResult, setUpdateResult] = useState<
     AppUpdateCheckResult | undefined
   >(undefined);
+  const [licenseDocument, setLicenseDocument] = useState<
+    AppLicenseDocument | undefined
+  >(undefined);
+  const [licenseLoading, setLicenseLoading] = useState<
+    AppLicenseDocumentKind | undefined
+  >(undefined);
+  const [licenseError, setLicenseError] = useState<string | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +68,22 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
       });
     } finally {
       setUpdateChecking(false);
+    }
+  };
+
+  const readLicenseDocument = props.desktopApi?.readLicenseDocument;
+  const handleReadLicenseDocument = async (kind: AppLicenseDocumentKind) => {
+    if (!readLicenseDocument) {
+      return;
+    }
+    setLicenseLoading(kind);
+    setLicenseError(undefined);
+    try {
+      setLicenseDocument(await readLicenseDocument(kind));
+    } catch (err) {
+      setLicenseError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLicenseLoading(undefined);
     }
   };
 
@@ -143,6 +170,57 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
             <dd>{metadata.nodeVersion}</dd>
           </div>
         </dl>
+      </SettingsSection>
+
+      <SettingsSection eyebrow="License" title="Attribution">
+        <div className="settings-license-actions">
+          <p className="settings-panel__hint">
+            PwrAgent is licensed under MIT.
+          </p>
+          <div className="settings-button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={!readLicenseDocument || licenseLoading === "license"}
+              onClick={() => {
+                void handleReadLicenseDocument("license");
+              }}
+            >
+              {licenseLoading === "license" ? "Loading…" : "View license"}
+            </button>
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={
+                !readLicenseDocument ||
+                licenseLoading === "third-party-licenses"
+              }
+              onClick={() => {
+                void handleReadLicenseDocument("third-party-licenses");
+              }}
+            >
+              {licenseLoading === "third-party-licenses"
+                ? "Loading…"
+                : "Third-party licenses"}
+            </button>
+          </div>
+          {licenseError ? (
+            <p className="settings-row__error">
+              Could not load license document: {licenseError}
+            </p>
+          ) : null}
+          {licenseDocument ? (
+            <article
+              className="settings-license-viewer"
+              aria-label={licenseDocument.title}
+            >
+              <header className="settings-license-viewer__header">
+                <h3>{licenseDocument.title}</h3>
+              </header>
+              <pre>{licenseDocument.content}</pre>
+            </article>
+          ) : null}
+        </div>
       </SettingsSection>
 
       {updateResult ? <UpdateResultStatus result={updateResult} /> : null}

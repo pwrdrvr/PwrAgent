@@ -53,6 +53,12 @@ files:
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"
 
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD_PARTY_LICENSES
+    to: THIRD_PARTY_LICENSES
+
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.
 electronFuses:
