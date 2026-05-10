@@ -31,6 +31,7 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import {
   MessagingController,
   messagingDeliveryPriority,
+  shouldApplyDeliveryBudget,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
@@ -1972,6 +1973,101 @@ describe("MessagingController", () => {
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
   });
 
+  it("falls back with a final assistant message per binding", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (
+          intent.kind === "stream_update" &&
+          intent.stream.isFinal &&
+          intent.bindingId === "binding-two"
+        ) {
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000,
+            outcome: "discarded" as const,
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000,
+          outcome: intent.kind === "status" && intent.delivery?.pin
+            ? "pinned" as const
+            : "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    const firstBinding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    if (!firstBinding) {
+      throw new Error("expected first binding");
+    }
+    await harness.store.upsertBinding({
+      ...firstBinding,
+      id: "binding-two",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "topic-2",
+          kind: "topic",
+          parentId: "supergroup-1",
+        },
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+    delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Hello final." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      delivered.filter(
+        (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+      ),
+    ).toHaveLength(2);
+    expect(delivered).toContainEqual(
+      expect.objectContaining({
+        bindingId: "binding-two",
+        kind: "message",
+        role: "assistant",
+      }),
+    );
+  });
+
   it("rechecks budget admission after a provider rate-limit rejection", async () => {
     let now = 1000;
     let rejectNextStream = false;
@@ -2232,6 +2328,26 @@ describe("MessagingController", () => {
       "critical_interactive",
     );
     expect(messagingDeliveryPriority(approvalCleanup)).toBe("routine_status");
+  });
+
+  it("does not charge typing activity against the message write budget", () => {
+    const activity = {
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1_000,
+      state: "active",
+    } satisfies MessagingSurfaceIntent;
+    const status = {
+      id: "status-1",
+      kind: "status",
+      createdAt: 1_000,
+      status: "working",
+      text: "Working",
+    } satisfies MessagingSurfaceIntent;
+
+    expect(shouldApplyDeliveryBudget(activity)).toBe(false);
+    expect(shouldApplyDeliveryBudget(status)).toBe(true);
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {

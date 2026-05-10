@@ -501,7 +501,7 @@ export class MessagingController {
           assistantText,
         );
         if (deliveredFinalStream) {
-          this.markAssistantMessageDelivered(event, assistantText);
+          this.markAssistantMessageDelivered(event, binding, assistantText);
         } else {
           await this.deliverAssistantMessage(assistantText, event, binding);
         }
@@ -2013,7 +2013,7 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    if (!this.markAssistantMessageDelivered(event, text)) {
+    if (!this.markAssistantMessageDelivered(event, binding, text)) {
       return;
     }
     this.logger.debug?.(
@@ -2039,8 +2039,12 @@ export class MessagingController {
     );
   }
 
-  private markAssistantMessageDelivered(event: AgentEvent, text: string): boolean {
-    const key = assistantMessageDeliveryKey(event, text);
+  private markAssistantMessageDelivered(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    text: string,
+  ): boolean {
+    const key = assistantMessageDeliveryKey(event, binding, text);
     if (this.deliveredAssistantMessageKeys.has(key)) {
       return false;
     }
@@ -4062,7 +4066,9 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
-    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    let scope = shouldApplyDeliveryBudget(routedIntent)
+      ? this.options.adapter.resolveDeliveryScope?.(routedIntent)
+      : undefined;
     const priority = messagingDeliveryPriority(routedIntent);
     const channel = binding?.channel.channel ??
       routedIntent.audit?.channel.channel ??
@@ -4747,6 +4753,10 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
   return true;
 }
 
+export function shouldApplyDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+  return intent.kind !== "activity";
+}
+
 export function messagingDeliveryPriority(
   intent: MessagingSurfaceIntent,
 ): MessagingDeliveryPriority {
@@ -5012,7 +5022,11 @@ function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): bool
   );
 }
 
-function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {
+function assistantMessageDeliveryKey(
+  event: AgentEvent,
+  binding: MessagingBindingRecord,
+  text: string,
+): string {
   const params = event.notification.params as {
     threadId?: unknown;
     turn?: { id?: unknown };
@@ -5026,6 +5040,7 @@ function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {
         ? params.turn.id
         : "";
   return [
+    binding.id,
     event.backend,
     threadId,
     turnId,

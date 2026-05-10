@@ -149,6 +149,9 @@ PwrAgent uses two related but distinct protection states:
   Mode preserves final assistant messages and interactive prompts, but may drop
   non-final streaming edits, routine status-card edits, and intermediate tool
   updates instead of queueing stale noise.
+- Typing/activity signals are best-effort presence hints. They do not consume
+  the local message/write budget, and they are dropped while a scope is already
+  in Slow Mode so they cannot crowd out final turn output.
 - **Cool Off** is provider-imposed. It begins when a provider returns
   rate-limit feedback with a retry window. PwrAgent stops sending to that scope
   until the retry window clears, then resumes conservatively.
