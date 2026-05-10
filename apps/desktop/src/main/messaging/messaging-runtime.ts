@@ -1796,6 +1796,8 @@ function messagingAdapterConfigFingerprint(
           ? config.mattermost
           : channel === "slack"
             ? config.slack
+            : channel === "line"
+              ? config.line
             : undefined;
 
   return stableStringify({
