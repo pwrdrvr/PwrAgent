@@ -525,22 +525,22 @@ function verifyCounts(dbPath: string): Record<string, number> {
   const nativeBinding = getNativeBinding();
   const db = new Database(dbPath, { readonly: true, ...(nativeBinding ? { nativeBinding } : {}) });
   try {
-    const tables = [
-      "bindings",
-      "pending_intents",
-      "browse_sessions",
-      "callback_handles",
-      "deliveries",
-      "backends",
-      "launchpad_defaults",
-      "directory_launchpads",
-      "threads",
-      "secrets",
-    ];
+    const tableCountQueries = [
+      ["bindings", "SELECT COUNT(*) as count FROM bindings"],
+      ["pending_intents", "SELECT COUNT(*) as count FROM pending_intents"],
+      ["browse_sessions", "SELECT COUNT(*) as count FROM browse_sessions"],
+      ["callback_handles", "SELECT COUNT(*) as count FROM callback_handles"],
+      ["deliveries", "SELECT COUNT(*) as count FROM deliveries"],
+      ["backends", "SELECT COUNT(*) as count FROM backends"],
+      ["launchpad_defaults", "SELECT COUNT(*) as count FROM launchpad_defaults"],
+      ["directory_launchpads", "SELECT COUNT(*) as count FROM directory_launchpads"],
+      ["threads", "SELECT COUNT(*) as count FROM threads"],
+      ["secrets", "SELECT COUNT(*) as count FROM secrets"],
+    ] as const;
     const counts: Record<string, number> = {};
-    for (const table of tables) {
+    for (const [table, query] of tableCountQueries) {
       const row = db
-        .prepare(`SELECT COUNT(*) as count FROM ${table}`)
+        .prepare(query)
         .get() as { count: number };
       counts[table] = row.count;
     }
