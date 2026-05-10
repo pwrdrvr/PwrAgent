@@ -104,12 +104,12 @@ Effective streaming mode is resolved per binding first, then provider setting:
 
 | Mode | Behavior |
 | --- | --- |
-| `Inherit` | Follow the provider-level Streaming Responses toggle. |
+| `Default` | Follow the provider-level Streaming Responses toggle. |
 | `Off` | Suppress stream updates for this binding. |
-| `Advanced` | Enable stream updates for this binding even when the provider toggle is off. |
+| `On` | Enable stream updates for this binding even when the provider toggle is off. |
 
 Use the status card's `Stream: <mode>` action, or reply `stream` when actions
-are not available, to cycle a binding through these modes.
+are not available, to cycle a binding through `Default` -> `On` -> `Off`.
 
 ## Tool Update Verbosity
 
@@ -282,7 +282,7 @@ The TOML equivalents are `streaming_responses = true` under a provider section,
 for example `[messaging.telegram]`, `[messaging.discord]`,
 `[messaging.mattermost]`, or `[messaging.slack]`. Providers default to `false`;
 the Settings > Messaging toggles and environment overrides expose the same
-booleans. Binding-level `Stream: Advanced` can opt a single binding into
+booleans. Binding-level `Stream: On` can opt a single binding into
 streaming without changing the provider default.
 
 Discord slash commands are reconciled on adapter startup when an Application ID

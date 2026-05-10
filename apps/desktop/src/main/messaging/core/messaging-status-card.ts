@@ -315,10 +315,10 @@ export function nextMessagingStreamingResponseMode(
 ): MessagingStreamingResponseMode {
   switch (mode) {
     case "inherit":
-      return "disabled";
-    case "disabled":
       return "enabled";
     case "enabled":
+      return "disabled";
+    case "disabled":
       return "inherit";
   }
 }
@@ -328,11 +328,11 @@ export function formatMessagingStreamingResponseModeLabel(
 ): string {
   switch (mode) {
     case "inherit":
-      return "Inherit";
+      return "Default";
     case "disabled":
       return "Off";
     case "enabled":
-      return "Advanced";
+      return "On";
   }
 }
 

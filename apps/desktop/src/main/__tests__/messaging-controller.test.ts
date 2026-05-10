@@ -292,19 +292,35 @@ describe("MessagingController", () => {
         }),
         expect.objectContaining({
           id: "status:streaming",
-          label: "Stream: Inherit",
+          label: "Stream: Default",
           fallbackText: "stream",
         }),
       ]),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Streaming: Inherit"),
+      text: expect.stringContaining("Streaming: Default"),
     });
   });
 
   it("cycles per-binding streaming mode from the status card", async () => {
     const harness = await createHarness();
     await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+
+    const bindingAfterEnable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(bindingAfterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Streaming: On"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Stream: On" }),
+      ]),
+    });
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:streaming" }),
@@ -326,15 +342,15 @@ describe("MessagingController", () => {
       buildCallbackEvent({ actionId: "status:streaming" }),
     );
 
-    const bindingAfterEnable = await harness.store.findActiveBindingForChannel(
+    const bindingAfterDefault = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/resume").channel,
     );
-    expect(bindingAfterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(bindingAfterDefault?.preferences?.streamingResponses).toBe("inherit");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Streaming: Advanced"),
+      text: expect.stringContaining("Streaming: Default"),
       actions: expect.arrayContaining([
-        expect.objectContaining({ label: "Stream: Advanced" }),
+        expect.objectContaining({ label: "Stream: Default" }),
       ]),
     });
   });

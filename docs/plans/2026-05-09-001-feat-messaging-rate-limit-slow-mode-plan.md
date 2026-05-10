@@ -419,7 +419,7 @@ flowchart TB
 **Approach:**
 - Change Settings label/copy from a neutral toggle to an Advanced / Cautioned control. The copy should state that streaming edits the same message repeatedly, can trigger provider rate limits sooner, and is poor for voice readers that announce messages when first received.
 - Keep global provider defaults off.
-- Add a binding status-card action that cycles `Streaming: Auto`, `Streaming: Off`, and `Streaming: On`, using existing `binding.preferences.streamingResponses` where possible.
+- Add a binding status-card action that cycles `Streaming: Default`, `Streaming: On`, and `Streaming: Off`, using existing `binding.preferences.streamingResponses` where possible.
 - Ensure `/status` or status-card text fallback can change the binding preference without a desktop-only path.
 - Use existing binding-local mutation patterns: update store/preferences and re-render binding status inline because this does not flow through the thread-state bus.
 - In slow mode, effective streaming should behave as disabled even when global or binding preference says enabled, with degraded/slow-mode docs explaining why.

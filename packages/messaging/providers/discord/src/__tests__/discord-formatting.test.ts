@@ -276,7 +276,7 @@ describe("discord formatting", () => {
         [
           {
             id: "status:streaming",
-            label: "Stream: Inherit",
+            label: "Stream: Default",
           },
         ],
         (action) => `dc:${action.id}`,

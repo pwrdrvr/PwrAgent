@@ -248,7 +248,7 @@ describe("telegram formatting", () => {
         [
           {
             id: "status:streaming",
-            label: "Stream: Inherit",
+            label: "Stream: Default",
           },
         ],
         (action) => `tg:${action.id}`,
