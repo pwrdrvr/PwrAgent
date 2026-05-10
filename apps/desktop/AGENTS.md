@@ -175,6 +175,13 @@ Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
+- For tooltips inside clipped or layered surfaces (sidebar, scroll regions,
+  overflow-hidden chips, draggable rails, or anything that must escape the
+  left bar), use `src/renderer/src/lib/useViewportTooltip.tsx` with the
+  shared `.viewport-tooltip` class. CSS pseudo-element tooltips
+  (`tooltip-target` + `data-tooltip`) are only for elements whose ancestors
+  all render with `overflow: visible`; otherwise they get clipped or lose
+  z-order fights against the main surface.
 - Use the project-local [desktop E2E fixture seeding skill](../../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when capturing or refreshing replay-backed desktop E2E fixtures.
 
 ## Third-Party Brand Assets
