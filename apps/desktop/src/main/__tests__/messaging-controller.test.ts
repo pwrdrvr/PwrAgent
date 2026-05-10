@@ -154,6 +154,14 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining("PwrAgent"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+        expect.objectContaining({ id: "browse:new:permissions" }),
+        expect.objectContaining({ id: "browse:new:fast" }),
+        expect.objectContaining({ id: "browse:new:model" }),
+        expect.objectContaining({ id: "browse:new:reasoning" }),
+      ]),
     });
     expect(readyIntent).toMatchObject({
       browseSessionId: expect.stringMatching(/^browse:/),
@@ -198,6 +206,88 @@ describe("MessagingController", () => {
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
+    });
+  });
+
+  it("starts a new messaging thread in a new worktree from the selected base branch", async () => {
+    const harness = await createHarness({
+      navigation: {
+        ...buildNavigationSnapshot(),
+        directories: [
+          {
+            ...buildNavigationSnapshot().directories[0]!,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches: ["main", "release/v2", "feature/current"],
+            },
+          },
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:workspace:worktree",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: New Worktree"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:base-branch",
+          label: "Base: main",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:base-branch",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      title: "Pick base branch",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-base-branch",
+          label: "release/v2",
+          value: { branchName: "release/v2" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-base-branch",
+        value: { branchName: "release/v2" },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
+
+    expect(harness.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      cwd: "/repo/pwragent",
+      executionMode: "default",
+      fastMode: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      workMode: "worktree",
+      branchName: "release/v2",
     });
   });
 
@@ -4400,13 +4490,13 @@ describe("MessagingController", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Existing Branch",
         }),
       ]),
     });
 
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4486,7 +4576,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4532,6 +4622,51 @@ describe("MessagingController", () => {
         value: expect.objectContaining({ pageIndex: 0 }),
       }),
     );
+  });
+
+  it("runs a detached-head worktree handoff without asking for a leave-local branch", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const createDetached = findChoice(harness.delivered.at(-1), "handoff:create-detached");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: createDetached.id,
+        value: createDetached.value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Confirm new detached-head worktree."),
+    });
+
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValueOnce(
+      buildLocalHandoffNavigationSnapshot(),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: "/repo/pwragent",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragent",
+      threadId: "thread-1",
+    });
   });
 
   it("runs a worktree-to-local handoff from the status menu", async () => {
@@ -4598,7 +4733,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4638,7 +4773,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:handoff" }),
     );
-    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:move-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: toWorktree.id,
@@ -4769,6 +4904,7 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  navigation?: NavigationSnapshot;
   now?: () => number;
   channel?: MessagingChannelKind;
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
@@ -4836,7 +4972,9 @@ async function createHarness(options?: {
       ? { setConversationTitle: options.setConversationTitle }
       : {}),
   };
-  const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const getNavigationSnapshot = vi.fn(
+    async () => options?.navigation ?? buildNavigationSnapshot(),
+  );
   const startThread = vi.fn(
     options?.startThread ??
       (async (request: StartThreadRequest) => ({

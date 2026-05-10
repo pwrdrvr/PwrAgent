@@ -382,8 +382,12 @@ describe("buildBindingStatusIntent", () => {
       prompt: expect.stringContaining("Workspace Handoff"),
       choices: expect.arrayContaining([
         expect.objectContaining({
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
+          id: "handoff:move-branch",
+          label: "Move Existing Branch",
+        }),
+        expect.objectContaining({
+          id: "handoff:create-detached",
+          label: "Create Detached Head",
         }),
       ]),
     });
@@ -487,6 +491,7 @@ describe("buildBindingStatusIntent", () => {
         repositoryPath: "/repo/pwragent",
         sourceBranch: "feature/handoff",
         sourcePath: "/repo/pwragent",
+        strategy: "detached-changes",
         threadId: "thread-1",
       }),
     ).toEqual({
@@ -495,6 +500,7 @@ describe("buildBindingStatusIntent", () => {
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent",
+      strategy: "detached-changes",
       threadId: "thread-1",
     });
     expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();

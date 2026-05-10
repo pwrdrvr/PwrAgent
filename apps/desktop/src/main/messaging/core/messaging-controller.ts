@@ -9,6 +9,7 @@ import type {
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
+  LaunchpadWorkMode,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
   NavigationSnapshot,
@@ -2463,6 +2464,147 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:workspace:local") {
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          workMode: "local",
+          branchName: undefined,
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:workspace:worktree") {
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          workMode: "worktree",
+          branchName: resolveNewThreadBaseBranch(nextSession, navigation),
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:base-branch") {
+      await this.presentNewThreadBranchPicker(nextSession, navigation, event);
+      return;
+    }
+    if (actionId === "browse:new:set-base-branch") {
+      const branchName = readStringValue(event.value, "branchName");
+      if (!branchName) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          workMode: "worktree",
+          branchName,
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:permissions") {
+      const currentMode =
+        nextSession.preferences?.executionMode ??
+        navigation.launchpadDefaults.executionMode;
+      const executionMode = currentMode === "full-access" ? "default" : "full-access";
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            executionMode,
+            permissionsMode: executionMode,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:fast") {
+      const fastMode = !(
+        nextSession.preferences?.fastMode ??
+        navigation.launchpadDefaults.fastMode ??
+        false
+      );
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            fastMode,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:model") {
+      await this.presentNewThreadModelPicker(
+        nextSession,
+        event,
+        navigation.launchpadDefaults.backend,
+      );
+      return;
+    }
+    if (actionId === "browse:new:set-model") {
+      const model = readStringValue(event.value, "model");
+      if (!model) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            model,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:reasoning") {
+      await this.presentNewThreadReasoningPicker(
+        nextSession,
+        event,
+        navigation.launchpadDefaults.backend,
+      );
+      return;
+    }
+    if (actionId === "browse:new:set-reasoning") {
+      const reasoningEffort = readStringValue(event.value, "reasoningEffort");
+      if (!reasoningEffort) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      await this.presentNewThreadPromptGate(
+        {
+          ...nextSession,
+          preferences: {
+            ...nextSession.preferences,
+            reasoningEffort,
+            updatedAt: this.now(),
+          },
+        },
+        event,
+        navigation,
+      );
+      return;
+    }
     if (actionId === "browse:select-thread") {
       const target = selectThreadFromValue(event.value);
       if (!target) {
@@ -2616,18 +2758,29 @@ export class MessagingController {
         ...session,
         mode: "new_thread_options",
         pageIndex: 0,
+        workMode: session.workMode ?? navigation.launchpadDefaults.workMode ?? "local",
+        branchName: session.branchName,
         selectedProject: project,
         updatedAt: this.now(),
         expiresAt: this.now() + this.pendingIntentTtlMs,
       },
       event,
+      navigation,
     );
   }
 
   private async presentNewThreadPromptGate(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
+    navigation?: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
   ): Promise<void> {
+    const snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(snapshot, session.selectedProject)
+      : undefined;
+    const options = newThreadOptionsForSession(session, snapshot, directory);
     await this.options.store.upsertBrowseSession(session);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -2637,14 +2790,60 @@ export class MessagingController {
       delivery: session.surface
         ? {
             mode: "update",
-            replaceMarkup: true,
-          }
+          replaceMarkup: true,
+        }
         : undefined,
       title: "Ready to start",
-      body: `Send the first instruction for ${session.selectedProject?.label ?? "this project"}. The thread will be created when that message arrives.`,
-      fallbackText: "Send your first instruction, reply back to change the project, or reply cancel.",
+      body: newThreadPromptGateBody(session, options),
+      fallbackText: "Send your first instruction, or use the option buttons before sending it.",
       targetSurface: session.surface,
       actions: [
+        {
+          id: "browse:new:workspace:local",
+          label: options.workMode === "local" ? "Local ✓" : "Local",
+          style: options.workMode === "local" ? "primary" : "secondary",
+          fallbackText: "local",
+        },
+        {
+          id: "browse:new:workspace:worktree",
+          label: options.workMode === "worktree" ? "New Worktree ✓" : "New Worktree",
+          style: options.workMode === "worktree" ? "primary" : "secondary",
+          fallbackText: "worktree",
+        },
+        ...(options.workMode === "worktree"
+          ? [
+              {
+                id: "browse:new:base-branch",
+                label: `Base: ${options.branchName}`,
+                style: "secondary" as const,
+                fallbackText: "base",
+              },
+            ]
+          : []),
+        {
+          id: "browse:new:permissions",
+          label: `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
+          style: "secondary",
+          fallbackText: "permissions",
+        },
+        {
+          id: "browse:new:fast",
+          label: options.fastMode ? "Fast: on" : "Fast: off",
+          style: "secondary",
+          fallbackText: "fast",
+        },
+        {
+          id: "browse:new:model",
+          label: "Model",
+          style: "secondary",
+          fallbackText: "model",
+        },
+        {
+          id: "browse:new:reasoning",
+          label: `Reasoning: ${options.reasoningEffort}`,
+          style: "secondary",
+          fallbackText: "reasoning",
+        },
         {
           id: "browse:mode:new",
           label: "Back",
@@ -2682,6 +2881,184 @@ export class MessagingController {
     });
   }
 
+  private async presentNewThreadBranchPicker(
+    session: MessagingBrowseSessionRecord,
+    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const branches = newThreadBranchChoices(session, navigation, directory);
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-branch"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? {
+            mode: "update",
+            replaceMarkup: true,
+          }
+        : undefined,
+      title: "Pick base branch",
+      body: `New worktree base for ${session.selectedProject?.label ?? "this project"}.`,
+      fallbackText: "Choose a branch, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...branches.map((branch, index) => ({
+          id: "browse:new:set-base-branch",
+          label: branch,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { branchName: branch },
+        })),
+        {
+          id: "browse:new:workspace:worktree",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+        {
+          id: "browse:cancel",
+          label: "Cancel",
+          style: "secondary" as const,
+          fallbackText: "cancel",
+          priority: 2,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async presentNewThreadModelPicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    backend: AppServerBackendKind,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(backend);
+    const models = summary?.launchpadOptions?.models ?? [];
+    if (models.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-models-unavailable"),
+          createdAt: this.now(),
+          title: "Models unavailable",
+          body: "This backend did not report model choices.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-model"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Select model",
+      body: "Choose the model for the new thread.",
+      fallbackText: "Choose a model, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...models.map((model, index) => ({
+          id: "browse:new:set-model",
+          label: model.label ?? model.id,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { model: model.id },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async presentNewThreadReasoningPicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    backend: AppServerBackendKind,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(backend);
+    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
+      "low",
+      "medium",
+      "high",
+    ];
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-reasoning"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Select reasoning",
+      body: "Choose the reasoning effort for the new thread.",
+      fallbackText: "Choose a reasoning option, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...efforts.map((effort, index) => ({
+          id: "browse:new:set-reasoning",
+          label: effort,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { reasoningEffort: effort },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
   private async createNewThreadFromPromptBundle(
     bundle: PendingNewThreadPromptBundle,
   ): Promise<void> {
@@ -2716,15 +3093,22 @@ export class MessagingController {
     const project = bundle.session.selectedProject;
     const directory = directoryForProjectSelection(navigation, project);
     const preferences = bundle.session.preferences;
+    const options = newThreadOptionsForSession(bundle.session, navigation, directory);
     const started = await this.options.backend.startThread({
       backend: navigation.launchpadDefaults.backend,
       cwd: directory?.path ?? project.path,
-      executionMode: preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
+      executionMode: options.executionMode,
       fastMode: preferences?.fastMode ?? navigation.launchpadDefaults.fastMode,
       model: preferences?.model ?? navigation.launchpadDefaults.model,
       reasoningEffort:
         preferences?.reasoningEffort ?? navigation.launchpadDefaults.reasoningEffort,
       serviceTier: preferences?.serviceTier ?? navigation.launchpadDefaults.serviceTier,
+      ...(options.workMode === "worktree"
+        ? {
+            workMode: "worktree" as const,
+            branchName: options.branchName,
+          }
+        : {}),
     });
     const binding = await this.bindChannelToThread(event, {
       backend: started.backend,
@@ -2742,6 +3126,7 @@ export class MessagingController {
       preferences,
       project,
       threadId: started.threadId,
+      workMode: options.workMode,
     });
     await this.options.store.deleteBrowseSession(bundle.session.id);
     await this.deliver(
@@ -2841,8 +3226,12 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    if (actionId === "handoff:local-to-worktree") {
+    if (actionId === "handoff:move-branch" || actionId === "handoff:local-to-worktree") {
       await this.presentHandoffBranchPicker(binding, event);
+      return;
+    }
+    if (actionId === "handoff:create-detached") {
+      await this.presentHandoffConfirmation(binding, event);
       return;
     }
     if (
@@ -3032,6 +3421,7 @@ export class MessagingController {
           context,
           createdAt: this.now(),
           leaveLocalBranch: request.leaveLocalBranch,
+          strategy: request.strategy,
         }),
         audit: this.buildHandoffAudit(
           `handoff.confirmation.${request.direction}`,
@@ -4950,6 +5340,9 @@ function validateHandoffRequest(
     };
   }
   if (request.direction === "local-to-worktree") {
+    if (request.strategy === "detached-changes") {
+      return { valid: true };
+    }
     if (!request.leaveLocalBranch) {
       return {
         valid: false,
@@ -4984,6 +5377,100 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+type NewThreadOptionsSummary = {
+  branchName: string;
+  executionMode: ThreadExecutionMode;
+  fastMode: boolean;
+  model: string;
+  reasoningEffort: string;
+  workMode: LaunchpadWorkMode;
+};
+
+function newThreadOptionsForSession(
+  session: MessagingBrowseSessionRecord,
+  navigation: NavigationSnapshot,
+  directory: NavigationDirectorySummary | undefined,
+): NewThreadOptionsSummary {
+  const workMode = session.workMode ?? navigation.launchpadDefaults.workMode ?? "local";
+  return {
+    branchName: resolveNewThreadBaseBranch(session, navigation, directory),
+    executionMode:
+      session.preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
+    fastMode:
+      session.preferences?.fastMode ?? navigation.launchpadDefaults.fastMode ?? false,
+    model:
+      session.preferences?.model ?? navigation.launchpadDefaults.model ?? "default",
+    reasoningEffort:
+      session.preferences?.reasoningEffort ??
+      navigation.launchpadDefaults.reasoningEffort ??
+      "medium",
+    workMode,
+  };
+}
+
+function newThreadPromptGateBody(
+  session: MessagingBrowseSessionRecord,
+  options: NewThreadOptionsSummary,
+): string {
+  return [
+    `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
+    "The thread will be created when that message arrives.",
+    `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
+    options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
+    `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
+    `Model: ${options.model}`,
+    `Reasoning: ${options.reasoningEffort}`,
+    `Fast mode: ${options.fastMode ? "on" : "off"}`,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function formatPermissionsShortLabel(mode: ThreadExecutionMode): string {
+  return mode === "full-access" ? "Full" : "Default";
+}
+
+function resolveNewThreadBaseBranch(
+  session: MessagingBrowseSessionRecord,
+  navigation: NavigationSnapshot,
+  directory?: NavigationDirectorySummary,
+): string {
+  const selectedDirectory =
+    directory ??
+    (session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined);
+  return (
+    sanitizeBranchLabel(session.branchName) ??
+    sanitizeBranchLabel(selectedDirectory?.gitStatus?.defaultBranch) ??
+    sanitizeBranchLabel(selectedDirectory?.gitStatus?.branches?.[0]) ??
+    sanitizeBranchLabel(selectedDirectory?.gitStatus?.currentBranch) ??
+    "main"
+  );
+}
+
+function newThreadBranchChoices(
+  session: MessagingBrowseSessionRecord,
+  navigation: NavigationSnapshot,
+  directory: NavigationDirectorySummary | undefined,
+): string[] {
+  const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
+  const branches = [
+    defaultBranch,
+    ...(directory?.gitStatus?.branches ?? []),
+    directory?.gitStatus?.currentBranch,
+  ].flatMap((branch) => {
+    const sanitized = sanitizeBranchLabel(branch);
+    return sanitized ? [sanitized] : [];
+  });
+  return branches.filter((branch, index) => branches.indexOf(branch) === index);
+}
+
+function sanitizeBranchLabel(branch: string | undefined): string | undefined {
+  const normalized = branch?.replace(/^refs\/heads\//, "").trim();
+  return normalized || undefined;
 }
 
 function normalizeConversationTitle(title: string | undefined): string | undefined {
@@ -5497,6 +5984,7 @@ function navigationWithStartedThread(params: {
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
   threadId: ThreadIdentifier;
+  workMode?: LaunchpadWorkMode;
 }): NavigationSnapshot {
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   if (
@@ -5511,9 +5999,10 @@ function navigationWithStartedThread(params: {
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
     ? {
         id: params.directory?.key ?? directoryPath,
-        kind: "local",
+        kind: params.workMode === "worktree" ? "worktree" : "local",
         label: params.directory?.label ?? params.project.label,
         path: directoryPath,
+        ...(params.workMode === "worktree" ? { worktreePath: directoryPath } : {}),
       }
     : undefined;
 

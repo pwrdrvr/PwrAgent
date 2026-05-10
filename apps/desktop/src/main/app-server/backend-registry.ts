@@ -1578,15 +1578,42 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    workMode?: NavigationLaunchpadDraft["workMode"];
+    branchName?: string;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
-    const { backend, executionMode = "default", linkedDirectories, ...request } = params;
+    const {
+      backend,
+      executionMode = "default",
+      linkedDirectories,
+      workMode,
+      branchName,
+      ...request
+    } = params;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
-    const cwd =
+    let cwd =
       backend === "codex" && !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
         : request.cwd;
+    let resolvedLinkedDirectories = linkedDirectories;
+    if (workMode === "worktree" && request.cwd?.trim()) {
+      const preparedWorkspace =
+        await this.gitDirectoryService.prepareLaunchpadWorkspace({
+          backend,
+          branchName,
+          directoryKind: "directory",
+          directoryLabel: path.basename(request.cwd) || request.cwd,
+          directoryPath: request.cwd,
+          workMode: "worktree",
+        });
+      cwd = preparedWorkspace.cwd;
+      resolvedLinkedDirectories = buildWorktreeLinkedDirectory({
+        label: path.basename(request.cwd) || request.cwd,
+        repositoryPath: preparedWorkspace.repositoryPath ?? request.cwd,
+        worktreePath: preparedWorkspace.cwd,
+      });
+    }
 
     const result = await this.getClient(backend, executionMode).startThread({
       ...request,
@@ -1609,11 +1636,18 @@ export class DesktopBackendRegistry {
         executionMode,
         ...modelSettings,
         linkedDirectories: (
-          linkedDirectories?.length ? linkedDirectories : buildLocalLinkedDirectory(cwd)
+          resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
         gitBranch: cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined,
       },
     );
+    if (workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend,
+        threadId: result.threadId,
+        worktreePath: cwd,
+      });
+    }
     this.invalidateThreadListCache(backend);
 
     if (backend === "codex") {

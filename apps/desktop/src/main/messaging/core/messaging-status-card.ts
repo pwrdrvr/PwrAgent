@@ -360,22 +360,39 @@ export function buildHandoffOverviewIntent(params: {
   createdAt: number;
   id: string;
 }): MessagingSingleSelectIntent {
-  const action =
+  const actions =
     params.context.workspaceKind === "local"
-      ? {
-          id: "handoff:local-to-worktree",
-          label: "Handoff to New Worktree",
-          fallbackText: "1",
-          style: "primary" as const,
-          value: handoffValue(params.context),
-        }
-      : {
-          id: "handoff:worktree-to-local",
-          label: "Handoff to Local",
-          fallbackText: "1",
-          style: "primary" as const,
-          value: handoffValue(params.context),
-        };
+      ? [
+          {
+            id: "handoff:move-branch",
+            label: "Move Existing Branch",
+            fallbackText: "1",
+            style: "primary" as const,
+            value: {
+              ...handoffValue(params.context),
+              strategy: "move-branch",
+            },
+          },
+          {
+            id: "handoff:create-detached",
+            label: "Create Detached Head",
+            fallbackText: "2",
+            style: "secondary" as const,
+            value: {
+              ...handoffValue(params.context),
+              strategy: "detached-changes",
+            },
+          },
+        ]
+      : [
+          {
+            id: "handoff:worktree-to-local",
+            label: "Handoff to Local",
+            fallbackText: "1",
+            style: "primary" as const,
+            value: handoffValue(params.context),
+          },
+        ];
 
   return {
     id: params.id,
@@ -389,13 +406,13 @@ export function buildHandoffOverviewIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: [
       handoffOverviewText(params.context),
-      `1. ${action.label}`,
-      "Reply with 1, Back, Refresh, or Cancel.",
+      ...actions.map((action, index) => `${index + 1}. ${action.label}`),
+      `Reply with ${actions.length === 1 ? "1" : "1 or 2"}, Back, Refresh, or Cancel.`,
     ].join("\n"),
     prompt: handoffOverviewText(params.context),
     choices: applyActionCapabilityLimits(
       [
-        action,
+        ...actions,
         {
           // Back from the handoff overview returns to the status card.
           // Distinct id from the sibling "Refresh" button so callback
@@ -597,13 +614,16 @@ export function buildHandoffConfirmationIntent(params: {
   createdAt: number;
   id: string;
   leaveLocalBranch?: string;
+  strategy?: HandoffThreadWorkspaceRequest["strategy"];
 }): MessagingConfirmationIntent {
   const direction =
     params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
   const body = [
-    direction === "local-to-worktree"
-      ? "Confirm handoff to a new worktree."
-      : "Confirm handoff to Local.",
+    params.strategy === "detached-changes"
+      ? "Confirm new detached-head worktree."
+      : direction === "local-to-worktree"
+        ? "Confirm moving this branch to a new worktree."
+        : "Confirm handoff to Local.",
     `Thread: ${params.context.threadTitle ?? params.context.threadId} (${params.context.backend})`,
     `Project: ${params.context.projectLabel ?? unavailable()}`,
     `Repository: ${params.context.repositoryPath}`,
@@ -612,6 +632,7 @@ export function buildHandoffConfirmationIntent(params: {
     params.leaveLocalBranch
       ? `Leave Local on: ${params.leaveLocalBranch}`
       : undefined,
+    params.strategy ? `Strategy: ${params.strategy}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -639,6 +660,7 @@ export function buildHandoffConfirmationIntent(params: {
           priority: 1,
           value: {
             ...handoffValue(params.context),
+            ...(params.strategy ? { strategy: params.strategy } : {}),
             ...(params.leaveLocalBranch
               ? { leaveLocalBranch: params.leaveLocalBranch }
               : {}),
@@ -646,7 +668,9 @@ export function buildHandoffConfirmationIntent(params: {
         },
         {
           id: params.context.workspaceKind === "local"
-            ? "handoff:local-to-worktree"
+            ? params.strategy === "move-branch"
+              ? "handoff:move-branch"
+              : "status:handoff"
             : "status:handoff",
           label: "Back",
           fallbackText: "back",
@@ -692,6 +716,10 @@ export function handoffRequestFromValue(
     backend: value.backend,
     threadId: value.threadId,
     direction: value.direction,
+    strategy:
+      value.strategy === "move-branch" || value.strategy === "detached-changes"
+        ? value.strategy
+        : undefined,
     repositoryPath: value.repositoryPath,
     sourcePath: value.sourcePath,
     sourceBranch: typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
