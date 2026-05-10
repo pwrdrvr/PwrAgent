@@ -1429,10 +1429,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return true;
     }
     const authorized = this.options.config.authorizedSupergroupIds ?? [];
-    return (
-      authorized.length === 0
-      || authorized.some((contact) => contact.id === String(chat.id))
-    );
+    return authorized.some((contact) => contact.id === String(chat.id));
   }
 
   private logUnauthorizedConversationOnce(
