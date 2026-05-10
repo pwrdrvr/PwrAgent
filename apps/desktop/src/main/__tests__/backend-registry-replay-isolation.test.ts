@@ -9,14 +9,17 @@ const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 const constructorState = vi.hoisted(() => ({
   codexCount: 0,
   codexArgs: [] as Array<string[] | undefined>,
+  codexEnvs: [] as Array<NodeJS.ProcessEnv | undefined>,
+  codexMetadataHomes: [] as Array<string | undefined>,
   grokCount: 0,
 }));
 
 vi.mock("../codex-app-server/client", () => ({
   CodexAppServerClient: class {
-    constructor(options?: { args?: string[] }) {
+    constructor(options?: { args?: string[]; env?: NodeJS.ProcessEnv }) {
       constructorState.codexCount += 1;
       constructorState.codexArgs.push(options?.args);
+      constructorState.codexEnvs.push(options?.env);
     }
 
     async close(): Promise<void> {
@@ -68,9 +71,27 @@ vi.mock("../codex-app-server/client", () => ({
   }
 }));
 
+vi.mock("../app-server/codex-session-metadata-service", () => ({
+  CodexSessionMetadataService: class {
+    constructor(options?: { codexHome?: string }) {
+      constructorState.codexMetadataHomes.push(options?.codexHome);
+    }
+
+    async updateThreadCwd() {
+      return { updated: false, reason: "missing-session" };
+    }
+  },
+}));
+
+const settingsState = vi.hoisted(() => ({
+  codexEnv: undefined as NodeJS.ProcessEnv | undefined,
+}));
+
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     resolveCodexCommandPreference: () => undefined,
+    resolveCodexSpawnEnv: () => settingsState.codexEnv,
+    resolveWorktreeStorage: () => "in-repo",
   }),
 }));
 
@@ -156,7 +177,10 @@ function createOverlayStoreMock() {
 beforeEach(() => {
   constructorState.codexCount = 0;
   constructorState.codexArgs = [];
+  constructorState.codexEnvs = [];
+  constructorState.codexMetadataHomes = [];
   constructorState.grokCount = 0;
+  settingsState.codexEnv = undefined;
 });
 
 afterEach(() => {
@@ -261,6 +285,23 @@ describe("DesktopBackendRegistry replay isolation", () => {
         'sandbox_mode="workspace-write"',
       ],
     ]);
+
+    await registry.close();
+  });
+
+  it("passes the selected Codex home to the live client and metadata helper", async () => {
+    const codexHome = path.join(os.tmpdir(), "pwragent-codex-profile-home");
+    settingsState.codexEnv = {
+      CODEX_HOME: codexHome,
+    } as NodeJS.ProcessEnv;
+
+    const registry = new DesktopBackendRegistry({
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(constructorState.codexCount).toBe(1);
+    expect(constructorState.codexEnvs[0]?.CODEX_HOME).toBe(codexHome);
+    expect(constructorState.codexMetadataHomes).toEqual([codexHome]);
 
     await registry.close();
   });

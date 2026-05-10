@@ -66,11 +66,15 @@ function worktreesRootFor(
   storage: DesktopWorktreeStorageLocation,
   options?: {
     backend?: AppServerBackendKind;
+    codexHome?: string;
     homeDir?: string;
   },
 ): string {
   if (storage === "user-home" && options?.backend === "codex") {
-    return codexHomeWorktreesRoot(options.homeDir);
+    return codexHomeWorktreesRoot({
+      codexHome: options.codexHome,
+      homeDir: options.homeDir,
+    });
   }
 
   return storage === "user-home"
@@ -78,10 +82,17 @@ function worktreesRootFor(
     : path.join(repoRoot, ".worktrees");
 }
 
-function codexHomeWorktreesRoot(homeDir?: string): string {
+function codexHomeWorktreesRoot(options: {
+  codexHome?: string;
+  homeDir?: string;
+}): string {
   const codexHome =
-    homeDir === undefined ? process.env.CODEX_HOME?.trim() : undefined;
-  return path.join(codexHome || path.join(homeDir ?? os.homedir(), ".codex"), "worktrees");
+    options.codexHome?.trim() ||
+    (options.homeDir === undefined ? process.env.CODEX_HOME?.trim() : undefined);
+  return path.join(
+    codexHome || path.join(options.homeDir ?? os.homedir(), ".codex"),
+    "worktrees",
+  );
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -107,6 +118,7 @@ async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
 
 export async function computeWorktreePath(params: {
   backend?: AppServerBackendKind;
+  codexHome?: string;
   repoRoot: string;
   storage: DesktopWorktreeStorageLocation;
   homeDir?: string;
@@ -114,6 +126,7 @@ export async function computeWorktreePath(params: {
 }): Promise<string> {
   const root = worktreesRootFor(params.repoRoot, params.storage, {
     backend: params.backend,
+    codexHome: params.codexHome,
     homeDir: params.homeDir,
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
@@ -227,6 +240,7 @@ type CachedDirectoryStatus = {
 
 type GitDirectoryServiceOptions = {
   cacheTtlMs?: number;
+  codexHome?: string;
   resolveWorktreeStorage?: () =>
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
@@ -236,6 +250,7 @@ type GitDirectoryServiceOptions = {
 export class GitDirectoryService {
   private readonly statusCache = new Map<string, CachedDirectoryStatus>();
   private readonly cacheTtlMs: number;
+  private readonly codexHome?: string;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
   private readonly homeDir: string;
 
@@ -243,6 +258,7 @@ export class GitDirectoryService {
     const normalized: GitDirectoryServiceOptions =
       typeof options === "number" ? { cacheTtlMs: options } : options;
     this.cacheTtlMs = normalized.cacheTtlMs ?? 3_000;
+    this.codexHome = normalized.codexHome;
     this.homeDir = normalized.homeDir ?? os.homedir();
     const resolveStorage = normalized.resolveWorktreeStorage;
     this.resolveStorage = async () =>
@@ -431,6 +447,7 @@ export class GitDirectoryService {
     const storage = await this.resolveStorage();
     const worktreePath = await computeWorktreePath({
       backend: launchpad.backend,
+      codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
       repoRoot,
       storage,
       homeDir: this.homeDir,

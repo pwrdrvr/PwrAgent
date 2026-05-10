@@ -3548,9 +3548,10 @@ export class CodexAppServerClient {
   }
 
   private getSessionIndexPath(): string {
+    const codexHome = this.options.env?.CODEX_HOME?.trim() || process.env.CODEX_HOME?.trim();
     return (
       this.options.sessionIndexPath?.trim() ||
-      path.join(os.homedir(), ".codex", "session_index.jsonl")
+      path.join(codexHome || path.join(os.homedir(), ".codex"), "session_index.jsonl")
     );
   }
 

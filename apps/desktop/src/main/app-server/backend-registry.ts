@@ -1111,6 +1111,7 @@ export class DesktopBackendRegistry {
       typeof settingsService?.resolveCodexSpawnEnv === "function"
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
+    const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
       ? resolveGrokApiKeyForLiveClient()
@@ -1139,11 +1140,14 @@ export class DesktopBackendRegistry {
     this.gitDirectoryService =
       options?.gitDirectoryService ??
       new GitDirectoryService({
+        codexHome,
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
     this.codexSessionMetadataService =
-      options?.codexSessionMetadataService ?? new CodexSessionMetadataService();
+      options?.codexSessionMetadataService ?? new CodexSessionMetadataService({
+        codexHome,
+      });
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
     this.gitWorkspaceHandoffService =
