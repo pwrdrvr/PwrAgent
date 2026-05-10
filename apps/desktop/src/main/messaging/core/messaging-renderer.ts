@@ -138,6 +138,7 @@ export function buildToolUpdateBatchMessageIntent(params: {
 export function buildConfirmationIntent(params: {
   actions?: MessagingSurfaceAction[];
   body: string;
+  browseSessionId?: MessagingConfirmationIntent["browseSessionId"];
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   delivery?: MessagingConfirmationIntent["delivery"];
@@ -151,6 +152,7 @@ export function buildConfirmationIntent(params: {
     kind: "confirmation",
     actions: applyActionCapabilityLimits(params.actions ?? [], params.capabilityProfile),
     body: params.body,
+    browseSessionId: params.browseSessionId,
     createdAt: params.createdAt,
     delivery: params.delivery,
     fallbackText: params.fallbackText,

@@ -257,6 +257,17 @@ type PendingQueueAuditMessage = {
 
 const PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX = "permissions:queue:cancel:";
 
+type PendingNewThreadPromptWindow = {
+  events: MessagingTurnInputEvent[];
+  session: MessagingBrowseSessionRecord;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+type PendingNewThreadPromptBundle = {
+  events: MessagingTurnInputEvent[];
+  session: MessagingBrowseSessionRecord;
+};
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -298,6 +309,7 @@ export class MessagingController {
   private readonly logger: MessagingControllerLogger;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
+  private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -759,6 +771,7 @@ export class MessagingController {
       return;
     }
 
+    const pendingNewThread = await this.findPendingNewThreadSession(event);
     const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
       actorId: event.actor.platformUserId,
       channel: event.channel,
@@ -782,6 +795,10 @@ export class MessagingController {
         });
         return;
       }
+      if (pendingNewThread) {
+        await this.appendPendingNewThreadPrompt(pendingNewThread, event);
+        return;
+      }
       if (mapped.kind === "ambiguous") {
         await this.deliver(
           buildConfirmationIntent({
@@ -797,6 +814,11 @@ export class MessagingController {
         );
         return;
       }
+    }
+
+    if (pendingNewThread) {
+      await this.appendPendingNewThreadPrompt(pendingNewThread, event);
+      return;
     }
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
@@ -846,6 +868,12 @@ export class MessagingController {
         args: parseTextCommandArgs(event.text ?? ""),
         rawText: event.text ?? "",
       });
+      return;
+    }
+
+    const pendingNewThread = await this.findPendingNewThreadSession(event);
+    if (pendingNewThread) {
+      await this.appendPendingNewThreadPrompt(pendingNewThread, event);
       return;
     }
 
@@ -904,9 +932,103 @@ export class MessagingController {
     });
   }
 
+  private async findPendingNewThreadSession(
+    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
+  ): Promise<MessagingBrowseSessionRecord | undefined> {
+    const session = await this.options.store.findActiveBrowseSessionForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      session?.launchAction === "start_new_thread" &&
+      session.mode === "new_thread_options" &&
+      session.selectedProject
+    ) {
+      return session;
+    }
+    return undefined;
+  }
+
+  private async appendPendingNewThreadPrompt(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingTurnInputEvent,
+  ): Promise<void> {
+    const key = this.pendingNewThreadPromptKey(session);
+    const existing = this.pendingNewThreadPrompts.get(key);
+    if (existing) {
+      existing.events.push(event);
+      existing.session = session;
+      if ((this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) <= 0) {
+        await this.flushPendingNewThreadPrompt(key);
+        return;
+      }
+      if (existing.timer) {
+        clearTimeout(existing.timer);
+      }
+      existing.timer = this.schedulePendingNewThreadPrompt(key);
+      return;
+    }
+
+    this.pendingNewThreadPrompts.set(key, {
+      events: [event],
+      session,
+      timer:
+        (this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) > 0
+          ? this.schedulePendingNewThreadPrompt(key)
+          : undefined,
+    });
+    if ((this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS) <= 0) {
+      await this.flushPendingNewThreadPrompt(key);
+    }
+  }
+
+  private schedulePendingNewThreadPrompt(
+    key: string,
+  ): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      void this.flushPendingNewThreadPrompt(key);
+    }, this.options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS);
+  }
+
+  private async flushPendingNewThreadPrompt(key: string): Promise<void> {
+    const pending = this.pendingNewThreadPrompts.get(key);
+    if (!pending) {
+      return;
+    }
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
+    this.pendingNewThreadPrompts.delete(key);
+    await this.createNewThreadFromPromptBundle({
+      events: pending.events,
+      session: pending.session,
+    });
+  }
+
+  private clearPendingNewThreadPrompt(sessionId: string): void {
+    for (const [key, pending] of this.pendingNewThreadPrompts.entries()) {
+      if (pending.session.id !== sessionId) {
+        continue;
+      }
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      this.pendingNewThreadPrompts.delete(key);
+    }
+  }
+
+  private pendingNewThreadPromptKey(session: MessagingBrowseSessionRecord): string {
+    return [
+      buildMessagingConversationKey(session.channel),
+      session.allowedActorIds.join(","),
+      session.id,
+    ].join(":");
+  }
+
   private async prepareTurnInput(
     events: MessagingTurnInputEvent[],
-    binding: MessagingBindingRecord,
+    binding: MessagingBindingRecord | undefined,
     event?: MessagingInboundEvent,
   ): Promise<
     | {
@@ -991,6 +1113,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
+    navigation?: NavigationSnapshot;
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
@@ -999,7 +1122,7 @@ export class MessagingController {
     let turnStarted = false;
 
     try {
-      const navigation = await this.options.backend.getNavigationSnapshot({
+      const navigation = params.navigation ?? await this.options.backend.getNavigationSnapshot({
         backend: "all",
       });
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
@@ -2050,6 +2173,12 @@ export class MessagingController {
 
   dispose(): void {
     this.turnAdmission.dispose();
+    for (const pending of this.pendingNewThreadPrompts.values()) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+    }
+    this.pendingNewThreadPrompts.clear();
     this.toolUpdatePolicy.dispose();
   }
 
@@ -2243,7 +2372,7 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:cancel") {
-      await this.options.store.deleteBrowseSession(session.id);
+      await this.retireBrowseSession(session);
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("browse-cancelled"),
@@ -2343,6 +2472,31 @@ export class MessagingController {
     });
   }
 
+  private async retireBrowseSession(
+    session: MessagingBrowseSessionRecord,
+  ): Promise<void> {
+    this.clearPendingNewThreadPrompt(session.id);
+    await this.options.store.deleteBrowseSession(session.id);
+    try {
+      const removed = await this.options.store.deletePendingIntentsForChannel({
+        channel: session.channel,
+      });
+      if (removed.length > 0) {
+        this.logger.debug?.("messaging retired channel pending intents on browse close", {
+          channel: session.channel.channel,
+          removedCount: removed.length,
+          sessionId: session.id,
+        });
+      }
+    } catch (error) {
+      this.logger.debug?.("messaging pending-intent cleanup failed on browse close", {
+        channel: session.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.id,
+      });
+    }
+  }
+
   private async resolveCallbackHandleForEvent(
     event: MessagingInboundCallbackEvent,
   ): Promise<MessagingCallbackHandleRecord | undefined> {
@@ -2409,8 +2563,111 @@ export class MessagingController {
       return;
     }
 
+    await this.presentNewThreadPromptGate(
+      {
+        ...session,
+        mode: "new_thread_options",
+        pageIndex: 0,
+        selectedProject: project,
+        updatedAt: this.now(),
+        expiresAt: this.now() + this.pendingIntentTtlMs,
+      },
+      event,
+    );
+  }
+
+  private async presentNewThreadPromptGate(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.options.store.upsertBrowseSession(session);
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-ready"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? {
+            mode: "update",
+            replaceMarkup: true,
+          }
+        : undefined,
+      title: "Ready to start",
+      body: `Send the first instruction for ${session.selectedProject?.label ?? "this project"}. The thread will be created when that message arrives.`,
+      fallbackText: "Send your first instruction, reply back to change the project, or reply cancel.",
+      targetSurface: session.surface,
+      actions: [
+        {
+          id: "browse:mode:new",
+          label: "Back",
+          style: "navigation",
+          fallbackText: "back",
+        },
+        {
+          id: "browse:cancel",
+          label: "Cancel",
+          style: "secondary",
+          fallbackText: "cancel",
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (!result.surface) {
+      return;
+    }
+
+    const updatedSession = {
+      ...session,
+      surface: result.surface,
+      updatedAt: this.now(),
+    };
+    await this.options.store.upsertBrowseSession(updatedSession);
+    await this.options.store.upsertPendingIntent({
+      id: intent.id,
+      channel: event.channel,
+      intent,
+      allowedActorIds: [event.actor.platformUserId],
+      createdAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      surface: result.surface,
+    });
+  }
+
+  private async createNewThreadFromPromptBundle(
+    bundle: PendingNewThreadPromptBundle,
+  ): Promise<void> {
+    const event = bundle.events[0];
+    if (!event || !bundle.session.selectedProject) {
+      return;
+    }
+
+    const prepared = await this.prepareTurnInput(bundle.events, undefined, event);
+    if (!prepared) {
+      return;
+    }
+
+    if (!this.options.backend.startThread) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-unavailable"),
+          createdAt: this.now(),
+          title: "New thread unavailable",
+          body: "This backend does not support starting a thread from messaging yet.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const project = bundle.session.selectedProject;
     const directory = directoryForProjectSelection(navigation, project);
-    const preferences = session.preferences;
+    const preferences = bundle.session.preferences;
     const started = await this.options.backend.startThread({
       backend: navigation.launchpadDefaults.backend,
       cwd: directory?.path ?? project.path,
@@ -2438,13 +2695,13 @@ export class MessagingController {
       project,
       threadId: started.threadId,
     });
-    await this.options.store.deleteBrowseSession(session.id);
+    await this.options.store.deleteBrowseSession(bundle.session.id);
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("new-thread-bound"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
-        delivery: session.surface
+        delivery: bundle.session.surface
           ? {
               mode: "update",
               replaceMarkup: true,
@@ -2452,13 +2709,20 @@ export class MessagingController {
           : undefined,
         title: "Thread started",
         body: `Started and bound a new thread for ${project.label}.`,
-        fallbackText: "Send a message to continue the new thread.",
-        targetSurface: session.surface,
+        fallbackText: "Started the thread with your first instruction.",
+        targetSurface: bundle.session.surface,
       }),
       undefined,
       event,
     );
-    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
+    await this.startPreparedInput({
+      binding: updatedBinding,
+      input: prepared.input,
+      preview: prepared.preview,
+      threadKey: buildThreadIdentityKey(started.backend, started.threadId),
+      event,
+      navigation: optimisticNavigation,
+    });
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -3841,7 +4105,7 @@ export class MessagingController {
   }
 
   private async bindChannelToThread(
-    event: MessagingInboundCallbackEvent,
+    event: MessagingInboundEvent,
     target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
   ): Promise<MessagingBindingRecord> {
     const now = this.now();
