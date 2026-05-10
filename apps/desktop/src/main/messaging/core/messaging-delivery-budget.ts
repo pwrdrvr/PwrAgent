@@ -66,6 +66,7 @@ export class MessagingDeliveryBudget {
   }
 
   admit(request: {
+    consumeCapacity?: boolean;
     priority: MessagingDeliveryPriority;
     scope?: MessagingDeliveryScope;
   }): MessagingDeliveryAdmission {
@@ -92,6 +93,10 @@ export class MessagingDeliveryBudget {
 
     if (slowMode && SLOW_MODE_DROP_PRIORITIES.has(request.priority)) {
       return { outcome: "dropped", reason: "slow-mode", slowMode };
+    }
+
+    if (request.consumeCapacity === false) {
+      return { outcome: "admitted", slowMode };
     }
 
     if (!this.hasCapacity(request.scope, state, request.priority)) {

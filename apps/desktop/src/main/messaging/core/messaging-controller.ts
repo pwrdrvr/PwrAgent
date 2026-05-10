@@ -4330,9 +4330,8 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
-    let scope = shouldApplyDeliveryBudget(routedIntent)
-      ? this.options.adapter.resolveDeliveryScope?.(routedIntent)
-      : undefined;
+    const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
+    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent);
     const channel = binding?.channel.channel ??
       routedIntent.audit?.channel.channel ??
@@ -4340,7 +4339,11 @@ export class MessagingController {
     while (true) {
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
-        let admission = this.deliveryBudget.admit({ priority, scope });
+        let admission = this.deliveryBudget.admit({
+          consumeCapacity: consumeDeliveryBudget,
+          priority,
+          scope,
+        });
         while (admission.outcome === "deferred") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
             at: this.now(),
@@ -4369,7 +4372,11 @@ export class MessagingController {
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
           await sleepUntil(admission.retryAt, this.now);
-          admission = this.deliveryBudget.admit({ priority, scope });
+          admission = this.deliveryBudget.admit({
+            consumeCapacity: consumeDeliveryBudget,
+            priority,
+            scope,
+          });
         }
         if (admission.outcome !== "admitted") {
           const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
@@ -5017,7 +5024,7 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
   return true;
 }
 
-export function shouldApplyDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
+export function shouldConsumeDeliveryBudget(intent: MessagingSurfaceIntent): boolean {
   return intent.kind !== "activity";
 }
 
