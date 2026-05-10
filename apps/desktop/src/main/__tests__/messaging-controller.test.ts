@@ -348,16 +348,17 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
 
-    expect(harness.startThread).toHaveBeenCalledWith({
-      backend: "codex",
-      cwd: "/repo/pwragent",
-      executionMode: "default",
-      fastMode: undefined,
-      model: undefined,
-      reasoningEffort: undefined,
-      serviceTier: undefined,
-      workMode: "worktree",
-      branchName: "release/v2",
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "codex",
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        executionMode: "default",
+        workMode: "worktree",
+        branchName: "release/v2",
+      }),
     });
   });
 
@@ -435,6 +436,40 @@ describe("MessagingController", () => {
         value: expect.objectContaining({ pageIndex: 0 }),
       }),
     );
+  });
+
+  it("does not invent a worktree path in the optimistic status for messaging-started threads", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        workMode: "worktree",
+      }),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Directory: /repo/pwragent"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.not.stringContaining("Worktree: /repo/pwragent"),
+    });
   });
 
   it("cancels a pending new-thread prompt without creating a thread", async () => {
@@ -5500,6 +5535,26 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
     },
   };
+}
+
+function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.directories[0] = {
+    ...snapshot.directories[0]!,
+    launchpad: {
+      directoryKey: "directory:pwragent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/repo/pwragent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+  };
+  return snapshot;
 }
 
 function buildLocalHandoffNavigationSnapshot(): NavigationSnapshot {

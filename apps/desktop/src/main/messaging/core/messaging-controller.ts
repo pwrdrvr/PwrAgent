@@ -6063,6 +6063,7 @@ function navigationWithStartedThread(params: {
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
   threadId: ThreadIdentifier;
+  worktreePath?: string;
   workMode: LaunchpadWorkMode;
 }): NavigationSnapshot {
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -6078,10 +6079,10 @@ function navigationWithStartedThread(params: {
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
     ? {
         id: params.directory?.key ?? directoryPath,
-        kind: params.workMode === "worktree" ? "worktree" : "local",
+        kind: params.workMode === "worktree" && params.worktreePath ? "worktree" : "local",
         label: params.directory?.label ?? params.project.label,
         path: directoryPath,
-        ...(params.workMode === "worktree" ? { worktreePath: directoryPath } : {}),
+        ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
       }
     : undefined;
 
