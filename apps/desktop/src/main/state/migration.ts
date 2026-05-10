@@ -4,7 +4,11 @@ import path from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
 import Database from "better-sqlite3";
 import { migrateMessagingStoreData } from "../messaging/core/messaging-migrations.js";
-import { resolveActiveProfilePath, resolvePwragentRoot } from "../profile";
+import {
+  resolveActiveProfileName,
+  resolveActiveProfilePath,
+  resolvePwragentRoot,
+} from "../profile";
 import { getNativeBinding } from "./native-binding.js";
 import { StateDb } from "./state-db.js";
 
@@ -68,6 +72,7 @@ export function migrateIfNeeded(options?: {
   xdgConfigHome?: string;
   xdgStateHome?: string;
 }): MigrationOutcome {
+  const profileName = resolveActiveProfileName(options);
   const dbPath = resolveActiveProfilePath("state/state.db", options);
   const nativeBinding = getNativeBinding();
 
@@ -85,6 +90,12 @@ export function migrateIfNeeded(options?: {
     }
   }
 
+  if (profileName !== "default") {
+    const stateDb = StateDb.open(dbPath, { profileName });
+    stateDb.close();
+    return { status: "fresh-install", dbPath };
+  }
+
   const legacy = findLegacyPaths(options);
   const hasAnySources =
     legacy.messagingState ||
@@ -95,7 +106,7 @@ export function migrateIfNeeded(options?: {
 
   if (!hasAnySources) {
     const stateDb = StateDb.open(dbPath, {
-      profileName: options?.cliProfile ?? "default",
+      profileName,
     });
     stateDb.close();
     return { status: "fresh-install", dbPath };
@@ -122,9 +133,7 @@ export function migrateIfNeeded(options?: {
     tmpDb.pragma("synchronous = NORMAL");
     tmpDb.pragma("auto_vacuum = INCREMENTAL");
 
-    const stateDb = StateDb.open(tmpDbPath, {
-      profileName: options?.cliProfile ?? "default",
-    });
+    const stateDb = StateDb.open(tmpDbPath, { profileName });
 
     const counts: Record<string, number> = {};
     const timestamp = new Date().toISOString();
