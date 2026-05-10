@@ -2,7 +2,7 @@ import { app, ipcMain } from "electron";
 import { APP_METADATA_READ_CHANNEL } from "../../shared/ipc";
 import type { AppMetadata } from "../../shared/app-metadata";
 
-const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC. All rights reserved.";
+const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 const APP_HOMEPAGE = "https://pwrdrvr.com";
 
 export function resolveAppMetadata(): AppMetadata {

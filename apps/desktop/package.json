@@ -5,8 +5,8 @@
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "author": "PwrDrvr LLC",
-  "license": "UNLICENSED",
-  "copyright": "Copyright © 2026 PwrDrvr LLC. All rights reserved.",
+  "license": "MIT",
+  "copyright": "Copyright © 2026 PwrDrvr LLC.",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {

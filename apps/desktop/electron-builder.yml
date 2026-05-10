@@ -1,6 +1,6 @@
 appId: com.pwrdrvr.pwragent
 productName: PwrAgent
-copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+copyright: "Copyright © 2026 PwrDrvr LLC."
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
@@ -85,7 +85,7 @@ mac:
   helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
   helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
-    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     LSMinimumSystemVersion: "12.0"
     LSApplicationCategoryType: public.app-category.developer-tools
   target:

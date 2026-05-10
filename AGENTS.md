@@ -40,10 +40,11 @@
   documented in [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).
 - The Phase 1 → Phase 2 distribution channel migration runbook lives at
   [docs/desktop-distribution-phase-2-runbook.md](docs/desktop-distribution-phase-2-runbook.md).
-- v1.0 is closed-source proprietary, owned by PwrDrvr LLC. Treat the LICENSE
-  file at the repo root and all `package.json` `license: "UNLICENSED"` markings
-  as load-bearing — do not add OSS license language to any package, README, or
-  source-file header without an explicit policy change from PwrDrvr LLC.
+- PwrAgent is MIT-licensed, owned by PwrDrvr LLC. Treat the repo-root
+  `LICENSE`, package `license: "MIT"` declarations, and third-party license
+  aggregation as load-bearing release metadata. Do not introduce a different
+  first-party license or remove license disclosures without an explicit policy
+  change from PwrDrvr LLC.
 
 ## Runtime Config
 

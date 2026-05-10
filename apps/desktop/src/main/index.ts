@@ -52,7 +52,7 @@ import { disposeAppState, initializeAppState } from "./state/app-state";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgent";
-const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC. All rights reserved.";
+const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 const APP_WEBSITE = "https://pwrdrvr.com";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
