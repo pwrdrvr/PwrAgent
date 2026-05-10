@@ -1986,7 +1986,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       budget:
         policy === "group"
           ? { limit: 20, intervalMs: 60_000, reserved: 5 }
-          : { limit: 1, intervalMs: 1_000, reserved: 0 },
+          : { limit: 60, intervalMs: 60_000, reserved: 0 },
     };
   }
 

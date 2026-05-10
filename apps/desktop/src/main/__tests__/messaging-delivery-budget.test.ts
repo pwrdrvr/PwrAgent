@@ -155,6 +155,48 @@ describe("MessagingDeliveryBudget", () => {
     });
   });
 
+  it("allows bursts within a sliding minute budget", () => {
+    let now = 1_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    const scope = testScope({ limit: 60, reserved: 0 });
+
+    for (let index = 0; index < 20; index += 1) {
+      now = 1_000 + (index * 500);
+      expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
+        outcome: "admitted",
+        slowMode: false,
+      });
+    }
+
+    expect(budget.isScopeInSlowMode(scope)).toBe(false);
+  });
+
+  it("enters slow mode when a sliding minute budget is exhausted", () => {
+    let now = 1_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    const scope = testScope({ limit: 60, reserved: 0 });
+
+    for (let index = 0; index < 60; index += 1) {
+      now = 1_000 + (index * 500);
+      expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
+        outcome: "admitted",
+        slowMode: false,
+      });
+    }
+
+    now = 31_000;
+    expect(budget.admit({ scope, priority: "routine_status" })).toEqual({
+      outcome: "dropped",
+      reason: "budget-exhausted",
+      slowMode: true,
+    });
+    expect(budget.admit({ scope, priority: "stream_partial" })).toEqual({
+      outcome: "dropped",
+      reason: "slow-mode",
+      slowMode: true,
+    });
+  });
+
   it("keeps independent scopes from throttling each other", () => {
     const budget = new MessagingDeliveryBudget({ now: () => 1_000 });
     const first = testScope({ id: "telegram:group:1", limit: 1, reserved: 0 });
