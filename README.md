@@ -58,11 +58,20 @@ graph TD
 
 | Layer | Storage | Purpose |
 |-------|---------|---------|
-| Desktop state | `~/.pwragent/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, secrets, launchpad settings |
+| Desktop state | `~/.pwragent/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, `safeStorage`-encrypted secret blobs, launchpad settings |
 | Desktop config | `~/.pwragent/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
 | Agent-Core threads | `<state_root>/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
 | Agent-Core metadata | `<state_root>/threads/<id>/thread.toml` | Thread config (model, cwd, approval policy) |
 | Protocol captures | `~/.pwragent/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
+
+Desktop secrets such as bot tokens and API keys are not written to TOML and are
+not stored as plaintext in sqlite. PwrAgent encrypts them with Electron
+[`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage) and
+stores only the resulting ciphertext blob in the active profile's `state.db`.
+On macOS, Electron backs `safeStorage` with Keychain Access for the app's
+encryption keys, so decrypting the sqlite blob requires the same OS/user/app
+Keychain context. The app refuses to write secrets when Electron reports an
+unsafe or unavailable `safeStorage` backend.
 
 See [docs/state-layout.md](docs/state-layout.md) for full directory layout, environment variables, and migration details.
 
