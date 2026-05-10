@@ -218,13 +218,15 @@ describe("LineAdapter", () => {
     });
   });
 
-  it("normalizes group join lifecycle events without a source user id", async () => {
+  it("drops group join lifecycle events without a source user id", async () => {
     const port = await getFreePort();
     const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const logger = { debug: vi.fn() };
     const adapter = new LineAdapter({
       api: createApi(),
       callbackHandleStore: createCallbackStore(),
       config,
+      logger,
       now: () => 1234,
     });
     adapters.push(adapter);
@@ -243,20 +245,84 @@ describe("LineAdapter", () => {
         },
       }],
     });
-    await waitFor(() => events.length === 1);
+    await waitFor(() => events.length > 0 || logger.debug.mock.calls.length > 0);
 
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      kind: "lifecycle",
-      lifecycle: "bound",
-      actor: { isBot: true },
-      channel: {
-        channel: "line",
-        conversation: {
-          id: "C0123456789abcdef0123456789abcdef",
-          kind: "channel",
-        },
+    expect(events).toHaveLength(0);
+    expect(logger.debug).toHaveBeenCalledWith(
+      "line lifecycle event ignored without source user",
+      {
+        conversationId: "C0123456789abcdef0123456789abcdef",
+        eventType: "join",
       },
+    );
+  });
+
+  it("rejects attachments over the request download limit before fetching", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+    });
+    adapters.push(adapter);
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "123",
+        kind: "file",
+        name: "large.bin",
+        disposition: "available",
+        sizeBytes: 11,
+      },
+      maxBytes: 10,
+    })).rejects.toThrow(/download limit/);
+    expect(api.downloadMessageContent).not.toHaveBeenCalled();
+  });
+
+  it("rejects downloaded attachments over the request limit when LINE omits size", async () => {
+    const api = createApi();
+    api.downloadMessageContent.mockResolvedValueOnce(new Uint8Array(11));
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+    });
+    adapters.push(adapter);
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "123",
+        kind: "file",
+        name: "large.bin",
+        disposition: "available",
+      },
+      maxBytes: 10,
+    })).rejects.toThrow(/download limit/);
+    expect(api.downloadMessageContent).toHaveBeenCalledWith("123");
+  });
+
+  it("allows attachments under the request download limit", async () => {
+    const api = createApi();
+    api.downloadMessageContent.mockResolvedValueOnce(new Uint8Array(10));
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+    });
+    adapters.push(adapter);
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "123",
+        kind: "file",
+        name: "small.bin",
+        disposition: "available",
+        sizeBytes: 10,
+      },
+      maxBytes: 10,
+    })).resolves.toMatchObject({
+      fileName: "small.bin",
+      sizeBytes: 10,
     });
   });
 

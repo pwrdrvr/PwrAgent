@@ -368,7 +368,10 @@ export class LineAdapter implements LineProviderAdapter {
     if (!messageId) {
       throw new Error("LINE attachment is missing a message id");
     }
-    const maxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
+    const providerMaxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
+    const maxBytes = providerMaxBytes === undefined
+      ? request.maxBytes
+      : Math.min(request.maxBytes, providerMaxBytes);
     if (
       maxBytes !== undefined
       && request.attachment.sizeBytes !== undefined
@@ -482,6 +485,16 @@ export class LineAdapter implements LineProviderAdapter {
       case "join":
       case "leave":
         if (!this.isAuthorizedConversation(channel)) {
+          return;
+        }
+        if (!ids.userId) {
+          this.logger.debug?.("line lifecycle event ignored without source user", {
+            conversationId: channel.conversation.id,
+            eventType: event.type,
+          });
+          return;
+        }
+        if (!this.authorizeInbound({ actor, channel, kind: "lifecycle", routingState })) {
           return;
         }
         await this.listener({
