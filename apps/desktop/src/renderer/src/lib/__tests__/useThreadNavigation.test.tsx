@@ -452,6 +452,83 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
   });
 
+  it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
+    let archived = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: archived
+        ? []
+        : [
+            {
+              id: "thread-archived",
+              title: "Archive me",
+              titleSource: "explicit" as const,
+              summary: "This thread has a worktree",
+              source: "codex" as const,
+              linkedDirectories: [
+                {
+                  id: "directory:/repo/app",
+                  label: "app",
+                  path: "/repo/app",
+                  kind: "worktree" as const,
+                  worktreePath: "/repo/.worktrees/archive-me",
+                },
+              ],
+              inbox: {
+                inInbox: false,
+              },
+              updatedAt: 1_000,
+            },
+          ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => {
+      archived = true;
+      return {
+        backend: "codex" as const,
+        threadId: "thread-archived",
+        archivedAt: 3_000,
+        cleanup: [
+          {
+            worktreePath: "/repo/.worktrees/archive-me",
+            removedWorktree: false,
+            deletedBranch: false,
+            error: "Worktree is not registered with Git",
+          },
+        ],
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-archived",
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(result.current.archiveThreadError).toBe(
+      "Thread archived, but worktree cleanup failed for /repo/.worktrees/archive-me: Worktree is not registered with Git",
+    );
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,

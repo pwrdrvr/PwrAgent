@@ -126,6 +126,15 @@ export class ReplayClient {
     return asThreadReplay(this.controller.consumeResponse("thread/read").result);
   }
 
+  async archiveThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    return this.controller.consumeResponse("thread/archive").result as {
+      threadId: string;
+    };
+  }
+
   async startThread(_params?: {
     cwd?: string;
     model?: string;

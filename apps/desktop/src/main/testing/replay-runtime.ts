@@ -139,6 +139,9 @@ type ReplayRuntimeClient = {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
+  archiveThread?(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }>;
   startThread(params: {
     cwd?: string;
     model?: string;
