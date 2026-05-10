@@ -129,7 +129,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("starts a new thread from /resume --new project selection", async () => {
+  it("starts a new thread from /resume --new only after the first prompt arrives", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
@@ -144,6 +144,18 @@ describe("MessagingController", () => {
       }),
     );
 
+    expect(harness.startThread).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("PwrAgent"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
     expect(harness.startThread).toHaveBeenCalledWith({
       backend: "codex",
       cwd: "/repo/pwragent",
@@ -153,6 +165,18 @@ describe("MessagingController", () => {
       reasoningEffort: undefined,
       serviceTier: undefined,
     });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Fix bug",
+          },
+        ],
+      }),
+    );
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toMatchObject({
@@ -170,6 +194,77 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       text: expect.stringContaining("Directory: /repo/pwragent"),
     });
+  });
+
+  it("cancels a pending new-thread prompt without creating a thread", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:cancel",
+      }),
+    );
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Resume cancelled",
+    });
+  });
+
+  it("debounces split first prompts before creating a messaging-started thread", async () => {
+    const harness = await createHarness({ inputDebounceMs: 10 });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("First prompt chunk"));
+    await harness.controller.handleInboundEvent(buildTextEvent("second prompt chunk"));
+    expect(harness.startThread).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(harness.startThread).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "First prompt chunk",
+          },
+          {
+            type: "text",
+            text: "second prompt chunk",
+          },
+        ],
+      }),
+    );
   });
 
   it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
