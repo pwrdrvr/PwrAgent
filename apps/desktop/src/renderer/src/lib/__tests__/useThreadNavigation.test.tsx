@@ -529,6 +529,75 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("surfaces archive cleanup metadata lookup skips without requiring a worktree path", async () => {
+    let archived = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: archived
+        ? []
+        : [
+            {
+              id: "thread-archived",
+              title: "Archive me",
+              titleSource: "explicit" as const,
+              summary: "Archive remains available without cleanup metadata",
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: false,
+              },
+              updatedAt: 1_000,
+            },
+          ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => {
+      archived = true;
+      return {
+        backend: "codex" as const,
+        threadId: "thread-archived",
+        archivedAt: 3_000,
+        cleanup: [
+          {
+            removedWorktree: false,
+            deletedBranch: false,
+            skippedReason:
+              "Unable to load thread metadata for archive cleanup: thread list unavailable",
+          },
+        ],
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-archived",
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(result.current.archiveThreadError).toBe(
+      "Thread archived, but worktree cleanup was skipped: Unable to load thread metadata for archive cleanup: thread list unavailable",
+    );
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,

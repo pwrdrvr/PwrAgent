@@ -1314,19 +1314,20 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
-    let thread: AppServerThreadSummary;
+    let thread: AppServerThreadSummary | undefined;
+    let cleanupMetadataError: string | undefined;
     try {
       thread = await this.findThreadForArchiveCleanup({
         backend,
         threadId: request.threadId,
       });
     } catch (error) {
+      cleanupMetadataError = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archive cleanup metadata lookup failed", {
         backend,
         threadId: request.threadId,
-        error: error instanceof Error ? error.message : String(error),
+        error: cleanupMetadataError,
       });
-      throw new Error("Unable to load thread metadata for archive cleanup.");
     }
 
     const result =
@@ -1336,10 +1337,12 @@ export class DesktopBackendRegistry {
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
-    const cleanup = await this.archiveThreadWorktrees({
-      backend,
-      thread,
-    });
+    const cleanup = thread
+      ? await this.archiveThreadWorktrees({
+          backend,
+          thread,
+        })
+      : this.buildArchiveCleanupMetadataSkippedResult(cleanupMetadataError);
 
     return {
       backend,
@@ -1347,6 +1350,20 @@ export class DesktopBackendRegistry {
       archivedAt: Date.now(),
       cleanup,
     };
+  }
+
+  private buildArchiveCleanupMetadataSkippedResult(
+    error?: string,
+  ): ArchiveThreadCleanupResult[] {
+    return [
+      {
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason: error
+          ? `Unable to load thread metadata for archive cleanup: ${error}`
+          : "Unable to load thread metadata for archive cleanup.",
+      },
+    ];
   }
 
   async restoreThread(
@@ -2967,7 +2984,13 @@ export class DesktopBackendRegistry {
   }): Promise<AppServerThreadSummary[]> {
     const defaultThreads = await this.codexClient
       .listThreads(params, diagnostics)
-      .catch(() => []);
+      .catch((error) => {
+        if (diagnostics?.callerReason === "archive-cleanup") {
+          throw error;
+        }
+
+        return [];
+      });
     const allThreads = defaultThreads.map((thread) => ({
       ...thread,
       executionMode: "default" as const,

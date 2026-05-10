@@ -300,7 +300,7 @@ export type AppServerListThreadsResponse = {
 };
 
 export type ArchiveThreadCleanupResult = {
-  worktreePath: string;
+  worktreePath?: string;
   branch?: string;
   removedWorktree: boolean;
   deletedBranch: boolean;
