@@ -2297,7 +2297,9 @@ function sanitizeDiscordThreadName(title: string): string {
 }
 
 function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
-  return intent.kind === "thread_picker" || intent.kind === "project_picker"
+  return intent.kind === "thread_picker" ||
+    intent.kind === "project_picker" ||
+    intent.kind === "confirmation"
     ? intent.browseSessionId
     : undefined;
 }

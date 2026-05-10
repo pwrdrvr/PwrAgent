@@ -2547,6 +2547,7 @@ export class MessagingController {
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
       capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
       createdAt: this.now(),
       delivery: session.surface
         ? {

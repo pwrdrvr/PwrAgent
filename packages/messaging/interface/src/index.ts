@@ -638,6 +638,7 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingConfirmationIntent = MessagingBaseSurfaceIntent & {
   kind: "confirmation";
+  browseSessionId?: string;
   title: string;
   body: string;
   actions: MessagingSurfaceAction[];

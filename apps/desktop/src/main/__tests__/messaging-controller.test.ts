@@ -148,10 +148,14 @@ describe("MessagingController", () => {
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toBeUndefined();
-    expect(harness.delivered.at(-1)).toMatchObject({
+    const readyIntent = harness.delivered.at(-1);
+    expect(readyIntent).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining("PwrAgent"),
+    });
+    expect(readyIntent).toMatchObject({
+      browseSessionId: expect.stringMatching(/^browse:/),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
@@ -224,6 +228,50 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Resume cancelled",
+    });
+  });
+
+  it("resolves pending new-thread Back through persisted callback handles", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    const readyIntent = harness.delivered.at(-1);
+    if (readyIntent?.kind !== "confirmation" || !readyIntent.browseSessionId) {
+      throw new Error("Expected ready-to-start confirmation with a browse session id");
+    }
+    await harness.store.upsertCallbackHandle({
+      id: "callback:ready-back",
+      actionId: "browse:mode:new",
+      allowedActorIds: ["user-1"],
+      browseSessionId: readyIntent.browseSessionId,
+      channel: buildCommandEvent("/resume").channel,
+      createdAt: 1000,
+      updatedAt: 1000,
+      expiresAt: 2000,
+      handle: "tg:ready-back",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+        interactionId: "tg:ready-back",
+      }),
+    );
+
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
     });
   });
 
