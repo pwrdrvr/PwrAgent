@@ -6695,10 +6695,10 @@ textarea,
   width: 100%;
   height: 100%;
   gap: 3px;
-  align-content: center;
+  align-content: start;
   min-width: 0;
   min-height: 60px;
-  padding: 7px 12px;
+  padding: 10px 12px;
   font-size: 12px;
   line-height: 1.25;
   text-align: left;
