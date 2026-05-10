@@ -1,0 +1,4 @@
+interface:
+  display_name: "PwrAgent Dev Restart"
+  short_description: "Safely restart local PwrAgent dev"
+  default_prompt: "Use $pwragent-dev-restart to restart the local PwrAgent dev app after pulling changes."
