@@ -18,6 +18,7 @@ import {
   formatRuntimePath,
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 
@@ -701,26 +702,33 @@ function RuntimeIdentityButton(props: {
   valueKind: "branch" | "cwd";
   onCopied: (valueKind: "branch" | "cwd") => void;
 }) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipText = props.copied
+    ? "Copied"
+    : `${props.value}\nClick to copy to clipboard`;
+
   return (
-    <button
-      aria-label={`Copy ${
-        props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
-      }`}
-      className="runtime-identity__button path-copy-target tooltip-target"
-      data-tooltip={
-        props.copied
-          ? "Copied"
-          : `${props.value}\nClick to copy to clipboard`
-      }
-      type="button"
-      onClick={() => {
-        void copyText(props.value).then(() => props.onCopied(props.valueKind));
-      }}
-    >
-      <span aria-hidden="true" className="runtime-identity__icon">
-        {props.valueKind === "cwd" ? <FolderIcon size={13} /> : <BranchIcon size={13} />}
-      </span>
-      <span className="runtime-identity__text">{props.label}</span>
-    </button>
+    <>
+      <button
+        aria-label={`Copy ${
+          props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+        }`}
+        className="runtime-identity__button path-copy-target"
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={() => {
+          void copyText(props.value).then(() => props.onCopied(props.valueKind));
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseLeave={tooltip.hide}
+      >
+        <span aria-hidden="true" className="runtime-identity__icon">
+          {props.valueKind === "cwd" ? <FolderIcon size={13} /> : <BranchIcon size={13} />}
+        </span>
+        <span className="runtime-identity__text">{props.label}</span>
+      </button>
+      {tooltip.tooltipNode}
+    </>
   );
 }
