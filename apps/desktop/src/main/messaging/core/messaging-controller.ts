@@ -1000,10 +1000,50 @@ export class MessagingController {
       clearTimeout(pending.timer);
     }
     this.pendingNewThreadPrompts.delete(key);
-    await this.createNewThreadFromPromptBundle({
-      events: pending.events,
-      session: pending.session,
-    });
+    try {
+      await this.createNewThreadFromPromptBundle({
+        events: pending.events,
+        session: pending.session,
+      });
+    } catch (error) {
+      this.logger.warn?.("messaging new-thread prompt failed", {
+        channel: pending.session.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: pending.session.id,
+      });
+      await this.deliverNewThreadPromptFailure(pending, error);
+    }
+  }
+
+  private async deliverNewThreadPromptFailure(
+    pending: PendingNewThreadPromptWindow,
+    error: unknown,
+  ): Promise<void> {
+    const event = pending.events[0];
+    if (!event) {
+      return;
+    }
+    try {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-start-failed"),
+          createdAt: this.now(),
+          title: "Thread could not start",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+    } catch (deliveryError) {
+      this.logger.debug?.("messaging new-thread failure notice failed", {
+        channel: pending.session.channel.channel,
+        deliveryError: deliveryError instanceof Error
+          ? deliveryError.message
+          : String(deliveryError),
+        sessionId: pending.session.id,
+      });
+    }
   }
 
   private clearPendingNewThreadPrompt(sessionId: string): void {
