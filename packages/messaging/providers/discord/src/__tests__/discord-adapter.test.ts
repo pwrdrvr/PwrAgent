@@ -1,10 +1,11 @@
-import type {
-  MessagingAuditContext,
-  MessagingCallbackHandleRecord,
-  MessagingCallbackHandleStore,
-  MessagingInboundEvent,
-  MessagingRejectedInboundEvent,
-  MessagingStatusIntent,
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  type MessagingAuditContext,
+  type MessagingCallbackHandleRecord,
+  type MessagingCallbackHandleStore,
+  type MessagingInboundEvent,
+  type MessagingRejectedInboundEvent,
+  type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -454,6 +455,7 @@ describe("discord adapter", () => {
         actionId: "permissions",
         allowedActorIds: [TEST_USER_ID, TEST_OTHER_USER_ID],
         bindingId: "binding-1",
+        expiresAt: 1234 + MESSAGING_CALLBACK_HANDLE_TTL_MS,
         handle: customId,
         value: { mode: "review" },
       }),

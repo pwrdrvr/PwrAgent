@@ -295,7 +295,7 @@ Return `MessagingDeliveryResult` with the appropriate `outcome` (`presented`, `u
 
 ## Step 6 — Wire callback handles
 
-When you render a button, you need to be able to reverse the click. The platform delivers a small payload back when the user clicks (`callback_data` on Telegram, `custom_id` on Discord, `value` on Slack, `integration.context` on Mattermost). That payload should be an **opaque short handle**, not the semantic action data. The semantic action lives in the `MessagingStore.callbackHandles` table (the controller persists it; restart-safe).
+When you render a button, you need to be able to reverse the click. The platform delivers a small payload back when the user clicks (`callback_data` on Telegram, `custom_id` on Discord, `value` on Slack, `integration.context` on Mattermost). That payload should be an **opaque compact handle**, not the semantic action data. The semantic action lives in the `MessagingStore.callbackHandles` table through `MessagingCallbackHandleStore`; the adapter writes it at render time and resolves it at click time.
 
 The pattern, identical across providers:
 
@@ -311,6 +311,8 @@ The pattern, identical across providers:
      intent.allowedActorIds && intent.allowedActorIds.length > 0
        ? intent.allowedActorIds
        : [intent.audit.actor.platformUserId];
+   const now = this.now();
+   const expiresAt = now + MESSAGING_CALLBACK_HANDLE_TTL_MS;
 
    const recordId = `${this.channel}-callback:${handle}:${createHash("sha256")
      .update(JSON.stringify([
@@ -325,9 +327,11 @@ The pattern, identical across providers:
    Persist the handle ↔ semantic-action mapping via the controller's `MessagingCallbackHandleStore`. Embed `handle` in the platform's callback payload.
 
    The persisted record is delivery-scoped, not handle-scoped. A single intent/action can fan out to multiple bindings and intentionally reuse the same platform handle; the persisted `id` must include the delivered conversation and binding so one delivery does not overwrite another. Persist the full `allowedActorIds` set from the intent, and persist `bindingId` from `intent.audit?.bindingId ?? intent.bindingId` so rebind/revoke cleanup deletes old buttons.
+
+   Use the shared `MESSAGING_CALLBACK_HANDLE_TTL_MS` policy for every sqlite-backed button handle. Do **not** use a provider-local 15-minute TTL for approvals, browse buttons, or status buttons. The button handle is just the route back to sqlite; the pending approval, browse session, or other domain record can expire separately after the handle resolves, which lets the controller return the correct UX instead of a generic unresolved-action error.
 2. **Click time** — when the platform delivers a click, look up the handle in the store, reconstruct `MessagingInboundCallbackEvent`, fire the listener.
 
-The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). Do not keep a parallel in-process map from platform handle to semantic action; that creates a second authorization path and makes live clicks behave differently from restart-recovered clicks. PR [#285](https://github.com/pwrdrvr/PwrAgent/pull/285) shows this model applied to Discord after restart-only component bindings exposed the fan-out and routed-binding edge cases; use that as the current reference pattern.
+The store is shared across the controller and your adapter (both go through the interface `MessagingCallbackHandleStore` shape). Do not keep a parallel in-process map from platform handle to semantic action, and do not encode semantic ids such as `status:streaming` directly into the platform payload. Those are legacy patterns: they create a second authorization path, make live clicks behave differently from restart-recovered clicks, and leave pinned/status buttons unable to survive normal idle time. PR [#285](https://github.com/pwrdrvr/PwrAgent/pull/285) shows this model applied to Discord after restart-only component bindings exposed the fan-out and routed-binding edge cases; use that as the current reference pattern.
 
 ### Out-of-band HTTP callback model (Mattermost)
 
@@ -752,6 +756,6 @@ Captured at the end of Phase 10 of [plan 2026-05-06-001](plans/2026-05-06-001-fe
 Captured while implementing [issue #261](https://github.com/pwrdrvr/PwrAgent/issues/261).
 
 - **Socket Mode is materially simpler than the Mattermost-style HTTP path.** Slack button clicks, message events, and slash-command payloads all arrive over the outbound app socket, so a desktop deployment does not need Cloudflare Tunnel / Tailscale Funnel just to receive clicks.
-- **The provider still needs signed opaque callback values.** Socket Mode authenticates transport, but the adapter stores only a short handle in Block Kit button `value`; signing `{handle, intentId, issuedAt}` catches stale or tampered values before the callback-handle lookup.
+- **The provider still needs signed opaque callback values.** Socket Mode authenticates transport, but the adapter stores only a compact handle in Block Kit button `value`; signing `{handle, intentId, issuedAt}` catches stale or tampered values before the callback-handle lookup.
 - **Slack has a real markdown dialect gap.** `slack-mrkdwn` is not CommonMark. The adapter needs a small boundary translator and tests for links/bold/escaping instead of forwarding producer markdown verbatim.
 - **Settings fan-out grows quickly for two-token providers.** Slack needs bot token + app token, optional signing secret, inbound mode, authorized users, and optional workspace IDs. The guide's settings table was accurate, but tests that construct full `DesktopSettingsSnapshot` fixtures also need an explicit default block.

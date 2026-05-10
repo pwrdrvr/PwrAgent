@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MESSAGING_DELIVERY_OUTCOMES,
   MESSAGING_INBOUND_EVENT_KINDS,
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
   MESSAGING_SURFACE_INTENT_KINDS,
   MESSAGING_TOOL_UPDATE_MODES,
   layoutMessagingActionRows,
@@ -520,5 +521,9 @@ describe("messaging surface contract", () => {
     expect(callbackHandle.handle).not.toContain("thread-1");
     expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
+  });
+
+  it("defines callback handles as long-lived sqlite routes", () => {
+    expect(MESSAGING_CALLBACK_HANDLE_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });

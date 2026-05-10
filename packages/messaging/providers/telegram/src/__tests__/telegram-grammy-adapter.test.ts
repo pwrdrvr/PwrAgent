@@ -12,11 +12,13 @@ import {
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
 } from "../telegram-adapter.ts";
-import type {
-  MessagingCallbackHandleRecord,
-  MessagingCallbackHandleStore,
-  MessagingInboundEvent,
-  MessagingStatusIntent,
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  type MessagingApprovalIntent,
+  type MessagingCallbackHandleRecord,
+  type MessagingCallbackHandleStore,
+  type MessagingInboundEvent,
+  type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 
 describe("adaptGrammyBot", () => {
@@ -178,6 +180,46 @@ describe("TelegramAdapter callback persistence", () => {
       channel: {
         conversation: { id: "chat-1" },
       },
+      expiresAt: 1_700_000_000_000 + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+    });
+  });
+
+  it("uses long-lived sqlite callback handles for approval buttons", async () => {
+    const store = fakeCallbackStore();
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store,
+    });
+    const intent = {
+      id: "approval-1",
+      kind: "approval",
+      createdAt: 1,
+      title: "Command Approval",
+      body: "Approve?",
+      audit: {
+        actor: { platformUserId: "user-1" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-1", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+      decisions: [{ id: "approval:accept", label: "Approve", decision: "accept" }],
+    } satisfies MessagingApprovalIntent;
+
+    await adapter.deliver(intent);
+
+    expect(store.records[0]).toMatchObject({
+      actionId: "approval:accept",
+      expiresAt: 1_700_000_000_000 + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+      pendingIntentId: "approval-1",
     });
   });
 

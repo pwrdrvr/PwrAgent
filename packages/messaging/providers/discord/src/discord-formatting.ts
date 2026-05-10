@@ -144,15 +144,19 @@ export function buildDiscordComponents(
   const items = actions
     .filter((action) => !action.disabled)
     .slice(0, maxActions)
-    .map((action) => ({
-      action,
-      component: {
-        custom_id: createCustomId(action),
-        label: action.label.slice(0, maxLabelLength),
-        style: styleForAction(action),
-        type: 2 as const,
-      },
-    }));
+    .map((action) => {
+      const customId = createCustomId(action);
+      assertOpaqueDiscordCustomId(customId);
+      return {
+        action,
+        component: {
+          custom_id: customId,
+          label: action.label.slice(0, maxLabelLength),
+          style: styleForAction(action),
+          type: 2 as const,
+        },
+      };
+    });
 
   if (items.length === 0) {
     return undefined;
@@ -166,6 +170,12 @@ export function buildDiscordComponents(
     components,
     type: 1,
   }));
+}
+
+function assertOpaqueDiscordCustomId(customId: string): void {
+  if (!/^dc:[A-Za-z0-9_-]{24}$/.test(customId)) {
+    throw new Error("Discord component custom_id must be an opaque persisted handle.");
+  }
 }
 
 function renderContentPart(part: MessagingContentPart): string {

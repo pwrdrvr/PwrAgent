@@ -155,15 +155,19 @@ export function buildTelegramKeyboard(
   const items = actions
     .filter((action) => !action.disabled)
     .slice(0, maxActions)
-    .map((action) => ({
-      action,
-      component: {
-        text: action.label.length > maxLabelLength
-          ? action.label.slice(0, maxLabelLength)
-          : action.label,
-        callback_data: createCallbackData(action),
-      },
-    }));
+    .map((action) => {
+      const callbackData = createCallbackData(action);
+      assertOpaqueTelegramCallbackHandle(callbackData);
+      return {
+        action,
+        component: {
+          text: action.label.length > maxLabelLength
+            ? action.label.slice(0, maxLabelLength)
+            : action.label,
+          callback_data: callbackData,
+        },
+      };
+    });
 
   if (items.length === 0) {
     return undefined;
@@ -175,6 +179,12 @@ export function buildTelegramKeyboard(
       maxColumns,
     }),
   };
+}
+
+function assertOpaqueTelegramCallbackHandle(callbackData: string): void {
+  if (!/^tg:[A-Za-z0-9_-]{18}$/.test(callbackData)) {
+    throw new Error("Telegram callback_data must be an opaque persisted handle.");
+  }
 }
 
 function renderContentPart(part: MessagingContentPart): string {

@@ -299,7 +299,7 @@ commands on every startup.
   `messaging-state.json` under the desktop state root.
 - Inbound attachments are downloaded only after authorization and active binding
   checks, then capped, sniffed, normalized, or rejected before model upload.
-- Telegram callback data and Discord component IDs contain short opaque handles,
+- Telegram callback data and Discord component IDs contain compact opaque handles,
   not thread IDs, request payloads, tokens, or callback secrets.
 - Discord deliveries use defensive `allowed_mentions` so agent output does not
   ping everyone, roles, or arbitrary users.

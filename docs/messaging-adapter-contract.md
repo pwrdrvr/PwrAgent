@@ -58,14 +58,18 @@ Adapters own routing and surface state. PwrAgent may persist and echo
 IDs, interaction tokens, thread IDs, callback payloads, and permission details
 belong inside adapter-owned opaque state.
 
-Interactive callbacks should use short opaque platform handles:
+Interactive callbacks should use compact opaque platform handles backed by
+long-lived sqlite records:
 
 - Telegram `callback_data` is byte-limited, so never embed semantic action data.
 - Discord component `custom_id` should likewise carry only a compact handle.
 - Slack button `value` and Mattermost `integration.context` should carry or wrap
   the same opaque handle, plus any provider authenticity/routing breadcrumbs.
-- The full pending intent remains in `MessagingStore` with binding, actor, TTL,
-  and audit context.
+- The handle record should outlive pinned/status surfaces and app restarts. Use
+  the shared callback-handle TTL policy rather than provider-local 15-minute
+  timers. The domain record a button points at, such as a pending approval or
+  browse session, may expire separately and should fail closed after the handle
+  resolves.
 - Callback handle records are scoped per delivery. Persist the delivered
   conversation, the full `allowedActorIds` set, and
   `intent.audit?.bindingId ?? intent.bindingId`; a single intent/action may be
@@ -198,8 +202,8 @@ runtime failures still report `errored`.
 Workspace handoff is expressed with the same generic status, single-select,
 confirmation, and error intents as other messaging workflows. Adapters should
 render its `Handoff`, branch, confirm, back, refresh, and cancel actions like
-any other `MessagingSurfaceAction`; provider payloads must remain short opaque
-handles. The earlier "low-button-count variation policy" deferral is now
+any other `MessagingSurfaceAction`; provider payloads must remain compact
+opaque handles. The earlier "low-button-count variation policy" deferral is now
 implemented via the capability profile (see below) — producers truncate by
 priority and adapters apply defensive caps from their own profile.
 
@@ -338,7 +342,7 @@ To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
 5. Render `MessagingSurfaceIntent` without changing `MessagingController`.
    Apply defensive caps from the adapter's own `capabilityProfile`.
 6. Store platform-specific details only in `MessagingAdapterState`.
-7. Use short callback handles and resolve them back to semantic actions
+7. Use compact opaque callback handles and resolve them back to semantic actions
    inside the adapter. Persist delivery-scoped callback records with the full
    actor set and routed binding id so restart, fan-out, and rebind cleanup paths
    behave consistently.
