@@ -10,9 +10,12 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingFilePart,
+  MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -338,7 +341,10 @@ export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -361,6 +367,7 @@ export type TelegramProviderAdapter = {
 
 export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       maxActions: 100,
@@ -449,6 +456,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
    */
   private stopping = false;
   private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, TelegramTypingSignal>();
 
@@ -465,6 +473,18 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return () => {
       this.inboundRejectedListeners.delete(listener);
     };
+  }
+
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const target = this.resolveTarget(intent);
+    return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -623,6 +643,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return await this.deliverSurface(intent);
     } catch (error) {
       const target = this.resolveTarget(intent);
+      const rateLimit = target
+        ? this.emitRateLimitFromError(error, target, { retryable: false })
+        : undefined;
       this.options.logger?.warn?.(
         `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
       );
@@ -631,6 +654,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
       };
     }
@@ -828,8 +852,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     target: TelegramDeliveryTarget,
   ): Promise<MessagingDeliveryResult> {
     if (
-      this.options.config.streamingResponses !== true ||
-      intent.policy === "disabled"
+      intent.policy === "disabled" ||
+      (
+        this.options.config.streamingResponses !== true &&
+        intent.policy !== "enabled"
+      )
     ) {
       return {
         channel: this.channel,
@@ -942,8 +969,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         };
       }
       const retryAfterMs = telegramRetryAfterMs(error);
+      let rateLimit: MessagingRateLimitInfo | undefined;
       if (retryAfterMs !== undefined) {
         this.blockStreamRateLimitTarget(target, retryAfterMs);
+        rateLimit = {
+          scope: this.rateLimitScopeForTarget(target),
+          retryAfterMs,
+          message: errorMessage(error),
+          observedAt: this.now(),
+          retryable: true,
+        };
+        this.emitRateLimit(rateLimit);
         this.options.logger?.warn?.(
           `telegram stream update rate limited retryAfterMs=${retryAfterMs} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
         );
@@ -953,6 +989,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1935,6 +1972,56 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return Number.isFinite(chatId) && chatId < 0 ? "group" : "dm";
   }
 
+  private rateLimitScopeForTarget(
+    target: TelegramDeliveryTarget,
+  ): MessagingDeliveryScope {
+    const policy = this.streamRateLimitPolicy(target);
+    const chatId = String(target.chatId);
+    return {
+      platform: this.channel,
+      id: policy === "group" ? `telegram:group:${chatId}` : `telegram:dm:${chatId}`,
+      kind: policy === "group" ? "group" : "dm",
+      label:
+        policy === "group"
+          ? `Telegram group ${compactIdentifier(chatId)}`
+          : "Telegram DM",
+      budget:
+        policy === "group"
+          ? { limit: 20, intervalMs: 60_000, reserved: 5 }
+          : { limit: 1, intervalMs: 1_000, reserved: 0 },
+    };
+  }
+
+  private emitRateLimitFromError(
+    error: unknown,
+    target: TelegramDeliveryTarget,
+    options?: { retryable?: boolean },
+  ): MessagingRateLimitInfo | undefined {
+    const retryAfterMs = telegramRetryAfterMs(error);
+    if (retryAfterMs === undefined) {
+      return undefined;
+    }
+    const info: MessagingRateLimitInfo = {
+      scope: this.rateLimitScopeForTarget(target),
+      retryAfterMs,
+      message: errorMessage(error),
+      observedAt: this.now(),
+      retryable: options?.retryable ?? false,
+    };
+    this.emitRateLimit(info);
+    return info;
+  }
+
+  private emitRateLimit(info: MessagingRateLimitInfo): void {
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
       setTimeout(resolve, ms);
@@ -2465,6 +2552,13 @@ function telegramRetryAfterSeconds(value: unknown): number | undefined {
       "retry_after",
     )
   );
+}
+
+function compactIdentifier(value: string): string {
+  if (value.length <= 12) {
+    return value;
+  }
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
 function telegramBotTokenDiagnostics(token: string): Record<string, unknown> {

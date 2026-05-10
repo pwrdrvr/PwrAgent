@@ -22,8 +22,10 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
+  MessagingApprovalDecision,
   MessagingChannelKind,
   MessagingConfirmationIntent,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
@@ -79,7 +81,9 @@ import {
   buildStatusReasoningPickerIntent,
   formatExecutionModeLabel,
   handoffRequestFromValue,
+  nextMessagingStreamingResponseMode,
   nextMessagingToolUpdateMode,
+  resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
@@ -89,6 +93,10 @@ import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
 } from "./messaging-tool-update-policy.js";
+import {
+  MessagingDeliveryBudget,
+  type MessagingDeliveryPriority,
+} from "./messaging-delivery-budget.js";
 import {
   DEFAULT_MESSAGING_ATTACHMENT_POLICY,
   processMessagingAttachments,
@@ -207,6 +215,22 @@ type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
   | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
+export type MessagingControllerDeliveryBudgetEvent = {
+  at: number;
+  backend?: AppServerBackendKind;
+  bindingId?: string;
+  channel: MessagingChannelKind;
+  intentId: string;
+  intentKind: MessagingSurfaceIntent["kind"];
+  outcome: "deferred" | "dropped";
+  priority: MessagingDeliveryPriority;
+  reason?: "cool-off" | "slow-mode" | "budget-exhausted" | "missing-scope";
+  retryAt?: number;
+  scope?: MessagingDeliveryScope;
+  slowMode: boolean;
+  threadId?: ThreadIdentifier;
+};
+
 type QueuedTurnAction = {
   entryId: string;
   kind: "cancel" | "steer";
@@ -246,6 +270,8 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
+  deliveryBudget?: MessagingDeliveryBudget;
+  onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
   /**
    * Notification hook invoked after any binding mutation the
    * controller performs (create, conversation-metadata refresh,
@@ -272,6 +298,7 @@ export class MessagingController {
   private readonly logger: MessagingControllerLogger;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
+  private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
    * we posted to each bound conversation. Cleared when the queue resolves
@@ -290,6 +317,7 @@ export class MessagingController {
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
+    this.deliveryBudget = options.deliveryBudget;
     this.logger = options.logger ?? messagingControllerLog;
     this.turnAdmission = new MessagingTurnAdmission({
       debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
@@ -492,7 +520,9 @@ export class MessagingController {
           reason: event.notification.method,
           force: true,
         });
-        await this.renderBindingStatus(binding);
+        if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
+          await this.renderBindingStatus(binding);
+        }
         await this.startNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
         const previousTurn = activeTurn;
@@ -512,7 +542,6 @@ export class MessagingController {
           reason: event.notification.method,
           force: true,
         });
-        await this.renderBindingStatus(binding);
       } else {
         const latestActiveTurn = this.getActiveTurn(binding);
         if (latestActiveTurn?.status !== "working") {
@@ -797,6 +826,10 @@ export class MessagingController {
 
     if (isToolsFallbackText(event.text)) {
       await this.cycleToolUpdateMode(binding, event);
+      return;
+    }
+    if (isStreamFallbackText(event.text)) {
+      await this.cycleStreamingResponseMode(binding, event);
       return;
     }
 
@@ -1356,25 +1389,19 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
-        await this.submitApprovalAction(pendingIntent.intent, action.id);
-        await this.retireApprovalIntent(pendingIntent, event);
+        const decision = await this.submitApprovalAction(
+          pendingIntent.intent,
+          action.id,
+        );
+        await this.retireApprovalIntent(
+          pendingIntent,
+          event,
+          approvalResponseLabel(decision),
+        );
         await this.options.store.deletePendingIntent(pendingIntent.id);
-        const resumedBinding = await this.resumeBindingForPendingIntent(
+        await this.resumeBindingForPendingIntent(
           pendingIntent,
           "pending_request.submitted",
-        );
-        if (resumedBinding) {
-          await this.renderBindingStatus(resumedBinding, event);
-        }
-        await this.deliver(
-          buildStatusIntent({
-            id: this.newIntentId("approval-submitted"),
-            createdAt: this.now(),
-            status: "completed",
-            text: "Approval response sent.",
-          }),
-          undefined,
-          event,
         );
         return;
       }
@@ -1411,11 +1438,11 @@ export class MessagingController {
   private async submitApprovalAction(
     intent: Extract<MessagingSurfaceIntent, { kind: "approval" }>,
     actionId: string,
-  ): Promise<void> {
+  ): Promise<MessagingApprovalDecision | undefined> {
     const requestContext = intent.requestContext;
     const decision = intent.decisions.find((action) => action.id === actionId)?.decision;
     if (!requestContext || !decision || !this.options.backend.submitServerRequest) {
-      return;
+      return decision;
     }
 
     await this.options.backend.submitServerRequest({
@@ -1427,6 +1454,7 @@ export class MessagingController {
         decision,
       },
     });
+    return decision;
   }
 
   /**
@@ -1699,21 +1727,19 @@ export class MessagingController {
     for (const pendingIntent of pendingIntents.filter((intent) =>
       this.isChannelInScope(intent.channel),
     )) {
-      await this.retireApprovalIntent(pendingIntent);
+      await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
       await this.options.store.deletePendingIntent(pendingIntent.id);
-      const resumedBinding = await this.resumeBindingForPendingIntent(
+      await this.resumeBindingForPendingIntent(
         pendingIntent,
         event.notification.method,
       );
-      if (resumedBinding) {
-        await this.renderBindingStatus(resumedBinding);
-      }
     }
   }
 
   private async retireApprovalIntent(
     pendingIntent: MessagingPendingIntentRecord,
     event?: MessagingInboundCallbackEvent,
+    responseLabel = "Resolved",
   ): Promise<void> {
     if (pendingIntent.intent.kind !== "approval") {
       return;
@@ -1728,12 +1754,14 @@ export class MessagingController {
       await this.deliver(
         {
           ...pendingIntent.intent,
+          body: approvalBodyWithResponse(pendingIntent.intent.body, responseLabel),
           decisions: [],
           delivery: {
             mode: "update",
             replaceMarkup: true,
             fallback: "fail",
           },
+          fallbackText: `Approval response received: ${responseLabel}.`,
           targetSurface,
         },
         undefined,
@@ -2556,6 +2584,10 @@ export class MessagingController {
       await this.cycleToolUpdateMode(binding, event);
       return;
     }
+    if (actionId === "status:streaming") {
+      await this.cycleStreamingResponseMode(binding, event);
+      return;
+    }
     if (actionId === "status:stop") {
       await this.stopActiveTurn(binding, event);
       return;
@@ -3334,6 +3366,17 @@ export class MessagingController {
     await this.renderBindingStatus(updatedBinding, event);
   }
 
+  private async cycleStreamingResponseMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const currentMode = resolveMessagingStreamingResponseMode(binding);
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      streamingResponses: nextMessagingStreamingResponseMode(currentMode),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
   private async updateBindingPreferences(
     binding: MessagingBindingRecord,
     patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
@@ -3766,9 +3809,6 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     occurredAt: number = this.now(),
   ): Promise<void> {
-    if (!this.options.backend.recordMessagingBindingTransition) {
-      return;
-    }
     const conversation = binding.channel.conversation;
     const transition: ThreadMessagingBindingTransition = {
       id: randomUUID(),
@@ -3781,20 +3821,23 @@ export class MessagingController {
       ancestorTitle: conversation.ancestorTitle,
       occurredAt,
     };
-    try {
-      await this.options.backend.recordMessagingBindingTransition({
-        backend: binding.backend,
-        threadId: binding.threadId,
-        transition,
-      });
-    } catch (error) {
-      this.logger.debug?.("messaging binding-transition audit failed", {
-        action,
-        bindingId: binding.id,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: binding.threadId,
-      });
+    if (this.options.backend.recordMessagingBindingTransition) {
+      try {
+        await this.options.backend.recordMessagingBindingTransition({
+          backend: binding.backend,
+          threadId: binding.threadId,
+          transition,
+        });
+      } catch (error) {
+        this.logger.debug?.("messaging binding-transition audit failed", {
+          action,
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
     }
+    this.recordBindingActivity(action, binding, occurredAt);
   }
 
   private async bindChannelToThread(
@@ -3947,16 +3990,7 @@ export class MessagingController {
     const conversation = binding?.channel.conversation;
     const summary = describeOutboundIntent(intent);
     try {
-      // Lazy import keeps the controller free of a top-level dep on
-      // the desktop activity-log singleton (the controller is shared
-      // with other harnesses; this method is the only main-process
-      // entry that needs it).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const log = (require(
-        "../desktop-messaging-activity-log",
-      ) as typeof import("../desktop-messaging-activity-log"))
-        .getDesktopMessagingActivityLog();
-      log.record({
+      this.desktopActivityLog().record({
         platform: channel,
         kind: "outbound",
         backend: binding?.backend,
@@ -3977,6 +4011,48 @@ export class MessagingController {
     }
   }
 
+  private recordBindingActivity(
+    action: ThreadMessagingBindingTransition["action"],
+    binding: MessagingBindingRecord,
+    occurredAt: number,
+  ): void {
+    try {
+      const conversation = binding.channel.conversation;
+      const log = this.desktopActivityLog();
+      log.record({
+        platform: binding.channel.channel,
+        kind: "binding",
+        backend: binding.backend,
+        threadId: binding.threadId,
+        bindingId: binding.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        summary: `Channel ${action}: ${describeConversation(conversation)} / ${binding.threadId}`,
+        createdAt: occurredAt,
+        payload: {
+          action,
+          conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
+          parentTitle: conversation.parentTitle,
+          ancestorTitle: conversation.ancestorTitle,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
+  }
+
+  private desktopActivityLog(): import("../messaging-activity-log").MessagingActivityLog {
+    // Lazy import keeps the controller free of a top-level dep on the
+    // desktop activity-log singleton (the controller is shared with
+    // other harnesses).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require(
+      "../desktop-messaging-activity-log",
+    ) as typeof import("../desktop-messaging-activity-log"))
+      .getDesktopMessagingActivityLog();
+  }
+
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -3986,35 +4062,146 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
-    const result = await this.options.adapter.deliver(routedIntent);
-    await this.options.store.recordDelivery({
-      ...result,
-      id: `delivery:${routedIntent.id}:${randomUUID()}`,
-      bindingId: binding?.id ?? intent.bindingId,
-      intentId: routedIntent.id,
-    });
-    this.recordOutboundActivity(routedIntent, binding, result);
-    if (
-      binding &&
-      result.channel === binding.channel.channel &&
-      isPermanentMessagingTargetFailure(result)
-    ) {
-      await this.options.store.revokeBinding({
-        bindingId: binding.id,
-        revokedAt: this.now(),
+    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    const priority = messagingDeliveryPriority(routedIntent);
+    const channel = binding?.channel.channel ??
+      routedIntent.audit?.channel.channel ??
+      this.options.channel;
+    while (true) {
+      if (this.deliveryBudget) {
+        const budgetChannel = channel ?? scope?.platform ?? "telegram";
+        let admission = this.deliveryBudget.admit({ priority, scope });
+        while (admission.outcome === "deferred") {
+          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
+            at: this.now(),
+            backend: binding?.backend,
+            bindingId: binding?.id ?? intent.bindingId,
+            channel: budgetChannel,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: "deferred",
+            priority,
+            reason: admission.reason,
+            retryAt: admission.retryAt,
+            scope,
+            slowMode: admission.slowMode,
+            threadId: binding?.threadId,
+          };
+          this.logger.info?.("messaging delivery budget deferred intent", {
+            bindingId: binding?.id ?? intent.bindingId,
+            delayMs: Math.max(0, admission.retryAt - this.now()),
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            priority,
+            retryAt: admission.retryAt,
+            scopeId: scope?.id,
+            slowMode: admission.slowMode,
+          });
+          this.notifyDeliveryBudgetEvent(budgetEvent);
+          await sleepUntil(admission.retryAt, this.now);
+          admission = this.deliveryBudget.admit({ priority, scope });
+        }
+        if (admission.outcome !== "admitted") {
+          const budgetEvent: MessagingControllerDeliveryBudgetEvent = {
+            at: this.now(),
+            backend: binding?.backend,
+            bindingId: binding?.id ?? intent.bindingId,
+            channel: budgetChannel,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: "dropped",
+            priority,
+            reason: admission.reason,
+            scope,
+            slowMode: admission.slowMode,
+            threadId: binding?.threadId,
+          };
+          this.logger.debug?.("messaging delivery budget skipped intent", {
+            bindingId: binding?.id ?? intent.bindingId,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            outcome: admission.outcome,
+            priority,
+            reason: admission.outcome === "dropped" ? admission.reason : undefined,
+            scopeId: scope?.id,
+            slowMode: admission.slowMode,
+          });
+          this.notifyDeliveryBudgetEvent(budgetEvent);
+          return {
+            channel: channel ?? "telegram",
+            deliveredAt: this.now(),
+            outcome: "discarded",
+          };
+        }
+      }
+      const result = await this.options.adapter.deliver(routedIntent);
+      if (this.deliveryBudget && result.rateLimit) {
+        scope = result.rateLimit.scope;
+        this.deliveryBudget.recordRateLimit(result.rateLimit);
+        if (result.rateLimit.retryable === true) {
+          this.logger.debug?.("messaging delivery rate-limited; rechecking budget", {
+            bindingId: binding?.id ?? intent.bindingId,
+            intentId: routedIntent.id,
+            intentKind: routedIntent.kind,
+            priority,
+            retryAfterMs: result.rateLimit.retryAfterMs,
+            scopeId: result.rateLimit.scope.id,
+          });
+          continue;
+        }
+        this.logger.debug?.("messaging delivery rate-limited; not retrying non-replayable attempt", {
+          bindingId: binding?.id ?? intent.bindingId,
+          intentId: routedIntent.id,
+          intentKind: routedIntent.kind,
+          priority,
+          retryAfterMs: result.rateLimit.retryAfterMs,
+          scopeId: result.rateLimit.scope.id,
+        });
+      }
+      await this.options.store.recordDelivery({
+        ...result,
+        id: `delivery:${routedIntent.id}:${randomUUID()}`,
+        bindingId: binding?.id ?? intent.bindingId,
+        intentId: routedIntent.id,
       });
-      await this.recordBindingTransition("unbound", binding);
-      this.notifyBindingChanged("permanent-delivery-failure");
-      this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
-        bindingId: binding.id,
-        channel: binding.channel.channel,
-        conversationId: binding.channel.conversation.id,
-        errorMessage: result.errorMessage,
-        outcome: result.outcome,
-        threadId: binding.threadId,
+      this.recordOutboundActivity(routedIntent, binding, result);
+      if (
+        binding &&
+        result.channel === binding.channel.channel &&
+        isPermanentMessagingTargetFailure(result)
+      ) {
+        await this.options.store.revokeBinding({
+          bindingId: binding.id,
+          revokedAt: this.now(),
+        });
+        await this.recordBindingTransition("unbound", binding);
+        this.notifyBindingChanged("permanent-delivery-failure");
+        this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
+          bindingId: binding.id,
+          channel: binding.channel.channel,
+          conversationId: binding.channel.conversation.id,
+          errorMessage: result.errorMessage,
+          outcome: result.outcome,
+          threadId: binding.threadId,
+        });
+      }
+      return result;
+    }
+  }
+
+  private notifyDeliveryBudgetEvent(
+    event: MessagingControllerDeliveryBudgetEvent,
+  ): void {
+    if (!this.options.onDeliveryBudgetEvent) return;
+    try {
+      this.options.onDeliveryBudgetEvent(event);
+    } catch (error) {
+      this.logger.debug?.("messaging delivery-budget listener threw", {
+        error: error instanceof Error ? error.message : String(error),
+        intentId: event.intentId,
+        outcome: event.outcome,
       });
     }
-    return result;
   }
 
   private async deliverToolActivityForBackendEvent(
@@ -4536,6 +4723,16 @@ function isThreadNameUpdatedEvent(event: AgentEvent): boolean {
   return event.notification.method === "thread/name/updated";
 }
 
+function shouldRenderStatusForTurnStateChange(
+  event: AgentEvent,
+  lifecycle: MessagingActiveTurnSummary | undefined,
+): boolean {
+  if (event.notification.method === "thread/status/changed") {
+    return false;
+  }
+  return Boolean(lifecycle && ["failed", "interrupted"].includes(lifecycle.status));
+}
+
 function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
   if (intent.kind === "activity" || intent.kind === "dismiss") {
     return false;
@@ -4548,6 +4745,87 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
     return false;
   }
   return true;
+}
+
+export function messagingDeliveryPriority(
+  intent: MessagingSurfaceIntent,
+): MessagingDeliveryPriority {
+  switch (intent.kind) {
+    case "approval":
+      if (intent.decisions.length === 0) {
+        return "routine_status";
+      }
+      return "critical_interactive";
+    case "questionnaire":
+      return "critical_interactive";
+    case "stream_update":
+      return intent.stream.isFinal ? "final_turn" : "stream_partial";
+    case "message":
+      if (intent.role === "assistant") {
+        return "final_turn";
+      }
+      if (intent.role === "system" && intent.id.startsWith("tool-update")) {
+        return "tool_progress";
+      }
+      return "user_command";
+    case "status":
+    case "activity":
+    case "progress":
+    case "dismiss":
+      return "routine_status";
+    case "thread_picker":
+    case "project_picker":
+    case "single_select":
+    case "multi_select":
+    case "confirmation":
+    case "error":
+      return "user_command";
+  }
+}
+
+function approvalResponseLabel(
+  decision: MessagingApprovalDecision | undefined,
+): string {
+  switch (decision) {
+    case "accept":
+      return "Approved";
+    case "accept_for_session":
+      return "Approved for Session";
+    case "decline":
+      return "Declined";
+    case "cancel":
+      return "Canceled";
+    case undefined:
+      return "Resolved";
+  }
+}
+
+function approvalBodyWithResponse(body: string, responseLabel: string): string {
+  const blocks = body
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const preservedBlocks = blocks.filter((block, index) => {
+    if (index === 0) {
+      return false;
+    }
+    return !/^Reply with\b/i.test(block);
+  });
+
+  return [...preservedBlocks, `Response Received: ${responseLabel}`].join("\n\n");
+}
+
+function sleepUntil(
+  retryAt: number,
+  now: () => number,
+): Promise<void> {
+  const delayMs = Math.max(0, retryAt - now());
+  if (delayMs === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
@@ -4961,6 +5239,10 @@ function isToolsFallbackText(text: string): boolean {
   return text.trim().toLowerCase() === "tools";
 }
 
+function isStreamFallbackText(text: string): boolean {
+  return text.trim().toLowerCase() === "stream";
+}
+
 function readBindingTarget(
   event: MessagingInboundCallbackEvent,
 ): { backend: AppServerBackendKind; threadId: ThreadIdentifier } | undefined {
@@ -5022,4 +5304,15 @@ function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
   if (intent.kind === "approval") return "Sent approval request";
   if (intent.kind === "error") return "Sent error notice";
   return `Sent ${intent.kind}`;
+}
+
+function describeConversation(
+  conversation: MessagingBindingRecord["channel"]["conversation"],
+): string {
+  const pieces = [
+    conversation.ancestorTitle,
+    conversation.parentTitle,
+    conversation.title,
+  ].filter((piece): piece is string => Boolean(piece));
+  return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
 }

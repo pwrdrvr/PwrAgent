@@ -21,12 +21,15 @@ import type {
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
   MessagingChannelRef,
+  MessagingClientRateLimitStrategy,
   MessagingConversationKind,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
   MessagingRejectedInboundEvent,
+  MessagingReconnectInfo,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -128,7 +131,9 @@ export type MattermostProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "mattermost";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -143,6 +148,7 @@ export type MattermostProviderAdapter = {
    * `<img>` icon, which is structurally insulated from `currentColor`).
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
+  onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle?(request: {
     actor?: MessagingActorIdentity;
@@ -212,6 +218,7 @@ type MattermostSurfaceOpaqueState = {
 
 export class MattermostAdapter implements MattermostProviderAdapter {
   readonly channel = "mattermost" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       // Mattermost docs are silent on the per-attachment / per-post hard
@@ -297,6 +304,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private wsErroredLatched = false;
   private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
+  private readonly reconnectListeners = new Set<
+    (info: MessagingReconnectInfo) => void
+  >();
+  private websocketReconnectActive = false;
   /**
    * Live token set, owned by the adapter and shared by reference with
    * the callback server. The reconciler mutates this on every
@@ -397,6 +408,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // too in case a caller constructs the adapter directly.
     const wsUrl = `${this.config.serverUrl.replace(/^http/, "ws").replace(/\/+$/, "")}/api/v4/websocket`;
     this.websocketClient.addMessageListener((message) => {
+      if (this.websocketReconnectActive) {
+        this.websocketReconnectActive = false;
+        this.emitReconnect({ state: "recovered", observedAt: this.now() });
+      }
       this.handleWebsocketMessage(message).catch((error) => {
         this.logger.error("mattermost websocket message handler crashed", {
           error: error instanceof Error ? error.message : String(error),
@@ -428,6 +443,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         this.emitRuntimeError(
           `websocket disconnected (${connectFailCount} consecutive failures)`,
         );
+      } else if (!this.stopping && connectFailCount > 0) {
+        this.websocketReconnectActive = true;
+        this.emitReconnect({
+          state: "started",
+          attemptCount: connectFailCount,
+          observedAt: this.now(),
+        });
       }
     });
     this.websocketClient.addErrorListener((event) => {
@@ -490,7 +512,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.callbackServer.stop();
     // Reset latch + drop listeners so a subsequent `start()` re-arms.
     this.runtimeErrorListeners.clear();
+    this.reconnectListeners.clear();
     this.wsErroredLatched = false;
+    this.websocketReconnectActive = false;
     this.stopping = false;
     this.logger.info("mattermost adapter stopped", {});
   }
@@ -508,12 +532,31 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
   }
 
+  onReconnect(listener: (info: MessagingReconnectInfo) => void): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
   private emitRuntimeError(reason: string): void {
     for (const listener of this.runtimeErrorListeners) {
       try {
         listener(reason);
       } catch (error) {
         this.logger.warn("mattermost runtime-error listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private emitReconnect(info: MessagingReconnectInfo): void {
+    for (const listener of this.reconnectListeners) {
+      try {
+        listener(info);
+      } catch (error) {
+        this.logger.warn("mattermost reconnect listener threw", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -564,6 +607,34 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef }).targetSurface;
+    const targetOpaque = targetSurface?.state?.opaque as
+      | MattermostSurfaceOpaqueState
+      | undefined;
+    const audit = (intent as { audit?: { channel?: MessagingChannelRef } }).audit;
+    const channelRef = audit?.channel;
+    const channelId = targetOpaque?.channelId ?? channelRef?.conversation.id;
+    if (!channelId) {
+      return undefined;
+    }
+    const rootId =
+      targetOpaque?.rootId
+      ?? (channelRef?.conversation.kind === "thread"
+        ? channelRef.conversation.parentId
+        : undefined);
+    return {
+      platform: this.channel,
+      id: rootId
+        ? `mattermost:thread:${channelId}:${rootId}`
+        : `mattermost:channel:${channelId}`,
+      kind: rootId ? "thread" : "channel",
+      label: rootId ? "Mattermost thread" : "Mattermost channel",
+      ...(rootId ? { parentId: channelId } : {}),
+      budget: { limit: 1, intervalMs: 1_000, reserved: 0 },
+    };
   }
 
   async downloadAttachment(
@@ -1858,7 +1929,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async deliverStreamUpdate(
     intent: MessagingSurfaceIntent & { kind: "stream_update" },
   ): Promise<MessagingDeliveryResult> {
-    if (this.config.streamingResponses === false) {
+    if (
+      intent.policy === "disabled" ||
+      (this.config.streamingResponses !== true && intent.policy !== "enabled")
+    ) {
       return {
         channel: this.channel,
         deliveredAt: this.now(),

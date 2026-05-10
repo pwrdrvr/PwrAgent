@@ -128,9 +128,121 @@ describe("SlackAdapter", () => {
 
     expect(adapter.channel).toBe("slack");
     expect(adapter.authorizedActorIds).toEqual(["U012ABCDEF0"]);
+    expect(adapter.clientRateLimitStrategy).toBe("externalized");
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(25);
     expect(adapter.capabilityProfile.actions?.supportsLayoutHints).toBe(true);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("slack-mrkdwn");
+  });
+
+  it("returns structured rate-limit feedback when Slack rejects a send", async () => {
+    const store = fakeStore();
+    const rateLimitError = Object.assign(new Error("rate_limited"), {
+      retryAfter: 3,
+    });
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: store,
+      api: {
+        ...fakeApi({}),
+        postMessage: async () => {
+          throw rateLimitError;
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const observed: unknown[] = [];
+    adapter.onRateLimit((info) => {
+      observed.push(info);
+    });
+
+    await expect(adapter.deliver({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: "Final answer" }],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "C012ABCDEF0", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      deliveredAt: 1_700_000_000_000,
+      errorMessage: "rate_limited",
+      outcome: "failed",
+      rateLimit: {
+        retryAfterMs: 3000,
+        retryable: true,
+        scope: {
+          id: "slack:channel:C012ABCDEF0",
+        },
+      },
+    });
+    expect(observed).toEqual([
+      expect.objectContaining({
+        retryAfterMs: 3000,
+        retryable: true,
+        scope: expect.objectContaining({
+          id: "slack:channel:C012ABCDEF0",
+        }),
+      }),
+    ]);
+  });
+
+  it("marks Slack file-upload rate limits non-retryable after posting the message", async () => {
+    const rateLimitError = Object.assign(new Error("rate_limited"), {
+      retryAfter: 3,
+    });
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({}),
+        uploadFile: async () => {
+          throw rateLimitError;
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Final answer" },
+        {
+          type: "file",
+          data: new Uint8Array([1, 2, 3]),
+          mimeType: "text/plain",
+          name: "answer.txt",
+        },
+      ],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "C012ABCDEF0", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "failed",
+      rateLimit: {
+        retryAfterMs: 3000,
+        retryable: false,
+      },
+    });
   });
 
   it("delivers interactive status cards as Block Kit messages", async () => {

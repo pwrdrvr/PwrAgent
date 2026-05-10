@@ -287,6 +287,38 @@ textarea,
   border: 1.5px solid var(--bg-panel);
 }
 
+.messaging-status-chip__tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  display: none;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  pointer-events: none;
+  text-align: left;
+  white-space: normal;
+}
+
+.messaging-status-chip__tooltip > span {
+  display: block;
+}
+
+.messaging-status-chip:hover .messaging-status-chip__tooltip,
+.messaging-status-chip:focus-visible .messaging-status-chip__tooltip,
+.messaging-status-chip:focus-within .messaging-status-chip__tooltip {
+  display: block;
+}
+
 /* Binding chip menu — small popover anchored to the chip wrap. The
    chip itself uses the shared .thread-row__chip primitive; only the
    menu has its own styling. */

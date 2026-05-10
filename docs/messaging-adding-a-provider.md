@@ -163,8 +163,11 @@ export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
+  clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   setConversationTitle?(req): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
@@ -178,10 +181,57 @@ Implement, in order:
 3. **`start(listener)`** — connect to the platform (WebSocket subscribe, gateway connect, long-poll loop, etc.). Begin authenticating. Save the listener so inbound events can reach the controller. If your platform uses out-of-band HTTP callbacks, also start the HTTP server here.
 4. **`stop()`** — disconnect and shut down anything started.
 5. **`deliver(intent)`** — the giant switch over `intent.kind`. Return `MessagingDeliveryResult`. See [Step 5](#step-5--render-outbound-intents) for the full table.
-6. **`downloadAttachment(req)`** — fetch a user-uploaded file's bytes by the opaque handle persisted in the inbound `media` event.
-7. **`setConversationTitle(req)`** — update the channel topic / DM title, if your platform exposes it.
+6. **`clientRateLimitStrategy` / `resolveDeliveryScope` / `onRateLimit`** — make outbound rate-limit ownership explicit. See [Rate-limit queue ownership](#rate-limit-queue-ownership).
+7. **`downloadAttachment(req)`** — fetch a user-uploaded file's bytes by the opaque handle persisted in the inbound `media` event.
+8. **`setConversationTitle(req)`** — update the channel topic / DM title, if your platform exposes it.
 
 > **Important:** the adapter must NOT call `turn/start` or any backend operation directly. It only translates events. The `MessagingController` owns workflow logic. Adapters that try to "be helpful" by debouncing input or starting turns themselves break the controller's turn-admission policy.
+
+### Rate-limit queue ownership
+
+PwrAgent must own outbound retry queues outside the platform SDK. This lets the
+controller stop sending before a provider-imposed Cool Off closes the next send
+window, enter local Slow Mode when its own scope budget is exhausted, preserve
+reserved capacity for final turn and interactive messages, and discard obsolete
+low-priority updates while Slow Mode is active.
+
+Before adding a provider, check the client SDK's outbound rate-limit behavior:
+
+- If the SDK can be configured to reject on 429 instead of sleeping/queueing,
+  enable that mode and set `clientRateLimitStrategy: "externalized"`.
+- If your adapter uses direct HTTP/fetch calls that return or throw immediately
+  on 429, set `clientRateLimitStrategy: "direct"`.
+- If the SDK silently queues or retries outbound sends and this cannot be
+  disabled through a supported option, do not ship the provider in that state.
+  Raise it as a client-SDK issue or wrap/replace the client so PwrAgent can own
+  the queue.
+
+When a send is rejected with rate-limit information, emit it through
+`onRateLimit` and include it on the failed `MessagingDeliveryResult.rateLimit`.
+Set `rateLimit.retryable: true` only if the failed attempt had no visible side
+effects. For example, a rejected first HTTP call is retryable; a failure after
+one Discord chunk was already sent, after a Slack message was posted but before
+file upload completed, or after one Telegram file/message was sent is not
+retryable. The desktop controller records every cooldown, but only re-runs
+admission for retryable attempts. Non-final stream updates, intermediate tool
+updates, and routine status edits should be dropped by the controller once slow
+mode applies; do not queue them inside the adapter.
+
+Treat message edits as outbound writes unless the provider has explicit,
+documented semantics saying otherwise. Some platforms put edits in a different
+bucket from new messages, but they are still API calls and may still produce
+provider rate-limit feedback.
+
+Current examples:
+
+- Discord uses `discord.js` REST with `rejectOnRateLimit`, so its strategy is
+  `externalized`.
+- Slack uses `@slack/web-api` with `rejectRateLimitedCalls`, so its strategy is
+  `externalized`.
+- Telegram's grammY adapter path does not install the auto-retry plugin for
+  outbound sends, so its strategy is `direct`.
+- Mattermost's `Client4` REST calls surface request failures directly, so its
+  strategy is `direct`.
 
 ## Step 4 — Translate inbound events
 
@@ -489,6 +539,7 @@ Mirror the patterns in `packages/messaging/providers/discord/src/__tests__/` and
 | Authorization | Unauthorized actor IDs are rejected before the controller sees the event. |
 | HMAC | (HTTP-callback platforms only) HMAC generation and verification, positive and negative. |
 | Threading | Parent post id round-trip for threaded conversations. |
+| Rate-limit ownership | SDK 429 handling is externalized or direct; rejected sends return `rateLimit` metadata, mark partial-success failures `retryable: false`, and do not enter an SDK-owned queue. |
 | Reconnect | (For platforms with persistent connections) WS or gateway disconnect / reconnect doesn't drop in-flight callback handles. |
 
 Optional but valuable:

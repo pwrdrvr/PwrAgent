@@ -213,8 +213,8 @@ export function MessagingSettings(props: {
           <ToggleField
             checked={telegram.streamingResponses.value}
             disabled={props.saving}
-            label="Streaming Responses"
-            sub="Send partial assistant tokens as Telegram message edits."
+            label="Streaming Responses (Advanced)"
+            sub="Sends partial assistant text as Telegram message edits."
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(telegram.streamingResponses)}
             onChange={(streamingResponses) => {
@@ -328,8 +328,8 @@ export function MessagingSettings(props: {
           <ToggleField
             checked={discord.streamingResponses.value}
             disabled={props.saving}
-            label="Streaming Responses"
-            sub="Send partial assistant tokens as Discord message edits."
+            label="Streaming Responses (Advanced)"
+            sub="Sends partial assistant text as Discord message edits."
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(discord.streamingResponses)}
             onChange={(streamingResponses) => {
@@ -480,8 +480,8 @@ export function MessagingSettings(props: {
           <ToggleField
             checked={mattermost.streamingResponses.value}
             disabled={props.saving}
-            label="Streaming Responses"
-            sub="Send partial assistant tokens as Mattermost message edits."
+            label="Streaming Responses (Advanced)"
+            sub="Sends partial assistant text as Mattermost message edits."
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(mattermost.streamingResponses)}
             onChange={(streamingResponses) => {
@@ -696,8 +696,8 @@ export function MessagingSettings(props: {
           <ToggleField
             checked={slack.streamingResponses.value}
             disabled={props.saving}
-            label="Streaming Responses"
-            sub="Send partial assistant tokens as Slack message edits."
+            label="Streaming Responses (Advanced)"
+            sub="Sends partial assistant text as Slack message edits."
             help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(slack.streamingResponses)}
             onChange={(streamingResponses) => {
@@ -813,7 +813,7 @@ const SLACK_INBOUND_MODE_OPTIONS: Array<{
 ];
 
 const STREAMING_RESPONSES_WARNING =
-  "Leave this off unless you know you need live edits. Voice readers may speak each partial edit as a separate incomplete reply, and frequent edits can quickly hit platform rate limits.";
+  "Advanced. Leave this off unless you specifically need live message edits. It does not make turns finish sooner; it repeatedly edits the same platform message, which can break voice readers and reach platform rate limits much sooner.";
 
 function chipLabelForBotToken(
   botToken: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"],

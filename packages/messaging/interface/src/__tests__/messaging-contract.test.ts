@@ -5,6 +5,9 @@ import {
   MESSAGING_SURFACE_INTENT_KINDS,
   MESSAGING_TOOL_UPDATE_MODES,
   layoutMessagingActionRows,
+  type MessagingDeliveryScope,
+  type MessagingPlatformStatus,
+  type MessagingRateLimitInfo,
   type MessagingApprovalIntent,
   type MessagingBindingRecord,
   type MessagingBrowseSessionRecord,
@@ -218,6 +221,47 @@ describe("messaging surface contract", () => {
 
     expect(intent.text).toBe("hello world");
     expect(JSON.stringify(intent)).not.toMatch(/agentMessage\/delta|telegram|discord/);
+  });
+
+  it("describes degraded platform health and provider-neutral rate scopes", () => {
+    const scope = {
+      platform: "telegram",
+      id: "telegram:supergroup:-1003841603622",
+      kind: "group",
+      label: "Telegram supergroup",
+      budget: {
+        limit: 20,
+        intervalMs: 60_000,
+        reserved: 5,
+      },
+    } satisfies MessagingDeliveryScope;
+    const rateLimit = {
+      scope,
+      retryAfterMs: 16_000,
+      observedAt: 1_000,
+    } satisfies MessagingRateLimitInfo;
+    const status = {
+      platform: "telegram",
+      health: "degraded",
+      changedAt: 1_000,
+      degradationReasons: [
+        {
+          kind: "rate-limited",
+          key: "rate-limited:telegram:supergroup:-1003841603622",
+          scope: rateLimit.scope,
+          retryAfterMs: rateLimit.retryAfterMs,
+          startedAt: 1_000,
+          expiresAt: 17_000,
+        },
+      ],
+    } satisfies MessagingPlatformStatus;
+
+    expect(status.health).toBe("degraded");
+    expect(status.degradationReasons?.[0]).toMatchObject({
+      kind: "rate-limited",
+      expiresAt: 17_000,
+    });
+    expect(JSON.stringify(status)).not.toMatch(/callback_data|custom_id/);
   });
 
   it("keeps approval audit data separate from adapter action payloads", () => {

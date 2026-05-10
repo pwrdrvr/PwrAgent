@@ -84,18 +84,32 @@ resume for the same turn until terminal completion.
 
 ## Streaming Responses
 
-Telegram and Discord can optionally show live assistant response text while
-backend `item/agentMessage/delta` events are arriving. The controller emits a
-generic stream update intent with accumulated assistant text; each provider then
-renders it only when that provider's streaming setting is enabled. When
-streaming is disabled or an update exceeds a safe platform edit limit, the
-provider discards the stream update and waits for the normal final assistant
-message.
+Streaming Responses are advanced. They optionally show live assistant response
+text while backend `item/agentMessage/delta` events are arriving. The controller
+emits a generic stream update intent with accumulated assistant text; each
+provider renders it only when the effective streaming policy allows it. When
+streaming is disabled, slow mode is active, or an update exceeds a safe platform
+edit limit, the provider discards the stream update and waits for the normal
+final assistant message.
 
 Streaming is separate from typing indicators and tool update notifications.
 Typing still reflects turn lifecycle, and the completed assistant message
-remains authoritative. Stream surfaces are transient runtime state and are not
-persisted as restart-safe managed messages.
+remains authoritative. Streaming does not make a turn finish sooner; it edits
+the same provider message repeatedly. Those edits can consume provider write
+budget quickly and can break voice-reader workflows that announce messages when
+received but do not observe later edits. Stream surfaces are transient runtime
+state and are not persisted as restart-safe managed messages.
+
+Effective streaming mode is resolved per binding first, then provider setting:
+
+| Mode | Behavior |
+| --- | --- |
+| `Inherit` | Follow the provider-level Streaming Responses toggle. |
+| `Off` | Suppress stream updates for this binding. |
+| `Advanced` | Enable stream updates for this binding even when the provider toggle is off. |
+
+Use the status card's `Stream: <mode>` action, or reply `stream` when actions
+are not available, to cycle a binding through these modes.
 
 ## Tool Update Verbosity
 
@@ -127,6 +141,45 @@ Effective mode is resolved as binding override, then Settings > Messaging
 default, then `Show Some` for old state. Pending batches flush before assistant
 messages, approval or questionnaire prompts, status replies, and terminal turn
 status so tool progress does not arrive after the response it explains.
+
+PwrAgent uses two related but distinct protection states:
+
+- **Slow Mode** is our local budget-protection state. It begins when a
+  provider-defined scope is close to or at its configured write budget. Slow
+  Mode preserves final assistant messages and interactive prompts, but may drop
+  non-final streaming edits, routine status-card edits, and intermediate tool
+  updates instead of queueing stale noise.
+- **Cool Off** is provider-imposed. It begins when a provider returns
+  rate-limit feedback with a retry window. PwrAgent stops sending to that scope
+  until the retry window clears, then resumes conservatively.
+
+The messaging status dot turns orange while Slow Mode, Cool Off, or reconnect
+degradation is active. Message edits should not be treated as free capacity:
+Slack documents `chat.update` as a separately rate-limited Web API method,
+Discord and Mattermost rate-limit API requests/routes, and Telegram documents
+edit calls as Bot API requests while its public send-message limits do not
+guarantee edits are exempt.
+
+Observed edit-rate behavior from May 9, 2026 probes:
+
+| Platform / surface | Probe | Result | Operational guidance |
+| --- | --- | --- | --- |
+| Telegram supergroup | One new bot message, then one edit per second in the same PwrDrvr supergroup. | 19 edits succeeded; edit 20 returned 429 with `retry_after=36`. | Treat sends and edits as consuming the same practical supergroup write budget. Telegram is the tightest provider for active agent turns. |
+| Telegram two-supergroup fan-out | Same pattern run concurrently in the PwrDrvr and GifGrid supergroups. | Each supergroup accepted one message plus 19 edits without a shared bot-wide 20/minute ceiling. | Active PwrAgent threads should usually be bound to separate Telegram supergroups. |
+| Telegram two-topic fan-out | Same pattern run concurrently in PwrDrvr topics `5642` and `3509`. | Two sends plus 9 edits on each topic succeeded; edit 10 returned 429 with `retry_after=35`. | Topics share the parent supergroup budget. Do not bind multiple active high-volume threads to different topics in one supergroup expecting isolation. |
+| Slack DM | One new bot message in the existing `hhunt` DM, then 60 edits at one edit per second. | Passed without a 429. | Slack edits are more permissive than Telegram in this DM, but new messages should still be budgeted conservatively because `chat.postMessage` has its own special limits. |
+| Discord DM and guild channel | One new bot message in the `huntharo2` DM and one in `huntharo-claw / #general`, then 60 edits at one edit per second on both messages. | Passed without a 429. Discord returned an edit bucket of 5 requests / 1 second. | Discord edits are much less restrictive than Telegram, but still count as REST requests and can hit route/global buckets. |
+| Mattermost | Not probed as a provider-global claim. | Rate limits are server-configured. | Use the target Mattermost server's `RateLimitSettings` rather than assuming a public SaaS limit. |
+
+Telegram-specific binding guidance:
+
+- Treat Telegram sends and edits as consuming the same practical supergroup
+  write budget.
+- Active PwrAgent threads should usually be bound to separate Telegram
+  supergroups. Binding multiple active threads to topics in the same supergroup
+  is likely to exhaust that supergroup's budget, trigger PwrAgent Slow Mode,
+  and drop routine updates.
+- Topics share the parent supergroup budget.
 
 ## Attachments
 
@@ -225,10 +278,12 @@ first-run discovery. Bot tokens are redacted from runtime logs. Telegram also
 accepts `TELEGRAM_BOT_TOKEN` and Discord also accepts `DISCORD_BOT_TOKEN` as
 local migration fallbacks.
 
-The TOML equivalents are `streaming_responses = true` under
-`[messaging.telegram]` or `[messaging.discord]`. Both providers default to
-`false`; the Settings > Messaging toggles and environment overrides expose the
-same booleans.
+The TOML equivalents are `streaming_responses = true` under a provider section,
+for example `[messaging.telegram]`, `[messaging.discord]`,
+`[messaging.mattermost]`, or `[messaging.slack]`. Providers default to `false`;
+the Settings > Messaging toggles and environment overrides expose the same
+booleans. Binding-level `Stream: Advanced` can opt a single binding into
+streaming without changing the provider default.
 
 Discord slash commands are reconciled on adapter startup when an Application ID
 is configured. The reconciler reads existing commands and only creates, patches,

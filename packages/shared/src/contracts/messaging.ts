@@ -53,9 +53,74 @@ export type MessagingChannelKind =
 
 export type MessagingConversationKind = "dm" | "channel" | "thread" | "topic";
 
+export type MessagingDeliveryScopeKind =
+  | "global"
+  | "dm"
+  | "group"
+  | "channel"
+  | "thread"
+  | "topic"
+  | "route"
+  | "workspace"
+  | "server"
+  | "custom";
+
+export type MessagingDeliveryScopeBudget = {
+  limit: number;
+  intervalMs: number;
+  reserved?: number;
+};
+
+export type MessagingDeliveryScope = {
+  platform: MessagingChannelKind;
+  id: string;
+  kind: MessagingDeliveryScopeKind;
+  label?: string;
+  parentId?: string;
+  bucketId?: string;
+  budget?: MessagingDeliveryScopeBudget;
+};
+
+type MessagingDegradationBase = {
+  key: string;
+  message?: string;
+  scope?: MessagingDeliveryScope;
+  startedAt: number;
+};
+
+export type MessagingRateLimitedDegradationReason = MessagingDegradationBase & {
+  kind: "rate-limited";
+  retryAfterMs?: number;
+  expiresAt: number;
+};
+
+export type MessagingReconnectingDegradationReason = MessagingDegradationBase & {
+  kind: "reconnecting";
+  attemptCount?: number;
+  lastFailureReason?: string;
+};
+
+export type MessagingMissingPermissionDegradationReason = MessagingDegradationBase & {
+  kind: "missing-permission";
+  bindingId?: string;
+  permission?: string;
+};
+
+export type MessagingWarningDegradationReason = MessagingDegradationBase & {
+  kind: "warning";
+  expiresAt?: number;
+};
+
+export type MessagingDegradationReason =
+  | MessagingRateLimitedDegradationReason
+  | MessagingReconnectingDegradationReason
+  | MessagingMissingPermissionDegradationReason
+  | MessagingWarningDegradationReason;
+
 /**
  * Health/lifecycle state for a single configured messaging platform.
  *   - `enabled`   adapter started successfully and is currently listening
+ *   - `degraded` adapter is connected but temporarily constrained
  *   - `suspended` configured but stopped (user toggled messaging off)
  *   - `errored`   the adapter failed to start, or hit a fatal runtime error
  *   - `unknown`   we know the platform is configured but haven't observed
@@ -63,6 +128,7 @@ export type MessagingConversationKind = "dm" | "channel" | "thread" | "topic";
  */
 export type MessagingPlatformHealth =
   | "enabled"
+  | "degraded"
   | "suspended"
   | "errored"
   | "unknown";
@@ -79,6 +145,8 @@ export type MessagingPlatformStatus = {
   changedAt: number;
   /** When errored, a human-readable reason for the UI tooltip. */
   reason?: string;
+  /** Transient provider/runtime reasons that make an enabled platform degraded. */
+  degradationReasons?: MessagingDegradationReason[];
   /**
    * Wall-clock ms of the last sent or received message that the
    * runtime told us about. Used to keep the activity dot blinking for
@@ -93,6 +161,7 @@ export type MessagingPlatformStatusEvent =
       platform: MessagingChannelKind;
       health: MessagingPlatformHealth;
       reason?: string;
+      degradationReasons?: MessagingDegradationReason[];
       at: number;
     }
   | {
@@ -107,7 +176,9 @@ export type MessagingActivityKind =
   | "inbound-rejected"
   | "inbound-ignored"
   | "pairing"
-  | "outbound";
+  | "outbound"
+  | "binding"
+  | "diagnostic";
 
 export type MessagingActivityEntry = {
   id: number;

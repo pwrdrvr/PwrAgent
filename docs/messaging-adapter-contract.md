@@ -140,12 +140,60 @@ current update unsafe to edit. Discarding a stream update is not a delivery
 failure and must not be treated as evidence that the conversation target is
 invalid.
 
+Streaming is an advanced capability, not the normal progress-notification path.
+It repeatedly edits the same provider message with partial assistant text. That
+can consume the same write budget needed for final answers, approvals, and
+status replies, and voice readers that announce messages when first received may
+not observe later edits. Providers should honor binding policy as:
+
+- `disabled`: discard stream updates.
+- `enabled`: allow stream updates even when the provider-global setting is off.
+- `inherit`: follow the provider-global setting.
+
 When streaming is enabled, adapters should use accumulated text for idempotent
 edits and keep any stream-key-to-platform-surface mapping in runtime memory
 only. Stream surfaces are transient; completed assistant message delivery
 remains the authoritative final response. Partial stream text may contain
 unfinished markdown, code fences, or links, so adapters should use conservative
 formatting until the final update or final assistant message arrives.
+
+## Rate-Limit and Reconnect Health
+
+Adapters may expose `resolveDeliveryScope(intent)`, `onRateLimit(listener)`,
+and `onReconnect(listener)` to the desktop runtime. Scope metadata must be
+provider-neutral: platform, stable scope id, kind, optional label, optional
+provider bucket id, and conservative write budget hints. Do not leak provider
+SDK error objects through these hooks.
+
+Outbound rate-limit retries are owned by the desktop delivery budget, not by
+provider SDKs. Adapters that use SDKs with built-in 429 queues must configure
+those SDKs to reject/surface rate-limit responses before constructing the
+adapter. Set `clientRateLimitStrategy` to `externalized` when the SDK has been
+configured this way, `direct` when calls go straight to the platform without a
+hidden retry queue, or `sdk-managed` only as a temporary diagnostic state. Do
+not ship a new provider with `sdk-managed`; fix or wrap the client first.
+
+The controller budgets all outbound intent kinds against the resolved scope:
+final assistant messages, user prompts, command replies, status updates, tool
+updates, and stream updates. Slow Mode is local: it starts when the shared
+budget for a scope is exhausted or close enough that reserved capacity must be
+protected. Provider 429 feedback starts a Cool Off window instead: the
+controller sends nothing to that scope until the provider retry window clears.
+In Slow Mode, obsolete low-priority traffic such as non-final stream updates,
+routine status edits, and intermediate tool progress can be dropped; final turn
+results and interactive prompts are reserved and deferred when possible.
+
+If a send attempt is rejected with a rate-limit error, `deliver()` should return
+a failed `MessagingDeliveryResult` with structured `rateLimit` metadata. Set
+`rateLimit.retryable: true` only when replaying the same intent cannot duplicate
+visible platform side effects from the failed attempt. The controller always
+records the cooldown. It only re-runs admission for retryable attempts; partial
+successes are recorded as failed delivery attempts so they do not duplicate
+already visible messages or attachments.
+
+The runtime reports a platform as `degraded` while a rate-limit or reconnect
+reason is active. `degraded` means connected but constrained. Fatal startup or
+runtime failures still report `errored`.
 
 Workspace handoff is expressed with the same generic status, single-select,
 confirmation, and error intents as other messaging workflows. Adapters should

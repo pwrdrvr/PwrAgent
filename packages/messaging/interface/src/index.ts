@@ -3,6 +3,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
+  MessagingDeliveryScope,
   MessagingToolUpdateMode,
   ThreadIdentifier,
   ThreadExecutionMode,
@@ -24,7 +25,18 @@ export {
   validateTelegramSupergroupId,
   type IdentifierValidationReason,
   type IdentifierValidationResult,
+  type MessagingDegradationReason,
+  type MessagingDeliveryScope,
+  type MessagingDeliveryScopeBudget,
+  type MessagingDeliveryScopeKind,
+  type MessagingMissingPermissionDegradationReason,
+  type MessagingPlatformHealth,
+  type MessagingPlatformStatus,
+  type MessagingPlatformStatusEvent,
+  type MessagingRateLimitedDegradationReason,
+  type MessagingReconnectingDegradationReason,
   type MessagingToolUpdateMode,
+  type MessagingWarningDegradationReason,
 } from "@pwragent/shared";
 
 export const MESSAGING_SURFACE_INTENT_KINDS = [
@@ -131,6 +143,40 @@ function isAsciiWhitespace(charCode: number): boolean {
     || charCode === 0x0c
     || charCode === 0x0d;
 }
+
+export type MessagingRateLimitInfo = {
+  retryAfterMs?: number;
+  scope: MessagingDeliveryScope;
+  message?: string;
+  observedAt?: number;
+  /**
+   * True only when replaying the same outbound intent cannot duplicate visible
+   * platform side effects from the failed attempt.
+   */
+  retryable?: boolean;
+};
+
+/**
+ * Describes where outbound 429 retry ownership lives for a provider client.
+ * `sdk-managed` is diagnostic only; shipped adapters should externalize SDK
+ * queues or use direct calls so the desktop budget can preserve priority slots.
+ */
+export type MessagingClientRateLimitStrategy =
+  | "externalized"
+  | "direct"
+  | "sdk-managed";
+
+export type MessagingReconnectInfo =
+  | {
+      state: "started";
+      attemptCount?: number;
+      lastFailureReason?: string;
+      observedAt?: number;
+    }
+  | {
+      state: "recovered";
+      observedAt?: number;
+    };
 
 export type MessagingChannelKind =
   | "telegram"
@@ -631,6 +677,13 @@ export type MessagingDeliveryResult = {
   channel: MessagingChannelKind;
   surface?: MessagingSurfaceRef;
   errorMessage?: string;
+  /**
+   * Structured provider rate-limit feedback for this delivery attempt.
+   * When present, the desktop controller should feed it back through
+   * its external admission budget. The controller only replays the
+   * intent when `rateLimit.retryable` is true.
+   */
+  rateLimit?: MessagingRateLimitInfo;
   deliveredAt: number;
 };
 

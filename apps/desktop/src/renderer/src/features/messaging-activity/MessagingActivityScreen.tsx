@@ -14,6 +14,8 @@ const KIND_LABEL: Record<MessagingActivityKind, string> = {
   "inbound-ignored": "Ignored",
   pairing: "Pairing",
   outbound: "Sent",
+  binding: "Binding",
+  diagnostic: "Diagnostic",
 };
 const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "muted"> = {
   "inbound-routed": "ok",
@@ -21,6 +23,8 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
   "inbound-ignored": "warning",
   pairing: "warning",
   outbound: "muted",
+  binding: "ok",
+  diagnostic: "warning",
 };
 
 /**
@@ -98,9 +102,9 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
       {/* Primary list — fills available height with internal scroll. */}
       <ActivitySection
         className="messaging-activity__main"
-        title="Currently bound"
+        title="Bound activity"
         emptyLabel="No bound conversations have sent messages recently."
-        kinds={["inbound-routed", "outbound"]}
+        kinds={["binding", "inbound-routed", "outbound"]}
         groups={groups}
       />
 
@@ -108,9 +112,9 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
           Stays pinned to the bottom of the pane. */}
       <ActivitySection
         className="messaging-activity__aside"
-        title="Received but ignored"
-        emptyLabel="No rejected or ignored inbound messages — your authorization list is doing its job."
-        kinds={["inbound-rejected", "inbound-ignored", "pairing"]}
+        title="Attention"
+        emptyLabel="No rejected messages, pairing attempts, or delivery diagnostics."
+        kinds={["diagnostic", "inbound-rejected", "inbound-ignored", "pairing"]}
         groups={groups}
       />
     </section>
@@ -308,6 +312,8 @@ function groupByKind(
     "inbound-ignored": [],
     pairing: [],
     outbound: [],
+    binding: [],
+    diagnostic: [],
   };
   for (const entry of entries) {
     groups[entry.kind]?.push(entry);

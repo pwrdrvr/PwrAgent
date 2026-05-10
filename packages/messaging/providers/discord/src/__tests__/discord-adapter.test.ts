@@ -62,6 +62,130 @@ describe("discord adapter", () => {
     );
   });
 
+  it("returns structured rate-limit feedback when Discord REST rejects a send", async () => {
+    const rateLimitError = Object.assign(new Error("Too Many Requests"), {
+      retryAfter: 500,
+    });
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        createMessage: vi.fn().mockRejectedValue(rateLimitError),
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+    const observed: unknown[] = [];
+    adapter.onRateLimit((info) => {
+      observed.push(info);
+    });
+
+    await expect(
+      adapter.deliver({
+        audit: discordAudit(),
+        createdAt: 1234,
+        id: "message-1",
+        kind: "message",
+        role: "assistant",
+        parts: [{ type: "text", text: "Final answer" }],
+      }),
+    ).resolves.toMatchObject({
+      channel: "discord",
+      deliveredAt: 1234,
+      errorMessage: "Too Many Requests",
+      outcome: "failed",
+      rateLimit: {
+        retryAfterMs: 500,
+        retryable: true,
+        scope: {
+          id: "discord:channel:channel-1",
+        },
+      },
+    });
+    expect(observed).toEqual([
+      expect.objectContaining({
+        retryAfterMs: 500,
+        retryable: true,
+        scope: expect.objectContaining({
+          id: "discord:channel:channel-1",
+        }),
+      }),
+    ]);
+  });
+
+  it("converts Discord API retry_after seconds without scaling REST retryAfter milliseconds", async () => {
+    const restRateLimitError = Object.assign(new Error("REST bucket"), {
+      retryAfter: 750,
+    });
+    const apiRateLimitError = Object.assign(new Error("API body"), {
+      retry_after: 2,
+    });
+    const createMessage = vi.fn()
+      .mockRejectedValueOnce(restRateLimitError)
+      .mockRejectedValueOnce(apiRateLimitError);
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    const intent = {
+      audit: discordAudit(),
+      createdAt: 1234,
+      id: "message-1",
+      kind: "message" as const,
+      role: "assistant" as const,
+      parts: [{ type: "text" as const, text: "Final answer" }],
+    };
+    await expect(adapter.deliver(intent)).resolves.toMatchObject({
+      rateLimit: { retryAfterMs: 750 },
+    });
+    await expect(adapter.deliver({ ...intent, id: "message-2" })).resolves.toMatchObject({
+      rateLimit: { retryAfterMs: 2000 },
+    });
+  });
+
+  it("marks chunked Discord sends non-retryable after a visible partial send", async () => {
+    const rateLimitError = Object.assign(new Error("Too Many Requests"), {
+      retryAfter: 500,
+    });
+    const createMessage = vi.fn()
+      .mockResolvedValueOnce({ channel_id: "channel-1", id: "message-1" })
+      .mockRejectedValueOnce(rateLimitError);
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await expect(
+      adapter.deliver({
+        audit: discordAudit(),
+        createdAt: 1234,
+        id: "message-1",
+        kind: "message",
+        role: "assistant",
+        parts: [{ type: "text", text: `${"a".repeat(2000)}${"b".repeat(2000)}` }],
+      }),
+    ).resolves.toMatchObject({
+      outcome: "failed",
+      rateLimit: {
+        retryAfterMs: 500,
+        retryable: false,
+      },
+    });
+  });
+
   it("returns a failed delivery when updating a stale message fails", async () => {
     const adapter = new DiscordAdapter({
       api: createApi({

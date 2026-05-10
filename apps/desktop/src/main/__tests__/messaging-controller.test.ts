@@ -19,6 +19,8 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingSurfaceAction,
+  MessagingChannelKind,
+  MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
@@ -28,9 +30,11 @@ import type {
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   MessagingController,
+  messagingDeliveryPriority,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
@@ -286,6 +290,51 @@ describe("MessagingController", () => {
           label: "Tools: Show Some",
           fallbackText: "tools",
         }),
+        expect.objectContaining({
+          id: "status:streaming",
+          label: "Stream: Inherit",
+          fallbackText: "stream",
+        }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Streaming: Inherit"),
+    });
+  });
+
+  it("cycles per-binding streaming mode from the status card", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+
+    const bindingAfterDisable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(bindingAfterDisable?.preferences?.streamingResponses).toBe("disabled");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Streaming: Off"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Stream: Off" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:streaming" }),
+    );
+
+    const bindingAfterEnable = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(bindingAfterEnable?.preferences?.streamingResponses).toBe("enabled");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Streaming: Advanced"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Stream: Advanced" }),
       ]),
     });
   });
@@ -604,14 +653,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "active",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: working"),
     });
 
     await harness.controller.handleBackendEvent({
@@ -630,14 +675,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -676,7 +717,7 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
-    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered).toHaveLength(1);
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -694,7 +735,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered).toHaveLength(1);
   });
 
   it("stops typing when the backend reports idle without a turn completion event", async () => {
@@ -716,14 +757,10 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -1741,8 +1778,9 @@ describe("MessagingController", () => {
         ],
       });
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
     });
   });
 
@@ -1916,6 +1954,268 @@ describe("MessagingController", () => {
       },
     });
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+  });
+
+  it("rechecks budget admission after a provider rate-limit rejection", async () => {
+    let now = 1000;
+    let rejectNextStream = false;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliver: async (intent) => {
+        attempts.push(intent);
+        if (rejectNextStream && intent.kind === "stream_update") {
+          return {
+            channel: "telegram" as const,
+            deliveredAt: now,
+            errorMessage: "Too Many Requests",
+            outcome: "failed" as const,
+            rateLimit: {
+              scope,
+              retryAfterMs: 5_000,
+              observedAt: now,
+              message: "Too Many Requests",
+              retryable: true,
+            },
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin
+            ? "pinned" as const
+            : "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
+    attempts.length = 0;
+    rejectNextStream = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(attempts).toEqual([
+      expect.objectContaining({
+        kind: "stream_update",
+        text: "Hello",
+      }),
+    ]);
+    expect(Object.keys((await harness.store.readSnapshot()).deliveries)).toHaveLength(
+      deliveriesBefore,
+    );
+  });
+
+  it("does not replay non-retryable provider rate-limit failures", async () => {
+    let now = 1000;
+    let rejectNextStream = false;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      deliver: async (intent) => {
+        attempts.push(intent);
+        if (rejectNextStream && intent.kind === "stream_update") {
+          return {
+            channel: "telegram" as const,
+            deliveredAt: now,
+            errorMessage: "Too Many Requests after partial send",
+            outcome: "failed" as const,
+            rateLimit: {
+              scope,
+              retryAfterMs: 5_000,
+              observedAt: now,
+              message: "Too Many Requests after partial send",
+              retryable: false,
+            },
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin
+            ? "pinned" as const
+            : "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    const deliveriesBefore = Object.keys((await harness.store.readSnapshot()).deliveries).length;
+    attempts.length = 0;
+    rejectNextStream = true;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(attempts).toHaveLength(1);
+    const deliveries = Object.values((await harness.store.readSnapshot()).deliveries);
+    expect(deliveries).toHaveLength(deliveriesBefore + 1);
+    expect(deliveries.at(-1)).toMatchObject({
+      outcome: "failed",
+      rateLimit: {
+        retryable: false,
+      },
+    });
+  });
+
+  it("reports budget deferrals before holding final stream updates", async () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:group:chat-1",
+      kind: "group",
+      budget: { limit: 1, intervalMs: 60_000, reserved: 0 },
+    };
+    const budgetEvents: Parameters<
+      NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+    >[0][] = [];
+    const onDeliveryBudgetEvent = vi.fn(
+      (event: Parameters<
+        NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+      >[0]) => {
+        budgetEvents.push(event);
+      },
+    );
+    const harness = await createHarness({
+      channel: "telegram",
+      now: () => now,
+      deliveryBudget: new MessagingDeliveryBudget({ now: () => now }),
+      resolveDeliveryScope: (intent) =>
+        intent.kind === "stream_update" ? scope : undefined,
+      onDeliveryBudgetEvent,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    const finalDelivery = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Hello final." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await vi.waitFor(() => {
+      expect(onDeliveryBudgetEvent).toHaveBeenCalledTimes(1);
+    });
+    expect(budgetEvents).toEqual([
+      expect.objectContaining({
+        intentKind: "stream_update",
+        outcome: "deferred",
+        priority: "final_turn",
+        reason: "budget-exhausted",
+        retryAt: 61_000,
+        scope,
+      }),
+    ]);
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+      ),
+    ).toEqual([]);
+
+    now = 61_001;
+    await vi.advanceTimersByTimeAsync(60_001);
+    await finalDelivery;
+
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+      ),
+    ).toMatchObject({
+      kind: "stream_update",
+      text: "Hello final.",
+    });
+  });
+
+  it("treats actionless approval cleanup edits as routine budget traffic", () => {
+    const approvalWithButtons = {
+      id: "approval-1",
+      kind: "approval",
+      createdAt: 1_000,
+      title: "Approve",
+      body: "Run command?",
+      decisions: [
+        {
+          id: "accept",
+          label: "Approve",
+          decision: "accept",
+        },
+      ],
+    } satisfies MessagingSurfaceIntent;
+    const approvalCleanup = {
+      ...approvalWithButtons,
+      id: "approval-2",
+      decisions: [],
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(approvalWithButtons)).toBe(
+      "critical_interactive",
+    );
+    expect(messagingDeliveryPriority(approvalCleanup)).toBe("routine_status");
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {
@@ -2297,7 +2597,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
@@ -2427,7 +2727,7 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("batches noisy default tool updates and flushes them before turn status", async () => {
+  it("batches noisy default tool updates and flushes them before turn completion activity", async () => {
     const harness = await createHarness();
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildTextEvent("start work"));
@@ -2466,12 +2766,15 @@ describe("MessagingController", () => {
           (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
         ),
     );
-    const statusIndex = harness.delivered.findIndex(
-      (intent) => intent.kind === "status" && intent.status === "idle",
+    const activityIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "activity" &&
+        intent.activity === "typing" &&
+        intent.state === "idle",
     );
 
     expect(batchIndex).toBeGreaterThanOrEqual(0);
-    expect(statusIndex).toBeGreaterThan(batchIndex);
+    expect(activityIndex).toBeGreaterThan(batchIndex);
   });
 
   it("flushes queued tool updates before assistant final text", async () => {
@@ -2588,15 +2891,11 @@ describe("MessagingController", () => {
       },
     } as unknown as AgentEvent);
 
-    expect(harness.delivered).toHaveLength(2);
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
       state: "idle",
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -2829,9 +3128,14 @@ describe("MessagingController", () => {
         decision: "accept_for_session",
       },
     });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: "Approval response sent.",
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "approval" && intent.decisions.length === 0,
+      ),
+    ).toMatchObject({
+      kind: "approval",
+      body: expect.stringContaining("Response Received: Approved for Session"),
+      decisions: [],
     });
   });
 
@@ -2858,20 +3162,13 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([
       expect.objectContaining({
         kind: "approval",
+        body: expect.stringContaining("Response Received: Approved"),
         decisions: [],
       }),
       expect.objectContaining({
         kind: "activity",
         activity: "typing",
         state: "active",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        status: "working",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        text: "Approval response sent.",
       }),
     ]);
   });
@@ -2918,6 +3215,7 @@ describe("MessagingController", () => {
       ),
     ).toMatchObject({
       kind: "approval",
+      body: expect.stringContaining("Response Received: Approved"),
       decisions: [],
       delivery: {
         mode: "update",
@@ -2927,10 +3225,6 @@ describe("MessagingController", () => {
       targetSurface: {
         id: `surface:${approvalIntent?.id}`,
       },
-    });
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: "Approval response sent.",
     });
   });
 
@@ -2975,6 +3269,7 @@ describe("MessagingController", () => {
       ),
     ).toMatchObject({
       kind: "approval",
+      body: expect.stringContaining("Response Received: Resolved"),
       decisions: [],
       delivery: {
         mode: "update",
@@ -3019,6 +3314,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([
       expect.objectContaining({
         kind: "approval",
+        body: expect.stringContaining("Response Received: Resolved"),
         decisions: [],
         targetSurface: expect.objectContaining({
           id: `surface:${approvalIntent?.id}`,
@@ -3028,10 +3324,6 @@ describe("MessagingController", () => {
         kind: "activity",
         activity: "typing",
         state: "active",
-      }),
-      expect.objectContaining({
-        kind: "status",
-        status: "working",
       }),
     ]);
   });
@@ -4023,12 +4315,16 @@ describe("MessagingController", () => {
 });
 
 async function createHarness(options?: {
+  deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
+  channel?: MessagingChannelKind;
+  onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
+  resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   /**
    * Set to `false` to construct the controller WITHOUT an
    * `onBindingChanged` callback. Used by tests that verify the
@@ -4066,6 +4362,9 @@ async function createHarness(options?: {
     capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
+      : {}),
+    ...(options?.resolveDeliveryScope
+      ? { resolveDeliveryScope: options.resolveDeliveryScope }
       : {}),
     deliver: vi.fn(
       options?.deliver ??
@@ -4220,9 +4519,12 @@ async function createHarness(options?: {
     adapter,
     authorizedActorIds: ["user-1"],
     backend,
+    channel: options?.channel,
+    deliveryBudget: options?.deliveryBudget,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    onDeliveryBudgetEvent: options?.onDeliveryBudgetEvent,
     // Pass the spy by default so tests can assert on fan-out. The
     // `bindingChangedListener: false` opt-out exists for tests that
     // verify the nullish-callback guard — production wiring always

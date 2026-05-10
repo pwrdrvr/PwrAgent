@@ -10,8 +10,11 @@ import type {
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
+  MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -272,7 +275,9 @@ describe("DesktopMessagingRuntime", () => {
         role: "assistant",
       });
     expect(adapter.delivered.at(-1)).toMatchObject({
-      kind: "status",
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
     });
   });
 
@@ -997,6 +1002,124 @@ describe("DesktopMessagingRuntime", () => {
         reason: expect.stringContaining("409"),
       }),
     ]);
+  });
+
+  it("emits health=degraded during rate-limit cool-off and reconnect attempts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    await prepareRuntimeStore();
+    let fireRateLimit: ((info: MessagingRateLimitInfo) => void) | undefined;
+    let fireReconnect: ((info: MessagingReconnectInfo) => void) | undefined;
+    const scope: MessagingDeliveryScope = {
+      id: "telegram:group:-100123",
+      kind: "group",
+      label: "Telegram group -100123",
+      platform: "telegram",
+    };
+    const adapter = createAdapter("telegram", {
+      onRateLimit: (listener: (info: MessagingRateLimitInfo) => void) => {
+        fireRateLimit = listener;
+        return () => {
+          fireRateLimit = undefined;
+        };
+      },
+      onReconnect: (listener: (info: MessagingReconnectInfo) => void) => {
+        fireReconnect = listener;
+        return () => {
+          fireReconnect = undefined;
+        };
+      },
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    try {
+      await runtime.start();
+      const events: unknown[] = [];
+      runtime.onPlatformStatus((event) => events.push(event));
+
+      fireRateLimit?.({
+        message: "Too many requests",
+        observedAt: 1000,
+        retryAfterMs: 5000,
+        scope,
+      });
+
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "degraded",
+          platform: "telegram",
+          degradationReasons: [
+            expect.objectContaining({
+              kind: "rate-limited",
+              scope: expect.objectContaining({ id: scope.id }),
+            }),
+          ],
+        }),
+      ]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          health: "degraded",
+          platform: "telegram",
+          degradationReasons: [
+            expect.objectContaining({ kind: "rate-limited" }),
+          ],
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(7000);
+
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "enabled",
+          platform: "telegram",
+          degradationReasons: [],
+        }),
+      ]);
+
+      fireReconnect?.({
+        attemptCount: 1,
+        lastFailureReason: "socket closed",
+        observedAt: Date.now(),
+        state: "started",
+      });
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "degraded",
+          platform: "telegram",
+          degradationReasons: [
+            expect.objectContaining({
+              attemptCount: 1,
+              kind: "reconnecting",
+            }),
+          ],
+        }),
+      ]);
+
+      fireReconnect?.({ observedAt: Date.now(), state: "recovered" });
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "enabled",
+          platform: "telegram",
+          degradationReasons: [],
+        }),
+      ]);
+    } finally {
+      await runtime.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("detaches adapter runtime-error listeners on stop so a graceful shutdown does not flip to errored", async () => {

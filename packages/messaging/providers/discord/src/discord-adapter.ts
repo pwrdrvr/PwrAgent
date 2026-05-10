@@ -21,11 +21,14 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingDeliveryScope,
   MessagingFilePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingRateLimitInfo,
   MessagingCallbackHandleStore,
   MessagingRejectedInboundEvent,
+  MessagingClientRateLimitStrategy,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -238,7 +241,10 @@ export type DiscordProviderAdapter = {
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -252,6 +258,7 @@ export type DiscordProviderAdapter = {
 
 export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
     actions: {
       maxActions: 25,
@@ -307,6 +314,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private readonly unauthorizedGuildLogKeys = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   private streamSurfaces = new Map<string, string>();
@@ -327,6 +335,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return () => {
       this.inboundRejectedListeners.delete(listener);
     };
+  }
+
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const target = this.resolveTarget(intent);
+    return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
@@ -422,6 +442,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return await this.deliverStreamUpdate(intent, target);
     }
 
+    let deliveredSideEffects = false;
     try {
       const callbackHandleWrites: Promise<unknown>[] = [];
       const components = buildDiscordComponents(
@@ -492,6 +513,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             surface: this.surfaceForMessage(message, target),
           };
         } catch (error) {
+          if (retryAfterMsFromError(error) !== undefined) {
+            throw error;
+          }
           if (intent.delivery.fallback !== "present_new") {
             throw error;
           }
@@ -518,6 +542,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           files: index === chunks.length - 1 ? filesForDiscordRequest(files) : undefined,
         };
         messages.push(await this.api.createMessage(target.channelId, request));
+        deliveredSideEffects = true;
       }
 
       const lastMessage = messages.at(-1);
@@ -534,6 +559,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       };
     } catch (error) {
       const message = errorMessage(error);
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: !deliveredSideEffects,
+      });
       this.options.logger?.warn?.(
         `discord deliver failed kind=${intent.kind} channel=${target.channelId} error=${message}`,
       );
@@ -542,6 +570,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: message,
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
         surface: intent.targetSurface,
       };
     }
@@ -571,8 +600,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     target: { channelId: string; guildId?: string; messageId?: string },
   ): Promise<MessagingDeliveryResult> {
     if (
-      this.options.config.streamingResponses !== true ||
-      intent.policy === "disabled"
+      intent.policy === "disabled" ||
+      (
+        this.options.config.streamingResponses !== true &&
+        intent.policy !== "enabled"
+      )
     ) {
       return {
         channel: this.channel,
@@ -615,11 +647,15 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         surface: this.surfaceForMessage(message, target),
       };
     } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(error, target, {
+        retryable: true,
+      });
       return {
         channel: this.channel,
         deliveredAt: this.now(),
         errorMessage: errorMessage(error),
         outcome: "failed",
+        ...(rateLimit ? { rateLimit } : {}),
       };
     }
   }
@@ -1251,6 +1287,50 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     };
   }
 
+  private rateLimitScopeForTarget(target: {
+    channelId: string;
+    guildId?: string;
+  }): MessagingDeliveryScope {
+    return {
+      platform: this.channel,
+      id: `discord:channel:${target.channelId}`,
+      kind: "channel",
+      parentId: target.guildId,
+      label: "Discord channel",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    };
+  }
+
+  private emitRateLimitFromError(
+    error: unknown,
+    target: { channelId: string; guildId?: string },
+    options?: { retryable?: boolean },
+  ): MessagingRateLimitInfo | undefined {
+    const retryAfterMs = retryAfterMsFromError(error);
+    if (retryAfterMs === undefined) {
+      return undefined;
+    }
+    const info: MessagingRateLimitInfo = {
+      scope: this.rateLimitScopeForTarget(target),
+      retryAfterMs,
+      message: errorMessage(error),
+      observedAt: this.now(),
+      retryable: options?.retryable ?? false,
+    };
+    this.emitRateLimit(info);
+    return info;
+  }
+
+  private emitRateLimit(info: MessagingRateLimitInfo): void {
+    for (const listener of this.rateLimitListeners) {
+      try {
+        listener(info);
+      } catch {
+        // Runtime listeners are observability. Delivery handling continues.
+      }
+    }
+  }
+
   private firstImageUrl(intent: MessagingSurfaceIntent): string | undefined {
     if (intent.kind !== "message") {
       return undefined;
@@ -1820,7 +1900,10 @@ class DiscordRestApi implements DiscordApi {
   private readonly rest: REST;
 
   constructor(botToken: string) {
-    this.rest = new REST({ version: "10" }).setToken(botToken);
+    this.rest = new REST({
+      rejectOnRateLimit: () => true,
+      version: "10",
+    }).setToken(botToken);
   }
 
   async createApplicationCommand(
@@ -2258,6 +2341,31 @@ function discordChannelIsThread(channel: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function retryAfterMsFromError(error: unknown): number | undefined {
+  const retryAfterMs =
+    readNumberProperty(error, "retryAfter") ??
+    readNumberProperty(error, "retryAfterMs");
+  if (retryAfterMs !== undefined) {
+    return Math.ceil(retryAfterMs);
+  }
+  const retryAfterSeconds = readNumberProperty(error, "retry_after");
+  if (retryAfterSeconds !== undefined) {
+    return Math.ceil(retryAfterSeconds * 1000);
+  }
+  const status = readNumberProperty(error, "status") ?? readNumberProperty(error, "code");
+  return status === 429 ? 1_000 : undefined;
+}
+
+function readNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "number" && Number.isFinite(property)
+    ? property
+    : undefined;
 }
 
 function commandArgsFromOptions(
