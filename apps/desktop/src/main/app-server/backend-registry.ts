@@ -84,7 +84,6 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
-import { CodexSessionMetadataService } from "./codex-session-metadata-service";
 import { GitDirectoryService } from "./git-directory-service";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
@@ -1014,7 +1013,6 @@ export class DesktopBackendRegistry {
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
-  private readonly codexSessionMetadataService: CodexSessionMetadataService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
@@ -1062,7 +1060,6 @@ export class DesktopBackendRegistry {
     grokClient?: BackendClient;
     overlayStore?: OverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
-    codexSessionMetadataService?: CodexSessionMetadataService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     createScratchProjectDirectory?: () => Promise<string>;
@@ -1143,10 +1140,6 @@ export class DesktopBackendRegistry {
         codexHome,
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
-      });
-    this.codexSessionMetadataService =
-      options?.codexSessionMetadataService ?? new CodexSessionMetadataService({
-        codexHome,
       });
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
@@ -1498,12 +1491,9 @@ export class DesktopBackendRegistry {
         worktreePath: result.linkedDirectory.worktreePath ?? result.targetPath,
       });
     }
-    await this.updateCodexSessionCwdAfterHandoff({
-      backend: request.backend,
-      cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
-      threadId: request.threadId,
-    });
-
+    // Do not rewrite Codex rollout JSONL files here. Codex may still hold the
+    // session file open; replacing it can orphan later transcript writes. The
+    // next turn resolves cwd from the overlay updated above.
     if (result.archivedSourceWorktree) {
       await this.overlayStore.upsertWorktreeSnapshot({
         backend: request.backend,
@@ -3374,38 +3364,6 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
         threadId: params.threadId,
         worktreePath,
-      });
-    }
-  }
-
-  private async updateCodexSessionCwdAfterHandoff(params: {
-    backend: AppServerBackendKind;
-    cwd?: string;
-    threadId: string;
-  }): Promise<void> {
-    const cwd = params.cwd?.trim();
-    if (params.backend !== "codex" || !cwd) {
-      return;
-    }
-
-    try {
-      const result = await this.codexSessionMetadataService.updateThreadCwd({
-        cwd,
-        threadId: params.threadId,
-      });
-      if (!result.updated && result.reason !== "unchanged") {
-        backendRegistryLog.warn("failed to update Codex session cwd after handoff", {
-          cwd,
-          reason: result.reason,
-          sessionPath: result.path,
-          threadId: params.threadId,
-        });
-      }
-    } catch (error) {
-      backendRegistryLog.warn("failed to update Codex session cwd after handoff", {
-        cwd,
-        error: error instanceof Error ? error.message : String(error),
-        threadId: params.threadId,
       });
     }
   }
