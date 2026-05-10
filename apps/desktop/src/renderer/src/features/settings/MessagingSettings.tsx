@@ -528,7 +528,7 @@ export function MessagingSettings(props: {
             help={
               <>
                 Click <strong>Generate</strong> to fill the field with a fresh
-                256-bit secret (then click Replace to save), <em>or</em> run
+                256-bit secret (then click Save to commit), <em>or</em> run
                 this in a terminal if you'd rather generate it yourself:
                 <br />
                 <code>openssl rand -hex 32</code>
@@ -997,6 +997,7 @@ function PairingTokenField(props: {
 }) {
   const [scope, setScope] = useState<MessagingPairingScope>("user_dm");
   const [message, setMessage] = useState<string | undefined>(undefined);
+  const [messageEntryId, setMessageEntryId] = useState<string | undefined>(undefined);
   const [entries, setEntries] = useState<MessagingPairingEntry[]>([]);
   const [busyId, setBusyId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -1012,9 +1013,20 @@ function PairingTokenField(props: {
   useEffect(() => {
     void refresh();
     return props.desktopApi?.onMessagingPairingChanged?.((event) => {
-      if (event.entry.platform === props.platform) void refresh();
+      if (event.entry.platform !== props.platform) return;
+      if (event.entry.id === messageEntryId && event.entry.status !== "pending") {
+        setMessage(undefined);
+        setMessageEntryId(undefined);
+      }
+      void refresh();
     });
-  }, [props.desktopApi, props.platform]);
+  }, [messageEntryId, props.desktopApi, props.platform]);
+
+  const selectScope = (nextScope: MessagingPairingScope) => {
+    setScope(nextScope);
+    setMessage(undefined);
+    setMessageEntryId(undefined);
+  };
 
   const generate = async () => {
     if (!props.desktopApi?.generateMessagingPairingToken) return;
@@ -1026,6 +1038,7 @@ function PairingTokenField(props: {
         scope,
       });
       setMessage(result.message);
+      setMessageEntryId(result.entry.id);
       await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1045,11 +1058,19 @@ function PairingTokenField(props: {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
         });
+        if (result?.entry.id === messageEntryId) {
+          setMessage(undefined);
+          setMessageEntryId(undefined);
+        }
         if (result?.added) {
           await props.onSettingsChanged?.();
         }
       } else {
-        await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+        const result = await props.desktopApi?.rejectMessagingPairing?.({ entryId: entry.id });
+        if (result?.entry.id === messageEntryId) {
+          setMessage(undefined);
+          setMessageEntryId(undefined);
+        }
       }
       await refresh();
     } catch (caught) {
@@ -1098,7 +1119,7 @@ function PairingTokenField(props: {
                   disabled={props.disabled}
                   role="radio"
                   type="button"
-                  onClick={() => setScope(option.value)}
+                  onClick={() => selectScope(option.value)}
                 >
                   {option.label}
                 </button>
@@ -1694,8 +1715,7 @@ function SecretField(props: {
   state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
   /**
    * Optional generator. When provided, a "Generate" button appears
-   * that fills the input with the produced value (the user still has
-   * to click Replace to commit). Used by the Mattermost HMAC field
+   * that fills the input with the produced value. Used by the Mattermost HMAC field
    * so users don't have to leave the app to run openssl.
    */
   onGenerate?: () => string;
@@ -1706,6 +1726,7 @@ function SecretField(props: {
   ) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
+  const dirty = value.length > 0;
   const status = props.state.configured ? "Set" : "Not set";
   const source = formatSourceLabel(props.state.source, props.state.overriddenByEnv);
 
@@ -1752,8 +1773,18 @@ function SecretField(props: {
               });
             }}
           >
-            Replace
+            Save
           </button>
+          {dirty ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled}
+              type="button"
+              onClick={() => setValue("")}
+            >
+              Discard
+            </button>
+          ) : null}
           <button
             className="button button--ghost"
             disabled={props.disabled || props.state.source === "env"}

@@ -3255,6 +3255,53 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("writes the session index under CODEX_HOME from the client environment", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    const codexHome = path.join(tempDir, "codex-profile-home");
+    const sessionIndexPath = path.join(codexHome, "session_index.jsonl");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-profile-home",
+        path: path.join(codexHome, "sessions/thread-profile-home.jsonl"),
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        preview: "Use selected Codex home for helper state",
+        name: "Untitled thread",
+        updatedAt: 1_777_401_255,
+      },
+      model: "gpt-5.5",
+    };
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+      });
+
+      await client.startThread({
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      });
+      await client.close();
+
+      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(indexLines).toEqual([
+        expect.objectContaining({
+          id: "thread-profile-home",
+          source: "pwragent",
+          thread_name: "Use selected Codex home for helper state",
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("records a derived session-index name when Codex returns the placeholder name", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");

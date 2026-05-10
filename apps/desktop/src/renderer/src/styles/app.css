@@ -775,12 +775,18 @@ textarea,
 
 .runtime-identity {
   display: flex;
+  position: relative;
   min-width: 0;
   align-items: center;
   gap: 6px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: no-drag;
+}
+
+.sidebar__menu--profile {
+  right: auto;
+  left: 0;
 }
 
 .runtime-identity__button {
@@ -2982,10 +2988,15 @@ textarea,
 }
 
 .settings-secret {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.settings-secret .settings-input {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .settings-inline-actions {

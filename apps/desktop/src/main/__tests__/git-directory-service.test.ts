@@ -172,6 +172,32 @@ describe("GitDirectoryService", () => {
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });
 
+  it("creates Codex user-home worktrees under the selected Codex profile home", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-home-"));
+    cleanupPaths.push(homeDir);
+    const codexHome = path.join(homeDir, "codex", "profiles", "work");
+    const service = new GitDirectoryService({
+      codexHome,
+      resolveWorktreeStorage: () => "user-home",
+      homeDir,
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      backend: "codex",
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+    });
+
+    const expectedRoot = path.join(codexHome, "worktrees");
+    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
+  });
+
   it("records Codex owner metadata in the worktree git directory", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

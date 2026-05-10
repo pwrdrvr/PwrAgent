@@ -17,6 +17,8 @@ const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
+const registerProfilesIpcHandlersMock = vi.fn();
+const disposeProfilesIpcHandlersMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
@@ -108,6 +110,11 @@ vi.mock("../ipc/preload-log", () => ({
   disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
 }));
 
+vi.mock("../ipc/profiles", () => ({
+  registerProfilesIpcHandlers: registerProfilesIpcHandlersMock,
+  disposeProfilesIpcHandlers: disposeProfilesIpcHandlersMock,
+}));
+
 vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
 }));
@@ -168,6 +175,8 @@ describe("bootstrapApp", () => {
     disposeImageNormalizationIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
     disposePreloadLogIpcHandlersMock.mockReset();
+    registerProfilesIpcHandlersMock.mockReset();
+    disposeProfilesIpcHandlersMock.mockReset();
     registerRendererErrorIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();

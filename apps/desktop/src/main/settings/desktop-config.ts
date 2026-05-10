@@ -91,6 +91,7 @@ export type DesktopSettingsConfig = {
   models?: {
     codex?: {
       path?: string;
+      profile?: string;
     };
   };
   applications?: {
@@ -427,6 +428,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.path !== undefined) {
     set(["models", "codex", "path"], patch.models.codex.path);
   }
+  if (patch.models?.codex?.profile !== undefined) {
+    set(["models", "codex", "profile"], patch.models.codex.profile);
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -547,6 +551,7 @@ function normalizeDesktopConfig(
     models: {
       codex: {
         path: readString(codex?.path),
+        profile: readString(codex?.profile),
       },
     },
     applications: {

@@ -46,6 +46,7 @@ describe("DesktopSettingsService", () => {
         "",
         "[models.codex]",
         'path = "codex-beta"',
+        'profile = "work"',
         "",
         "[applications.editor]",
         'preferred_id = "vscode"',
@@ -108,6 +109,13 @@ describe("DesktopSettingsService", () => {
       value: "codex-beta",
       source: "config",
     });
+    expect(snapshot.models.codex.profile).toEqual({
+      value: "work",
+      source: "config",
+    });
+    expect(snapshot.models.codex.profiles.effectiveCodexHome).toMatch(
+      /\.codex\/profiles\/work$/,
+    );
     expect(snapshot.applications.preferredEditorId).toEqual({
       value: "vscode",
       source: "config",
@@ -389,6 +397,47 @@ describe("DesktopSettingsService", () => {
 
     const snapshot = await service.readSettings();
     expect(snapshot.worktrees.storage.value).toBe("in-repo");
+  });
+
+  it("round-trips the Codex auth profile through write + read", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({ models: { codex: { profile: "work" } } });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[models.codex]");
+    expect(tomlOnDisk).toContain('profile = "work"');
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.models.codex.profile).toEqual({
+      value: "work",
+      source: "config",
+    });
+  });
+
+  it("sets CODEX_HOME for the selected Codex auth profile", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[models.codex]", 'profile = "work"'].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(
+      path.join(root, "codex", "profiles", "work"),
+    );
   });
 
   it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {

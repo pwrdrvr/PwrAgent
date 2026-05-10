@@ -71,6 +71,10 @@ import {
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
+import {
+  discoverCodexAuthProfiles,
+  resolveCodexHomeForProfile,
+} from "./codex-profiles";
 import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
@@ -158,6 +162,10 @@ export class DesktopSettingsService {
     );
     const codexDiscovery = await discoverCodexCommands({
       configuredCommand: config.models?.codex?.path,
+      env: this.env,
+    });
+    const codexProfiles = discoverCodexAuthProfiles({
+      configuredProfile: config.models?.codex?.profile,
       env: this.env,
     });
     const ghDiscovery = await discoverGhCommands({
@@ -355,7 +363,9 @@ export class DesktopSettingsService {
       models: {
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
+          profile: this.resolveConfigString(config.models?.codex?.profile),
           discovery: codexDiscovery,
+          profiles: codexProfiles,
         },
         grok: {
           apiKey: grokApiKey,
@@ -463,6 +473,18 @@ export class DesktopSettingsService {
       || this.readConfig().config.models?.codex?.path
       || undefined
     );
+  }
+
+  resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
+    const configuredProfile = this.readConfig().config.models?.codex?.profile;
+    const codexHome = resolveCodexHomeForProfile(configuredProfile, {
+      env: this.env,
+    });
+    if (!codexHome) return this.env;
+    return {
+      ...this.env,
+      CODEX_HOME: codexHome,
+    };
   }
 
   resolveGhCommandPreference(): string | undefined {

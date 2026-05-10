@@ -31,6 +31,7 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
@@ -99,6 +100,8 @@ import type {
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  OpenDesktopPwrAgentProfileRequest,
+  OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   PickGhCommandResponse,
@@ -124,6 +127,10 @@ export type DesktopApi = {
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
+  listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
+  openPwrAgentProfile?: (
+    request: OpenDesktopPwrAgentProfileRequest,
+  ) => Promise<OpenDesktopPwrAgentProfileResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

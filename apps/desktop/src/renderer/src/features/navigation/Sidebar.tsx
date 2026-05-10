@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
+  DesktopPwrAgentProfileSummary,
   MessagingThreadBindingSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
@@ -42,6 +43,8 @@ type SidebarProps = {
   archiveThreadError?: string;
   renameThreadError?: string;
   runtimeIdentity?: RuntimeIdentity;
+  activeProfile?: string;
+  profiles?: DesktopPwrAgentProfileSummary[];
   settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
   selectedItemKey?: string;
@@ -54,6 +57,7 @@ type SidebarProps = {
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onOpenSettings?: () => void;
+  onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
@@ -116,6 +120,7 @@ export function Sidebar(props: SidebarProps) {
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const runtimeGitRefLabel = props.runtimeIdentity
     ? formatRuntimeGitRef(props.runtimeIdentity)
     : undefined;
@@ -170,6 +175,26 @@ export function Sidebar(props: SidebarProps) {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) {
+      return;
+    }
+
+    const closeMenu = (): void => setProfileMenuOpen(false);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileMenuOpen]);
 
   useLayoutEffect(() => {
     if (!contextMenu) {
@@ -342,6 +367,49 @@ export function Sidebar(props: SidebarProps) {
               valueKind="branch"
               onCopied={setCopiedRuntimeValue}
             />
+          ) : null}
+        </div>
+      ) : null}
+
+      {props.activeProfile ? (
+        <div className="runtime-identity" aria-label="PwrAgent profile">
+          <button
+            className="runtime-identity__button"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setProfileMenuOpen((open) => !open);
+            }}
+          >
+            {`profile:${props.activeProfile}`}
+          </button>
+          {profileMenuOpen && props.profiles?.length ? (
+            <div
+              className="sidebar__menu sidebar__menu--profile"
+              role="menu"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {props.profiles.map((profile) => (
+                <button
+                  key={profile.name}
+                  className="sidebar__menu-item"
+                  disabled={profile.active || !props.onOpenProfile}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    void props.onOpenProfile?.(profile.name);
+                  }}
+                >
+                  <span className="sidebar__menu-item-title">
+                    {profile.displayName || profile.name}
+                  </span>
+                  <span className="sidebar__menu-item-detail">
+                    {profile.active ? "Current profile" : "Open in new app instance"}
+                  </span>
+                </button>
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}

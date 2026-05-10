@@ -130,6 +130,26 @@ export type DesktopCodexDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopCodexAuthProfileSource = "default" | "directory" | "config";
+
+export type DesktopCodexAuthProfileCandidate = {
+  name: string;
+  displayName: string;
+  codexHome: string;
+  source: DesktopCodexAuthProfileSource;
+  exists: boolean;
+  selected: boolean;
+  hasAuthFile: boolean;
+  hasConfigFile: boolean;
+};
+
+export type DesktopCodexAuthProfileDiscoverySnapshot = {
+  profileRoot: string;
+  effectiveCodexHome: string;
+  profiles: DesktopCodexAuthProfileCandidate[];
+  error?: string;
+};
+
 export type DesktopGhCandidateSource =
   | "env"
   | "config"
@@ -260,7 +280,9 @@ export type DesktopSettingsSnapshot = {
   models: {
     codex: {
       path: DesktopSettingsValue<string>;
+      profile: DesktopSettingsValue<string>;
       discovery: DesktopCodexDiscoverySnapshot;
+      profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
     grok: {
       apiKey: DesktopSettingsSecretState;
@@ -326,6 +348,7 @@ export type DesktopSettingsConfigPatch = {
   models?: {
     codex?: {
       path?: string;
+      profile?: string;
     };
   };
   applications?: {
@@ -374,6 +397,28 @@ export type PickGhCommandResponse = {
 
 export type DesktopSettingsWriteResponse = {
   snapshot: DesktopSettingsSnapshot;
+};
+
+export type DesktopPwrAgentProfileSummary = {
+  name: string;
+  displayName?: string;
+  lastUsed?: string;
+  active: boolean;
+};
+
+export type ListDesktopPwrAgentProfilesResponse = {
+  activeProfile: string;
+  profiles: DesktopPwrAgentProfileSummary[];
+};
+
+export type OpenDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type OpenDesktopPwrAgentProfileResponse = {
+  opened: boolean;
+  profile: string;
+  reason?: "active";
 };
 
 export type OpenDesktopApplicationRequest = {

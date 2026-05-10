@@ -49,7 +49,11 @@ async function refreshModelBackendsIfNeeded(params: {
   patch?: WriteDesktopSettingsConfigRequest["patch"];
   secret?: ReplaceDesktopSettingsSecretRequest["secret"];
 }): Promise<void> {
-  if (params.patch?.models?.codex?.path !== undefined || params.secret === "grokApiKey") {
+  if (
+    params.patch?.models?.codex?.path !== undefined
+    || params.patch?.models?.codex?.profile !== undefined
+    || params.secret === "grokApiKey"
+  ) {
     await disposeDesktopBackendRegistry();
   }
 }

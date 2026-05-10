@@ -10,7 +10,10 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import type {
+  DesktopSettingsSnapshot,
+  MessagingPairingEntry,
+} from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -105,6 +108,7 @@ function createSnapshot(
     models: {
       codex: {
         path: { value: "", source: "default" },
+        profile: { value: "", source: "default" },
         discovery: {
           selectedCommand: "/usr/local/bin/codex",
           selectedSource: "path",
@@ -122,6 +126,32 @@ function createSnapshot(
               selected: false,
               source: "application",
               version: "0.120.0",
+            },
+          ],
+        },
+        profiles: {
+          profileRoot: "/home/example/.codex/profiles",
+          effectiveCodexHome: "/home/example/.codex",
+          profiles: [
+            {
+              name: "",
+              displayName: "System default",
+              codexHome: "/home/example/.codex",
+              source: "default",
+              exists: true,
+              selected: true,
+              hasAuthFile: true,
+              hasConfigFile: true,
+            },
+            {
+              name: "work",
+              displayName: "work",
+              codexHome: "/home/example/.codex/profiles/work",
+              source: "directory",
+              exists: true,
+              selected: false,
+              hasAuthFile: true,
+              hasConfigFile: false,
             },
           ],
         },
@@ -303,13 +333,25 @@ describe("SettingsScreen", () => {
     // `/usr/local/bin/codex`, so the single "Use" here points at
     // `/Applications/Codex.app/Contents/Resources/codex`.
     const useButtons = screen.getAllByRole("button", { name: "Use" });
-    expect(useButtons).toHaveLength(1);
+    expect(useButtons).toHaveLength(2);
     fireEvent.click(useButtons[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
           codex: {
             path: "/Applications/Codex.app/Contents/Resources/codex",
+          },
+        },
+      });
+    });
+    expect(screen.getByText("System default")).toBeInTheDocument();
+    expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
+    fireEvent.click(useButtons[1]!);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            profile: "work",
           },
         },
       });
@@ -613,6 +655,75 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("clears a generated pairing message after the token is observed", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          enabled: { value: true, source: "config" as const },
+        },
+      },
+    });
+    const pairingMessage = "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    const entry: MessagingPairingEntry = {
+      id: "pairing-1",
+      platform: "telegram",
+      instanceId: "default",
+      scope: "user_dm",
+      status: "pending",
+      generatedAt: 1,
+      expiresAt: 2,
+    };
+    let pairingChanged:
+      | ((event: { at: number; entry: MessagingPairingEntry }) => void)
+      | undefined;
+    const desktopApi = {
+      generateMessagingPairingToken: vi.fn(async () => ({
+        entry,
+        expiresAt: 2,
+        message: pairingMessage,
+        token: "123456789ABCDEFGHJKLMNPQRSTUVWXY",
+      })),
+      listMessagingPairingRequests: vi.fn(async () => ({ entries: [] })),
+      onMessagingPairingChanged: vi.fn((callback) => {
+        pairingChanged = callback;
+        return () => undefined;
+      }),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Generate" })[0]!);
+    expect(await screen.findByText(pairingMessage)).toBeInTheDocument();
+
+    act(() => {
+      pairingChanged?.({
+        at: 3,
+        entry: {
+          ...entry,
+          status: "observed",
+          observedAt: 3,
+          observedActor: { id: "8460800771", displayName: "Harold Hunt" },
+          observedChat: { id: "8460800771", kind: "dm", title: "Harold Hunt" },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(pairingMessage)).not.toBeInTheDocument();
+    });
+  });
+
   it("shows observed pairing IDs and refreshes authorized IDs after approval", async () => {
     const snapshot = createSnapshot();
     const initialSnapshot: DesktopSettingsSnapshot = {
@@ -860,7 +971,7 @@ describe("SettingsScreen", () => {
     });
     fireEvent.click(
       within(signingSecretControls as HTMLElement).getByRole("button", {
-        name: "Replace",
+        name: "Save",
       }),
     );
 
@@ -1306,7 +1417,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(tokenInput, {
       target: { value: "123456789:secret-token" },
     });
-    fireEvent.click(screen.getAllByRole("button", { name: "Replace" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
 
     await waitFor(() => {
       expect(settings.replaceSecret).toHaveBeenCalledWith(
@@ -1315,6 +1426,22 @@ describe("SettingsScreen", () => {
       );
     });
     expect(tokenInput).toHaveValue("123456789:secret-token");
+  });
+
+  it("lets users discard an unsaved secret draft", () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    const tokenInput = screen.getAllByLabelText("Bot Token")[0];
+    fireEvent.change(tokenInput, {
+      target: { value: "123456789:secret-token" },
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Discard" })[0]);
+
+    expect(tokenInput).toHaveValue("");
+    expect(settings.replaceSecret).not.toHaveBeenCalled();
   });
 
   it("blocks settings edits when the config file cannot be parsed", () => {
