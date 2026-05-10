@@ -65,6 +65,63 @@ describe("MessagingDeliveryBudget", () => {
     });
   });
 
+  it("checks cool-off and slow mode for non-consuming activity", () => {
+    let now = 10_000;
+    const budget = new MessagingDeliveryBudget({ now: () => now });
+    const scope = testScope({ limit: 20, reserved: 5 });
+
+    budget.recordRateLimit({
+      scope,
+      retryAfterMs: 16_000,
+      observedAt: now,
+    });
+
+    expect(
+      budget.admit({
+        consumeCapacity: false,
+        scope,
+        priority: "routine_status",
+      }),
+    ).toEqual({
+      outcome: "dropped",
+      reason: "cool-off",
+      slowMode: true,
+    });
+
+    now = 28_001;
+    expect(
+      budget.admit({
+        consumeCapacity: false,
+        scope,
+        priority: "routine_status",
+      }),
+    ).toEqual({
+      outcome: "dropped",
+      reason: "slow-mode",
+      slowMode: true,
+    });
+  });
+
+  it("does not consume capacity for non-consuming activity", () => {
+    const budget = new MessagingDeliveryBudget({ now: () => 1_000 });
+    const scope = testScope({ limit: 1, reserved: 0 });
+
+    expect(
+      budget.admit({
+        consumeCapacity: false,
+        scope,
+        priority: "routine_status",
+      }),
+    ).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+    expect(budget.admit({ scope, priority: "routine_status" })).toMatchObject({
+      outcome: "admitted",
+      slowMode: false,
+    });
+  });
+
   it("enters slow mode when the local budget is exhausted", () => {
     let now = 1_000;
     const budget = new MessagingDeliveryBudget({ now: () => now });

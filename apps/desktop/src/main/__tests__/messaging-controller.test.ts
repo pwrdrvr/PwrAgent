@@ -31,7 +31,7 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import {
   MessagingController,
   messagingDeliveryPriority,
-  shouldApplyDeliveryBudget,
+  shouldConsumeDeliveryBudget,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
@@ -850,6 +850,85 @@ describe("MessagingController", () => {
       kind: "activity",
       activity: "typing",
       state: "idle",
+    });
+  });
+
+  it("drops typing activity during provider cool-off without spending write budget", async () => {
+    let now = 1_000;
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:group:chat-1",
+      kind: "group",
+      budget: { limit: 20, intervalMs: 60_000, reserved: 5 },
+    };
+    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
+    const budgetEvents: Parameters<
+      NonNullable<MessagingControllerOptions["onDeliveryBudgetEvent"]>
+    >[0][] = [];
+    const harness = await createHarness({
+      channel: "telegram",
+      now: () => now,
+      deliveryBudget,
+      resolveDeliveryScope: (intent) =>
+        intent.kind === "activity" || intent.kind === "status" ? scope : undefined,
+      onDeliveryBudgetEvent: (event) => {
+        budgetEvents.push(event);
+      },
+    });
+    await bindThread(harness);
+    deliveryBudget.recordRateLimit({
+      scope,
+      retryAfterMs: 5_000,
+      observedAt: now,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(budgetEvents.at(-1)).toMatchObject({
+      intentKind: "activity",
+      outcome: "dropped",
+      reason: "cool-off",
+      scope,
+    });
+
+    now = 8_001;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(budgetEvents.at(-1)).toMatchObject({
+      intentKind: "activity",
+      outcome: "dropped",
+      reason: "slow-mode",
+      scope,
     });
   });
 
@@ -2500,8 +2579,8 @@ describe("MessagingController", () => {
       text: "Working",
     } satisfies MessagingSurfaceIntent;
 
-    expect(shouldApplyDeliveryBudget(activity)).toBe(false);
-    expect(shouldApplyDeliveryBudget(status)).toBe(true);
+    expect(shouldConsumeDeliveryBudget(activity)).toBe(false);
+    expect(shouldConsumeDeliveryBudget(status)).toBe(true);
   });
 
   it("serializes concurrent assistant stream deliveries onto one surface", async () => {
