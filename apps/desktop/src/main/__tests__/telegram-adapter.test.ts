@@ -1357,6 +1357,26 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("clears Telegram webhook on startup even when webhook info is empty", async () => {
+    const api = createApi();
+    api.getWebhookInfo.mockResolvedValueOnce({ url: "" });
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.deleteWebhook).toHaveBeenCalledWith({
+      drop_pending_updates: false,
+    });
+  });
+
   it("registers PwrAgent bot commands on startup", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({

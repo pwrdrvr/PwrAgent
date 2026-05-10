@@ -516,9 +516,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       });
     }
 
-    let webhookInfo: { url: string };
     try {
-      webhookInfo = await this.bot.api.getWebhookInfo();
+      await this.bot.api.getWebhookInfo();
     } catch (error) {
       this.options.logger?.warn?.("telegram getWebhookInfo failed", {
         error: errorMessage(error),
@@ -527,11 +526,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       });
       throw error;
     }
-    if (webhookInfo.url) {
-      await this.bot.api.deleteWebhook({
-        drop_pending_updates: false,
-      });
-    }
+    await this.bot.api.deleteWebhook({
+      drop_pending_updates: false,
+    });
     await this.bot.api.setMyCommands({
       commands: [
         {
