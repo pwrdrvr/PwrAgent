@@ -17,6 +17,7 @@ import {
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AppServerThreadReplay,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
@@ -134,6 +135,25 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   }
 
   backendRegistryLog.info(event, payload);
+}
+
+function assistantOutputForTurn(
+  replay: AppServerThreadReplay,
+  turnId: string,
+): Array<{ type: "text"; text: string }> {
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (
+      entry?.type === "message" &&
+      entry.role === "assistant" &&
+      entry.turn?.id === turnId &&
+      entry.text.trim()
+    ) {
+      return [{ type: "text", text: entry.text }];
+    }
+  }
+
+  return [];
 }
 
 type BackendClient = {
@@ -1707,31 +1727,77 @@ export class DesktopBackendRegistry {
         ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
         : undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    const result =
-      params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
-            const effectiveMode = params.executionMode ?? mode;
-            const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
-            const started = await client.startTurn({
+    const syntheticStartedTurnId = `pending:${params.threadId}`;
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: params.threadId,
+          turnId: syntheticStartedTurnId,
+          turn: {
+            id: syntheticStartedTurnId,
+            status: "in_progress",
+            startedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    let result: { threadId: string; turnId: string };
+    try {
+      result =
+        params.backend === "codex"
+          ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
+              const effectiveMode = params.executionMode ?? mode;
+              const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+              const started = await client.startTurn({
+                threadId: params.threadId,
+                input: params.input,
+                ...(cwd ? { cwd } : {}),
+                collaborationMode: params.collaborationMode,
+                ...turnParams,
+                approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+                sandbox: params.sandbox ?? modeSettings.sandbox,
+              });
+              activeTurnMode = effectiveMode;
+              return started;
+            }, params.executionMode)
+          : await this.grokClient.startTurn({
               threadId: params.threadId,
               input: params.input,
-              ...(cwd ? { cwd } : {}),
-              collaborationMode: params.collaborationMode,
-              ...turnParams,
-              approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
-              sandbox: params.sandbox ?? modeSettings.sandbox,
+              model: turnParams.model,
+              serviceTier: turnParams.serviceTier,
+              reasoningEffort: turnParams.reasoningEffort,
+              fastMode: turnParams.fastMode,
             });
-            activeTurnMode = effectiveMode;
-            return started;
-          }, params.executionMode)
-        : await this.grokClient.startTurn({
+    } catch (error) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "turn/failed",
+          params: {
             threadId: params.threadId,
-            input: params.input,
-            model: turnParams.model,
-            serviceTier: turnParams.serviceTier,
-            reasoningEffort: turnParams.reasoningEffort,
-            fastMode: turnParams.fastMode,
-          });
+            turnId: syntheticStartedTurnId,
+            turn: {
+              id: syntheticStartedTurnId,
+              status: "failed",
+              completedAt: Date.now(),
+              error: {
+                message: error instanceof Error ? error.message : String(error),
+              },
+            },
+          },
+        },
+      });
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
+      );
+      throw error;
+    }
+    this.activeCodexTurnModes.delete(
+      buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
+    );
 
     if (
       turnParams.model !== undefined ||
@@ -1764,6 +1830,11 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     };
+    await this.emitCompletedTurnFromReplay({
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+    });
     this.scheduleThreadTitleGeneration({
       backend: params.backend,
       threadId: result.threadId,
@@ -1771,6 +1842,48 @@ export class DesktopBackendRegistry {
     });
 
     return response;
+  }
+
+  private async emitCompletedTurnFromReplay(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): Promise<void> {
+    let output: Array<{ type: "text"; text: string }> = [];
+    try {
+      const replay = await this.readThread({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      output = assistantOutputForTurn(replay.replay, params.turnId);
+    } catch (error) {
+      backendRegistryLog.warn("failed to read completed turn replay for local event", {
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (output.length === 0) {
+      return;
+    }
+
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          turn: {
+            id: params.turnId,
+            status: "completed",
+            completedAt: Date.now(),
+            output,
+          },
+        },
+      },
+    });
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {

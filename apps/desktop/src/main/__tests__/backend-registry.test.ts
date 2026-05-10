@@ -2272,6 +2272,78 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("emits local turn lifecycle events for registry-started Codex turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-1",
+            role: "assistant",
+            text: "Done from replay.",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Desktop-originated turn" }],
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        notification: expect.objectContaining({
+          method: "turn/started",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+          }),
+        }),
+      }),
+      {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: expect.objectContaining({
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done from replay." }],
+            }),
+          },
+        },
+      },
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("emits server request resolution when a pending request is submitted externally", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
