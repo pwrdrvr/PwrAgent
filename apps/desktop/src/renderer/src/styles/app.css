@@ -7165,6 +7165,7 @@ textarea,
   justify-content: center;
   min-height: calc(100vh - 48px);
   max-width: 520px;
+  padding: 0 16px;
 }
 
 .renderer-error-boundary {
