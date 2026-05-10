@@ -61,7 +61,9 @@ function formatArchiveCleanupFailure(
   }
 
   const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
-  return `Thread archived, but worktree cleanup failed for ${firstFailure.worktreePath}: ${reason}`;
+  return firstFailure.worktreePath
+    ? `Thread archived, but worktree cleanup failed for ${firstFailure.worktreePath}: ${reason}`
+    : `Thread archived, but worktree cleanup was skipped: ${reason}`;
 }
 
 function linkedDirectoriesEqual(

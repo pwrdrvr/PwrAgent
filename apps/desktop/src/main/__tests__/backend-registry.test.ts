@@ -2580,7 +2580,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("refuses to archive when worktree cleanup metadata cannot be loaded", async () => {
+  it("archives and reports skipped cleanup when worktree cleanup metadata cannot be loaded", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/archive"] },
       listThreadsError: new Error("thread list unavailable"),
@@ -2597,15 +2597,26 @@ describe("DesktopBackendRegistry", () => {
       } as unknown as WorktreeArchiveService,
     });
 
-    await expect(
-      registry.archiveThread({
-        backend: "codex",
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("Unable to load thread metadata for archive cleanup.");
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
 
-    expect(codexClient.lastArchiveThreadParams).toBeUndefined();
+    expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: "thread-1" });
     expect(archiveWorktree).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      archivedAt: expect.any(Number),
+      cleanup: [
+        {
+          removedWorktree: false,
+          deletedBranch: false,
+          skippedReason:
+            "Unable to load thread metadata for archive cleanup: thread list unavailable",
+        },
+      ],
+    });
 
     await registry.close();
   });
