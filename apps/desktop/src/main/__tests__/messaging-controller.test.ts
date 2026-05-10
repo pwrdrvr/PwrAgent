@@ -264,7 +264,7 @@ describe("MessagingController", () => {
       actions: expect.arrayContaining([
         expect.objectContaining({
           id: "browse:new:set-base-branch",
-          label: "release/v2",
+          label: "2. release/v2",
           value: { branchName: "release/v2" },
         }),
       ]),
@@ -289,6 +289,82 @@ describe("MessagingController", () => {
       workMode: "worktree",
       branchName: "release/v2",
     });
+  });
+
+  it("paginates the new-thread base branch picker", async () => {
+    const branches = Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`);
+    const harness = await createHarness({
+      navigation: {
+        ...buildNavigationSnapshot(),
+        directories: [
+          {
+            ...buildNavigationSnapshot().directories[0]!,
+            gitStatus: {
+              currentBranch: "feature/current",
+              defaultBranch: "main",
+              branches,
+            },
+          },
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:workspace:worktree" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:base-branch" }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    if (!firstPage || firstPage.kind !== "confirmation") {
+      throw new Error("Expected new-thread base branch picker");
+    }
+    expect(firstPage.body).toContain("Page 1/3.");
+    expect(
+      firstPage.actions.filter((action) => action.id === "browse:new:set-base-branch"),
+    ).toHaveLength(8);
+    expect(firstPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "browse:new:branches:next",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+
+    const nextPage = findAction(firstPage, "browse:new:branches:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: nextPage.id,
+        value: nextPage.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    if (!secondPage || secondPage.kind !== "confirmation") {
+      throw new Error("Expected second new-thread base branch picker page");
+    }
+    expect(secondPage.body).toContain("Page 2/3.");
+    expect(secondPage.actions[0]).toMatchObject({
+      id: "browse:new:set-base-branch",
+      label: "9. branch-8",
+    });
+    expect(secondPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "browse:new:branches:previous",
+        value: expect.objectContaining({ pageIndex: 0 }),
+      }),
+    );
   });
 
   it("cancels a pending new-thread prompt without creating a thread", async () => {

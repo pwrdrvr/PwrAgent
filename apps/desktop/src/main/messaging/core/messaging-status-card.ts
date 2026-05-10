@@ -42,7 +42,8 @@ export type MessagingWorkspaceHandoffContext = {
   workspaceKind: "local" | "worktree";
 };
 
-export const HANDOFF_BRANCH_PAGE_SIZE = 8;
+export const BRANCH_PICKER_PAGE_SIZE = 8;
+export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
 export function buildBindingStatusIntent(params: {
   binding: MessagingBindingRecord;
@@ -445,6 +446,99 @@ export function buildHandoffOverviewIntent(params: {
   };
 }
 
+export function buildBranchPickerPage(params: {
+  branches: string[];
+  branchActionId: string;
+  branchValue: (branch: string) => MessagingJsonValue;
+  capabilityProfile?: MessagingCapabilityProfile;
+  maxPageSize?: number;
+  navActionCountBase?: number;
+  navActionCountMultipage?: number;
+  nextActionId: string;
+  pageIndex?: number;
+  pageSize?: number;
+  pageValue?: (pageIndex: number) => MessagingJsonValue;
+  previousActionId: string;
+}): {
+  branchChoices: MessagingSurfaceAction[];
+  pageActions: MessagingSurfaceAction[];
+  pageIndex: number;
+  pageSize: number;
+  totalPages: number;
+} {
+  const navActionCountBase = params.navActionCountBase ?? 3;
+  const navActionCountMultipage = params.navActionCountMultipage ?? 5;
+  const maxPageSize = params.maxPageSize ?? BRANCH_PICKER_PAGE_SIZE;
+  const totalBranches = params.branches.length;
+  const profilePageSize = (navActionCount: number): number =>
+    params.capabilityProfile
+      ? capabilityProfilePageSize(
+          params.capabilityProfile,
+          navActionCount,
+          maxPageSize,
+        )
+      : maxPageSize;
+  const singlePagePageSize = profilePageSize(navActionCountBase);
+  const pageSize = Math.max(
+    1,
+    params.pageSize
+      ?? (totalBranches <= singlePagePageSize
+        ? singlePagePageSize
+        : profilePageSize(navActionCountMultipage)),
+  );
+  const totalPages = Math.max(1, Math.ceil(totalBranches / pageSize));
+  const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
+  const pageStart = pageIndex * pageSize;
+  const pageBranches = params.branches.slice(pageStart, pageStart + pageSize);
+  const pageValue = params.pageValue ?? ((index) => ({ pageIndex: index }));
+
+  const branchChoices = pageBranches.map((branch, index) => {
+    const branchNumber = pageStart + index + 1;
+    return {
+      id: params.branchActionId,
+      label: `${branchNumber}. ${branch}`,
+      fallbackText: String(branchNumber),
+      style: "secondary" as const,
+      priority: 100 + index,
+      value: params.branchValue(branch),
+    };
+  });
+  const pageActions: MessagingSurfaceAction[] = [
+    ...(pageIndex > 0
+      ? [
+          {
+            id: params.previousActionId,
+            label: "Previous",
+            fallbackText: "previous",
+            style: "secondary" as const,
+            priority: 4,
+            value: pageValue(pageIndex - 1),
+          },
+        ]
+      : []),
+    ...(pageIndex < totalPages - 1
+      ? [
+          {
+            id: params.nextActionId,
+            label: "Next",
+            fallbackText: "next",
+            style: "secondary" as const,
+            priority: 5,
+            value: pageValue(pageIndex + 1),
+          },
+        ]
+      : []),
+  ];
+
+  return {
+    branchChoices,
+    pageActions,
+    pageIndex,
+    pageSize,
+    totalPages,
+  };
+}
+
 export function buildHandoffBranchPickerIntent(params: {
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
@@ -454,96 +548,28 @@ export function buildHandoffBranchPickerIntent(params: {
   pageIndex?: number;
   pageSize?: number;
 }): MessagingSingleSelectIntent {
-  // Three nav buttons always render (Back/Refresh/Cancel). Previous/Next
-  // appear conditionally based on pagination — but pageSize must be a
-  // single value across all pages, so we plan for the worst case (a
-  // middle page with both Previous AND Next visible) when the picker
-  // actually paginates. For a single-page result we only need to reserve
-  // 3 nav slots, freeing 2 more for branches.
-  const NAV_ACTIONS_BASE = 3; // back, refresh, cancel
-  const NAV_ACTIONS_MULTIPAGE = 5; // + previous + next
-  const totalBranches = params.context.leaveLocalBranches.length;
-  const profilePageSize = (navActionCount: number): number =>
-    params.capabilityProfile
-      ? capabilityProfilePageSize(
-          params.capabilityProfile,
-          navActionCount,
-          HANDOFF_BRANCH_PAGE_SIZE,
-        )
-      : HANDOFF_BRANCH_PAGE_SIZE;
-  // First-pass page size assumes single-page (no Previous/Next). If the
-  // branches don't all fit on one page, recompute with the multi-page
-  // budget so middle pages still leave room for both nav buttons.
-  const singlePagePageSize = profilePageSize(NAV_ACTIONS_BASE);
-  const pageSize = Math.max(
-    1,
-    params.pageSize
-      ?? (totalBranches <= singlePagePageSize
-        ? singlePagePageSize
-        : profilePageSize(NAV_ACTIONS_MULTIPAGE)),
-  );
-  const totalPages = Math.max(1, Math.ceil(totalBranches / pageSize));
-  const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
-  const pageStart = pageIndex * pageSize;
-  const pageBranches = params.context.leaveLocalBranches.slice(
-    pageStart,
-    pageStart + pageSize,
-  );
-  const branchChoices = pageBranches.map((branch, index) => {
-    const branchNumber = pageStart + index + 1;
-    return {
-      id: "handoff:select-leave-branch",
-      label: `${branchNumber}. ${branch}`,
-      fallbackText: String(branchNumber),
-      style: "secondary" as const,
-      // Branch entries are the lowest priority — under tight action
-      // budgets, drop branches before nav buttons. The page-size math
-      // should already prevent this from triggering, but the priority
-      // pass is the safety net.
-      priority: 100 + index,
-      value: {
-        ...handoffValue(params.context),
-        leaveLocalBranch: branch,
-      },
-    };
+  const page = buildBranchPickerPage({
+    branches: params.context.leaveLocalBranches,
+    branchActionId: "handoff:select-leave-branch",
+    branchValue: (branch) => ({
+      ...handoffValue(params.context),
+      leaveLocalBranch: branch,
+    }),
+    capabilityProfile: params.capabilityProfile,
+    nextActionId: "handoff:branches:next",
+    pageIndex: params.pageIndex,
+    pageSize: params.pageSize,
+    pageValue: (pageIndex) => ({
+      ...handoffValue(params.context),
+      pageIndex,
+    }),
+    previousActionId: "handoff:branches:previous",
   });
-  const pageActions: MessagingSurfaceAction[] = [
-    ...(pageIndex > 0
-      ? [
-          {
-            id: "handoff:branches:previous",
-            label: "Previous",
-            fallbackText: "previous",
-            style: "secondary" as const,
-            priority: 4,
-            value: {
-              ...handoffValue(params.context),
-              pageIndex: pageIndex - 1,
-            },
-          },
-        ]
-      : []),
-    ...(pageIndex < totalPages - 1
-      ? [
-          {
-            id: "handoff:branches:next",
-            label: "Next",
-            fallbackText: "next",
-            style: "secondary" as const,
-            priority: 5,
-            value: {
-              ...handoffValue(params.context),
-              pageIndex: pageIndex + 1,
-            },
-          },
-        ]
-      : []),
-  ];
 
   const choices = applyActionCapabilityLimits(
     [
-      ...branchChoices,
-      ...pageActions,
+      ...page.branchChoices,
+      ...page.pageActions,
       {
         id: "status:handoff",
         label: "Back",
@@ -582,15 +608,19 @@ export function buildHandoffBranchPickerIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: [
       "Choose the branch that should remain checked out in Local.",
-      totalPages > 1 ? `Page ${pageIndex + 1}/${totalPages}.` : undefined,
-      ...branchChoices.map((choice) => choice.label),
+      page.totalPages > 1
+        ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
+        : undefined,
+      ...page.branchChoices.map((choice) => choice.label),
       "Reply with a number, Back, Refresh, or Cancel.",
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n"),
     prompt: [
       "Choose the branch that should remain checked out in Local.",
-      totalPages > 1 ? `Page ${pageIndex + 1}/${totalPages}.` : undefined,
+      page.totalPages > 1
+        ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
+        : undefined,
       `Moving branch: ${params.context.branch ?? unavailable()}`,
       `Local: ${params.context.repositoryPath}`,
     ]

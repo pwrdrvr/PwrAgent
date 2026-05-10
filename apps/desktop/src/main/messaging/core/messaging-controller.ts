@@ -75,6 +75,7 @@ import {
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
+  buildBranchPickerPage,
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
@@ -2492,6 +2493,18 @@ export class MessagingController {
       await this.presentNewThreadBranchPicker(nextSession, navigation, event);
       return;
     }
+    if (
+      actionId === "browse:new:branches:next" ||
+      actionId === "browse:new:branches:previous"
+    ) {
+      await this.presentNewThreadBranchPicker(
+        nextSession,
+        navigation,
+        event,
+        branchPageIndexFromValue(event.value),
+      );
+      return;
+    }
     if (actionId === "browse:new:set-base-branch") {
       const branchName = readStringValue(event.value, "branchName");
       if (!branchName) {
@@ -2885,11 +2898,23 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
     event: MessagingInboundEvent,
+    pageIndex = 0,
   ): Promise<void> {
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined;
     const branches = newThreadBranchChoices(session, navigation, directory);
+    const page = buildBranchPickerPage({
+      branches,
+      branchActionId: "browse:new:set-base-branch",
+      branchValue: (branchName) => ({ branchName }),
+      capabilityProfile: this.capabilityProfile,
+      navActionCountBase: 2,
+      navActionCountMultipage: 4,
+      nextActionId: "browse:new:branches:next",
+      pageIndex,
+      previousActionId: "browse:new:branches:previous",
+    });
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-branch"),
       capabilityProfile: this.capabilityProfile,
@@ -2902,18 +2927,22 @@ export class MessagingController {
           }
         : undefined,
       title: "Pick base branch",
-      body: `New worktree base for ${session.selectedProject?.label ?? "this project"}.`,
-      fallbackText: "Choose a branch, or reply back.",
+      body: [
+        `New worktree base for ${session.selectedProject?.label ?? "this project"}.`,
+        page.totalPages > 1
+          ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
+          : undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
+      fallbackText: [
+        "Choose a branch, or reply back.",
+        ...page.branchChoices.map((choice) => choice.label),
+      ].join("\n"),
       targetSurface: session.surface,
       actions: [
-        ...branches.map((branch, index) => ({
-          id: "browse:new:set-base-branch",
-          label: branch,
-          style: "secondary" as const,
-          fallbackText: String(index + 1),
-          priority: 10 + index,
-          value: { branchName: branch },
-        })),
+        ...page.branchChoices,
+        ...page.pageActions,
         {
           id: "browse:new:workspace:worktree",
           label: "Back",
@@ -3241,7 +3270,7 @@ export class MessagingController {
       await this.presentHandoffBranchPicker(
         binding,
         event,
-        handoffBranchPageIndexFromValue(event.value),
+        branchPageIndexFromValue(event.value),
       );
       return;
     }
@@ -5293,7 +5322,7 @@ function handoffContextForBinding(
   };
 }
 
-function handoffBranchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
+function branchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return 0;
   }
