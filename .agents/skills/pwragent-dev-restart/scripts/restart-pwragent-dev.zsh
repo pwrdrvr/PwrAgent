@@ -8,8 +8,8 @@ Usage:
   restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run]
 
 Schedules or performs a local PwrAgent dev restart. The restart stops processes
-that match the target checkout path or PwrAgent dev user-data path, then starts
-`pnpm dev` from the target checkout.
+that match the target checkout path plus the bounded parent dev-server chain,
+then starts `pnpm dev` from the target checkout.
 USAGE
 }
 
@@ -81,14 +81,15 @@ fi
 mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
 
 script_path="${0:A}"
-user_data_path="/Users/huntharo/Library/Application Support/PwrAgent"
 
 matching_pids() {
-  local pattern="$1"
+  local command pattern="$1"
   pgrep -f "$pattern" 2>/dev/null | while read -r pid; do
     [[ -z "$pid" ]] && continue
     [[ "$pid" == "$$" ]] && continue
     [[ "$pid" == "$PPID" ]] && continue
+    command="$(process_command "$pid")"
+    [[ "$command" == *"restart-pwragent-dev.zsh"* ]] && continue
     print -r -- "$pid"
   done
 }
@@ -97,18 +98,36 @@ parent_pid() {
   ps -p "$1" -o ppid= 2>/dev/null | tr -d ' '
 }
 
+process_command() {
+  ps -p "$1" -o command= 2>/dev/null
+}
+
+is_dev_chain_parent() {
+  local command="$1"
+  [[ "$command" == *"pnpm dev"* ]] && return 0
+  [[ "$command" == *"pnpm --filter @pwragent/desktop dev"* ]] && return 0
+  [[ "$command" == *"electron-vite"* && "$command" == *"dev"* ]] && return 0
+  [[ "$command" == *"scripts/rebuild-native-for-electron.mjs"* && "$command" == *"electron-vite dev"* ]] && return 0
+  return 1
+}
+
 candidate_pids() {
-  local pattern pid parent
-  for pattern in "$root" "$user_data_path"; do
-    for pid in $(matching_pids "$pattern"); do
-      while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
-        [[ "$pid" != "$$" && "$pid" != "$PPID" ]] && print -r -- "$pid"
-        parent="$(parent_pid "$pid")"
-        [[ -z "$parent" || "$parent" == "$pid" ]] && break
-        pid="$parent"
-      done
+  local command parent pid
+  for pid in $(matching_pids "$root"); do
+    [[ "$pid" != "$$" && "$pid" != "$PPID" ]] && print -r -- "$pid"
+
+    parent="$(parent_pid "$pid")"
+    while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
+      [[ "$parent" == "$$" || "$parent" == "$PPID" ]] && break
+      command="$(process_command "$parent")"
+      if [[ "$command" == *"$root"* ]] || is_dev_chain_parent "$command"; then
+        print -r -- "$parent"
+        parent="$(parent_pid "$parent")"
+      else
+        break
+      fi
     done
-  done | sort -nu
+  done | sort -rnu
 }
 
 describe_candidates() {
@@ -116,6 +135,11 @@ describe_candidates() {
   for pid in $(candidate_pids); do
     ps -p "$pid" -o pid=,ppid=,command= 2>/dev/null || true
   done
+}
+
+log_candidates() {
+  log_line "candidate processes:"
+  describe_candidates | while read -r line; do log_line "$line"; done
 }
 
 stop_matches() {
@@ -138,23 +162,26 @@ schedule_restart() {
   log_line "scheduled command: $command"
 
   if [[ "$dry_run" == "true" ]]; then
+    log_candidates
     return 0
   fi
 
   if command -v launchctl >/dev/null 2>&1; then
     local label="com.pwragent.dev.restart.$(date +%s)"
-    launchctl submit -l "$label" -- /bin/zsh -lc "$command"
-    log_line "submitted launchctl label=$label"
-  else
-    nohup /bin/zsh -lc "$command" >> "$log_path" 2>&1 &
-    log_line "submitted nohup pid=$!"
+    if launchctl submit -l "$label" -- /bin/zsh -lc "$command"; then
+      log_line "submitted launchctl label=$label"
+      return 0
+    fi
+    log_line "launchctl submit failed label=$label; falling back to nohup"
   fi
+
+  nohup /bin/zsh -lc "$command" >> "$log_path" 2>&1 &
+  log_line "submitted nohup pid=$!"
 }
 
 restart_now() {
   log_line "restart starting root=$root dryRun=$dry_run"
-  log_line "candidate processes:"
-  describe_candidates | while read -r line; do log_line "$line"; done
+  log_candidates
 
   stop_matches TERM
 

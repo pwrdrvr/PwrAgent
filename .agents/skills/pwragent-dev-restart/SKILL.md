@@ -39,8 +39,8 @@ Use this skill when the running Electron app must be stopped and restarted from 
 
 ## Script Notes
 
-- The script stops processes matching the target checkout path, PwrAgent's dev user-data path, and their parent process chain, then starts `pnpm dev` from the checkout.
-- It uses `launchctl submit` on macOS so the delayed restart is not owned by the current shell. If `launchctl` is unavailable, it falls back to `nohup`.
+- The script stops processes matching the target checkout path and their bounded parent dev-server chain, then starts `pnpm dev` from the checkout.
+- It uses `launchctl submit` on macOS so the delayed restart is not owned by the current shell. If `launchctl` is unavailable or submission fails, it falls back to `nohup`.
 - Default root is `/Users/huntharo/github/PwrAgnt`.
 - Default log is `<root>/.local/pwragent-dev-restart.log`.
 - Use `--dry-run` before scheduling unless the user explicitly asks to restart immediately.
