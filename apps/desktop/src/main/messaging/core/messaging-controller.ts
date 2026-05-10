@@ -1006,6 +1006,18 @@ export class MessagingController {
     });
   }
 
+  private clearPendingNewThreadPrompt(sessionId: string): void {
+    for (const [key, pending] of this.pendingNewThreadPrompts.entries()) {
+      if (pending.session.id !== sessionId) {
+        continue;
+      }
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      this.pendingNewThreadPrompts.delete(key);
+    }
+  }
+
   private pendingNewThreadPromptKey(session: MessagingBrowseSessionRecord): string {
     return [
       buildMessagingConversationKey(session.channel),
@@ -2360,7 +2372,7 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:cancel") {
-      await this.options.store.deleteBrowseSession(session.id);
+      await this.retireBrowseSession(session);
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("browse-cancelled"),
@@ -2458,6 +2470,31 @@ export class MessagingController {
       channel: event.channel,
       now: this.now(),
     });
+  }
+
+  private async retireBrowseSession(
+    session: MessagingBrowseSessionRecord,
+  ): Promise<void> {
+    this.clearPendingNewThreadPrompt(session.id);
+    await this.options.store.deleteBrowseSession(session.id);
+    try {
+      const removed = await this.options.store.deletePendingIntentsForChannel({
+        channel: session.channel,
+      });
+      if (removed.length > 0) {
+        this.logger.debug?.("messaging retired channel pending intents on browse close", {
+          channel: session.channel.channel,
+          removedCount: removed.length,
+          sessionId: session.id,
+        });
+      }
+    } catch (error) {
+      this.logger.debug?.("messaging pending-intent cleanup failed on browse close", {
+        channel: session.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+        sessionId: session.id,
+      });
+    }
   }
 
   private async resolveCallbackHandleForEvent(

@@ -229,6 +229,17 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Resume cancelled",
     });
+
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildTextEvent("@huntharo_bot"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Choose a thread",
+    });
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      title: "Choose an option",
+    });
   });
 
   it("resolves pending new-thread Back through persisted callback handles", async () => {
