@@ -38,7 +38,9 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
 
       - name: License metadata
-        run: pnpm licenses:check
+        run: |
+          pnpm install --frozen-lockfile --force
+          pnpm licenses:check
 
       - name: Type check
         run: pnpm typecheck
