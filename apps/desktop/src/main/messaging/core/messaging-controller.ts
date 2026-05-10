@@ -5335,9 +5335,6 @@ function handoffContextForBinding(
     (candidate, index, branches) =>
       candidate !== branch && branches.indexOf(candidate) === index,
   );
-  if (leaveLocalBranches.length === 0) {
-    return undefined;
-  }
 
   return {
     backend: binding.backend,

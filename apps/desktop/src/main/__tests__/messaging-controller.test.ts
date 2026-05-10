@@ -4847,6 +4847,40 @@ describe("MessagingController", () => {
     });
   });
 
+  it("offers detached-head handoff for a local checkout with no alternate branches", async () => {
+    const harness = await createHarness();
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        branches: ["feature/handoff"],
+        handoffBranches: [],
+      },
+    };
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    const overview = harness.delivered.at(-1);
+    if (!overview || !("choices" in overview)) {
+      throw new Error("Expected handoff overview");
+    }
+    expect(overview.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:move-branch" }),
+    );
+    expect(overview.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:create-detached",
+        fallbackText: "1",
+      }),
+    );
+  });
+
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());

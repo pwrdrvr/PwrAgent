@@ -373,39 +373,39 @@ export function buildHandoffOverviewIntent(params: {
   createdAt: number;
   id: string;
 }): MessagingSingleSelectIntent {
-  const actions =
-    params.context.workspaceKind === "local"
-      ? [
-          {
-            id: "handoff:move-branch",
-            label: "Move Existing Branch",
-            fallbackText: "1",
-            style: "primary" as const,
-            value: {
-              ...handoffValue(params.context),
-              strategy: "move-branch",
-            },
-          },
-          {
-            id: "handoff:create-detached",
-            label: "Create Detached Head",
-            fallbackText: "2",
-            style: "secondary" as const,
-            value: {
-              ...handoffValue(params.context),
-              strategy: "detached-changes",
-            },
-          },
-        ]
-      : [
-          {
-            id: "handoff:worktree-to-local",
-            label: "Handoff to Local",
-            fallbackText: "1",
-            style: "primary" as const,
-            value: handoffValue(params.context),
-          },
-        ];
+  const actions: MessagingSurfaceAction[] = [];
+  if (params.context.workspaceKind === "local") {
+    if (params.context.leaveLocalBranches.length > 0) {
+      actions.push({
+        id: "handoff:move-branch",
+        label: "Move Existing Branch",
+        fallbackText: String(actions.length + 1),
+        style: "primary",
+        value: {
+          ...handoffValue(params.context),
+          strategy: "move-branch",
+        },
+      });
+    }
+    actions.push({
+      id: "handoff:create-detached",
+      label: "Create Detached Head",
+      fallbackText: String(actions.length + 1),
+      style: actions.length === 0 ? "primary" : "secondary",
+      value: {
+        ...handoffValue(params.context),
+        strategy: "detached-changes",
+      },
+    });
+  } else {
+    actions.push({
+      id: "handoff:worktree-to-local",
+      label: "Handoff to Local",
+      fallbackText: "1",
+      style: "primary",
+      value: handoffValue(params.context),
+    });
+  }
 
   return {
     id: params.id,
@@ -420,7 +420,7 @@ export function buildHandoffOverviewIntent(params: {
     fallbackText: [
       handoffOverviewText(params.context),
       ...actions.map((action, index) => `${index + 1}. ${action.label}`),
-      `Reply with ${actions.length === 1 ? "1" : "1 or 2"}, Back, Refresh, or Cancel.`,
+      `Reply with ${actions.map((_, index) => index + 1).join(" or ")}, Back, Refresh, or Cancel.`,
     ].join("\n"),
     prompt: handoffOverviewText(params.context),
     choices: applyActionCapabilityLimits(

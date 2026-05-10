@@ -462,6 +462,33 @@ describe("buildBindingStatusIntent", () => {
     });
   });
 
+  it("offers detached handoff without move-branch choices", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      leaveLocalBranches: [],
+    };
+    const overview = buildHandoffOverviewIntent({
+      id: "handoff-overview-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+
+    expect(overview.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:move-branch" }),
+    );
+    expect(overview.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:create-detached",
+        fallbackText: "1",
+        label: "Create Detached Head",
+        style: "primary",
+      }),
+    );
+    expect(overview.fallbackText).toContain("Reply with 1, Back, Refresh, or Cancel.");
+  });
+
   it("paginates handoff branch picker choices", () => {
     const binding = buildBinding();
     const context = {
