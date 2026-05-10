@@ -19,7 +19,8 @@ export type IdentifierRejectionLogger = {
 const LINE_ID_LENGTH = 33;
 const LINE_MESSAGE_ID_MAX_LENGTH = 32;
 const LINE_WEBHOOK_EVENT_ID_MAX_LENGTH = 64;
-const LINE_CALLBACK_HANDLE_MAX_LENGTH = 32;
+const LINE_CALLBACK_HANDLE_PREFIX = "line:";
+const LINE_CALLBACK_HANDLE_HASH_LENGTH = 18;
 
 export type { IdentifierValidationReason, IdentifierValidationResult };
 
@@ -77,10 +78,16 @@ export function validateLineCallbackHandle(
 ): IdentifierValidationResult {
   if (typeof value !== "string") return { ok: false, reason: "type" };
   if (value.length === 0) return { ok: false, reason: "empty" };
-  if (!value.startsWith("line:") || value.length > LINE_CALLBACK_HANDLE_MAX_LENGTH) {
+  if (!value.startsWith(LINE_CALLBACK_HANDLE_PREFIX)) {
     return { ok: false, reason: "format" };
   }
-  for (let index = "line:".length; index < value.length; index += 1) {
+  if (
+    value.length !==
+      LINE_CALLBACK_HANDLE_PREFIX.length + LINE_CALLBACK_HANDLE_HASH_LENGTH
+  ) {
+    return { ok: false, reason: "length" };
+  }
+  for (let index = LINE_CALLBACK_HANDLE_PREFIX.length; index < value.length; index += 1) {
     if (!isBase64UrlChar(value.charCodeAt(index))) {
       return { ok: false, reason: "format" };
     }

@@ -20,7 +20,7 @@ describe("LINE formatting", () => {
           label: "Approve this very long label",
         },
       ],
-      buildPostbackData: () => "line:abc",
+      buildPostbackData: () => signedLinePostbackData(),
       capabilityProfile: {
         ...PERMISSIVE_CAPABILITY_PROFILE,
         actions: {
@@ -43,6 +43,17 @@ describe("LINE formatting", () => {
     );
   });
 
+  it("requires postback button data to be opaque persisted handles", () => {
+    expect(() =>
+      buildLineActionBubble({
+        actions: [{ id: "approve", label: "Approve" }],
+        buildPostbackData: () => "confirm:yes",
+        capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+        title: "Choose",
+      })
+    ).toThrow(/opaque persisted handle/);
+  });
+
   it("renders https image parts as LINE image messages", () => {
     expect(imageMessagesForLineIntent({
       id: "intent-1",
@@ -60,3 +71,12 @@ describe("LINE formatting", () => {
     }]);
   });
 });
+
+function signedLinePostbackData(): string {
+  return JSON.stringify({
+    v: 1,
+    h: "line:abcDEF012_-xyz789A",
+    t: 1234,
+    s: "abcdefghijklmnopqrstuvwxyzABCDEF",
+  });
+}

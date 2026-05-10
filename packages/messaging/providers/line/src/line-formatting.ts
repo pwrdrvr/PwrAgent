@@ -12,6 +12,9 @@ export const LINE_POSTBACK_DATA_LIMIT_CHARS = 300;
 export const LINE_ACTION_LABEL_LIMIT = 20;
 export const LINE_QUICK_REPLY_ITEM_LIMIT = 13;
 
+const LINE_POSTBACK_HANDLE_PATTERN = /^line:[A-Za-z0-9_-]{18}$/;
+const LINE_POSTBACK_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+
 export type LineTextMessage = {
   type: "text";
   text: string;
@@ -103,19 +106,23 @@ export function buildLineActionBubble(params: {
   const items = params.actions
     .filter((action) => !action.disabled)
     .slice(0, maxActions)
-    .map((action) => ({
-      action,
-      component: {
-        type: "button" as const,
-        style: styleForLineAction(action),
-        action: {
-          type: "postback" as const,
-          label: truncateLineText(action.label, maxLabelLength),
-          data: params.buildPostbackData(action),
-          displayText: truncateLineText(action.fallbackText ?? action.label, 300),
+    .map((action) => {
+      const postbackData = params.buildPostbackData(action);
+      assertOpaqueLinePostbackData(postbackData);
+      return {
+        action,
+        component: {
+          type: "button" as const,
+          style: styleForLineAction(action),
+          action: {
+            type: "postback" as const,
+            label: truncateLineText(action.label, maxLabelLength),
+            data: postbackData,
+            displayText: truncateLineText(action.fallbackText ?? action.label, 300),
+          },
         },
-      },
-    }));
+      };
+    });
 
   if (items.length === 0) {
     return undefined;
@@ -246,6 +253,41 @@ export function styleForLineAction(
 
 function renderContentParts(parts: MessagingContentPart[]): string {
   return parts.map(renderContentPart).filter(Boolean).join("\n\n");
+}
+
+function assertOpaqueLinePostbackData(data: string): void {
+  if (data.length > LINE_POSTBACK_DATA_LIMIT_CHARS) {
+    throw new Error("LINE postback data exceeds provider limit.");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    throw new Error("LINE postback data must be an opaque persisted handle.");
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("LINE postback data must be an opaque persisted handle.");
+  }
+
+  const record = parsed as {
+    h?: unknown;
+    s?: unknown;
+    t?: unknown;
+    v?: unknown;
+  };
+  if (
+    record.v !== 1 ||
+    typeof record.h !== "string" ||
+    !LINE_POSTBACK_HANDLE_PATTERN.test(record.h) ||
+    typeof record.t !== "number" ||
+    !Number.isFinite(record.t) ||
+    typeof record.s !== "string" ||
+    !LINE_POSTBACK_SIGNATURE_PATTERN.test(record.s)
+  ) {
+    throw new Error("LINE postback data must be an opaque persisted handle.");
+  }
 }
 
 function renderContentPart(part: MessagingContentPart): string {

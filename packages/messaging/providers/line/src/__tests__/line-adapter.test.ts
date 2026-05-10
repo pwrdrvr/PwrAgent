@@ -1,9 +1,10 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  MessagingCallbackHandleRecord,
-  MessagingInboundEvent,
+import {
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  type MessagingCallbackHandleRecord,
+  type MessagingInboundEvent,
 } from "@pwragent/messaging-interface";
 import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
@@ -58,6 +59,7 @@ describe("LineAdapter", () => {
     const result = await adapter.deliver({
       id: "intent-1",
       kind: "confirmation",
+      browseSessionId: "browse-1",
       title: "Confirm",
       body: "Run it?",
       actions: [{ id: "confirm:yes", label: "Approve" }],
@@ -91,7 +93,9 @@ describe("LineAdapter", () => {
         actionId: "confirm:yes",
         allowedActorIds: ["U0123456789abcdef0123456789abcdef"],
         bindingId: undefined,
-        handle: expect.stringMatching(/^line:/),
+        browseSessionId: "browse-1",
+        expiresAt: 1234 + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+        handle: expect.stringMatching(/^line:[A-Za-z0-9_-]{18}$/),
       }),
     );
   });
@@ -111,6 +115,7 @@ describe("LineAdapter", () => {
       id: "intent-1",
       bindingId: "stale-binding",
       kind: "confirmation",
+      browseSessionId: "browse-2",
       title: "Confirm",
       body: "Run it?",
       actions: [{ id: "confirm:yes", label: "Approve" }],
@@ -134,6 +139,7 @@ describe("LineAdapter", () => {
     expect(store.records[0]).toMatchObject({
       allowedActorIds: ["U0123456789abcdef0123456789abcdef"],
       bindingId: "binding-1",
+      browseSessionId: "browse-2",
       channel: {
         conversation: {
           id: "C0123456789abcdef0123456789abcdef",

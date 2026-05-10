@@ -23,7 +23,10 @@ import type {
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
-import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+} from "@pwragent/messaging-interface";
 import type { LineMessagingConfig } from "./line-config.ts";
 import {
   LINE_MESSAGE_TEXT_LIMIT,
@@ -47,7 +50,6 @@ import {
 } from "./validate-ids.ts";
 
 const DEFAULT_CALLBACK_PORT = 47822;
-const LINE_CALLBACK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LINE_SIGNED_VALUE_VERSION = 1;
 const LINE_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -880,10 +882,11 @@ export class LineAdapter implements LineProviderAdapter {
           actionId: action.id,
           allowedActorIds: params.allowedActorIds,
           bindingId: params.bindingId,
+          browseSessionId: browseSessionIdForIntent(params.intent),
           channel: params.channelRef,
           createdAt: issuedAt,
           updatedAt: issuedAt,
-          expiresAt: issuedAt + LINE_CALLBACK_TTL_MS,
+          expiresAt: issuedAt + MESSAGING_CALLBACK_HANDLE_TTL_MS,
           handle,
           pendingIntentId: params.intent.id,
           ...(action.value !== undefined ? { value: action.value } : {}),
@@ -1087,6 +1090,14 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.kind === "thread_picker" ||
+    intent.kind === "project_picker" ||
+    intent.kind === "confirmation"
+    ? intent.browseSessionId
+    : undefined;
 }
 
 function lineCallbackRecordId(
