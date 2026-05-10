@@ -1140,8 +1140,23 @@ describe("Sidebar", () => {
     expect(screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy working directory" }));
-    fireEvent.click(screen.getByRole("button", { name: "Copy branch name" }));
+    const cwdButton = screen.getByRole("button", { name: "Copy working directory" });
+    fireEvent.mouseEnter(cwdButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard"
+    );
+    fireEvent.mouseLeave(cwdButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    const branchButton = screen.getByRole("button", { name: "Copy branch name" });
+    fireEvent.mouseEnter(branchButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "codex/fix-thread-naming-ephemeral\nClick to copy to clipboard"
+    );
+    fireEvent.mouseLeave(branchButton);
+
+    fireEvent.click(cwdButton);
+    fireEvent.click(branchButton);
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
