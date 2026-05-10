@@ -2988,10 +2988,15 @@ textarea,
 }
 
 .settings-secret {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.settings-secret .settings-input {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .settings-inline-actions {
