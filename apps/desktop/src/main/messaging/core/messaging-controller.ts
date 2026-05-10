@@ -113,6 +113,9 @@ import {
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
+// Discrete item lifecycle events are cheap provider lease renewals, not
+// visible message sends. Let them through a little sooner than noisy deltas.
+const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
@@ -565,6 +568,7 @@ export class MessagingController {
         }
         await this.signalTurnActivity(binding, latestActiveTurn, {
           reason: event.notification.method,
+          refreshMs: typingActivityRefreshMsForBackendEvent(event),
         });
       }
     }
@@ -4025,16 +4029,17 @@ export class MessagingController {
   private async signalTurnActivity(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
-    options?: { force?: boolean; reason?: string },
+    options?: { force?: boolean; reason?: string; refreshMs?: number },
   ): Promise<void> {
     const state = activeTurn.status === "working" ? "active" : "idle";
     const now = this.now();
     const lastSignaledAt = this.typingActivityLastSignaledAt.get(binding.id);
+    const refreshMs = options?.refreshMs ?? TYPING_ACTIVITY_REFRESH_MS;
     if (
       state === "active" &&
       !options?.force &&
       lastSignaledAt !== undefined &&
-      now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
+      now - lastSignaledAt < refreshMs
     ) {
       return;
     }
@@ -5395,6 +5400,21 @@ function isTurnWorkActivityEvent(
     event.notification.method.startsWith("item/") ||
     event.notification.method.startsWith("turn/") ||
     event.notification.method.startsWith("thread/")
+  );
+}
+
+function typingActivityRefreshMsForBackendEvent(event: AgentEvent): number {
+  const method = event.notification.method;
+  return method.startsWith("item/") && !isHighFrequencyItemActivityEvent(method)
+    ? TYPING_ACTIVITY_CONTINUATION_REFRESH_MS
+    : TYPING_ACTIVITY_REFRESH_MS;
+}
+
+function isHighFrequencyItemActivityEvent(method: string): boolean {
+  return (
+    method.endsWith("/delta") ||
+    method.endsWith("Delta") ||
+    method.endsWith("/progress")
   );
 }
 

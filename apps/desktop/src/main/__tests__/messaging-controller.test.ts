@@ -3019,6 +3019,40 @@ describe("MessagingController", () => {
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
   });
 
+  it("passes discrete work activity through so providers can renew typing leases", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start long work"));
+    harness.delivered.length = 0;
+
+    now += 9_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "reasoning-1",
+            type: "reasoning",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+    ]);
+  });
+
   it("suppresses high-frequency typing refreshes without logging each skipped delta", async () => {
     let now = 1000;
     const logger = {
