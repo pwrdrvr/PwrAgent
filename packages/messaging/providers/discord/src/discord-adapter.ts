@@ -32,7 +32,10 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
-import { extractMessagingPairingToken } from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+} from "@pwragent/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import type {
   DiscordApplicationCommand,
@@ -1193,7 +1196,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           browseSessionId: browseSessionIdForIntent(intent),
           channel: intent.audit.channel,
           createdAt: now,
-          expiresAt: now + 15 * 60 * 1000,
+          expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
           handle: customId,
           pendingIntentId: intent.id,
           surface: intent.targetSurface,

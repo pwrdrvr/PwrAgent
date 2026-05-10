@@ -57,7 +57,7 @@ describe("telegram formatting", () => {
     );
   });
 
-  it("builds one-button rows with short opaque callback handles", () => {
+  it("builds one-button rows with compact opaque callback handles", () => {
     const keyboard = buildTelegramKeyboard(
       [
         {
@@ -69,7 +69,7 @@ describe("telegram formatting", () => {
           },
         },
       ],
-      () => "tg:short-handle",
+      () => "tg:abcdefghijklmnopqr",
     );
 
     expect(keyboard).toEqual({
@@ -77,7 +77,7 @@ describe("telegram formatting", () => {
         [
           {
             text: "1. Long thread",
-            callback_data: "tg:short-handle",
+            callback_data: "tg:abcdefghijklmnopqr",
           },
         ],
       ],
@@ -106,7 +106,7 @@ describe("telegram formatting", () => {
           layout: { row: 1, column: 0 },
         },
       ],
-      (action) => `tg:${action.id}`,
+      () => "tg:abcdefghijklmnopqr",
     );
 
     expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
@@ -122,7 +122,7 @@ describe("telegram formatting", () => {
         { id: "two", label: "Two" },
         { id: "three", label: "Three" },
       ],
-      (action) => `tg:${action.id}`,
+      () => "tg:abcdefghijklmnopqr",
       { columns: 2 },
     );
 
@@ -170,7 +170,7 @@ describe("telegram formatting", () => {
 
     const keyboard = buildTelegramKeyboard(
       intent.choices,
-      (action) => `tg:${action.id}`,
+      () => "tg:abcdefghijklmnopqr",
     );
 
     expect(textForTelegramIntent(intent)).toContain("Workspace Handoff");
@@ -219,7 +219,7 @@ describe("telegram formatting", () => {
     expect(rendered).toBe("Tool update: npm view &lt;dive&gt;");
   });
 
-  it("exposes the tool updates status action through generic keyboard rows", () => {
+  it("renders status actions with caller-provided opaque callback handles", () => {
     const keyboard = buildTelegramKeyboard(
       [
         {
@@ -229,16 +229,30 @@ describe("telegram formatting", () => {
           style: "secondary",
         },
       ],
-      (action) => `tg:${action.id}`,
+      () => "tg:abcdefghijklmnopqr",
     );
 
     expect(keyboard?.inline_keyboard).toEqual([
       [
         {
           text: "Tools: Show Some",
-          callback_data: "tg:status:tool-updates",
+          callback_data: "tg:abcdefghijklmnopqr",
         },
       ],
     ]);
+  });
+
+  it("rejects semantic ids in Telegram callback_data", () => {
+    expect(() =>
+      buildTelegramKeyboard(
+        [
+          {
+            id: "status:streaming",
+            label: "Stream: Default",
+          },
+        ],
+        (action) => `tg:${action.id}`,
+      ),
+    ).toThrow("Telegram callback_data must be an opaque persisted handle.");
   });
 });

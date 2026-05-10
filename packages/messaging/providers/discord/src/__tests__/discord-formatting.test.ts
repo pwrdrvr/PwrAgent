@@ -68,14 +68,14 @@ describe("discord formatting", () => {
           style: "primary",
         },
       ],
-      () => "dc:short-handle",
+      () => "dc:abcdefghijklmnopqrstuvwx",
     );
 
     expect(components).toEqual([
       {
         components: [
           {
-            custom_id: "dc:short-handle",
+            custom_id: "dc:abcdefghijklmnopqrstuvwx",
             label: "1. Thread",
             style: 1,
             type: 2,
@@ -120,7 +120,7 @@ describe("discord formatting", () => {
           style: "secondary",
         },
       ],
-      (action) => `dc:${action.id}`,
+      () => "dc:abcdefghijklmnopqrstuvwx",
     );
 
     expect(components?.map((row) => row.components.map((button) => button.label))).toEqual([
@@ -137,7 +137,7 @@ describe("discord formatting", () => {
         { id: "two", label: "Two" },
         { id: "three", label: "Three" },
       ],
-      (action) => `dc:${action.id}`,
+      () => "dc:abcdefghijklmnopqrstuvwx",
       { columns: 2 },
     );
 
@@ -197,7 +197,7 @@ describe("discord formatting", () => {
 
     const components = buildDiscordComponents(
       intent.choices,
-      (action) => `dc:${action.id}`,
+      () => "dc:abcdefghijklmnopqrstuvwx",
     );
 
     expect(textForDiscordIntent(intent)).toContain("Workspace Handoff");
@@ -242,7 +242,7 @@ describe("discord formatting", () => {
     expect(rendered).toBe("Tool updates: ran 2 tools\n- pnpm test\n- Failed: tsc");
   });
 
-  it("exposes the tool updates status action through generic components", () => {
+  it("renders status actions with caller-provided opaque custom IDs", () => {
     const components = buildDiscordComponents(
       [
         {
@@ -252,14 +252,14 @@ describe("discord formatting", () => {
           style: "secondary",
         },
       ],
-      (action) => `dc:${action.id}`,
+      () => "dc:abcdefghijklmnopqrstuvwx",
     );
 
     expect(components).toEqual([
       {
         components: [
           {
-            custom_id: "dc:status:tool-updates",
+            custom_id: "dc:abcdefghijklmnopqrstuvwx",
             label: "Tools: Show Some",
             style: 2,
             type: 2,
@@ -268,5 +268,19 @@ describe("discord formatting", () => {
         type: 1,
       },
     ]);
+  });
+
+  it("rejects semantic ids in Discord custom IDs", () => {
+    expect(() =>
+      buildDiscordComponents(
+        [
+          {
+            id: "status:streaming",
+            label: "Stream: Default",
+          },
+        ],
+        (action) => `dc:${action.id}`,
+      ),
+    ).toThrow("Discord component custom_id must be an opaque persisted handle.");
   });
 });

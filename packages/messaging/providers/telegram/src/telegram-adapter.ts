@@ -23,6 +23,7 @@ import type {
 import {
   extractMessagingPairingToken,
   layoutMessagingActionRows,
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -1607,7 +1608,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         bindingId: callbackBindingId(intent),
         channel: intent.audit.channel,
         createdAt: now,
-        expiresAt: now + 15 * 60 * 1000,
+        expiresAt: now + MESSAGING_CALLBACK_HANDLE_TTL_MS,
         handle,
         pendingIntentId: intent.id,
         browseSessionId: browseSessionIdForIntent(intent),

@@ -673,6 +673,8 @@ export type MessagingSurfaceIntent =
   | MessagingErrorIntent
   | MessagingDismissIntent;
 
+export const MESSAGING_CALLBACK_HANDLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 export type MessagingDeliveryResult = {
   outcome: MessagingDeliveryOutcome;
   channel: MessagingChannelKind;

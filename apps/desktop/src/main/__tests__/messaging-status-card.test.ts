@@ -67,12 +67,12 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Reasoning: high");
     expect(intent.text).toContain("Fast mode: on");
     expect(intent.text).toContain("Permissions: Full Access");
-    expect(intent.text).toContain("Streaming: Inherit");
+    expect(intent.text).toContain("Streaming: Default");
     expect(intent.text).toContain("Context usage: unavailable");
     expect(intent.actions).toContainEqual(
       expect.objectContaining({
         id: "status:streaming",
-        label: "Stream: Inherit",
+        label: "Stream: Default",
         fallbackText: "stream",
       }),
     );

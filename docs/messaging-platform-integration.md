@@ -104,12 +104,12 @@ Effective streaming mode is resolved per binding first, then provider setting:
 
 | Mode | Behavior |
 | --- | --- |
-| `Inherit` | Follow the provider-level Streaming Responses toggle. |
+| `Default` | Follow the provider-level Streaming Responses toggle. |
 | `Off` | Suppress stream updates for this binding. |
-| `Advanced` | Enable stream updates for this binding even when the provider toggle is off. |
+| `On` | Enable stream updates for this binding even when the provider toggle is off. |
 
 Use the status card's `Stream: <mode>` action, or reply `stream` when actions
-are not available, to cycle a binding through these modes.
+are not available, to cycle a binding through `Default` -> `On` -> `Off`.
 
 ## Tool Update Verbosity
 
@@ -149,6 +149,9 @@ PwrAgent uses two related but distinct protection states:
   Mode preserves final assistant messages and interactive prompts, but may drop
   non-final streaming edits, routine status-card edits, and intermediate tool
   updates instead of queueing stale noise.
+- Typing/activity signals are best-effort presence hints. They do not consume
+  the local message/write budget, and they are dropped while a scope is already
+  in Slow Mode so they cannot crowd out final turn output.
 - **Cool Off** is provider-imposed. It begins when a provider returns
   rate-limit feedback with a retry window. PwrAgent stops sending to that scope
   until the retry window clears, then resumes conservatively.
@@ -282,7 +285,7 @@ The TOML equivalents are `streaming_responses = true` under a provider section,
 for example `[messaging.telegram]`, `[messaging.discord]`,
 `[messaging.mattermost]`, or `[messaging.slack]`. Providers default to `false`;
 the Settings > Messaging toggles and environment overrides expose the same
-booleans. Binding-level `Stream: Advanced` can opt a single binding into
+booleans. Binding-level `Stream: On` can opt a single binding into
 streaming without changing the provider default.
 
 Discord slash commands are reconciled on adapter startup when an Application ID
@@ -299,7 +302,7 @@ commands on every startup.
   `messaging-state.json` under the desktop state root.
 - Inbound attachments are downloaded only after authorization and active binding
   checks, then capped, sniffed, normalized, or rejected before model upload.
-- Telegram callback data and Discord component IDs contain short opaque handles,
+- Telegram callback data and Discord component IDs contain compact opaque handles,
   not thread IDs, request payloads, tokens, or callback secrets.
 - Discord deliveries use defensive `allowed_mentions` so agent output does not
   ping everyone, roles, or arbitrary users.
