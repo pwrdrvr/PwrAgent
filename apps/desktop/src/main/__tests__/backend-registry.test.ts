@@ -1534,6 +1534,64 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("updates Codex git metadata when materializing a git-backed launchpad", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
+    const repo = path.join(root, "app");
+    await mkdir(repo, { recursive: true });
+    await git(repo, ["init", "-b", "feature/metadata"]);
+    await git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repo}`,
+        launchpad: {
+          directoryKey: `directory:${repo}`,
+          directoryKind: "directory",
+          directoryLabel: "app",
+          directoryPath: repo,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-1",
+        gitInfo: {
+          branch: "feature/metadata",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records Codex owner metadata when materializing a worktree launchpad", async () => {
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({

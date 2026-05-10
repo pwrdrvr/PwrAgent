@@ -1633,6 +1633,7 @@ export class DesktopBackendRegistry {
       sandbox: request.sandbox ?? modeSettings.sandbox,
     });
     const startedAt = Date.now();
+    const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
     this.pendingStartedThreads.set(
       `${backend}:${result.threadId}`,
       {
@@ -1648,7 +1649,7 @@ export class DesktopBackendRegistry {
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
-        gitBranch: cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined,
+        gitBranch,
       },
     );
     if (workMode === "worktree") {
@@ -1665,6 +1666,11 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         executionMode,
+      });
+      await this.updateThreadGitBranchMetadata({
+        backend,
+        threadId: result.threadId,
+        branch: gitBranch,
       });
     }
     if (
