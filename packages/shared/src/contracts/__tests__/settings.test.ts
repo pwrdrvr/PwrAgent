@@ -97,6 +97,8 @@ describe("desktop settings contracts", () => {
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
+          authorizedTeams: { value: [], source: "default" },
+          authorizedConversations: { value: [], source: "default" },
         },
         slack: {
           enabled: { value: false, source: "default" },

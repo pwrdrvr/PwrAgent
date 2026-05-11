@@ -15,6 +15,7 @@ const baseConfig = {
   appToken: "xapp-test",
   signingSecret: "test-signing-secret",
   authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Alice" }],
+  authorizedTeamIds: [{ id: "T012ABCDEF0", displayName: "PwrDrvr" }],
 };
 
 function fakeStore(): MessagingCallbackHandleStore & {
@@ -657,6 +658,135 @@ describe("SlackAdapter", () => {
       expect.objectContaining({
         reason: "unauthorized-conversation",
         actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+      }),
+    ]);
+  });
+
+  it("rejects group DM events when the authorized workspace list is empty", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "mpim",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        reason: "unauthorized-conversation",
+        actor: expect.objectContaining({ platformUserId: "U012ABCDEF0" }),
+      }),
+    ]);
+  });
+
+  it("allows DMs from authorized actors when the authorized workspace list is empty", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, authorizedTeamIds: [] },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "D012ABCDEF0",
+            kind: "dm",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("allows authorized conversations without authorizing the whole workspace", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [{ id: "C012ABCDEF0", displayName: "dev" }],
+        authorizedTeamIds: [],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "/status",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "status",
       }),
     ]);
   });

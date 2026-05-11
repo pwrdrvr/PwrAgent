@@ -41,6 +41,8 @@ import type {
   MessagingInboundEvent,
   MessagingActorIdentity,
   MessagingAdapterState,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingChannelRef,
   MessagingChannelKind,
   MessagingReconnectInfo,
@@ -68,6 +70,10 @@ export type MessagingAdapter = {
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   downloadAttachment?(

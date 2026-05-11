@@ -27,6 +27,8 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
   MessagingChannelKind,
   MessagingClientRateLimitStrategy,
@@ -50,9 +52,12 @@ import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import {
   type DesktopMessagingConfigLoadOptions,
+  classifyDesktopMessagingChannelConfigUpdate,
   loadDesktopMessagingConfig,
   redactDesktopMessagingConfig,
   type DesktopMessagingConfig,
+  type DesktopMessagingConfigChannel,
+  type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
@@ -80,6 +85,10 @@ export type DesktopMessagingAdapter = {
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -100,12 +109,19 @@ export type DesktopMessagingConfigLoader = (
 
 type RunningMessagingAdapter = {
   adapter: DesktopMessagingAdapter;
+  authorization: RunningMessagingAuthorization;
+  config: DesktopMessagingConfig;
   controller: MessagingController;
   fingerprint: string;
   unsubscribeInboundRejected?: () => void;
   unsubscribeRateLimit?: () => void;
   unsubscribeReconnect?: () => void;
   unsubscribeRuntimeError?: () => void;
+};
+
+type RunningMessagingAuthorization = {
+  actorIds: string[];
+  actorIdSet: Set<string>;
 };
 
 const messagingLog = getMainLogger("pwragent:messaging");
@@ -316,12 +332,55 @@ export class DesktopMessagingRuntime {
     }
 
     const stoppedChannels: MessagingChannelKind[] = [];
+    const hotUpdatedChannels: MessagingChannelKind[] = [];
     for (const [channel, running] of [...this.runningAdapters.entries()]) {
       const next = nextAdapters.get(channel);
-      const nextFingerprint = next
-        ? messagingAdapterConfigFingerprint(config, channel)
-        : undefined;
-      if (!next || running.fingerprint !== nextFingerprint) {
+      if (!next) {
+        await this.stopRunningAdapter(running);
+        this.runningAdapters.delete(channel);
+        stoppedChannels.push(channel);
+        continue;
+      }
+
+      if (!isDesktopMessagingConfigChannel(channel)) {
+        const nextFingerprint = messagingAdapterConfigFingerprint(config, channel);
+        if (running.fingerprint !== nextFingerprint) {
+          await this.stopRunningAdapter(running);
+          this.runningAdapters.delete(channel);
+          stoppedChannels.push(channel);
+        }
+        continue;
+      }
+
+      const configUpdate = classifyDesktopMessagingChannelConfigUpdate(
+        running.config,
+        config,
+        channel,
+      );
+      if (configUpdate.action === "unchanged") {
+        continue;
+      }
+
+      const nextFingerprint = messagingAdapterConfigFingerprint(config, channel);
+      if (
+        configUpdate.action === "hot"
+        && await this.hotApplyRunningAdapter(running, configUpdate, {
+          config,
+          fingerprint: nextFingerprint,
+        })
+      ) {
+        hotUpdatedChannels.push(channel);
+        continue;
+      }
+
+      if (configUpdate.action === "hot") {
+        messagingLog.info(`${channel}: hot config update unsupported — restarting adapter`, {
+          channel,
+          changedFields: configUpdate.changedFields,
+        });
+      }
+
+      if (running.fingerprint !== nextFingerprint) {
         await this.stopRunningAdapter(running);
         this.runningAdapters.delete(channel);
         stoppedChannels.push(channel);
@@ -363,8 +422,10 @@ export class DesktopMessagingRuntime {
       startedChannels.length > 0
       || stoppedChannels.length > 0
       || failedChannels.length > 0
+      || hotUpdatedChannels.length > 0
     ) {
       messagingLog.info("messaging runtime config applied", {
+        hotUpdated: hotUpdatedChannels.length > 0 ? hotUpdatedChannels : undefined,
         started: startedChannels.length > 0 ? startedChannels : undefined,
         stopped: stoppedChannels.length > 0 ? stoppedChannels : undefined,
         failed: failedChannels.length > 0 ? failedChannels : undefined,
@@ -707,7 +768,10 @@ export class DesktopMessagingRuntime {
   }): Promise<boolean> {
     const { adapter, config, store } = params;
     const authorizedActorIds = [...adapter.authorizedActorIds];
-    const authorizedActorIdSet = new Set(authorizedActorIds);
+    const authorization: RunningMessagingAuthorization = {
+      actorIds: authorizedActorIds,
+      actorIdSet: new Set(authorizedActorIds),
+    };
     const deliveryBudget = new MessagingDeliveryBudget();
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
       messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
@@ -759,7 +823,7 @@ export class DesktopMessagingRuntime {
         if (await this.handlePairingInbound(adapter, event)) {
           return;
         }
-        const authorized = authorizedActorIdSet.has(event.actor.platformUserId);
+        const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
         this.recordActivityFromInbound(adapter.channel, event, authorized);
         try {
           if (!authorized) {
@@ -768,7 +832,7 @@ export class DesktopMessagingRuntime {
               actorId: event.actor.platformUserId,
               actorIsBot: event.actor.isBot,
               actorUsername: event.actor.username,
-              authorizedActorCount: authorizedActorIds.length,
+              authorizedActorCount: authorization.actorIds.length,
               channel: adapter.channel,
               conversationId: event.channel.conversation.id,
               conversationKind: event.channel.conversation.kind,
@@ -832,6 +896,8 @@ export class DesktopMessagingRuntime {
 
     this.runningAdapters.set(adapter.channel, {
       adapter,
+      authorization,
+      config,
       controller,
       fingerprint: messagingAdapterConfigFingerprint(config, adapter.channel),
       unsubscribeInboundRejected,
@@ -845,6 +911,73 @@ export class DesktopMessagingRuntime {
       channel: adapter.channel,
     });
     return true;
+  }
+
+  private async hotApplyRunningAdapter(
+    running: RunningMessagingAdapter,
+    update: Extract<DesktopMessagingChannelConfigUpdate, { action: "hot" }>,
+    next: {
+      config: DesktopMessagingConfig;
+      fingerprint: string;
+    },
+  ): Promise<boolean> {
+    const { adapter } = running;
+    if (update.authorization && !adapter.updateAuthorization) {
+      return false;
+    }
+    if (update.renderingPreferences && !adapter.updateRenderingPreferences) {
+      return false;
+    }
+
+    try {
+      if (update.authorization) {
+        await adapter.updateAuthorization?.(update.authorization);
+        this.replaceRunningAuthorization(running, update.authorization.authorizedActorIds);
+      }
+      if (update.renderingPreferences) {
+        await adapter.updateRenderingPreferences?.(update.renderingPreferences);
+      }
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: hot config update failed — restarting adapter`, {
+        channel: adapter.channel,
+        changedFields: update.changedFields,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+
+    running.config = next.config;
+    running.fingerprint = next.fingerprint;
+    this.recordDiagnosticActivity({
+      platform: adapter.channel,
+      summary: `Hot-applied messaging config: ${adapter.channel}`,
+      createdAt: Date.now(),
+      payload: {
+        mode: "hot-update",
+        changedFields: [...update.changedFields],
+      },
+    });
+    messagingLog.info(`${adapter.channel}: hot-applied messaging config`, {
+      channel: adapter.channel,
+      changedFields: update.changedFields,
+    });
+    return true;
+  }
+
+  private replaceRunningAuthorization(
+    running: RunningMessagingAdapter,
+    actorIds: readonly string[],
+  ): void {
+    running.authorization.actorIds.splice(
+      0,
+      running.authorization.actorIds.length,
+      ...actorIds,
+    );
+    running.authorization.actorIdSet.clear();
+    for (const actorId of actorIds) {
+      running.authorization.actorIdSet.add(actorId);
+    }
+    running.controller.updateAuthorizedActorIds(actorIds);
   }
 
   private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
@@ -1665,6 +1798,15 @@ function messagingAdapterConfigFingerprint(
     channelConfig,
     inputDebounceMs: config.inputDebounceMs,
   });
+}
+
+function isDesktopMessagingConfigChannel(
+  channel: MessagingChannelKind,
+): channel is DesktopMessagingConfigChannel {
+  return channel === "telegram"
+    || channel === "discord"
+    || channel === "mattermost"
+    || channel === "slack";
 }
 
 function stableStringify(value: unknown): string {

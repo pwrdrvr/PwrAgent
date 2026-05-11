@@ -187,6 +187,40 @@ Implement, in order:
 
 > **Important:** the adapter must NOT call `turn/start` or any backend operation directly. It only translates events. The `MessagingController` owns workflow logic. Adapters that try to "be helpful" by debouncing input or starting turns themselves break the controller's turn-admission policy.
 
+### Inbound authorization is fail-closed
+
+Before any inbound event reaches the controller, the adapter must enforce both
+actor authorization and shared-surface authorization. This is deliberately
+stricter than "authorized user can talk anywhere":
+
+- 1:1 DMs may authorize by actor alone.
+- Any shared conversation, including groups, supergroups, guild channels,
+  workspaces, teams, MPIM/group DMs, threads, and channel callbacks, must require
+  an explicit allowlist match for the containing workspace/guild/team or the
+  concrete conversation.
+- Empty shared-surface allowlists mean deny, not allow all.
+- Removing a shared surface from the allowlist must take effect via the generic
+  authorization hot-update path and must not require adapter teardown.
+- Pairing-token messages may be the only exception, and only when the platform's
+  pairing flow intentionally supports recovery from an unallowed shared surface.
+
+Do not encode this as desktop workflow logic. Model it as generic
+`MessagingAdapterAuthorizationUpdate.authorizedConversationIds` and, where the
+platform has a containing workspace/guild/team concept,
+`authorizedWorkspaceIds`. The provider maps those generic IDs to its own config
+fields (`authorizedSupergroupIds`, `authorizedGuildIds`, `authorizedTeamIds`,
+etc.) inside the adapter boundary.
+
+Provider tests must prove the default-closed behavior before dispatch:
+
+- an authorized actor in an unconfigured shared conversation is rejected with
+  `reason: "unauthorized-conversation"`;
+- an empty shared-surface allowlist rejects, rather than grants, access;
+- hot-removing a shared surface prevents the next inbound event without
+  restarting the adapter;
+- 1:1 DMs from authorized actors still work if the platform supports direct DMs;
+- group DMs are not treated as 1:1 DMs.
+
 ### Rate-limit queue ownership
 
 PwrAgent must own outbound retry queues outside the platform SDK. This lets the

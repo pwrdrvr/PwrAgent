@@ -3,6 +3,10 @@ import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mat
 import type { SlackMessagingConfig } from "@pwragent/messaging-provider-slack";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
 import type { MessagingToolUpdateMode } from "@pwragent/shared";
+import type {
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
+} from "@pwragent/messaging-interface";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getMainLogger } from "../log";
@@ -13,6 +17,8 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -54,6 +60,8 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -96,6 +104,103 @@ export type DesktopMessagingConfig = {
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
 
+export type DesktopMessagingConfigFieldImpact =
+  | "authorization"
+  | "connection"
+  | "irrelevant"
+  | "rendering";
+
+export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
+  attachmentPolicy: "connection",
+  discord: "connection",
+  enabled: "connection",
+  inputDebounceMs: "connection",
+  mattermost: "connection",
+  slack: "connection",
+  telegram: "connection",
+  toolUpdateDefaultMode: "irrelevant",
+} as const satisfies Record<
+  keyof DesktopMessagingConfig,
+  DesktopMessagingConfigFieldImpact
+>;
+
+export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
+  telegram: {
+    authorizedActorIds: "authorization",
+    authorizedSupergroupIds: "authorization",
+    botToken: "connection",
+    channel: "irrelevant",
+    enabled: "connection",
+    streamingResponses: "rendering",
+  },
+  discord: {
+    applicationId: "connection",
+    authorizedActorIds: "authorization",
+    authorizedGuildIds: "authorization",
+    botToken: "connection",
+    channel: "irrelevant",
+    enabled: "connection",
+    streamingResponses: "rendering",
+  },
+  mattermost: {
+    authorizedActorIds: "authorization",
+    authorizedConversationIds: "authorization",
+    authorizedTeamIds: "authorization",
+    botToken: "connection",
+    callbackBaseUrl: "connection",
+    callbackHmacSecret: "connection",
+    channel: "irrelevant",
+    enabled: "connection",
+    registerSlashCommands: "connection",
+    serverUrl: "connection",
+    slashCommandPrefix: "connection",
+    streamingResponses: "rendering",
+  },
+  slack: {
+    appToken: "connection",
+    authorizedActorIds: "authorization",
+    authorizedConversationIds: "authorization",
+    authorizedTeamIds: "authorization",
+    botToken: "connection",
+    channel: "irrelevant",
+    enabled: "connection",
+    inboundMode: "connection",
+    registerSlashCommands: "connection",
+    signingSecret: "connection",
+    slashCommandPrefix: "connection",
+    streamingResponses: "rendering",
+    workspaceUrl: "connection",
+  },
+} as const satisfies {
+  telegram: Record<keyof TelegramMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  discord: Record<keyof DiscordMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  mattermost: Record<
+    keyof MattermostMessagingConfig,
+    DesktopMessagingConfigFieldImpact
+  >;
+  slack: Record<keyof SlackMessagingConfig, DesktopMessagingConfigFieldImpact>;
+};
+
+export type DesktopMessagingConfigChannel =
+  keyof typeof DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS;
+
+export type DesktopMessagingChannelConfigUpdate =
+  | {
+      action: "unchanged";
+      changedFields: readonly string[];
+    }
+  | {
+      action: "hot";
+      authorization?: MessagingAdapterAuthorizationUpdate;
+      changedFields: readonly string[];
+      renderingPreferences?: MessagingAdapterRenderingPreferencesUpdate;
+    }
+  | {
+      action: "restart";
+      changedFields: readonly string[];
+      restartFields: readonly string[];
+    };
+
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
   | "readSettings"
@@ -113,6 +218,89 @@ export type DesktopMessagingConfigLoadOptions = {
   messagingEnabledOverride?: boolean;
 };
 
+export function classifyDesktopMessagingChannelConfigUpdate(
+  previous: DesktopMessagingConfig,
+  next: DesktopMessagingConfig,
+  channel: DesktopMessagingConfigChannel,
+): DesktopMessagingChannelConfigUpdate {
+  const changedFields: string[] = [];
+  const restartFields: string[] = [];
+
+  for (const field of ["attachmentPolicy", "inputDebounceMs"] as const) {
+    if (
+      stableMessagingConfigStringify(previous[field])
+      === stableMessagingConfigStringify(next[field])
+    ) {
+      continue;
+    }
+    changedFields.push(field);
+    restartFields.push(field);
+  }
+
+  const previousChannelConfig = previous[channel];
+  const nextChannelConfig = next[channel];
+  if (!previousChannelConfig && !nextChannelConfig) {
+    return restartFields.length > 0
+      ? { action: "restart", changedFields, restartFields }
+      : { action: "unchanged", changedFields };
+  }
+  if (!previousChannelConfig || !nextChannelConfig) {
+    const field = channel;
+    changedFields.push(field);
+    restartFields.push(field);
+    return { action: "restart", changedFields, restartFields };
+  }
+
+  const impacts = DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS[channel];
+  const fieldNames = new Set([
+    ...Object.keys(previousChannelConfig),
+    ...Object.keys(nextChannelConfig),
+  ]);
+  let authorizationChanged = false;
+  let renderingChanged = false;
+
+  for (const fieldName of [...fieldNames].sort()) {
+    const impact = impacts[fieldName as keyof typeof impacts];
+    const previousValue = previousChannelConfig[
+      fieldName as keyof typeof previousChannelConfig
+    ];
+    const nextValue = nextChannelConfig[fieldName as keyof typeof nextChannelConfig];
+    if (
+      stableMessagingConfigStringify(previousValue)
+      === stableMessagingConfigStringify(nextValue)
+    ) {
+      continue;
+    }
+
+    const qualifiedField = `${channel}.${fieldName}`;
+    changedFields.push(qualifiedField);
+    if (impact === "authorization") {
+      authorizationChanged = true;
+    } else if (impact === "rendering") {
+      renderingChanged = true;
+    } else if (impact === "connection" || impact === undefined) {
+      restartFields.push(qualifiedField);
+    }
+  }
+
+  if (restartFields.length > 0) {
+    return { action: "restart", changedFields, restartFields };
+  }
+  if (authorizationChanged || renderingChanged) {
+    return {
+      action: "hot",
+      changedFields,
+      ...(authorizationChanged
+        ? { authorization: authorizationUpdateForChannelConfig(next, channel) }
+        : {}),
+      ...(renderingChanged
+        ? { renderingPreferences: renderingPreferencesForChannelConfig(next, channel) }
+        : {}),
+    };
+  }
+  return { action: "unchanged", changedFields };
+}
+
 export function loadDesktopMessagingConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): DesktopMessagingConfig {
@@ -129,6 +317,12 @@ export function loadDesktopMessagingConfig(
   const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
   const mattermostAuthorizedActorIds = parseContactList(
     env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
+  );
+  const mattermostAuthorizedTeamIds = parseContactList(
+    env[MATTERMOST_AUTHORIZED_TEAMS_ENV],
+  );
+  const mattermostAuthorizedConversationIds = parseContactList(
+    env[MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV],
   );
   const mattermostCallbackHmacSecret = readEnv(
     env,
@@ -220,6 +414,8 @@ export function loadDesktopMessagingConfig(
               MATTERMOST_STREAMING_RESPONSES_ENV,
             ).value ?? false,
             authorizedActorIds: mattermostAuthorizedActorIds,
+            authorizedTeamIds: mattermostAuthorizedTeamIds,
+            authorizedConversationIds: mattermostAuthorizedConversationIds,
           },
         }
       : {}),
@@ -290,6 +486,12 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostAuthorizedActorIds =
     envConfig.mattermost?.authorizedActorIds
     ?? snapshot.messaging.mattermost.authorizedUserIds.value;
+  const mattermostAuthorizedTeamIds =
+    envConfig.mattermost?.authorizedTeamIds
+    ?? snapshot.messaging.mattermost.authorizedTeams.value;
+  const mattermostAuthorizedConversationIds =
+    envConfig.mattermost?.authorizedConversationIds
+    ?? snapshot.messaging.mattermost.authorizedConversations.value;
   const slackAuthorizedActorIds =
     envConfig.slack?.authorizedActorIds
     ?? snapshot.messaging.slack.authorizedUserIds.value;
@@ -441,6 +643,8 @@ export async function loadDesktopMessagingConfigFromSettings(
             streamingResponses:
               snapshot.messaging.mattermost.streamingResponses.value,
             authorizedActorIds: mattermostAuthorizedActorIds,
+            authorizedTeamIds: mattermostAuthorizedTeamIds,
+            authorizedConversationIds: mattermostAuthorizedConversationIds,
           },
         }
       : {};
@@ -584,6 +788,9 @@ export function redactDesktopMessagingConfig(
             config.mattermost.registerSlashCommands ?? false,
           streamingResponses: config.mattermost.streamingResponses ?? false,
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
+          authorizedWorkspaceCount: config.mattermost.authorizedTeamIds?.length ?? 0,
+          authorizedConversationCount:
+            config.mattermost.authorizedConversationIds?.length ?? 0,
         }
       : undefined,
     slack: config.slack
@@ -609,6 +816,83 @@ export function redactDesktopMessagingConfig(
 function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {
   const value = readEnvInteger(env, MESSAGING_INPUT_DEBOUNCE_MS_ENV).value;
   return value === undefined ? undefined : Math.min(value, 5_000);
+}
+
+function authorizationUpdateForChannelConfig(
+  config: DesktopMessagingConfig,
+  channel: DesktopMessagingConfigChannel,
+): MessagingAdapterAuthorizationUpdate {
+  switch (channel) {
+    case "telegram":
+      return {
+        authorizedActorIds: contactIds(config.telegram?.authorizedActorIds),
+        authorizedConversationIds: contactIds(config.telegram?.authorizedSupergroupIds),
+      };
+    case "discord":
+      return {
+        authorizedActorIds: contactIds(config.discord?.authorizedActorIds),
+        authorizedConversationIds: contactIds(config.discord?.authorizedGuildIds),
+      };
+    case "mattermost":
+      return {
+        authorizedActorIds: contactIds(config.mattermost?.authorizedActorIds),
+        authorizedConversationIds: contactIds(
+          config.mattermost?.authorizedConversationIds,
+        ),
+        authorizedWorkspaceIds: contactIds(config.mattermost?.authorizedTeamIds),
+      };
+    case "slack":
+      return {
+        authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
+        authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
+        authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
+      };
+    default: {
+      const exhaustive: never = channel;
+      throw new Error(`unknown messaging channel: ${exhaustive}`);
+    }
+  }
+}
+
+function renderingPreferencesForChannelConfig(
+  config: DesktopMessagingConfig,
+  channel: DesktopMessagingConfigChannel,
+): MessagingAdapterRenderingPreferencesUpdate {
+  switch (channel) {
+    case "telegram":
+      return { streamingResponses: config.telegram?.streamingResponses };
+    case "discord":
+      return { streamingResponses: config.discord?.streamingResponses };
+    case "mattermost":
+      return { streamingResponses: config.mattermost?.streamingResponses };
+    case "slack":
+      return { streamingResponses: config.slack?.streamingResponses };
+    default: {
+      const exhaustive: never = channel;
+      throw new Error(`unknown messaging channel: ${exhaustive}`);
+    }
+  }
+}
+
+function contactIds(
+  contacts: readonly { id: string }[] | undefined,
+): readonly string[] {
+  return contacts?.map((contact) => contact.id) ?? [];
+}
+
+function stableMessagingConfigStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableMessagingConfigStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableMessagingConfigStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function readEnv(

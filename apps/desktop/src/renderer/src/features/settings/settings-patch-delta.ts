@@ -128,6 +128,22 @@ export function buildMattermostPatchDelta(
   ) {
     patch.authorizedUserIds = candidate.authorizedUserIds.value;
   }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedTeams.value,
+      candidate.authorizedTeams.value,
+    )
+  ) {
+    patch.authorizedTeams = candidate.authorizedTeams.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedConversations.value,
+      candidate.authorizedConversations.value,
+    )
+  ) {
+    patch.authorizedConversations = candidate.authorizedConversations.value;
+  }
 
   return Object.keys(patch).length === 0 ? undefined : patch;
 }

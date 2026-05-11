@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  classifyDesktopMessagingChannelConfigUpdate,
+  DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS,
+  DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS,
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
   MATTERMOST_BOT_TOKEN_ENV,
@@ -47,6 +52,127 @@ afterEach(() => {
 });
 
 describe("desktop messaging config", () => {
+  it("classifies every desktop messaging config field explicitly", () => {
+    expect(Object.keys(DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS).sort()).toEqual([
+      "attachmentPolicy",
+      "discord",
+      "enabled",
+      "inputDebounceMs",
+      "mattermost",
+      "slack",
+      "telegram",
+      "toolUpdateDefaultMode",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.telegram).sort()).toEqual([
+      "authorizedActorIds",
+      "authorizedSupergroupIds",
+      "botToken",
+      "channel",
+      "enabled",
+      "streamingResponses",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.discord).sort()).toEqual([
+      "applicationId",
+      "authorizedActorIds",
+      "authorizedGuildIds",
+      "botToken",
+      "channel",
+      "enabled",
+      "streamingResponses",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.mattermost).sort()).toEqual([
+      "authorizedActorIds",
+      "authorizedConversationIds",
+      "authorizedTeamIds",
+      "botToken",
+      "callbackBaseUrl",
+      "callbackHmacSecret",
+      "channel",
+      "enabled",
+      "registerSlashCommands",
+      "serverUrl",
+      "slashCommandPrefix",
+      "streamingResponses",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.slack).sort()).toEqual([
+      "appToken",
+      "authorizedActorIds",
+      "authorizedConversationIds",
+      "authorizedTeamIds",
+      "botToken",
+      "channel",
+      "enabled",
+      "inboundMode",
+      "registerSlashCommands",
+      "signingSecret",
+      "slashCommandPrefix",
+      "streamingResponses",
+      "workspaceUrl",
+    ]);
+  });
+
+  it("classifies authorization-only changes as hot updates", () => {
+    const previous = {
+      telegram: {
+        channel: "telegram" as const,
+        botToken: "token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001", displayName: "" }],
+      },
+    };
+    const next = {
+      telegram: {
+        channel: "telegram" as const,
+        botToken: "token",
+        authorizedActorIds: [
+          { id: "user-1", displayName: "" },
+          { id: "user-2", displayName: "" },
+        ],
+        authorizedSupergroupIds: [
+          { id: "-1001", displayName: "" },
+          { id: "-1002", displayName: "" },
+        ],
+      },
+    };
+
+    expect(classifyDesktopMessagingChannelConfigUpdate(previous, next, "telegram"))
+      .toEqual({
+        action: "hot",
+        changedFields: [
+          "telegram.authorizedActorIds",
+          "telegram.authorizedSupergroupIds",
+        ],
+        authorization: {
+          authorizedActorIds: ["user-1", "user-2"],
+          authorizedConversationIds: ["-1001", "-1002"],
+        },
+      });
+  });
+
+  it("classifies credential changes as restart-required", () => {
+    const previous = {
+      discord: {
+        channel: "discord" as const,
+        botToken: "token-1",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    };
+    const next = {
+      discord: {
+        channel: "discord" as const,
+        botToken: "token-2",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    };
+
+    expect(classifyDesktopMessagingChannelConfigUpdate(previous, next, "discord"))
+      .toEqual({
+        action: "restart",
+        changedFields: ["discord.botToken"],
+        restartFields: ["discord.botToken"],
+      });
+  });
+
   it("enables configured channels when credentials are present before actor discovery", () => {
     const config = loadDesktopMessagingConfig({
       [TELEGRAM_BOT_TOKEN_ENV]: " tg-token ",
@@ -56,6 +182,8 @@ describe("desktop messaging config", () => {
       [MATTERMOST_SERVER_URL_ENV]: "https://chat.example.com",
       [MATTERMOST_CALLBACK_BASE_URL_ENV]:
         "https://pwragent.example.com/messaging/mattermost/callback",
+      [MATTERMOST_AUTHORIZED_TEAMS_ENV]: "teamabcdefghijklmnopqrstu1",
+      [MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV]: "channelabcdefghijklmn12345",
     });
 
     expect(config).toEqual({
@@ -91,6 +219,12 @@ describe("desktop messaging config", () => {
           "https://pwragent.example.com/messaging/mattermost/callback",
         streamingResponses: false,
         authorizedActorIds: [],
+        authorizedTeamIds: [
+          { id: "teamabcdefghijklmnopqrstu1", displayName: "" },
+        ],
+        authorizedConversationIds: [
+          { id: "channelabcdefghijklmn12345", displayName: "" },
+        ],
       },
     });
   });
@@ -319,6 +453,8 @@ describe("desktop messaging config", () => {
         channel: "mattermost",
         botToken: "settings-mattermost-token",
         authorizedActorIds: [],
+        authorizedTeamIds: [],
+        authorizedConversationIds: [],
       },
     });
     expect(messagingLog.warn).toHaveBeenCalledWith(

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { Bot, InputFile } from "grammy";
 import type {
   MessagingAdapterState,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
@@ -346,6 +348,10 @@ export type TelegramProviderAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -467,6 +473,25 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.options.config.authorizedActorIds = telegramContactsFromIds(
+      update.authorizedActorIds,
+      this.options.config.authorizedActorIds,
+    );
+    this.options.config.authorizedSupergroupIds = telegramContactsFromIds(
+      update.authorizedConversationIds ?? [],
+      this.options.config.authorizedSupergroupIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.options.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
@@ -1404,10 +1429,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return true;
     }
     const authorized = this.options.config.authorizedSupergroupIds ?? [];
-    return (
-      authorized.length === 0
-      || authorized.some((contact) => contact.id === String(chat.id))
-    );
+    return authorized.some((contact) => contact.id === String(chat.id));
   }
 
   private logUnauthorizedConversationOnce(
@@ -2425,6 +2447,14 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
   return intent.allowedActorIds && intent.allowedActorIds.length > 0
     ? intent.allowedActorIds
     : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function telegramContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

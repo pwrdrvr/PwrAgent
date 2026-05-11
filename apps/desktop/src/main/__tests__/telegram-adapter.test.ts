@@ -2460,6 +2460,7 @@ async function createControllerHarness(): Promise<{
       channel: "telegram",
       botToken: "telegram-token",
       authorizedActorIds: [{ id: "42", displayName: "" }],
+      authorizedSupergroupIds: [{ id: "-100777", displayName: "PwrAgent" }],
     },
     now: () => 1000,
     pollOnStart: false,

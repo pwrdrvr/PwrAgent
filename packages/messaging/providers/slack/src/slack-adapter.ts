@@ -4,6 +4,8 @@ import { WebClient } from "@slack/web-api";
 import type {
   MessagingActorIdentity,
   MessagingAdapterState,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -144,6 +146,10 @@ export type SlackProviderAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
@@ -265,7 +271,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       supportsRemoteImageUrl: true,
     },
   };
-  readonly authorizedActorIds: readonly string[];
+  private authorizedActorIdsValue: string[];
 
   private readonly api: SlackApi;
   private readonly callbackHandleStore: MessagingCallbackHandleStore;
@@ -292,7 +298,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
     this.callbackHandleStore = options.callbackHandleStore;
-    this.authorizedActorIds = options.config.authorizedActorIds.map((actor) => actor.id);
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
+      (actor) => actor.id,
+    );
     this.signingSecret =
       options.config.signingSecret?.trim()
       || options.config.appToken?.trim()
@@ -304,6 +312,34 @@ export class SlackAdapter implements SlackProviderAdapter {
       ?? (options.config.inboundMode === "events"
         ? undefined
         : createSlackSocketClient(options.config.appToken));
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.authorizedActorIdsValue;
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    this.config.authorizedActorIds = slackContactsFromIds(
+      update.authorizedActorIds,
+      this.config.authorizedActorIds,
+    );
+    this.config.authorizedConversationIds = slackContactsFromIds(
+      update.authorizedConversationIds ?? [],
+      this.config.authorizedConversationIds,
+    );
+    this.config.authorizedTeamIds = slackContactsFromIds(
+      update.authorizedWorkspaceIds ?? [],
+      this.config.authorizedTeamIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
@@ -1077,22 +1113,6 @@ export class SlackAdapter implements SlackProviderAdapter {
   }): boolean {
     if (params.pairing) return true;
 
-    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
-    if (
-      allowedTeams?.length
-      && (!params.teamId || !allowedTeams.includes(params.teamId))
-    ) {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason: "unauthorized-conversation",
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
-      return false;
-    }
     if (!this.authorizedActorIds.includes(params.actor.platformUserId)) {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
@@ -1105,23 +1125,33 @@ export class SlackAdapter implements SlackProviderAdapter {
       });
       return false;
     }
-    const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id);
-    if (
-      allowedConversations?.length
-      && !allowedConversations.includes(params.channel.conversation.id)
-    ) {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason: "unauthorized-conversation",
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
-      return false;
+
+    if (params.channel.conversation.kind === "dm") {
+      return true;
     }
-    return true;
+
+    const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
+      ?? [];
+    if (allowedConversations.includes(params.channel.conversation.id)) {
+      return true;
+    }
+
+    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
+      ?? [];
+    if (params.teamId !== undefined && allowedTeams.includes(params.teamId)) {
+      return true;
+    }
+
+    this.emitInboundRejected({
+      id: this.newEventId("slack-rejected"),
+      kind: params.kind,
+      actor: params.actor,
+      channel: params.channel,
+      receivedAt: this.now(),
+      reason: "unauthorized-conversation",
+      ...(params.routingState ? { routingState: params.routingState } : {}),
+    });
+    return false;
   }
 
   private async channelRefForSlack(params: {
@@ -1556,6 +1586,14 @@ function callbackAllowedActorIds(
   }
   const actorId = intent.audit?.actor.platformUserId ?? fallbackActorId;
   return actorId ? [actorId] : ["unknown"];
+}
+
+function slackContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

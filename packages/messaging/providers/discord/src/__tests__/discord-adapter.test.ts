@@ -25,6 +25,7 @@ const TEST_GUILD_ID = "1480556454498009353";
 const TEST_MESSAGE_ID = "1480556454498009354";
 const TEST_USER_ID = "1480556454498009355";
 const TEST_OTHER_USER_ID = "1480556454498009356";
+const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
@@ -35,6 +36,7 @@ describe("discord adapter", () => {
       }),
       config: {
         authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
         botToken: "token",
         channel: "discord",
       },
@@ -471,6 +473,7 @@ describe("discord adapter", () => {
           { id: TEST_USER_ID, displayName: "" },
           { id: TEST_OTHER_USER_ID, displayName: "" },
         ],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
         botToken: "token",
         channel: "discord",
       },
@@ -533,6 +536,7 @@ describe("discord adapter", () => {
           { id: TEST_USER_ID, displayName: "" },
           { id: TEST_OTHER_USER_ID, displayName: "" },
         ],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
         botToken: "token",
         channel: "discord",
       },
@@ -637,6 +641,7 @@ describe("discord adapter", () => {
       api: createApi({ createMessage }),
       config: {
         authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
         botToken: "token",
         channel: "discord",
       },
@@ -720,6 +725,7 @@ describe("discord adapter", () => {
       api: createApi(),
       config: {
         authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
         botToken: "token",
         channel: "discord",
       },
@@ -973,6 +979,108 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
+    it("drops guild messages when the authorized guild list is empty", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "/status",
+          id: "empty-guild-list-msg",
+        }),
+      });
+
+      expect(events).toEqual([]);
+      expect(rejectedEvents).toEqual([
+        expect.objectContaining({
+          kind: "command",
+          reason: "unauthorized-conversation",
+        }),
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.objectContaining({ guildId: TEST_GUILD_ID }),
+      );
+      await adapter.stop();
+    });
+
+    it("drops non-guild group DM messages", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const rejectedEvents: MessagingRejectedInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      adapter.onInboundRejected((event) => {
+        rejectedEvents.push(event);
+      });
+      const groupDmMessage = {
+        ...messageDispatch({
+          authorBot: false,
+          content: "/status",
+          id: "group-dm-msg",
+        }),
+        channel_type: 3,
+      };
+      Reflect.deleteProperty(groupDmMessage, "guild_id");
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: groupDmMessage,
+      });
+
+      expect(events).toEqual([]);
+      expect(rejectedEvents).toEqual([
+        expect.objectContaining({
+          channel: expect.objectContaining({
+            conversation: expect.objectContaining({ kind: "channel" }),
+          }),
+          kind: "command",
+          reason: "unauthorized-conversation",
+        }),
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized non-guild conversation",
+        expect.objectContaining({ channelType: 3 }),
+      );
+      await adapter.stop();
+    });
+
     it("drops malformed component IDs before acknowledging the interaction", async () => {
       const events: MessagingInboundEvent[] = [];
       const createInteractionResponse = vi.fn(async () => {});
@@ -1104,6 +1212,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: TEST_CHANNEL_ID,
           authorizedActorIds: [{ id: "1480556454498009999", displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },
@@ -1157,6 +1266,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: BOT_ID,
           authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },
@@ -1197,6 +1307,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: BOT_ID,
           authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },
@@ -1236,6 +1347,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: BOT_ID,
           authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },
@@ -1282,6 +1394,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: BOT_ID,
           authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },
@@ -1327,6 +1440,7 @@ describe("discord adapter", () => {
         config: {
           applicationId: BOT_ID,
           authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
           botToken: "token",
           channel: "discord",
         },

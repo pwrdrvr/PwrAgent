@@ -595,6 +595,42 @@ export function MessagingSettings(props: {
               });
             }}
           />
+          <AuthorizedListField
+            disabled={props.saving}
+            label="Authorized Teams"
+            sub="Mattermost team IDs allowed for shared channel access."
+            help="26-character lowercase a-z0-9 Mattermost team ID. Rejected Mattermost messages show the team ID in Messaging Activity when available."
+            source={optionalListSourceBadge(mattermost.authorizedTeams)}
+            validateEntry={validateMattermostTeamIdEntry}
+            value={mattermost.authorizedTeams.value}
+            onSave={(authorizedTeams) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                authorizedTeams: {
+                  ...mattermost.authorizedTeams,
+                  value: authorizedTeams,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            label="Authorized Conversations"
+            sub="Mattermost channel or group DM IDs allowed even without allowing the whole team."
+            help="26-character lowercase a-z0-9 Mattermost channel ID. Rejected Mattermost messages show the channel ID in Messaging Activity."
+            source={optionalListSourceBadge(mattermost.authorizedConversations)}
+            validateEntry={validateMattermostConversationIdEntry}
+            value={mattermost.authorizedConversations.value}
+            onSave={(authorizedConversations) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                authorizedConversations: {
+                  ...mattermost.authorizedConversations,
+                  value: authorizedConversations,
+                },
+              });
+            }}
+          />
         </div>
       </SettingsSection>
 
@@ -1676,6 +1712,20 @@ function validateMattermostUserIdEntry(value: string): string | undefined {
   return validationMessage(validateMattermostId(value), "Mattermost user ID", {
     format: "Use the 26-character lowercase a-z0-9 Mattermost user ID.",
     length: "Mattermost user IDs are exactly 26 lowercase a-z0-9 characters.",
+  });
+}
+
+function validateMattermostTeamIdEntry(value: string): string | undefined {
+  return validationMessage(validateMattermostId(value), "Mattermost team ID", {
+    format: "Use the 26-character lowercase a-z0-9 Mattermost team ID.",
+    length: "Mattermost team IDs are exactly 26 lowercase a-z0-9 characters.",
+  });
+}
+
+function validateMattermostConversationIdEntry(value: string): string | undefined {
+  return validationMessage(validateMattermostId(value), "Mattermost conversation ID", {
+    format: "Use the 26-character lowercase a-z0-9 Mattermost channel or group DM ID.",
+    length: "Mattermost conversation IDs are exactly 26 lowercase a-z0-9 characters.",
   });
 }
 

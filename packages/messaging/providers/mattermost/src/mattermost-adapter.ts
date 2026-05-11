@@ -14,6 +14,8 @@ import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/cli
 import type {
   MessagingActorIdentity,
   MessagingAdapterState,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -137,6 +139,10 @@ export type MattermostProviderAdapter = {
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void>;
   /**
    * Subscribe to fatal post-start runtime errors. Fires once per
    * runtime-error episode, NOT per transient websocket retry.
@@ -273,7 +279,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     },
   };
 
-  readonly authorizedActorIds: readonly string[];
+  private authorizedActorIdsValue: string[];
 
   private readonly client: Client4;
   private readonly websocketClient: WebSocketClient;
@@ -348,7 +354,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   constructor(options: MattermostAdapterOptions) {
     this.config = options.config;
-    this.authorizedActorIds = options.config.authorizedActorIds.map(
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
       (contact) => contact.id,
     );
     this.callbackHandleStore = options.callbackHandleStore;
@@ -380,6 +386,34 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         validSlashCommandTokens: this.slashCommandTokens,
         logger: this.logger,
       });
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.authorizedActorIdsValue;
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    this.config.authorizedActorIds = mattermostContactsFromIds(
+      update.authorizedActorIds,
+      this.config.authorizedActorIds,
+    );
+    this.config.authorizedConversationIds = mattermostContactsFromIds(
+      update.authorizedConversationIds ?? [],
+      this.config.authorizedConversationIds,
+    );
+    this.config.authorizedTeamIds = mattermostContactsFromIds(
+      update.authorizedWorkspaceIds ?? [],
+      this.config.authorizedTeamIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   async start(listener: MattermostInboundListener): Promise<void> {
@@ -816,6 +850,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       username: data.sender_name,
       isBot: false,
     };
+    if (
+      !isPairingMessage
+      && !this.isAuthorizedMattermostConversation(channelRef, data.team_id)
+    ) {
+      this.emitUnauthorizedConversation({
+        actor,
+        channel: channelRef,
+        eventId: `mattermost:post:${post.id}:rejected`,
+        kind: messageText.startsWith("/") ? "command" : "text",
+      });
+      return;
+    }
 
     const fileIds: string[] = Array.isArray(post.file_ids) ? post.file_ids : [];
 
@@ -1106,6 +1152,21 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         ...(parentTitleForRef ? { parentTitle: parentTitleForRef } : {}),
       },
     };
+    const actor: MessagingActorIdentity = {
+      platformUserId: body.user_id,
+      displayName: body.user_name,
+      username: body.user_name,
+      isBot: false,
+    };
+    if (!this.isAuthorizedMattermostConversation(channelRef, body.team_id)) {
+      this.emitUnauthorizedConversation({
+        actor,
+        channel: channelRef,
+        eventId: this.newEventId("callback-rejected"),
+        kind: "callback",
+      });
+      return;
+    }
     let resolvedHandle: MessagingCallbackHandleRecord | undefined;
     try {
       resolvedHandle = await this.callbackHandleStore.resolveCallbackHandle({
@@ -1132,12 +1193,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       kind: "callback",
       id: this.newEventId("callback"),
       receivedAt: this.now(),
-      actor: {
-        platformUserId: body.user_id,
-        displayName: body.user_name,
-        username: body.user_name,
-        isBot: false,
-      },
+      actor,
       channel: channelRef,
       actionId: resolvedHandle.actionId,
       value: resolvedHandle.value,
@@ -1377,6 +1433,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         ...(parentTitle ? { parentTitle } : {}),
       },
     };
+    if (!this.isAuthorizedMattermostConversation(channelRef, body.team_id)) {
+      this.emitUnauthorizedConversation({
+        actor,
+        channel: channelRef,
+        eventId: this.newEventId("slashcmd-rejected"),
+        kind: "command",
+      });
+      return undefined;
+    }
 
     // Reuse the existing text-prefix command dispatch — it's
     // channel-neutral and already wired to the controller. Build a
@@ -1425,6 +1490,45 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       ...(routingState ? { routingState } : {}),
     });
     return undefined;
+  }
+
+  private isAuthorizedMattermostConversation(
+    channel: MessagingChannelRef,
+    teamId?: string,
+  ): boolean {
+    if (channel.conversation.kind === "dm") {
+      return true;
+    }
+    const authorizedConversations = this.config.authorizedConversationIds ?? [];
+    if (
+      authorizedConversations.some(
+        (contact) => contact.id === channel.conversation.id,
+      )
+    ) {
+      return true;
+    }
+    const authorizedTeams = this.config.authorizedTeamIds ?? [];
+    return Boolean(
+      teamId && authorizedTeams.some((contact) => contact.id === teamId),
+    );
+  }
+
+  private emitUnauthorizedConversation(params: {
+    actor: MessagingActorIdentity;
+    channel: MessagingChannelRef;
+    eventId: string;
+    kind: MessagingInboundEvent["kind"];
+    routingState?: MessagingAdapterState;
+  }): void {
+    this.emitInboundRejected({
+      id: params.eventId,
+      kind: params.kind,
+      actor: params.actor,
+      channel: params.channel,
+      receivedAt: this.now(),
+      reason: "unauthorized-conversation",
+      ...(params.routingState ? { routingState: params.routingState } : {}),
+    });
   }
 
   private async dispatchCommandEvent(params: {
@@ -2227,7 +2331,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const isThread = Boolean(post.root_id && post.root_id !== post.id);
     const kind: MessagingConversationKind = isThread
       ? "thread"
-      : data.channel_type === "D" || data.channel_type === "G"
+      : data.channel_type === "D"
         ? "dm"
         : "channel";
     // Title selection (mirrors Discord's adapter):
@@ -2465,6 +2569,14 @@ function callbackAllowedActorIds(
   }
   const actorId = intent.audit?.actor.platformUserId ?? fallbackActorId;
   return actorId ? [actorId] : ["unknown"];
+}
+
+function mattermostContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

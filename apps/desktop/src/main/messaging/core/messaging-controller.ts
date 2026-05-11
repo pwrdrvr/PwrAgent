@@ -2225,6 +2225,13 @@ export class MessagingController {
     return true;
   }
 
+  updateAuthorizedActorIds(actorIds: readonly string[]): void {
+    this.authorizedActorIds.clear();
+    for (const actorId of actorIds) {
+      this.authorizedActorIds.add(actorId);
+    }
+  }
+
   dispose(): void {
     this.turnAdmission.dispose();
     for (const pending of this.pendingNewThreadPrompts.values()) {

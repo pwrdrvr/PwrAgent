@@ -241,6 +241,17 @@ export type MessagingActorIdentity = {
   isBot?: boolean;
 };
 
+export type MessagingAdapterAuthorizationUpdate = {
+  authorizedActorIds: readonly string[];
+  authorizedConversationIds?: readonly string[];
+  authorizedWorkspaceIds?: readonly string[];
+};
+
+export type MessagingAdapterRenderingPreferencesUpdate = {
+  streamingResponses?: boolean;
+  toolUpdateDefaultMode?: MessagingToolUpdateMode;
+};
+
 export type MessagingChannelRef = {
   channel: MessagingChannelKind;
   conversation: MessagingConversationRef;

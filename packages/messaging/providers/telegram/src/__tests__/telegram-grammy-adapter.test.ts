@@ -365,6 +365,76 @@ describe("TelegramAdapter callback persistence", () => {
       }),
     ]);
   });
+
+  it("rejects supergroup messages after hot-removing the authorized supergroup", async () => {
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-100123", displayName: "Claw Dev" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: string[] = [];
+    adapter.onInboundRejected?.((event) => {
+      rejected.push(event.reason);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleUpdate({
+      update_id: 100,
+      message: {
+        chat: {
+          id: -100123,
+          title: "Claw Dev",
+          type: "supergroup",
+        },
+        date: 1_700_000_000,
+        from: {
+          first_name: "Harold",
+          id: 42,
+          username: "huntharo",
+        },
+        message_id: 500,
+        text: "before",
+      },
+    });
+    await adapter.updateAuthorization({
+      authorizedActorIds: ["42"],
+      authorizedConversationIds: [],
+    });
+    await adapter.handleUpdate({
+      update_id: 101,
+      message: {
+        chat: {
+          id: -100123,
+          title: "Claw Dev",
+          type: "supergroup",
+        },
+        date: 1_700_000_001,
+        from: {
+          first_name: "Harold",
+          id: 42,
+          username: "huntharo",
+        },
+        message_id: 501,
+        text: "after",
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "text",
+      text: "before",
+    });
+    expect(rejected).toEqual(["unauthorized-conversation"]);
+  });
 });
 
 function createGrammyBot(): TelegramGrammyBotLike & {
