@@ -35,7 +35,7 @@
           "source": "codex",
           "executionMode": "default",
           "linkedDirectories": [
-            { "id": "dir-web-app", "label": "web-app", "path": "/Users/hunt/code/web-app", "kind": "local" }
+            { "id": "dir-web-app", "label": "web-app", "path": "/Users/riley/code/web-app", "kind": "local" }
           ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715431200000
@@ -48,7 +48,7 @@
           "source": "codex",
           "executionMode": "default",
           "linkedDirectories": [
-            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
           ],
           "inbox": { "inInbox": true, "reason": "new-thread" },
           "updatedAt": 1715424600000
@@ -61,7 +61,7 @@
           "source": "codex",
           "executionMode": "default",
           "linkedDirectories": [
-            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
           ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715418000000
@@ -77,9 +77,9 @@
             {
               "id": "dir-pwragent-cpu-worktree",
               "label": "startup-cpu (worktree)",
-              "path": "/Users/hunt/code/pwragent",
+              "path": "/Users/riley/code/pwragent",
               "kind": "worktree",
-              "worktreePath": "/Users/hunt/code/pwragent/.worktrees/startup-cpu"
+              "worktreePath": "/Users/riley/code/pwragent/.worktrees/startup-cpu"
             }
           ],
           "inbox": { "inInbox": false, "reason": "none" },
@@ -93,7 +93,7 @@
           "source": "codex",
           "executionMode": "default",
           "linkedDirectories": [
-            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
           ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715404800000
@@ -106,7 +106,7 @@
           "source": "codex",
           "executionMode": "default",
           "linkedDirectories": [
-            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
           ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715398200000

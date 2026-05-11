@@ -46,6 +46,40 @@ const captureScript = path.resolve(
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 
+/**
+ * Synthetic personas used across the screenshot captures. Everything
+ * here is deliberately invented — no real Telegram peer IDs, no real
+ * Slack workspace IDs, no real human names. The numeric and opaque
+ * IDs follow each platform's format closely enough to look plausible
+ * but include obvious tells:
+ *   - Telegram peer ids use the 555-prefixed phone-number-style block
+ *     reserved for fiction.
+ *   - Telegram supergroup ids preserve the `-100xxx` format but use
+ *     a synthetic body.
+ *   - Slack workspace/channel ids embed "FAKE" so screenshot viewers
+ *     can tell at a glance that nothing here points at a real
+ *     workspace.
+ * Reusing these constants across tests keeps the captures coherent —
+ * the "bound thread" chip and the "Inbound from ..." activity rows
+ * reference the same fake user.
+ */
+const PERSONA_OWNER = {
+  displayName: "Riley Chen",
+  username: "rileychen",
+  telegramPeerId: "5550199999",
+} as const;
+
+const PERSONA_REJECTED = {
+  displayName: "Casey Wong",
+  slackUserId: "U0FAKE001",
+  slackChannelId: "C0FAKE002",
+  slackChannelTitle: "design-chat",
+} as const;
+
+const SYNTHETIC_TELEGRAM_SUPERGROUP_ID = "-1009990000001";
+const SYNTHETIC_TELEGRAM_TOPIC_ID_PRIMARY = "42";
+const SYNTHETIC_TELEGRAM_TOPIC_ID_SECONDARY = "108";
+
 test.skip(
   process.env.PWRAGENT_SCREENSHOT_CAPTURE !== "1",
   "Set PWRAGENT_SCREENSHOT_CAPTURE=1 via the package script to capture README screenshots.",
@@ -162,7 +196,8 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
     const bindingId = seedTelegramBinding({
       stateDbPath,
       threadId: "thread-recents-hero-primary",
-      conversationTitle: "Hunt",
+      conversationTitle: PERSONA_OWNER.displayName.split(" ")[0],
+      conversationId: PERSONA_OWNER.telegramPeerId,
     });
 
     // Seed activity rows that mirror the user's reference screenshot:
@@ -179,15 +214,15 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
         kind: "inbound-routed",
         threadId: "thread-recents-hero-primary",
         bindingId,
-        conversationId: "953",
-        actorId: "8460800771",
-        actorDisplayName: "Harold Hunt",
-        summary: "Inbound from Harold Hunt",
+        conversationId: SYNTHETIC_TELEGRAM_TOPIC_ID_PRIMARY,
+        actorId: PERSONA_OWNER.telegramPeerId,
+        actorDisplayName: PERSONA_OWNER.displayName,
+        summary: `Inbound from ${PERSONA_OWNER.displayName}`,
         createdAt: now - 19 * hour,
         payload: {
           conversationKind: "topic",
-          conversationParentId: "-1003841603622",
-          conversationBucketId: "-1003841603622",
+          conversationParentId: SYNTHETIC_TELEGRAM_SUPERGROUP_ID,
+          conversationBucketId: SYNTHETIC_TELEGRAM_SUPERGROUP_ID,
         },
       },
       {
@@ -195,25 +230,25 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
         kind: "inbound-routed",
         threadId: "thread-recents-hero-primary",
         bindingId,
-        conversationId: "6690",
-        actorId: "8460800771",
-        actorDisplayName: "Harold Hunt",
-        summary: "Inbound from Harold Hunt",
+        conversationId: SYNTHETIC_TELEGRAM_TOPIC_ID_SECONDARY,
+        actorId: PERSONA_OWNER.telegramPeerId,
+        actorDisplayName: PERSONA_OWNER.displayName,
+        summary: `Inbound from ${PERSONA_OWNER.displayName}`,
         createdAt: now - 20 * hour,
         payload: {
           conversationKind: "topic",
-          conversationParentId: "-1003841603622",
-          conversationBucketId: "-1003841603622",
+          conversationParentId: SYNTHETIC_TELEGRAM_SUPERGROUP_ID,
+          conversationBucketId: SYNTHETIC_TELEGRAM_SUPERGROUP_ID,
         },
       },
       {
         platform: "slack",
         kind: "inbound-rejected",
-        conversationId: "G01N9LZU287",
-        conversationTitle: "signals-chat",
-        actorId: "UA6R99D0A",
-        actorDisplayName: "Vitaliy Morarian",
-        summary: "Rejected inbound from Vitaliy Morarian",
+        conversationId: PERSONA_REJECTED.slackChannelId,
+        conversationTitle: PERSONA_REJECTED.slackChannelTitle,
+        actorId: PERSONA_REJECTED.slackUserId,
+        actorDisplayName: PERSONA_REJECTED.displayName,
+        summary: `Rejected inbound from ${PERSONA_REJECTED.displayName}`,
         createdAt: now - 4 * hour,
         payload: { conversationKind: "channel" },
       },
@@ -320,10 +355,14 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
         .first(),
     ).toBeVisible({ timeout: 15_000 });
     await expect(
-      activityWindow.getByText(/Inbound from Harold Hunt/).first(),
+      activityWindow
+        .getByText(new RegExp(`Inbound from ${PERSONA_OWNER.displayName}`))
+        .first(),
     ).toBeVisible();
     await expect(
-      activityWindow.getByText(/Rejected inbound from Vitaliy Morarian/),
+      activityWindow.getByText(
+        new RegExp(`Rejected inbound from ${PERSONA_REJECTED.displayName}`),
+      ),
     ).toBeVisible();
 
     captureNative("screenshot-closed-by-default.png", {
@@ -555,14 +594,14 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     }
     markPairingObserved(stateDbPath, entryId, {
       observedActor: {
-        id: "8460800771",
-        username: "huntharo",
-        displayName: "Harold Hunt",
+        id: PERSONA_OWNER.telegramPeerId,
+        username: PERSONA_OWNER.username,
+        displayName: PERSONA_OWNER.displayName,
       },
       observedChat: {
-        id: "8460800771",
+        id: PERSONA_OWNER.telegramPeerId,
         kind: "dm",
-        title: "Harold Hunt",
+        title: PERSONA_OWNER.displayName,
       },
     });
 
@@ -599,7 +638,9 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
     // renders a row per authorized user with the numeric peer id in
     // a text input and the display name beside it.
     await expect(
-      app.window.locator('input[value="8460800771"]').first(),
+      app.window
+        .locator(`input[value="${PERSONA_OWNER.telegramPeerId}"]`)
+        .first(),
     ).toBeVisible({ timeout: 10_000 });
 
     // Re-scroll so the Pairing field stays at center (the Authorized
@@ -648,7 +689,8 @@ test("bound-thread — thread row + detail with messenger chip", async () => {
     seedTelegramBinding({
       stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
       threadId: "thread-recents-hero-primary",
-      conversationTitle: "Hunt",
+      conversationTitle: PERSONA_OWNER.displayName.split(" ")[0],
+      conversationId: PERSONA_OWNER.telegramPeerId,
     });
 
     // Reload the renderer so it re-fetches `thread/list` with the new
