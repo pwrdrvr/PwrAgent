@@ -16,6 +16,12 @@ export type AppLicenseDocument = {
   content: string;
 };
 
+export type AppChangelogDocument = {
+  kind: "changelog";
+  title: string;
+  content: string;
+};
+
 export type AppUpdateCheckResult =
   | { status: "skipped"; reason: string }
   | { status: "error"; message: string }

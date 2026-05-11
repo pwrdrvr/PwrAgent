@@ -400,6 +400,14 @@ textarea,
   background: var(--bg-app);
 }
 
+.document-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-app);
+}
+
 .activity-screen {
   display: flex;
   flex: 1;
@@ -501,6 +509,60 @@ textarea,
   flex: 1;
   min-height: 0;
   padding: 18px 24px;
+}
+
+.document-window__content {
+  flex: 1;
+  min-height: 0;
+  padding: 26px 28px;
+  overflow: auto;
+}
+
+.document-window__body {
+  max-width: 900px;
+  margin: 0 auto;
+  color: var(--text-secondary);
+}
+
+.document-window__empty,
+.document-window__error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.document-window__error {
+  color: var(--danger-text);
+}
+
+.document-window__markdown {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.document-window__markdown .transcript-message__heading:is(h1) {
+  color: var(--text-primary);
+  font-size: 26px;
+  line-height: 1.15;
+}
+
+.document-window__markdown .transcript-message__heading:is(h2) {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.document-window__markdown .transcript-message__list {
+  padding-left: 22px;
+}
+
+.document-window__markdown .transcript-message__list li + li {
+  margin-top: 8px;
 }
 
 /* Pinned head + filling middle + capped footer for the activity body. */

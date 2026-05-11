@@ -118,6 +118,7 @@ import type {
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type {
+  AppChangelogDocument,
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
@@ -131,6 +132,8 @@ export type DesktopApi = {
   readLicenseDocument?: (
     kind: AppLicenseDocumentKind,
   ) => Promise<AppLicenseDocument>;
+  readChangelogDocument?: () => Promise<AppChangelogDocument>;
+  openChangelogWindow?: () => Promise<void>;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (

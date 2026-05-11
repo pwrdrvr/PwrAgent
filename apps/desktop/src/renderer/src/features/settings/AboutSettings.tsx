@@ -72,6 +72,7 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
   };
 
   const readLicenseDocument = props.desktopApi?.readLicenseDocument;
+  const openChangelogWindow = props.desktopApi?.openChangelogWindow;
   const handleReadLicenseDocument = async (kind: AppLicenseDocumentKind) => {
     if (!readLicenseDocument) {
       return;
@@ -170,6 +171,26 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
             <dd>{metadata.nodeVersion}</dd>
           </div>
         </dl>
+      </SettingsSection>
+
+      <SettingsSection eyebrow="Release Notes" title="Changelog">
+        <div className="settings-license-actions">
+          <p className="settings-panel__hint">
+            Review bundled release notes for this build.
+          </p>
+          <div className="settings-button-row">
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={!openChangelogWindow}
+              onClick={() => {
+                void openChangelogWindow?.();
+              }}
+            >
+              Open changelog
+            </button>
+          </div>
+        </div>
       </SettingsSection>
 
       <SettingsSection eyebrow="License" title="Attribution">
