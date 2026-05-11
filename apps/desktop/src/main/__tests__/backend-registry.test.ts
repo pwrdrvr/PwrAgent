@@ -501,6 +501,7 @@ class MockBackendClient {
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
+      setThreadPermissionsDelay?: Promise<unknown>;
     }
   ) {}
 
@@ -677,6 +678,7 @@ class MockBackendClient {
   }): Promise<{ threadId: string }> {
     this.lastSetThreadPermissionsParams = params;
     this.setThreadPermissionsCallCount += 1;
+    await this.options.setThreadPermissionsDelay;
     if (this.options.setThreadPermissionsError) {
       throw this.options.setThreadPermissionsError;
     }
@@ -2490,6 +2492,37 @@ describe("DesktopBackendRegistry", () => {
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
     });
+
+    await registry.close();
+  });
+
+  it("rejects Codex review start while the thread has an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Keep working" }],
+    });
+
+    await expect(
+      registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      }),
+    ).rejects.toThrow("Thread already has an active turn in progress: thread-1");
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
 
     await registry.close();
   });
@@ -4727,6 +4760,75 @@ describe("DesktopBackendRegistry", () => {
 
       const log = await getLog(overlayStore, "thread-1");
       expect(log.map((entry) => entry.status)).toContain("applied");
+
+      await registry.close();
+    });
+
+    it("startReview waits for an in-flight permission queue flush before review/start", async () => {
+      const permissionFlush = createDeferred<void>();
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "review/start", "thread/resume"] },
+        setThreadPermissionsDelay: permissionFlush.promise,
+      });
+      const overlayStore = createOverlayStoreMock({
+        executionMode: "default",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok unavailable"),
+        }),
+        overlayStore,
+      });
+      const turnId = await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          turn: { id: turnId, status: "completed", output: [] },
+        },
+      });
+
+      await waitForCondition(
+        () => codexClient.lastSetThreadPermissionsParams !== undefined,
+      );
+
+      const reviewPromise = registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+      await flushAsync();
+
+      expect(codexClient.lastStartReviewParams).toBeUndefined();
+      permissionFlush.resolve();
+      await reviewPromise;
+
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-1",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+      expect(codexClient.lastStartReviewParams).toEqual({
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(overlay?.executionMode).toBe("full-access");
 
       await registry.close();
     });

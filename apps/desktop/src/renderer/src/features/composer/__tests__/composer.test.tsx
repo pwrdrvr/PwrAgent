@@ -9,6 +9,7 @@ import type {
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
 import type {
@@ -572,6 +573,202 @@ describe("Composer", () => {
         turnId: "turn-1",
       });
     });
+  });
+
+  it("queues submits while a turn start is pending", async () => {
+    let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>((resolve) => {
+          resolveStartTurn = () =>
+            resolve({
+              backend: request.backend,
+              threadId: request.threadId,
+              turnId: "turn-1",
+            });
+        })
+    );
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Slow send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "did CI pass" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(textarea, { target: { value: "follow up next" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("follow up next");
+
+    await act(async () => {
+      resolveStartTurn?.({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+    });
+  });
+
+  it("queues slash review submits while a turn start is pending", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>((resolve) => {
+          resolveStartTurn = () =>
+            resolve({
+              backend: request.backend,
+              threadId: request.threadId,
+              turnId: "turn-1",
+            });
+        })
+    );
+
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
+          listener: infer Listener,
+        ) => unknown
+          ? Listener
+          : never) => {
+          agentEventHandler = callback as typeof agentEventHandler;
+          return () => undefined;
+        },
+        startReview,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Slow send",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(<Composer {...baseProps} />);
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "did CI pass" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(textarea, { target: { value: "/review main" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Review changes against main"
+    );
+
+    await act(async () => {
+      resolveStartTurn?.({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+    });
+    rerender(<Composer {...baseProps} activeTurnId="turn-1" />);
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("keeps the review target picker for bare reviews while a turn start is pending", async () => {
+    const startReview = vi.fn();
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>(() => {
+          void request;
+        })
+    );
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Slow send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "did CI pass" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.change(textarea, { target: { value: "/review" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
   });
 
   it("queues Enter during an active turn and sends it after the turn clears", async () => {
@@ -1918,6 +2115,234 @@ describe("Composer", () => {
     });
     expect(addOptimisticReviewEntry).toHaveBeenCalledWith("Review changes against main");
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("queues review target submissions while a turn is active", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const baseProps = {
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startReview,
+      },
+      backends: [
+        {
+          ...backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                supportsReasoning: true,
+                supportsSteering: true,
+              },
+            ],
+          }),
+          capabilities: {
+            ...backendSummary("codex").capabilities,
+            steerTurn: true,
+          },
+        },
+      ],
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Review thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(<Composer {...baseProps} />);
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/review" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+
+    rerender(<Composer {...baseProps} activeTurnId="turn-1" />);
+    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Review changes against main")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("keeps the review target picker for bare review commands during an active turn", async () => {
+    const startReview = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+  });
+
+  it("starts a queued review without clearing the next live draft", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "next-draft.png", {
+      type: "image/png",
+    });
+    const baseProps = {
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startReview,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Review thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(<Composer {...baseProps} activeTurnId="turn-1" />);
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("next-draft.png")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "keep this next draft" },
+    });
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+    expect(
+      screen.queryByText("/review does not accept image attachments.")
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue("keep this next draft");
+    expect(screen.getByAltText("next-draft.png")).toBeInTheDocument();
+  });
+
+  it("rejects review queue attempts with live image attachments", async () => {
+    const startReview = vi.fn();
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "review-image.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+    expect(await screen.findByAltText("review-image.png")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.getByText("/review does not accept image attachments.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue("/review main");
+    expect(screen.getByAltText("review-image.png")).toBeInTheDocument();
   });
 
   it("asks for a review target before submitting bare slash review commands", async () => {

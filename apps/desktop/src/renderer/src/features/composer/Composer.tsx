@@ -165,6 +165,10 @@ type QueuedTurnDraft = {
   id: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
+  reviewCommand?: {
+    displayText: string;
+    target: AppServerReviewTarget;
+  };
   text: string;
 };
 
@@ -398,6 +402,10 @@ function findSlashCommandTrigger(text: string, caret: number): {
 }
 
 function formatDraftPreview(draft: QueuedTurnDraft): string {
+  if (draft.reviewCommand) {
+    return draft.reviewCommand.displayText;
+  }
+
   const text = draft.text.trim();
   if (text) {
     return text;
@@ -497,6 +505,22 @@ function parseStaleSteerError(
   }
 
   return undefined;
+}
+
+function reviewCommandToDraftText(command: {
+  target: AppServerReviewTarget;
+}): string {
+  const target = command.target;
+  if (target.type === "uncommittedChanges") {
+    return "/review";
+  }
+  if (target.type === "baseBranch") {
+    return `/review ${target.branch}`;
+  }
+  if (target.type === "commit") {
+    return `/review --commit ${[target.sha, target.title].filter(Boolean).join(" ")}`;
+  }
+  return `/review --custom ${target.instructions}`;
 }
 
 function HighlightedAutocompleteLabel(props: {
@@ -921,7 +945,12 @@ export function Composer(props: ComposerProps) {
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [handoffError, setHandoffError] = useState<string | undefined>();
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [sending, setSendingState] = useState(false);
+  const sendingRef = useRef(false);
+  const updateSending = (nextSending: boolean): void => {
+    sendingRef.current = nextSending;
+    setSendingState(nextSending);
+  };
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
@@ -1071,7 +1100,10 @@ export function Composer(props: ComposerProps) {
 
     const snapshots = state.filter(
       (entry) =>
-        entry.text.trim() || entry.imageAttachments.length > 0 || entry.input?.length,
+        entry.reviewCommand ||
+        entry.text.trim() ||
+        entry.imageAttachments.length > 0 ||
+        entry.input?.length,
     );
 
     if (snapshots.length === 0) {
@@ -1328,7 +1360,7 @@ export function Composer(props: ComposerProps) {
       setPendingSteerState(undefined);
       setQueuedTurnsState([]);
     }
-    setSending(false);
+    updateSending(false);
     setInterrupting(false);
     setSteering(false);
     updateActiveTurnId(undefined);
@@ -1429,7 +1461,7 @@ export function Composer(props: ComposerProps) {
       );
       setImageAttachments(props.launchpad?.imageAttachments ?? []);
     }
-    setSending(false);
+    updateSending(false);
     setInterrupting(false);
     setSteering(false);
     updateActiveTurnId(undefined);
@@ -1461,7 +1493,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(props.activeTurnId);
 
     if (!props.activeTurnId) {
-      setSending(false);
+      updateSending(false);
       setInterrupting(false);
       setSteering(false);
     }
@@ -1536,7 +1568,7 @@ export function Composer(props: ComposerProps) {
           props.removeOptimisticMessage?.(activeOptimisticMessageId);
         }
         props.onPendingStatusChange?.(undefined);
-        setSending(false);
+        updateSending(false);
         setInterrupting(false);
         setSteering(false);
         if (pendingSteer?.status === "pending") {
@@ -1567,7 +1599,7 @@ export function Composer(props: ComposerProps) {
         }
 
         props.onPendingStatusChange?.(undefined);
-        setSending(false);
+        updateSending(false);
         setInterrupting(false);
         setSteering(false);
         setPendingSteer(undefined);
@@ -1625,17 +1657,21 @@ export function Composer(props: ComposerProps) {
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
     target: AppServerReviewTarget;
-  }): Promise<void> => {
+  }, options?: { queued?: QueuedTurnDraft }): Promise<void> => {
     if (props.disabled) {
       return;
     }
-    if (imageAttachments.length > 0) {
+    if (!options?.queued && imageAttachments.length > 0) {
       setSendError("/review does not accept image attachments.");
+      return;
+    }
+    if (!options?.queued && shouldQueueThreadSubmit()) {
+      queueReviewCommand(reviewCommand);
       return;
     }
 
     setSendError(undefined);
-    setSending(true);
+    updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
@@ -1655,14 +1691,14 @@ export function Composer(props: ComposerProps) {
         props.onPendingStatusChange?.(undefined);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
-        setSending(false);
+        updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startReview) {
       props.onPendingStatusChange?.(undefined);
-      setSending(false);
+      updateSending(false);
       return;
     }
 
@@ -1679,15 +1715,19 @@ export function Composer(props: ComposerProps) {
       });
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
-      clearComposerDraftSnapshot(composerScopeKey);
-      clearComposerDraft();
-      setReviewConfig(undefined);
+      if (options?.queued) {
+        removeQueuedTurn(options.queued);
+      } else {
+        clearComposerDraftSnapshot(composerScopeKey);
+        clearComposerDraft();
+        setReviewConfig(undefined);
+      }
     } catch (error) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
       props.onPendingStatusChange?.(undefined);
-      setSending(false);
+      updateSending(false);
       setInterrupting(false);
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
@@ -1762,7 +1802,7 @@ export function Composer(props: ComposerProps) {
         : undefined;
 
     if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
-      setSending(false);
+      updateSending(false);
       return;
     }
 
@@ -1805,7 +1845,7 @@ export function Composer(props: ComposerProps) {
         props.removeOptimisticMessage?.(optimisticMessageId);
       }
       props.onPendingStatusChange?.(undefined);
-      setSending(false);
+      updateSending(false);
       setInterrupting(false);
       setSteering(false);
       updateActiveTurnId(undefined);
@@ -1815,14 +1855,23 @@ export function Composer(props: ComposerProps) {
     }
   };
 
+  const sendQueuedTurn = async (queued: QueuedTurnDraft): Promise<void> => {
+    if (queued.reviewCommand) {
+      await submitReviewCommand(queued.reviewCommand, { queued });
+      return;
+    }
+
+    await sendThreadTurn(queued);
+  };
+
   useEffect(() => {
     if (!queuedTurn || activeTurnId || sending || props.launchpad || props.disabled) {
       return;
     }
 
-    setSending(true);
-    void sendThreadTurn(queuedTurn).finally(() => {
-      setSending(false);
+    updateSending(true);
+    void sendQueuedTurn(queuedTurn).finally(() => {
+      updateSending(false);
     });
   }, [activeTurnId, queuedTurn, sending, props.disabled, props.launchpad]);
 
@@ -1871,6 +1920,26 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setSendError(undefined);
   };
+
+  const queueReviewCommand = (reviewCommand: {
+    displayText: string;
+    target: AppServerReviewTarget;
+  }): void => {
+    enqueueQueuedTurn({
+      id: createQueuedTurnId(),
+      text: reviewCommandToDraftText(reviewCommand),
+      imageAttachments: [],
+      reviewCommand,
+    });
+    clearComposerDraftSnapshot(composerScopeKey);
+    clearComposerDraft();
+    setImageAttachments([]);
+    setReviewConfig(undefined);
+    setSendError(undefined);
+  };
+
+  const shouldQueueThreadSubmit = (): boolean =>
+    !props.launchpad && (Boolean(activeTurnIdRef.current) || sendingRef.current);
 
   const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
     const turnId = activeTurnIdRef.current;
@@ -1995,9 +2064,24 @@ export function Composer(props: ComposerProps) {
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = parseReviewCommand(draft);
-    if (activeTurnIdRef.current && !props.launchpad) {
-      if (mode === "steer") {
+    if (shouldQueueThreadSubmit()) {
+      if (activeTurnIdRef.current && mode === "steer") {
         steerCurrentDraft();
+      } else if (reviewCommand && isBareReviewCommand) {
+        setReviewConfig(
+          reviewConfig ??
+            createReviewConfig({
+              directory: props.directory,
+              thread: props.thread,
+            })
+        );
+        setSendError(undefined);
+      } else if (reviewCommand) {
+        if (imageAttachments.length > 0) {
+          setSendError("/review does not accept image attachments.");
+          return;
+        }
+        queueReviewCommand(reviewCommand);
       } else {
         queueCurrentDraft();
       }
@@ -2041,7 +2125,7 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    setSending(true);
+    updateSending(true);
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
@@ -2060,13 +2144,13 @@ export function Composer(props: ComposerProps) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
-        setSending(false);
+        updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startTurn) {
-      setSending(false);
+      updateSending(false);
       return;
     }
 
@@ -2162,6 +2246,11 @@ export function Composer(props: ComposerProps) {
 
     if (command.id === "review-current") {
       enterReviewComposer();
+      return;
+    }
+
+    if (shouldQueueThreadSubmit()) {
+      queueCurrentDraft();
       return;
     }
 
@@ -2894,7 +2983,7 @@ export function Composer(props: ComposerProps) {
           </div>
           <QueuedImageAttachments attachments={queued.imageAttachments} />
           <div className="composer__queued-actions">
-            {supportsSteering ? (
+            {supportsSteering && !queued.reviewCommand ? (
               <button
                 className="composer__secondary-action"
                 disabled={props.disabled || steering || !activeTurnId}
