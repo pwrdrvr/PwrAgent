@@ -70,6 +70,7 @@ export type DesktopMessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
+  readCredentialMetadata?(): MessagingCredentialMetadata | undefined;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -94,6 +95,11 @@ export type DesktopMessagingAdapter = {
   ): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
+};
+
+export type MessagingCredentialMetadata = {
+  account?: string;
+  detail?: string;
 };
 
 export type DesktopMessagingAdapterFactory = (params: {
@@ -222,6 +228,10 @@ export class DesktopMessagingRuntime {
   private readonly platformStatuses = new Map<
     MessagingChannelKind,
     MessagingPlatformStatus
+  >();
+  private readonly platformCredentialMetadata = new Map<
+    MessagingChannelKind,
+    MessagingCredentialMetadata & { observedAt: number }
   >();
   private readonly platformDegradationReasons = new Map<
     MessagingChannelKind,
@@ -475,6 +485,19 @@ export class DesktopMessagingRuntime {
       this.clearExpiredDegradationReasons(platform);
     }
     return [...this.platformStatuses.values()];
+  }
+
+  getPlatformCredentialMetadata(
+    platform: MessagingChannelKind,
+  ): (MessagingCredentialMetadata & { observedAt: number }) | undefined {
+    const status = this.platformStatuses.get(platform);
+    if (
+      !this.runningAdapters.has(platform)
+      || (status?.health !== "enabled" && status?.health !== "degraded")
+    ) {
+      return undefined;
+    }
+    return this.platformCredentialMetadata.get(platform);
   }
 
   /**
@@ -906,7 +929,9 @@ export class DesktopMessagingRuntime {
       unsubscribeRuntimeError,
     });
     this.syncRunningAdapterLists();
-    this.setPlatformHealth(adapter.channel, "enabled");
+    this.setPlatformHealth(adapter.channel, "enabled", {
+      credentialMetadata: adapter.readCredentialMetadata?.(),
+    });
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,
     });
@@ -1130,10 +1155,30 @@ export class DesktopMessagingRuntime {
   private setPlatformHealth(
     platform: MessagingChannelKind,
     health: MessagingPlatformHealth,
-    options: { reason?: string } = {},
+    options: {
+      credentialMetadata?: MessagingCredentialMetadata;
+      reason?: string;
+    } = {},
   ): void {
     const at = Date.now();
     const previous = this.platformStatuses.get(platform);
+    if (
+      options.credentialMetadata
+      && (options.credentialMetadata.account || options.credentialMetadata.detail)
+    ) {
+      this.platformCredentialMetadata.set(platform, {
+        ...definedCredentialMetadata(options.credentialMetadata),
+        observedAt: at,
+      });
+    } else if (health !== "enabled") {
+      this.platformCredentialMetadata.delete(platform);
+    }
+    const credentialMetadata = this.platformCredentialMetadata.get(platform);
+    const {
+      account: _previousAccount,
+      detail: _previousDetail,
+      ...previousWithoutCredentialMetadata
+    } = previous ?? {};
     if (health === "enabled" || health === "suspended" || health === "errored") {
       if (health !== "enabled") {
         this.clearPlatformDegradationReasons(platform, { broadcast: false });
@@ -1145,10 +1190,11 @@ export class DesktopMessagingRuntime {
     const effectiveHealth =
       health === "enabled" && degradationReasons.length > 0 ? "degraded" : health;
     const next: MessagingPlatformStatus = {
-      ...previous,
+      ...previousWithoutCredentialMetadata,
       platform,
       health: effectiveHealth,
       changedAt: at,
+      ...definedCredentialMetadata(credentialMetadata ?? {}),
       reason: options.reason,
       degradationReasons,
       // Preserve the existing activity timestamp through health
@@ -1161,6 +1207,7 @@ export class DesktopMessagingRuntime {
       kind: "health-changed",
       platform,
       health: effectiveHealth,
+      ...definedCredentialMetadata(next),
       reason: options.reason,
       degradationReasons,
       at,
@@ -1937,6 +1984,15 @@ function streamingResponsesDefaultForChannel(
     default:
       return false;
   }
+}
+
+function definedCredentialMetadata(
+  metadata: MessagingCredentialMetadata,
+): MessagingCredentialMetadata {
+  return {
+    ...(metadata.account !== undefined ? { account: metadata.account } : {}),
+    ...(metadata.detail !== undefined ? { detail: metadata.detail } : {}),
+  };
 }
 
 function degradationTimerKey(

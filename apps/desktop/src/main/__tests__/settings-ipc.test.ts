@@ -16,6 +16,7 @@ const providerMocks = vi.hoisted(() => ({
 }));
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async () => undefined),
+  getPlatformCredentialMetadata: vi.fn(),
   isEnabled: vi.fn(() => false),
   requestCredentialValidation: vi.fn(),
 }));
@@ -93,6 +94,7 @@ describe("settings ipc", () => {
     providerMocks.resolveSlackContact.mockReset();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     runtimeMock.applyConfig.mockClear();
+    runtimeMock.getPlatformCredentialMetadata.mockReset();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.requestCredentialValidation.mockReset();
   });
@@ -165,6 +167,39 @@ describe("settings ipc", () => {
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
+  });
+
+  it("uses startup messaging identity as the last credential result when no manual test ran", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    runtimeMock.getPlatformCredentialMetadata.mockReturnValue({
+      account: "@pwragent_bot",
+      detail: "api.telegram.org",
+      observedAt: 1234,
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL } = await import("../../shared/ipc");
+
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL)?.(
+        {},
+        { kind: "telegram" },
+      ),
+    ).resolves.toMatchObject({
+      account: "@pwragent_bot",
+      detail: "api.telegram.org",
+      kind: "telegram",
+      status: "ok",
+      testedAt: 1234,
+    });
   });
 
   it("disposes backend clients after model settings change", async () => {

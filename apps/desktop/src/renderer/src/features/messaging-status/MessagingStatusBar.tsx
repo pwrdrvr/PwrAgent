@@ -88,6 +88,8 @@ function PlatformChip(props: {
   const Icon = ICONS[status.platform];
   const labelLines = [
     `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
+    status.account ? `Bot: ${status.account}` : undefined,
+    status.detail ? `Account detail: ${status.detail}` : undefined,
     status.reason,
     ...formatDegradationReasons(status.degradationReasons ?? []),
   ]

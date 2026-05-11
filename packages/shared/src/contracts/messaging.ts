@@ -143,6 +143,10 @@ export type MessagingPlatformStatus = {
   health: MessagingPlatformHealth;
   /** Wall-clock ms when the health last changed. */
   changedAt: number;
+  /** Public identity observed at adapter startup, e.g. bot username. */
+  account?: string;
+  /** Short public detail for the identity, e.g. API host or workspace. */
+  detail?: string;
   /** When errored, a human-readable reason for the UI tooltip. */
   reason?: string;
   /** Transient provider/runtime reasons that make an enabled platform degraded. */
@@ -160,6 +164,8 @@ export type MessagingPlatformStatusEvent =
       kind: "health-changed";
       platform: MessagingChannelKind;
       health: MessagingPlatformHealth;
+      account?: string;
+      detail?: string;
       reason?: string;
       degradationReasons?: MessagingDegradationReason[];
       at: number;

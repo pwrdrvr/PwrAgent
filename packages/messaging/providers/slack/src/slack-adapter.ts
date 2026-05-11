@@ -286,6 +286,8 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userDisplayNameCache = new Map<string, string | undefined>();
+  private botAccount: string | undefined;
+  private botAccountDetail: string | undefined;
   private botUserId: string | undefined;
   private conversationInfoLookupDisabled = false;
   private threadInfoLookupDisabled = false;
@@ -316,6 +318,14 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   get authorizedActorIds(): readonly string[] {
     return this.authorizedActorIdsValue;
+  }
+
+  readCredentialMetadata(): { account?: string; detail?: string } | undefined {
+    if (!this.botAccount && !this.botAccountDetail) return undefined;
+    return {
+      ...(this.botAccount ? { account: this.botAccount } : {}),
+      ...(this.botAccountDetail ? { detail: this.botAccountDetail } : {}),
+    };
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -366,6 +376,8 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.listener = listener;
     const auth = await this.api.authTest();
     this.botUserId = auth.user_id;
+    this.botAccount = auth.user ?? auth.user_id;
+    this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
 
     if (this.config.inboundMode === "events") {
       throw new Error("Slack Events API mode is not implemented yet; use Socket Mode");
@@ -1529,6 +1541,15 @@ export function createSlackSocketClient(
     appToken,
     autoReconnectEnabled: true,
   }) as SlackSocketClient;
+}
+
+function hostFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 export function stripBotMention(text: string, botUserId: string | undefined): string {

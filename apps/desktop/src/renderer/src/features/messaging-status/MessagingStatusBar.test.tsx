@@ -1,7 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MessagingPlatformStatus } from "@pwragent/shared";
+import type {
+  MessagingPlatformStatus,
+  MessagingPlatformStatusEvent,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { MessagingStatusBar } from "./MessagingStatusBar";
 
@@ -31,6 +34,8 @@ describe("MessagingStatusBar", () => {
         ],
         health: "degraded",
         platform: "telegram",
+        account: "@pwragent_bot",
+        detail: "api.telegram.org",
       },
     ] satisfies MessagingPlatformStatus[];
     const desktopApi: DesktopApi = {
@@ -50,5 +55,54 @@ describe("MessagingStatusBar", () => {
     });
     expect(chip).toHaveTextContent("Rate limited");
     expect(chip).toHaveTextContent("Telegram group -100123");
+    expect(chip).toHaveTextContent("Bot: @pwragent_bot");
+    expect(chip).toHaveTextContent("Account detail: api.telegram.org");
+  });
+
+  it("clears credential identity when health event omits account metadata", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+        account: "@pwragent_bot",
+        detail: "api.telegram.org",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    let emitStatusEvent: ((event: MessagingPlatformStatusEvent) => void) | null =
+      null;
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => statuses),
+      onMessagingPlatformStatusEvent: vi.fn((listener) => {
+        emitStatusEvent = listener;
+        return () => {};
+      }),
+    };
+
+    render(<MessagingStatusBar desktopApi={desktopApi} />);
+
+    const chip = await screen.findByRole("group", {
+      name: "Messaging platform status",
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
+    });
+    expect(chip).toHaveTextContent("Bot: @pwragent_bot");
+    expect(chip).toHaveTextContent("Account detail: api.telegram.org");
+
+    act(() => {
+      emitStatusEvent?.({
+        at: 2000,
+        health: "suspended",
+        kind: "health-changed",
+        platform: "telegram",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Telegram: Suspended/)).toBeInTheDocument();
+    });
+    expect(chip).not.toHaveTextContent("Bot: @pwragent_bot");
+    expect(chip).not.toHaveTextContent("Account detail: api.telegram.org");
   });
 });

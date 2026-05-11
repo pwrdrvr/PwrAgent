@@ -96,10 +96,17 @@ function upsertHealth(
 ): MessagingPlatformStatus[] {
   const platform: MessagingChannelKind = event.platform;
   const existing = current.find((entry) => entry.platform === platform);
+  const {
+    account: _existingAccount,
+    detail: _existingDetail,
+    ...existingWithoutCredentialMetadata
+  } = existing ?? {};
   const next: MessagingPlatformStatus = {
-    ...existing,
+    ...existingWithoutCredentialMetadata,
     platform,
     health: event.health,
+    ...(event.account !== undefined ? { account: event.account } : {}),
+    ...(event.detail !== undefined ? { detail: event.detail } : {}),
     changedAt: event.at,
     reason: event.reason,
     degradationReasons: event.degradationReasons,
