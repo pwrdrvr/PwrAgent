@@ -628,6 +628,64 @@ describe("MessagingController", () => {
     });
   });
 
+  it("pins the Workspaces Scratchpad first when choosing a project for a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories = [
+      {
+        ...navigation.directories[0]!,
+        latestUpdatedAt: 9_000,
+      },
+      {
+        key: "workspace:/Users/test/.pwragent/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/projects",
+        threadKeys: ["codex:scratchpad-thread"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 1_000,
+      },
+      {
+        key: "directory:giphy-demo",
+        kind: "directory",
+        label: "giphy-demo",
+        path: "/repo/giphy-demo",
+        threadKeys: ["codex:giphy-thread"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_000,
+      },
+    ];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+
+    const pickerIntent = harness.delivered.at(-1);
+    if (pickerIntent?.kind !== "project_picker") {
+      throw new Error("Expected project picker intent");
+    }
+
+    expect(
+      pickerIntent.page.actions.filter((action) => action.id === "browse:select-project"),
+    ).toEqual([
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "1. Workspaces Scratchpad (1)",
+        value: {
+          directoryKey: "workspace:/Users/test/.pwragent/projects",
+          label: "Workspaces Scratchpad",
+          path: "/Users/test/.pwragent/projects",
+        },
+      }),
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "2. PwrAgent (1)",
+      }),
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "3. giphy-demo (1)",
+      }),
+    ]);
+  });
+
   it("debounces split first prompts before creating a messaging-started thread", async () => {
     const harness = await createHarness({ inputDebounceMs: 10 });
 

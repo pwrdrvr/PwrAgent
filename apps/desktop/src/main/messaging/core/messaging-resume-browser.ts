@@ -22,6 +22,7 @@ import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
 const RESUME_BROWSER_NAV_ACTION_COUNT = 5;
+const WORKSPACES_SCRATCHPAD_LABEL = "Workspaces Scratchpad";
 
 export function resumeBrowserPageSize(
   profile?: MessagingCapabilityProfile,
@@ -242,9 +243,10 @@ function buildProjectPickerIntent(params: {
   const page = paginate(allProjects, params.session.pageIndex, params.session.pageSize);
   const actions: MessagingSurfaceAction[] = [
     ...page.items.map((project, index) => {
+      const projectLabel = formatProjectPickerLabel(project, params.session);
       const value: Record<string, MessagingJsonValue> = {
         directoryKey: project.key,
-        label: project.label,
+        label: projectLabel,
       };
       if (typeof project.path === "string") {
         value.path = project.path;
@@ -252,7 +254,7 @@ function buildProjectPickerIntent(params: {
 
       return {
         id: "browse:select-project",
-        label: `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
+        label: `${page.startIndex + index + 1}. ${projectLabel} (${project.threadKeys.length})`,
         style: "primary" as const,
         fallbackText: String(index + 1),
         value,
@@ -339,14 +341,40 @@ function projectsForSession(
       if (!query) {
         return true;
       }
-      return [directory.label, directory.path, directory.key]
+      return [
+        formatProjectPickerLabel(directory, session),
+        directory.label,
+        directory.path,
+        directory.key,
+      ]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(query));
     })
     .sort((left, right) => {
+      if (session.launchAction === "start_new_thread") {
+        const leftRank = isWorkspaceScratchpadDirectory(left) ? 0 : 1;
+        const rightRank = isWorkspaceScratchpadDirectory(right) ? 0 : 1;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+      }
       const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
       return updatedDelta !== 0 ? updatedDelta : left.label.localeCompare(right.label);
     });
+}
+
+function isWorkspaceScratchpadDirectory(directory: NavigationDirectorySummary): boolean {
+  return directory.kind === "workspace";
+}
+
+function formatProjectPickerLabel(
+  project: NavigationDirectorySummary,
+  session: MessagingBrowseSessionRecord,
+): string {
+  return session.launchAction === "start_new_thread" &&
+    isWorkspaceScratchpadDirectory(project)
+    ? WORKSPACES_SCRATCHPAD_LABEL
+    : project.label;
 }
 
 // Explicit row sentinels for the resume browser footer. Items above are
@@ -505,10 +533,10 @@ function projectPickerFallbackText(
   ].filter(Boolean);
   return [
     projectPickerPromptText(session, page.totalPages, page.totalItems),
-    ...page.items.map(
-      (project, index) =>
-        `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
-    ),
+    ...page.items.map((project, index) => {
+      const projectLabel = formatProjectPickerLabel(project, session);
+      return `${page.startIndex + index + 1}. ${projectLabel} (${project.threadKeys.length})`;
+    }),
     page.totalItems > 0
       ? `Reply with a number, or reply ${formatControlList(controls)}.`
       : `Reply ${formatControlList(controls)}.`,
