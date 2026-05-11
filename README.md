@@ -104,9 +104,10 @@ people inside your org.
 
 A sensible path:
 
-- **Start on a personal project.** Run it locally without messaging
-  enabled, or pair it to a personal Telegram or Discord bot. Get a
-  feel for what the agent does and what data it touches.
+- **Start on a personal project on a personally owned machine.** Run
+  it locally without messaging enabled, or pair it to a personal
+  Telegram or Discord bot. Get a feel for what the agent does and what
+  data it touches.
 - **Confirm policy before installing on a work machine.** Some
   employers disallow third-party developer tools by default; some
   allow them only after a security review.
