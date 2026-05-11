@@ -3208,6 +3208,7 @@ describe("DesktopBackendRegistry", () => {
     await expect(
       registry.listThreads({ backend: "codex", archived: true }),
     ).resolves.toMatchObject([archivedThread]);
+    await waitForCondition(() => messagingStore.revokedBindingIds.length === 1);
 
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
     expect(messagingStore.deletedPendingThreads).toEqual([
@@ -3245,6 +3246,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+    await waitForCondition(() => messagingStore.revokedBindingIds.length === 1);
 
     expect(codexClient.lastListThreadsDiagnostics).toEqual({
       callerReason: "archive-bound-binding-cleanup",
@@ -3253,6 +3255,70 @@ describe("DesktopBackendRegistry", () => {
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
     expect(messagingStore.deletedPendingThreads).toEqual([
       { backend: "codex", threadId: "thread-1" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("does not block thread refresh when archive cleanup asks for navigation", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archived elsewhere",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [archivedThread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+    });
+    let registry!: DesktopBackendRegistry;
+    let nestedNavigationResolved = false;
+    const messagingArchiveCleaner = {
+      requests: [] as Array<{
+        backend: "codex" | "grok";
+        threadId: string;
+        origin: "thread-archive";
+      }>,
+      async requestBindingRevokeAllForThread(request: {
+        backend: "codex" | "grok";
+        threadId: string;
+        origin: "thread-archive";
+      }) {
+        messagingArchiveCleaner.requests.push(request);
+        await registry.listThreads();
+        nestedNavigationResolved = true;
+        return { notifiedCount: 1, revokedCount: 1 };
+      },
+    };
+    registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), 100);
+    });
+
+    await expect(Promise.race([registry.listThreads(), timeout])).resolves.toEqual([]);
+    await waitForCondition(() => nestedNavigationResolved);
+
+    expect(messagingArchiveCleaner.requests).toEqual([
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        origin: "thread-archive",
+      },
     ]);
 
     await registry.close();
@@ -3302,6 +3368,7 @@ describe("DesktopBackendRegistry", () => {
       },
     });
     await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+    await waitForCondition(() => messagingStore.revokedBindingIds.length === 1);
 
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
     expect(messagingStore.deletedPendingThreads).toEqual([

@@ -1333,7 +1333,7 @@ export class DesktopBackendRegistry {
         archived: params.archived,
         filter: params.filter,
       }, diagnostics);
-      await this.handleThreadListArchiveState({
+      this.scheduleThreadListArchiveStateCleanup({
         backend: "codex",
         filter: params.filter,
         archived: params.archived,
@@ -1351,7 +1351,7 @@ export class DesktopBackendRegistry {
         }, diagnostics),
         params,
       );
-      await this.handleThreadListArchiveState({
+      this.scheduleThreadListArchiveStateCleanup({
         backend: "grok",
         filter: params.filter,
         archived: params.archived,
@@ -3223,6 +3223,20 @@ export class DesktopBackendRegistry {
       method === "turn/completed" ||
       method === "turn/failed"
     );
+  }
+
+  private scheduleThreadListArchiveStateCleanup(params: {
+    archived?: boolean;
+    backend: AppServerBackendKind;
+    filter?: string;
+    threads: AppServerThreadSummary[];
+  }): void {
+    void this.handleThreadListArchiveState(params).catch((error) => {
+      backendRegistryLog.warn("thread list archive state cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private async handleThreadListArchiveState(params: {
