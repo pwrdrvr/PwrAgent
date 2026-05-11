@@ -7,8 +7,14 @@ chat platforms you already use. Start a thread on your laptop, follow it
 from Telegram, approve a destructive command from Discord, hand the
 conversation back to the desktop when you're ready to read the diff.
 
-> **Status: alpha.** macOS only today. Expect active development and
-> breaking changes while the desktop app settles.
+> **Status: beta.** macOS only today. PwrAgent is intentionally
+> non-destructive between releases: the config system migrates settings
+> forward without breaking older versions, only writes the keys it means
+> to change, and preserves keys it doesn't recognize so newer releases
+> can introduce settings without invalidating older ones. The contract
+> with users is a stable, steadily evolving project — not churn. See
+> [docs/config-file-evolution.md](docs/config-file-evolution.md) for the
+> read-fallback, lazy-conversion, and downgrade-compatibility rules.
 
 ![PwrAgent Recents view](docs/assets/screenshots/screenshot-recents-hero.png)
 <!-- screenshot: screenshot-recents-hero.png — Recents lens populated with several threads, at least one carrying a messenger badge. 1440×900, macOS, light theme. -->
@@ -80,6 +86,9 @@ or in `~/.config/grok-app-server/config.toml`. See
 ## Roadmap
 
 - macOS-first today. Linux and Windows are not yet supported.
+- Beta-stable. New features arrive on a steady cadence; the config and
+  state systems are designed to migrate forward without breaking older
+  installs.
 - The desktop release pipeline (signing, notarization, auto-update) is
   documented in
   [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).

@@ -1,9 +1,13 @@
 # Contributing to PwrAgent
 
 Thanks for taking the time to improve PwrAgent. The project is MIT-licensed
-and currently in alpha, so expect active iteration. This document covers
-the development setup, repository conventions, testing workflow, and
-diagnostic tooling you'll need to ship a change confidently.
+and currently in beta — actively developed, but designed to be
+non-destructive between releases. The config and state systems migrate
+forward without invalidating older installs (see
+[docs/config-file-evolution.md](docs/config-file-evolution.md)); keep
+that contract in mind when proposing changes to either. This document
+covers the development setup, repository conventions, testing workflow,
+and diagnostic tooling you'll need to ship a change confidently.
 
 For the architectural picture (process model, storage layers, messaging
 layer, dependency boundaries), read [ARCHITECTURE.md](ARCHITECTURE.md)
