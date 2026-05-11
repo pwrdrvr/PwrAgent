@@ -43,6 +43,28 @@ describe("LINE formatting", () => {
     );
   });
 
+  it("omits postback display text so button taps do not print magic commands", () => {
+    const bubble = buildLineActionBubble({
+      actions: [
+        {
+          id: "status:detach",
+          label: "Detach",
+          fallbackText: "detach",
+        },
+      ],
+      buildPostbackData: () => signedLinePostbackData(),
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      title: "Status",
+    });
+
+    const row = bubble?.contents.footer?.contents[0];
+    const button = row?.type === "box" ? row.contents[0] : undefined;
+
+    expect(button?.type).toBe("button");
+    expect(button?.type === "button" ? button.action.displayText : undefined)
+      .toBeUndefined();
+  });
+
   it("flows status-sized action sets into compact rows by default", () => {
     const bubble = buildLineActionBubble({
       actions: Array.from({ length: 13 }, (_, index) => ({
