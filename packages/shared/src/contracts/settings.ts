@@ -43,13 +43,16 @@ export type DesktopMessagingContactLookupPlatform =
   | "telegram"
   | "discord"
   | "mattermost"
-  | "slack";
+  | "slack"
+  | "line";
 
 export type DesktopMessagingContactLookupKind =
   | "user"
   | "supergroup"
   | "guild"
-  | "workspace";
+  | "workspace"
+  | "group"
+  | "room";
 
 export type DesktopMessagingContactLookupRequest = {
   platform: DesktopMessagingContactLookupPlatform;
@@ -81,7 +84,9 @@ export type DesktopSettingsSecretName =
   | "mattermostHmacSecret"
   | "slackBotToken"
   | "slackAppToken"
-  | "slackSigningSecret";
+  | "slackSigningSecret"
+  | "lineChannelAccessToken"
+  | "lineChannelSecret";
 
 export type DesktopSettingsSecretState = {
   configured: boolean;
@@ -305,6 +310,18 @@ export type DesktopSettingsSnapshot = {
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       authorizedWorkspaces: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
+    line: {
+      enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
+      channelAccessToken: DesktopSettingsSecretState;
+      channelSecret: DesktopSettingsSecretState;
+      webhookUrl: DesktopSettingsValue<string>;
+      callbackBaseUrl: DesktopSettingsValue<string>;
+      botUserId: DesktopSettingsValue<string>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedGroups: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedRooms: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+    };
   };
   models: {
     codex: {
@@ -374,6 +391,16 @@ export type DesktopSettingsConfigPatch = {
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedWorkspaces?: DesktopAuthorizedContact[];
+    };
+    line?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      webhookUrl?: string;
+      callbackBaseUrl?: string;
+      botUserId?: string;
+      authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedGroups?: DesktopAuthorizedContact[];
+      authorizedRooms?: DesktopAuthorizedContact[];
     };
   };
   models?: {
@@ -497,6 +524,7 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "codex",
   "mattermost",
   "slack",
+  "line",
 ] as const;
 
 export type SettingsCredentialTestKind =

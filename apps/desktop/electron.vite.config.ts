@@ -28,6 +28,7 @@ export default defineConfig(({ command }) => {
             "@pwragent/agent-core",
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",
+            "@pwragent/messaging-provider-line",
             "@pwragent/messaging-provider-mattermost",
             "@pwragent/messaging-provider-slack",
             "@pwragent/messaging-provider-telegram"

@@ -23,6 +23,7 @@ type TesterOptions = {
   resolveMattermostBotToken?: () => string | undefined;
   resolveMattermostServerUrl?: () => string | undefined;
   resolveSlackBotToken?: () => string | undefined;
+  resolveLineChannelAccessToken?: () => string | undefined;
   resolveGrokApiKey?: () => Promise<string | undefined>;
   resolveCodexCommand?: () => Promise<string | undefined>;
   runCodexVersion?: (
@@ -58,6 +59,8 @@ function buildTester(options: TesterOptions = {}) {
       options.resolveMattermostServerUrl
       ?? (() => "https://mm.example.com"),
     resolveSlackBotToken: options.resolveSlackBotToken ?? (() => "slack-token"),
+    resolveLineChannelAccessToken:
+      options.resolveLineChannelAccessToken ?? (() => "line-token"),
     resolveGrokApiKey: options.resolveGrokApiKey ?? (async () => "grok-key"),
     resolveCodexCommand: options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
     validateMessagingCredentials,

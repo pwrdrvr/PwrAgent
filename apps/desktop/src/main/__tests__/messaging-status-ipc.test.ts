@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async () => undefined),
+  deliverPairingOutcome: vi.fn(async () => undefined),
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
+  listPairingRequests: vi.fn((): { entries: unknown[] } => ({ entries: [] })),
   onBindingsChanged: vi.fn(() => vi.fn()),
   onPairingChanged: vi.fn(() => vi.fn()),
   onPlatformStatus: vi.fn(() => vi.fn()),
@@ -12,6 +14,13 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 const settingsServiceMock = vi.hoisted(() => ({
   readSettings: vi.fn(),
+  writeConfigPatch: vi.fn(async () => ({ configPath: "/tmp/pwragent-config.toml" })),
+}));
+const pairingStoreMock = vi.hoisted(() => ({
+  markStatus: vi.fn(),
+}));
+const activityLogMock = vi.hoisted(() => ({
+  record: vi.fn(),
 }));
 const messagingConfigMocks = vi.hoisted(() => ({
   loadDesktopMessagingConfigFromSettings: vi.fn(async () => ({
@@ -46,6 +55,14 @@ vi.mock("../messaging/messaging-config", () => ({
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings,
 }));
 
+vi.mock("../messaging/desktop-messaging-pairing-store", () => ({
+  getDesktopMessagingPairingStore: vi.fn(() => pairingStoreMock),
+}));
+
+vi.mock("../messaging/desktop-messaging-activity-log", () => ({
+  getDesktopMessagingActivityLog: vi.fn(() => activityLogMock),
+}));
+
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => ({
     info: vi.fn(),
@@ -66,13 +83,23 @@ describe("messaging status ipc", () => {
   beforeEach(() => {
     handlers.clear();
     runtimeMock.applyConfig.mockClear();
+    runtimeMock.deliverPairingOutcome.mockClear();
     runtimeMock.getPlatformStatuses.mockClear();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.isEnabled.mockReturnValue(true);
+    runtimeMock.listPairingRequests.mockClear();
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [] });
     runtimeMock.onBindingsChanged.mockClear();
     runtimeMock.onPairingChanged.mockClear();
     runtimeMock.onPlatformStatus.mockClear();
     runtimeMock.stop.mockClear();
+    settingsServiceMock.readSettings.mockReset();
+    settingsServiceMock.writeConfigPatch.mockClear();
+    settingsServiceMock.writeConfigPatch.mockResolvedValue({
+      configPath: "/tmp/pwragent-config.toml",
+    });
+    pairingStoreMock.markStatus.mockReset();
+    activityLogMock.record.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
   });
 
@@ -99,4 +126,120 @@ describe("messaging status ipc", () => {
       { allowStart: true },
     );
   });
+
+  it("approves LINE user pairing into authorized users", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-line-user",
+      platform: "line",
+      instanceId: "default",
+      scope: "user_dm",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U0123456789abcdef0123456789abcdef", displayName: "Harold" },
+      observedChat: { id: "U0123456789abcdef0123456789abcdef", kind: "dm" },
+    };
+    const consumed = { ...entry, status: "consumed" };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(lineSettingsSnapshot());
+    pairingStoreMock.markStatus.mockReturnValue(consumed);
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id }),
+    ).resolves.toMatchObject({ added: true, entry: consumed });
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        line: {
+          authorizedUserIds: [
+            { id: "U0123456789abcdef0123456789abcdef", displayName: "Harold" },
+          ],
+        },
+      },
+    });
+    expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(consumed, "approved");
+  });
+
+  it("approves LINE group and room pairing into separate bucket lists", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const approve = async (entry: Record<string, unknown>) => {
+      runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+      pairingStoreMock.markStatus.mockReturnValue({ ...entry, status: "consumed" });
+      registerMessagingStatusIpcHandlers();
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
+    };
+
+    settingsServiceMock.readSettings.mockResolvedValue(lineSettingsSnapshot());
+
+    await approve({
+      id: "pairing-line-group",
+      platform: "line",
+      instanceId: "default",
+      scope: "bucket",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U0123456789abcdef0123456789abcdef" },
+      observedChat: {
+        id: "C0123456789abcdef0123456789abcdef",
+        kind: "channel",
+        title: "LINE group",
+      },
+    });
+    await approve({
+      id: "pairing-line-room",
+      platform: "line",
+      instanceId: "default",
+      scope: "bucket",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "U0123456789abcdef0123456789abcdef" },
+      observedChat: {
+        id: "R0123456789abcdef0123456789abcdef",
+        kind: "channel",
+        title: "LINE room",
+      },
+    });
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(1, {
+      messaging: {
+        line: {
+          authorizedGroups: [
+            { id: "C0123456789abcdef0123456789abcdef", displayName: "LINE group" },
+          ],
+        },
+      },
+    });
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(2, {
+      messaging: {
+        line: {
+          authorizedRooms: [
+            { id: "R0123456789abcdef0123456789abcdef", displayName: "LINE room" },
+          ],
+        },
+      },
+    });
+  });
 });
+
+function lineSettingsSnapshot() {
+  return {
+    messaging: {
+      line: {
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedGroups: { value: [], source: "default" },
+        authorizedRooms: { value: [], source: "default" },
+      },
+    },
+  };
+}

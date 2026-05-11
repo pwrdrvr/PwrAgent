@@ -42,6 +42,7 @@ describe("messaging provider loader", () => {
 
     expect(registry.telegram.load).not.toHaveBeenCalled();
     expect(registry.discord.load).not.toHaveBeenCalled();
+    expect(registry.line.load).not.toHaveBeenCalled();
   });
 
   it("loads only enabled configured providers and caches modules", async () => {
@@ -58,6 +59,14 @@ describe("messaging provider loader", () => {
         authorizedActorIds: [{ id: "telegram-user", displayName: "" }],
         botToken: "telegram-token",
         channel: "telegram",
+      },
+      line: {
+        authorizedActorIds: [{ id: "line-user", displayName: "" }],
+        callbackBaseUrl: "http://127.0.0.1:47822/",
+        channel: "line",
+        channelAccessToken: "line-token",
+        channelSecret: "line-secret",
+        enabled: false,
       },
     };
 
@@ -145,12 +154,18 @@ function createRegistry(
           config.slack ? createAdapter("slack") : undefined,
       })),
     },
+    line: {
+      load: vi.fn(async () => ({
+        createAdapter: ({ config }: { config: DesktopMessagingConfig }) =>
+          config.line ? createAdapter("line") : undefined,
+      })),
+    },
     ...overrides,
   };
 }
 
 function createAdapter(
-  channel: "telegram" | "discord" | "mattermost" | "slack",
+  channel: "telegram" | "discord" | "mattermost" | "slack" | "line",
 ): DesktopMessagingAdapter {
   return {
     authorizedActorIds: [`${channel}-user`],

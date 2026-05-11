@@ -34,6 +34,7 @@ graph TB
         Discord["discord<br/>uses discord.js"]
         Mattermost["mattermost<br/>uses @mattermost/client<br/>+ HTTP callback listener"]
         Slack["slack<br/>uses @slack/web-api<br/>+ @slack/socket-mode"]
+        Line["line<br/>uses @line/bot-sdk<br/>+ signed webhook listener"]
         Future["future:<br/>signal, feishu,<br/>matrix, …"]
     end
 
@@ -47,6 +48,7 @@ graph TB
     Discord -->|implements adapter contract| Interface
     Mattermost -->|implements adapter contract| Interface
     Slack -->|implements adapter contract| Interface
+    Line -->|implements adapter contract| Interface
     Future -->|implements adapter contract| Interface
     Interface -->|imports app/nav types| Shared
     DesktopApp -->|imports messaging types| Interface
@@ -153,10 +155,11 @@ Different platforms deliver button clicks back to the bot through different tran
 | Discord | Gateway component-interaction events via `discord.js` | The same gateway connection. |
 | **Mattermost** | **Out-of-band HTTP POST** to a URL the bot supplies as `integration.url` on each rendered button | **A small HTTP listener bound to `127.0.0.1:<port>`** inside the adapter package. Production deployments expose it through Cloudflare Tunnel or Tailscale Funnel; the listener never binds to a public interface. HMAC-signed `integration.context` defends against forged callbacks (the platform doesn't sign them). |
 | Slack | Socket Mode events via `@slack/socket-mode` | The outbound WebSocket carries message events, button clicks, and slash-command payloads. No public callback URL is needed for v1. |
+| LINE | Signed webhooks via `X-Line-Signature` | LINE is webhook-only. The adapter verifies the HMAC-SHA256 signature over the raw body before parsing, then normalizes message/postback/follow/join events. Production deployments expose the localhost listener through the same tunnel pattern as Mattermost. |
 
 Inline-stream providers don't need a listener — clicks ride back over their existing connection. HTTP-callback providers need an authenticated, tunneled listener; PwrAgent's pattern uses HMAC over `(intentId, actionId, issuedAt)` with a persistent deployment secret when callbacks need to survive adapter restarts. See [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) for the recommended Cloudflare Tunnel + Zero Trust deployment posture and the Tailscale Funnel free-ish alternative.
 
-Every provider persists callback handle records with the same delivery-scoped model: the platform payload contains a compact opaque handle, while the sqlite store record includes the semantic action, delivered conversation, full allowed actor set, and routed binding id (`intent.audit?.bindingId ?? intent.bindingId`). Callback handles use a long shared TTL so pinned/status buttons survive idle time and restarts; pending approvals, browse sessions, and other domain records enforce their own expiry after the handle resolves. This keeps restart, fan-out delivery, and rebind cleanup behavior consistent across Telegram, Discord, Slack, and Mattermost.
+Every provider persists callback handle records with the same delivery-scoped model: the platform payload contains a compact opaque handle, while the sqlite store record includes the semantic action, delivered conversation, full allowed actor set, and routed binding id (`intent.audit?.bindingId ?? intent.bindingId`). Callback handles use a long shared TTL so pinned/status buttons survive idle time and restarts; pending approvals, browse sessions, and other domain records enforce their own expiry after the handle resolves. This keeps restart, fan-out delivery, and rebind cleanup behavior consistent across Telegram, Discord, Slack, Mattermost, and LINE.
 
 ## Capability profile
 

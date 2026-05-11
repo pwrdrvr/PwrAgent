@@ -8,6 +8,9 @@ import {
 } from "react";
 import {
   validateDiscordSnowflake,
+  validateLineGroupId,
+  validateLineRoomId,
+  validateLineUserId,
   validateMattermostId,
   validateSlackTeamId,
   validateSlackUserId,
@@ -26,7 +29,7 @@ import {
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -70,11 +73,15 @@ export function MessagingSettings(props: {
   onSaveSlack: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["slack"]>,
   ) => Promise<void>;
+  onSaveLine: (
+    patch: NonNullable<DesktopSettingsSnapshot["messaging"]["line"]>,
+  ) => Promise<void>;
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
   const mattermost = props.snapshot.messaging.mattermost;
   const slack = props.snapshot.messaging.slack;
+  const line = props.snapshot.messaging.line;
   const messagingEnabled = props.snapshot.messaging.enabled;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
@@ -826,6 +833,187 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
+        title="LINE"
+        chip={chipLabelForBotToken(line.channelAccessToken)}
+        chipKind={chipKindForBotToken(line.channelAccessToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={line.enabled.value}
+            disabled={platformControlsDisabled}
+            label="Enabled"
+            sub="Turn the LINE adapter on or off independently of the global messaging switch."
+            source={sourceBadge(line.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveLine({
+                ...line,
+                enabled: { ...line.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !line.channelAccessToken.writable}
+            label="Channel Access Token"
+            sub="Stored in the system keychain. Create or issue this from the LINE Developers console."
+            secret="lineChannelAccessToken"
+            state={line.channelAccessToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SecretField
+            disabled={props.saving || !line.channelSecret.writable}
+            label="Channel Secret"
+            sub="Stored in the system keychain. Used to verify X-Line-Signature before webhook processing."
+            secret="lineChannelSecret"
+            state={line.channelSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates the channel access token with LINE getBotInfo."
+            control={
+              <SettingsTestBlock
+                kind="line"
+                desktopApi={props.desktopApi}
+                icon={<LineIcon size={14} />}
+                defaultName="Your LINE bot"
+                defaultSub="getBotInfo"
+              />
+            }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !line.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="line"
+            supportsBucket
+          />
+          <TextField
+            disabled={props.saving}
+            label="Webhook URL"
+            sub="Public HTTPS URL configured in the LINE Developers console. This should point at your tunnel hostname."
+            help={<code>https://line-webhook.example.com/</code>}
+            placeholder="https://line-webhook.example.com/"
+            source={optionalStringSourceBadge(line.webhookUrl)}
+            value={line.webhookUrl.value}
+            onSave={(webhookUrl) => {
+              void props.onSaveLine({
+                ...line,
+                webhookUrl: { ...line.webhookUrl, value: webhookUrl },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Local Webhook Listener"
+            sub="Where PwrAgent listens locally before the tunnel forwards LINE webhooks. The listener binds to the URL's host and port."
+            help={<code>http://127.0.0.1:47822</code>}
+            placeholder="http://127.0.0.1:47822"
+            source={optionalStringSourceBadge(line.callbackBaseUrl)}
+            value={line.callbackBaseUrl.value}
+            onSave={(callbackBaseUrl) => {
+              void props.onSaveLine({
+                ...line,
+                callbackBaseUrl: {
+                  ...line.callbackBaseUrl,
+                  value: callbackBaseUrl,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Bot User ID"
+            sub="Optional. Auto-discovered at startup and useful for group mention filtering."
+            source={optionalStringSourceBadge(line.botUserId)}
+            value={line.botUserId.value}
+            onSave={(botUserId) => {
+              void props.onSaveLine({
+                ...line,
+                botUserId: { ...line.botUserId, value: botUserId },
+              });
+            }}
+          />
+          <ToggleField
+            checked={line.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses (Advanced)"
+            sub="LINE does not support message edits; leave this off so only final assistant text is posted."
+            help={STREAMING_RESPONSES_WARNING}
+            source={sourceBadge(line.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveLine({
+                ...line,
+                streamingResponses: {
+                  ...line.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "line", "user")}
+            label="Authorized User IDs"
+            sub="LINE user IDs that can DM or mention the bot."
+            help="LINE user IDs use U followed by 32 lowercase hex characters."
+            source={optionalListSourceBadge(line.authorizedUserIds)}
+            validateEntry={validateLineUserIdEntry}
+            value={line.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveLine({
+                ...line,
+                authorizedUserIds: {
+                  ...line.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "line", "group")}
+            label="Authorized Groups"
+            sub="Optional LINE group IDs allowed for bound threads."
+            help="LINE group IDs use C followed by 32 lowercase hex characters."
+            source={optionalListSourceBadge(line.authorizedGroups)}
+            validateEntry={validateLineGroupIdEntry}
+            value={line.authorizedGroups.value}
+            onSave={(authorizedGroups) => {
+              void props.onSaveLine({
+                ...line,
+                authorizedGroups: {
+                  ...line.authorizedGroups,
+                  value: authorizedGroups,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "line", "room")}
+            label="Authorized Rooms"
+            sub="Optional LINE room IDs allowed for bound threads."
+            help="LINE room IDs use R followed by 32 lowercase hex characters."
+            source={optionalListSourceBadge(line.authorizedRooms)}
+            validateEntry={validateLineRoomIdEntry}
+            value={line.authorizedRooms.value}
+            onSave={(authorizedRooms) => {
+              void props.onSaveLine({
+                ...line,
+                authorizedRooms: {
+                  ...line.authorizedRooms,
+                  value: authorizedRooms,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
   );
 }
@@ -940,6 +1128,7 @@ function TextField(props: {
   label: string;
   sub?: ReactNode;
   help?: ReactNode;
+  placeholder?: string;
   source: string;
   value: string;
   onSave: (value: string) => void;
@@ -957,6 +1146,7 @@ function TextField(props: {
           aria-label={props.label}
           className="settings-input"
           disabled={props.disabled}
+          placeholder={props.placeholder}
           value={value}
           onBlur={() => props.onSave(value.trim())}
           onChange={(event) => setValue(event.currentTarget.value)}
@@ -1248,6 +1438,13 @@ function defaultPairingScopeOptions(platform: MessagingChannelKind): PairingScop
       { label: "User via DM", value: "user_dm" },
       { label: "User via channel", value: "user_in_group" },
       { label: "Workspace", value: "bucket" },
+    ];
+  }
+  if (platform === "line") {
+    return [
+      { label: "User via DM", value: "user_dm" },
+      { label: "User via group/room", value: "user_in_group" },
+      { label: "Group/room", value: "bucket" },
     ];
   }
   return [
@@ -1740,6 +1937,27 @@ function validateSlackWorkspaceIdEntry(value: string): string | undefined {
   return validationMessage(validateSlackTeamId(value), "Slack workspace ID", {
     format: "Use a Slack workspace/team ID starting with T, e.g. T012ABCDEF0.",
     length: "Slack workspace IDs must be 64 characters or fewer.",
+  });
+}
+
+function validateLineUserIdEntry(value: string): string | undefined {
+  return validationMessage(validateLineUserId(value), "LINE user ID", {
+    format: "Use a LINE user ID starting with U followed by 32 lowercase hex characters.",
+    length: "LINE user IDs are exactly 33 characters: U plus 32 lowercase hex characters.",
+  });
+}
+
+function validateLineGroupIdEntry(value: string): string | undefined {
+  return validationMessage(validateLineGroupId(value), "LINE group ID", {
+    format: "Use a LINE group ID starting with C followed by 32 lowercase hex characters.",
+    length: "LINE group IDs are exactly 33 characters: C plus 32 lowercase hex characters.",
+  });
+}
+
+function validateLineRoomIdEntry(value: string): string | undefined {
+  return validationMessage(validateLineRoomId(value), "LINE room ID", {
+    format: "Use a LINE room ID starting with R followed by 32 lowercase hex characters.",
+    length: "LINE room IDs are exactly 33 characters: R plus 32 lowercase hex characters.",
   });
 }
 

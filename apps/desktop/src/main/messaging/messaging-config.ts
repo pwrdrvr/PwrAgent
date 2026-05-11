@@ -1,4 +1,5 @@
 import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { LineMessagingConfig } from "@pwragent/messaging-provider-line";
 import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
 import type { SlackMessagingConfig } from "@pwragent/messaging-provider-slack";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
@@ -17,6 +18,16 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  LINE_AUTHORIZED_GROUPS_ENV,
+  LINE_AUTHORIZED_ROOMS_ENV,
+  LINE_AUTHORIZED_USER_IDS_ENV,
+  LINE_BOT_USER_ID_ENV,
+  LINE_CALLBACK_BASE_URL_ENV,
+  LINE_CHANNEL_ACCESS_TOKEN_ENV,
+  LINE_CHANNEL_SECRET_ENV,
+  LINE_ENABLED_ENV,
+  LINE_STREAMING_RESPONSES_ENV,
+  LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
   MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
@@ -60,6 +71,16 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  LINE_AUTHORIZED_GROUPS_ENV,
+  LINE_AUTHORIZED_ROOMS_ENV,
+  LINE_AUTHORIZED_USER_IDS_ENV,
+  LINE_BOT_USER_ID_ENV,
+  LINE_CALLBACK_BASE_URL_ENV,
+  LINE_CHANNEL_ACCESS_TOKEN_ENV,
+  LINE_CHANNEL_SECRET_ENV,
+  LINE_ENABLED_ENV,
+  LINE_STREAMING_RESPONSES_ENV,
+  LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
   MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
@@ -93,11 +114,14 @@ export {
   TELEGRAM_STREAMING_RESPONSES_ENV,
 };
 
+export const LINE_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47822";
+
 export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
   enabled?: boolean;
   inputDebounceMs?: number;
+  line?: LineMessagingConfig;
   mattermost?: MattermostMessagingConfig;
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
@@ -115,6 +139,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   discord: "connection",
   enabled: "connection",
   inputDebounceMs: "connection",
+  line: "connection",
   mattermost: "connection",
   slack: "connection",
   telegram: "connection",
@@ -171,6 +196,20 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     streamingResponses: "rendering",
     workspaceUrl: "connection",
   },
+  line: {
+    authorizedActorIds: "authorization",
+    authorizedGroupIds: "authorization",
+    authorizedRoomIds: "authorization",
+    botUserId: "connection",
+    callbackBaseUrl: "connection",
+    channel: "irrelevant",
+    channelAccessToken: "connection",
+    channelSecret: "connection",
+    enabled: "connection",
+    streamingResponses: "rendering",
+    webhookPath: "connection",
+    webhookUrl: "connection",
+  },
 } as const satisfies {
   telegram: Record<keyof TelegramMessagingConfig, DesktopMessagingConfigFieldImpact>;
   discord: Record<keyof DiscordMessagingConfig, DesktopMessagingConfigFieldImpact>;
@@ -179,6 +218,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     DesktopMessagingConfigFieldImpact
   >;
   slack: Record<keyof SlackMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  line: Record<keyof LineMessagingConfig, DesktopMessagingConfigFieldImpact>;
 };
 
 export type DesktopMessagingConfigChannel =
@@ -211,6 +251,8 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveSlackAppTokenSync"
   | "resolveSlackBotTokenSync"
   | "resolveSlackSigningSecretSync"
+  | "resolveLineChannelAccessTokenSync"
+  | "resolveLineChannelSecretSync"
 >;
 
 export type DesktopMessagingConfigLoadOptions = {
@@ -352,6 +394,15 @@ export function loadDesktopMessagingConfig(
     env,
     SLACK_REGISTER_SLASH_COMMANDS_ENV,
   ).value;
+  const lineChannelAccessToken = readEnv(env, LINE_CHANNEL_ACCESS_TOKEN_ENV);
+  const lineChannelSecret = readEnv(env, LINE_CHANNEL_SECRET_ENV);
+  const lineWebhookUrl = readEnv(env, LINE_WEBHOOK_URL_ENV);
+  const lineCallbackBaseUrl =
+    readEnv(env, LINE_CALLBACK_BASE_URL_ENV) ?? LINE_DEFAULT_CALLBACK_BASE_URL;
+  const lineBotUserId = readEnv(env, LINE_BOT_USER_ID_ENV);
+  const lineAuthorizedActorIds = parseContactList(env[LINE_AUTHORIZED_USER_IDS_ENV]);
+  const lineAuthorizedGroupIds = parseContactList(env[LINE_AUTHORIZED_GROUPS_ENV]);
+  const lineAuthorizedRoomIds = parseContactList(env[LINE_AUTHORIZED_ROOMS_ENV]);
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
@@ -445,6 +496,29 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
+    ...(lineChannelSecret
+      && lineCallbackBaseUrl
+      ? {
+          line: {
+            channel: "line" as const,
+            enabled: true,
+            channelSecret: lineChannelSecret,
+            callbackBaseUrl: lineCallbackBaseUrl,
+            ...(lineChannelAccessToken
+              ? { channelAccessToken: lineChannelAccessToken }
+              : {}),
+            ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
+            ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
+            streamingResponses: readEnvBoolean(
+              env,
+              LINE_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
+            authorizedActorIds: lineAuthorizedActorIds,
+            authorizedGroupIds: lineAuthorizedGroupIds,
+            authorizedRoomIds: lineAuthorizedRoomIds,
+          },
+        }
+      : {}),
   };
 }
 
@@ -471,6 +545,11 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack?.appToken ?? settings.resolveSlackAppTokenSync();
   const slackSigningSecret =
     envConfig.slack?.signingSecret ?? settings.resolveSlackSigningSecretSync();
+  const lineChannelAccessToken =
+    envConfig.line?.channelAccessToken
+    ?? settings.resolveLineChannelAccessTokenSync();
+  const lineChannelSecret =
+    envConfig.line?.channelSecret ?? settings.resolveLineChannelSecretSync();
   const telegramAuthorizedActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
@@ -498,6 +577,15 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackAuthorizedTeamIds =
     envConfig.slack?.authorizedTeamIds
     ?? snapshot.messaging.slack.authorizedWorkspaces.value;
+  const lineAuthorizedActorIds =
+    envConfig.line?.authorizedActorIds
+    ?? snapshot.messaging.line.authorizedUserIds.value;
+  const lineAuthorizedGroupIds =
+    envConfig.line?.authorizedGroupIds
+    ?? snapshot.messaging.line.authorizedGroups.value;
+  const lineAuthorizedRoomIds =
+    envConfig.line?.authorizedRoomIds
+    ?? snapshot.messaging.line.authorizedRooms.value;
   const mattermostServerUrlRaw =
     envConfig.mattermost?.serverUrl
     || snapshot.messaging.mattermost.serverUrl.value
@@ -536,6 +624,23 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackRegisterSlashCommands =
     envConfig.slack?.registerSlashCommands
     ?? snapshot.messaging.slack.registerSlashCommands.value;
+  const lineWebhookUrl =
+    envConfig.line?.webhookUrl
+    || snapshot.messaging.line.webhookUrl.value
+    || undefined;
+  const lineCallbackBaseUrlRaw =
+    envConfig.line?.callbackBaseUrl
+    || snapshot.messaging.line.callbackBaseUrl.value
+    || LINE_DEFAULT_CALLBACK_BASE_URL;
+  const lineCallbackBaseUrl = normalizeMattermostUrl(
+    lineCallbackBaseUrlRaw,
+    "callbackBaseUrl",
+    log,
+  );
+  const lineBotUserId =
+    envConfig.line?.botUserId
+    || snapshot.messaging.line.botUserId.value
+    || undefined;
   const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
     imageProfile: snapshot.messaging.attachments.imageProfile.value,
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
@@ -568,6 +673,12 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack,
     env,
     SLACK_ENABLED_ENV,
+  );
+  const lineEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.line.enabled.value,
+    envConfig.line,
+    env,
+    LINE_ENABLED_ENV,
   );
 
   const telegramConfig = messagingEnabled && buildChannelConfig({
@@ -679,6 +790,36 @@ export async function loadDesktopMessagingConfigFromSettings(
         }
       : {};
 
+  const lineConfig =
+    messagingEnabled
+    && buildChannelConfig({
+      log,
+      channel: "line",
+      enabled: lineEnabled,
+      hasToken: Boolean(lineChannelSecret),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: lineAuthorizedActorIds.length,
+    })
+    && lineCallbackBaseUrl
+      ? {
+          line: {
+            channel: "line" as const,
+            enabled: true,
+            channelSecret: lineChannelSecret!,
+            callbackBaseUrl: lineCallbackBaseUrl,
+            ...(lineChannelAccessToken
+              ? { channelAccessToken: lineChannelAccessToken }
+              : {}),
+            ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
+            ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
+            streamingResponses: snapshot.messaging.line.streamingResponses.value,
+            authorizedActorIds: lineAuthorizedActorIds,
+            authorizedGroupIds: lineAuthorizedGroupIds,
+            authorizedRoomIds: lineAuthorizedRoomIds,
+          },
+        }
+      : {};
+
   return {
     enabled: messagingEnabled,
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
@@ -688,6 +829,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     ...discordConfig,
     ...mattermostConfig,
     ...slackConfig,
+    ...lineConfig,
   };
 }
 
@@ -809,6 +951,23 @@ export function redactDesktopMessagingConfig(
           authorizedWorkspaceCount: config.slack.authorizedTeamIds?.length ?? 0,
         }
       : undefined,
+    line: config.line
+      ? {
+          channel: config.line.channel,
+          enabled: config.line.enabled !== false,
+          ...(config.line.channelAccessToken
+            ? { channelAccessToken: "[REDACTED]" }
+            : {}),
+          channelSecret: "[REDACTED]",
+          callbackBaseUrl: config.line.callbackBaseUrl,
+          webhookUrl: config.line.webhookUrl,
+          botUserId: config.line.botUserId,
+          streamingResponses: config.line.streamingResponses ?? false,
+          authorizedActorCount: config.line.authorizedActorIds.length,
+          authorizedGroupCount: config.line.authorizedGroupIds?.length ?? 0,
+          authorizedRoomCount: config.line.authorizedRoomIds?.length ?? 0,
+        }
+      : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
 }
@@ -847,6 +1006,14 @@ function authorizationUpdateForChannelConfig(
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
         authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
       };
+    case "line":
+      return {
+        authorizedActorIds: contactIds(config.line?.authorizedActorIds),
+        authorizedConversationIds: [
+          ...contactIds(config.line?.authorizedGroupIds),
+          ...contactIds(config.line?.authorizedRoomIds),
+        ],
+      };
     default: {
       const exhaustive: never = channel;
       throw new Error(`unknown messaging channel: ${exhaustive}`);
@@ -867,6 +1034,8 @@ function renderingPreferencesForChannelConfig(
       return { streamingResponses: config.mattermost?.streamingResponses };
     case "slack":
       return { streamingResponses: config.slack?.streamingResponses };
+    case "line":
+      return { streamingResponses: config.line?.streamingResponses };
     default: {
       const exhaustive: never = channel;
       throw new Error(`unknown messaging channel: ${exhaustive}`);

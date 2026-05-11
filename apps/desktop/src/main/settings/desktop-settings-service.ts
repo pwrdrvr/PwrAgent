@@ -33,6 +33,16 @@ import {
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
   GH_COMMAND_ENV,
+  LINE_AUTHORIZED_GROUPS_ENV,
+  LINE_AUTHORIZED_ROOMS_ENV,
+  LINE_AUTHORIZED_USER_IDS_ENV,
+  LINE_BOT_USER_ID_ENV,
+  LINE_CALLBACK_BASE_URL_ENV,
+  LINE_CHANNEL_ACCESS_TOKEN_ENV,
+  LINE_CHANNEL_SECRET_ENV,
+  LINE_ENABLED_ENV,
+  LINE_STREAMING_RESPONSES_ENV,
+  LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
   MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
@@ -156,6 +166,16 @@ export class DesktopSettingsService {
     const slackSigningSecret = await this.readSecretState(
       "slackSigningSecret",
       SLACK_SIGNING_SECRET_ENV,
+      secretStorage.available,
+    );
+    const lineChannelAccessToken = await this.readSecretState(
+      "lineChannelAccessToken",
+      LINE_CHANNEL_ACCESS_TOKEN_ENV,
+      secretStorage.available,
+    );
+    const lineChannelSecret = await this.readSecretState(
+      "lineChannelSecret",
+      LINE_CHANNEL_SECRET_ENV,
       secretStorage.available,
     );
     const grokApiKey = await this.readSecretState(
@@ -371,6 +391,45 @@ export class DesktopSettingsService {
             SLACK_AUTHORIZED_WORKSPACES_ENV,
           ),
         },
+        line: {
+          enabled: this.resolveBoolean(
+            config.messaging?.line?.enabled,
+            false,
+            LINE_ENABLED_ENV,
+          ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.line?.streamingResponses,
+            false,
+            LINE_STREAMING_RESPONSES_ENV,
+          ),
+          channelAccessToken: lineChannelAccessToken,
+          channelSecret: lineChannelSecret,
+          webhookUrl: this.resolveString(
+            config.messaging?.line?.webhookUrl,
+            LINE_WEBHOOK_URL_ENV,
+          ),
+          callbackBaseUrl: this.resolveStringWithDefault(
+            config.messaging?.line?.callbackBaseUrl,
+            "http://127.0.0.1:47822",
+            LINE_CALLBACK_BASE_URL_ENV,
+          ),
+          botUserId: this.resolveString(
+            config.messaging?.line?.botUserId,
+            LINE_BOT_USER_ID_ENV,
+          ),
+          authorizedUserIds: this.resolveList(
+            config.messaging?.line?.authorizedUserIds,
+            LINE_AUTHORIZED_USER_IDS_ENV,
+          ),
+          authorizedGroups: this.resolveList(
+            config.messaging?.line?.authorizedGroups,
+            LINE_AUTHORIZED_GROUPS_ENV,
+          ),
+          authorizedRooms: this.resolveList(
+            config.messaging?.line?.authorizedRooms,
+            LINE_AUTHORIZED_ROOMS_ENV,
+          ),
+        },
       },
       models: {
         codex: {
@@ -476,6 +535,17 @@ export class DesktopSettingsService {
 
   resolveSlackSigningSecretSync(): string | undefined {
     return this.resolveSecretSync("slackSigningSecret", SLACK_SIGNING_SECRET_ENV);
+  }
+
+  resolveLineChannelAccessTokenSync(): string | undefined {
+    return this.resolveSecretSync(
+      "lineChannelAccessToken",
+      LINE_CHANNEL_ACCESS_TOKEN_ENV,
+    );
+  }
+
+  resolveLineChannelSecretSync(): string | undefined {
+    return this.resolveSecretSync("lineChannelSecret", LINE_CHANNEL_SECRET_ENV);
   }
 
   resolveGrokApiKeySync(): string | undefined {

@@ -1791,6 +1791,68 @@ describe("DesktopMessagingRuntime", () => {
     expect(secondTelegramAdapter.start).toHaveBeenCalledTimes(1);
   });
 
+  it("hot-applies LINE authorization changes without restarting the running adapter", async () => {
+    await prepareRuntimeStore();
+    const updateAuthorization = vi.fn(async () => undefined);
+    const lineAdapter = createAdapter("line", {
+      updateAuthorization,
+      updateRenderingPreferences: vi.fn(async () => undefined),
+    });
+    const replacementLineAdapter = createAdapter("line");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.line) return [];
+      return [
+        config.line.authorizedActorIds.some((actor) => actor.id === "user-2")
+          ? replacementLineAdapter
+          : lineAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        line: {
+          channel: "line",
+          channelAccessToken: "line-token",
+          channelSecret: "line-secret",
+          callbackBaseUrl: "http://127.0.0.1:47822/",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+          authorizedGroupIds: [{ id: "C0123456789abcdef0123456789abcdef", displayName: "" }],
+          authorizedRoomIds: [{ id: "R0123456789abcdef0123456789abcdef", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      line: {
+        channel: "line",
+        channelAccessToken: "line-token",
+        channelSecret: "line-secret",
+        callbackBaseUrl: "http://127.0.0.1:47822/",
+        authorizedActorIds: [{ id: "user-2", displayName: "" }],
+        authorizedGroupIds: [{ id: "C22222222222222222222222222222222", displayName: "" }],
+        authorizedRoomIds: [{ id: "R22222222222222222222222222222222", displayName: "" }],
+      },
+    });
+
+    expect(lineAdapter.start).toHaveBeenCalledTimes(1);
+    expect(lineAdapter.stop).not.toHaveBeenCalled();
+    expect(lineAdapter.updateAuthorization).toHaveBeenCalledWith({
+      authorizedActorIds: ["user-2"],
+      authorizedConversationIds: [
+        "C22222222222222222222222222222222",
+        "R22222222222222222222222222222222",
+      ],
+    });
+    expect(replacementLineAdapter.start).not.toHaveBeenCalled();
+  });
+
   it("hot-applies config by stopping disabled channels and restarting changed credentials", async () => {
     await prepareRuntimeStore();
     const firstTelegramAdapter = createAdapter("telegram", {

@@ -9,10 +9,13 @@ import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
-  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
-  MATTERMOST_AUTHORIZED_TEAMS_ENV,
+  LINE_CALLBACK_BASE_URL_ENV,
+  LINE_CHANNEL_ACCESS_TOKEN_ENV,
+  LINE_CHANNEL_SECRET_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_SERVER_URL_ENV,
@@ -58,6 +61,7 @@ describe("desktop messaging config", () => {
       "discord",
       "enabled",
       "inputDebounceMs",
+      "line",
       "mattermost",
       "slack",
       "telegram",
@@ -108,6 +112,20 @@ describe("desktop messaging config", () => {
       "slashCommandPrefix",
       "streamingResponses",
       "workspaceUrl",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.line).sort()).toEqual([
+      "authorizedActorIds",
+      "authorizedGroupIds",
+      "authorizedRoomIds",
+      "botUserId",
+      "callbackBaseUrl",
+      "channel",
+      "channelAccessToken",
+      "channelSecret",
+      "enabled",
+      "streamingResponses",
+      "webhookPath",
+      "webhookUrl",
     ]);
   });
 
@@ -306,6 +324,36 @@ describe("desktop messaging config", () => {
     });
   });
 
+  it("loads LINE from env in receive-only mode before a channel access token exists", () => {
+    const config = loadDesktopMessagingConfig({
+      [LINE_CHANNEL_SECRET_ENV]: "line-secret",
+    });
+
+    expect(config.line).toMatchObject({
+      channel: "line",
+      enabled: true,
+      channelSecret: "line-secret",
+      callbackBaseUrl: "http://127.0.0.1:47822",
+      authorizedActorIds: [],
+      authorizedGroupIds: [],
+      authorizedRoomIds: [],
+    });
+    expect(config.line?.channelAccessToken).toBeUndefined();
+  });
+
+  it("adds the LINE channel access token when it exists in env", () => {
+    const config = loadDesktopMessagingConfig({
+      [LINE_CHANNEL_ACCESS_TOKEN_ENV]: "line-token",
+      [LINE_CHANNEL_SECRET_ENV]: "line-secret",
+      [LINE_CALLBACK_BASE_URL_ENV]: "http://127.0.0.1:47822/",
+    });
+
+    expect(config.line).toMatchObject({
+      channelAccessToken: "line-token",
+      channelSecret: "line-secret",
+    });
+  });
+
   it("normalizes unimplemented Slack Events API mode from env to Socket Mode", () => {
     const config = loadDesktopMessagingConfig({
       [SLACK_BOT_TOKEN_ENV]: "xoxb-token",
@@ -478,6 +526,46 @@ describe("desktop messaging config", () => {
     expect(messagingLog.error).not.toHaveBeenCalledWith(
       expect.stringContaining("no authorized user IDs configured"),
       expect.anything(),
+    );
+  });
+
+  it("loads LINE from settings in receive-only mode before a channel access token exists", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.line]",
+        "enabled = true",
+        'callback_base_url = "http://127.0.0.1:47822/"',
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("lineChannelSecret", "settings-line-secret");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {}, {
+      logStartupEligibility: true,
+    });
+
+    expect(config.line).toMatchObject({
+      channel: "line",
+      enabled: true,
+      channelSecret: "settings-line-secret",
+      callbackBaseUrl: "http://127.0.0.1:47822",
+      authorizedActorIds: [],
+    });
+    expect(config.line?.channelAccessToken).toBeUndefined();
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "line: enabled with no authorized user IDs configured",
+      ),
+      { channel: "line" },
     );
   });
 

@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import {
   DiscordIcon,
+  LineIcon,
   MattermostIcon,
   SlackIcon,
   TelegramIcon,
@@ -22,6 +23,7 @@ const ICONS: Partial<
   discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
   slack: ({ size }) => <SlackIcon size={size} />,
+  line: ({ size }) => <LineIcon size={size} />,
 };
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {

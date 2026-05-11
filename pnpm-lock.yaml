@@ -38,6 +38,9 @@ importers:
       '@pwragent/messaging-provider-discord':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/discord
+      '@pwragent/messaging-provider-line':
+        specifier: workspace:*
+        version: link:../../packages/messaging/providers/line
       '@pwragent/messaging-provider-mattermost':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/mattermost
@@ -161,6 +164,19 @@ importers:
       discord.js:
         specifier: ^14.25.1
         version: 14.26.3
+    devDependencies:
+      vitest:
+        specifier: ^4.1.4
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@29.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
+
+  packages/messaging/providers/line:
+    dependencies:
+      '@line/bot-sdk':
+        specifier: ^11.0.0
+        version: 11.0.0
+      '@pwragent/messaging-interface':
+        specifier: workspace:*
+        version: link:../../interface
     devDependencies:
       vitest:
         specifier: ^4.1.4
@@ -834,6 +850,10 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@line/bot-sdk@11.0.0':
+    resolution: {integrity: sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==}
+    engines: {node: '>=20'}
 
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg==}
@@ -4232,6 +4252,10 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@line/bot-sdk@11.0.0':
+    dependencies:
+      '@types/node': 24.12.2
 
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:

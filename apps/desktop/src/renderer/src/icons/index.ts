@@ -3,6 +3,7 @@ export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
 export { FolderIcon } from "./FolderIcon";
 export { MattermostIcon } from "./MattermostIcon";
+export { LineIcon } from "./LineIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
 export { SlackIcon } from "./SlackIcon";

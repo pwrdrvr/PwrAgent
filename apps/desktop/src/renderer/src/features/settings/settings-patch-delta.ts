@@ -196,6 +196,57 @@ export function buildSlackPatchDelta(
   return Object.keys(patch).length === 0 ? undefined : patch;
 }
 
+export function buildLinePatchDelta(
+  snapshot: DesktopSettingsSnapshot["messaging"]["line"],
+  candidate: DesktopSettingsSnapshot["messaging"]["line"],
+): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["line"]> | undefined {
+  const patch: NonNullable<
+    NonNullable<DesktopSettingsConfigPatch["messaging"]>["line"]
+  > = {};
+
+  if (snapshot.enabled.value !== candidate.enabled.value) {
+    patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+    patch.streamingResponses = candidate.streamingResponses.value;
+  }
+  if (snapshot.webhookUrl.value !== candidate.webhookUrl.value) {
+    patch.webhookUrl = candidate.webhookUrl.value;
+  }
+  if (snapshot.callbackBaseUrl.value !== candidate.callbackBaseUrl.value) {
+    patch.callbackBaseUrl = candidate.callbackBaseUrl.value;
+  }
+  if (snapshot.botUserId.value !== candidate.botUserId.value) {
+    patch.botUserId = candidate.botUserId.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedUserIds.value,
+      candidate.authorizedUserIds.value,
+    )
+  ) {
+    patch.authorizedUserIds = candidate.authorizedUserIds.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedGroups.value,
+      candidate.authorizedGroups.value,
+    )
+  ) {
+    patch.authorizedGroups = candidate.authorizedGroups.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedRooms.value,
+      candidate.authorizedRooms.value,
+    )
+  ) {
+    patch.authorizedRooms = candidate.authorizedRooms.value;
+  }
+
+  return Object.keys(patch).length === 0 ? undefined : patch;
+}
+
 function authorizedContactArrayEqual(
   a: readonly DesktopAuthorizedContact[],
   b: readonly DesktopAuthorizedContact[],
