@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  AppServerReviewTarget,
   AppServerTurnInputItem,
   NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared";
@@ -18,6 +19,10 @@ export type ComposerQueuedTurnSnapshot = {
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
+  reviewCommand?: {
+    displayText: string;
+    target: AppServerReviewTarget;
+  };
 };
 
 export type ComposerPendingSteerSnapshot = {

@@ -1122,6 +1122,7 @@ export class DesktopBackendRegistry {
       flushAttempts: number;
     }
   >();
+  private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly attemptedTitleGenerations = new Set<string>();
   private titleGenerationSequence = 0;
 
@@ -1998,6 +1999,13 @@ export class DesktopBackendRegistry {
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
+      throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
+    }
+    if (params.backend === "codex") {
+      await this.flushQueuedExecutionModeIfPresent(params.threadId);
+    }
+
     const startWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
@@ -2524,8 +2532,9 @@ export class DesktopBackendRegistry {
    * Called from two places:
    *  - the `emit()` listener when codex reports `thread/status/changed
    *    → idle` (or `turn/completed`), as the natural turn-end signal.
-   *  - the top of `startTurn` for codex, to guarantee the queue
-   *    applies BEFORE the next turn fires (race-safe ordering).
+   *  - the top of `startTurn`/`startReview` for codex, to guarantee
+   *    the queue applies BEFORE the next turn or review fires
+   *    (race-safe ordering).
    *
    * Idempotent: a no-op when no queue is present. On apply error, the
    * queue is retained and the failure counter is incremented; after
@@ -2535,6 +2544,12 @@ export class DesktopBackendRegistry {
   private async flushQueuedExecutionModeIfPresent(
     threadId: string,
   ): Promise<void> {
+    const activeFlush = this.queuedExecutionModeFlushes.get(threadId);
+    if (activeFlush) {
+      await activeFlush;
+      return;
+    }
+
     const queue = this.queuedExecutionModes.get(threadId);
     if (!queue) return;
     // Atomic claim: in JS's single-threaded event loop, `Map.delete`
@@ -2547,6 +2562,27 @@ export class DesktopBackendRegistry {
     if (!this.queuedExecutionModes.delete(threadId)) {
       return;
     }
+
+    const flush = this.applyClaimedQueuedExecutionMode(threadId, queue);
+    this.queuedExecutionModeFlushes.set(threadId, flush);
+    try {
+      await flush;
+    } finally {
+      if (this.queuedExecutionModeFlushes.get(threadId) === flush) {
+        this.queuedExecutionModeFlushes.delete(threadId);
+      }
+    }
+  }
+
+  private async applyClaimedQueuedExecutionMode(
+    threadId: string,
+    queue: {
+      mode: ThreadExecutionMode;
+      queuedAt: number;
+      queueId: string;
+      flushAttempts: number;
+    },
+  ): Promise<void> {
     try {
       await this.applyThreadExecutionMode(
         {
