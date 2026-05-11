@@ -179,7 +179,9 @@ Security reports should follow [SECURITY.md](SECURITY.md), not public issues.
 
 PwrAgent is licensed under the [MIT License](LICENSE). Third-party dependency
 notices are aggregated in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) and
-shipped with desktop distributions.
+shipped with desktop distributions. See
+[docs/third-party-license-notices.md](docs/third-party-license-notices.md) for
+the Electron/Chromium runtime notice policy and links.
 
 ## Developer Diagnostics
 

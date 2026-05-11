@@ -8,6 +8,8 @@ Scope
 -----
 
 This notice covers npm production dependencies for @pwragent/desktop plus the Electron runtime package.
+Electron includes Chromium and Node.js runtime components. PwrAgent includes Electron's MIT runtime license here; Chromium's generated credits are maintained upstream by Chromium/Electron and are intentionally not appended to this text notice because Electron's generated LICENSES.chromium.html is about 18 MB for the pinned runtime.
+For Chromium runtime credits, see https://source.chromium.org/chromium and Electron's packaged LICENSES.chromium.html in the corresponding Electron release.
 Codex App Server Rust dependency disclosures are maintained by the Codex distribution; PwrAgent invokes a local Codex App Server and does not vendor those Rust crates into this npm notice.
 
 Dependency Summary
