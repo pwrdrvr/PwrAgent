@@ -100,6 +100,8 @@ function upsertHealth(
     ...existing,
     platform,
     health: event.health,
+    account: event.account ?? existing?.account,
+    detail: event.detail ?? existing?.detail,
     changedAt: event.at,
     reason: event.reason,
     degradationReasons: event.degradationReasons,

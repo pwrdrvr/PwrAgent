@@ -259,6 +259,29 @@ function getCredentialTester(
   return credentialTesterInstance;
 }
 
+function startupCredentialResult(
+  kind: SettingsCredentialTestKind,
+): SettingsCredentialTestResult | undefined {
+  if (
+    kind !== "telegram"
+    && kind !== "discord"
+    && kind !== "mattermost"
+    && kind !== "slack"
+  ) {
+    return undefined;
+  }
+  const metadata = getDesktopMessagingRuntime().getPlatformCredentialMetadata(kind);
+  if (!metadata) return undefined;
+  return {
+    kind,
+    status: "ok",
+    testedAt: metadata.observedAt,
+    durationMs: 0,
+    ...(metadata.account !== undefined ? { account: metadata.account } : {}),
+    ...(metadata.detail !== undefined ? { detail: metadata.detail } : {}),
+  };
+}
+
 /** For tests / shutdown — reset the singleton tester. */
 function disposeCredentialTester(): void {
   credentialTesterInstance = undefined;
@@ -412,7 +435,7 @@ export function registerSettingsIpcHandlers(
       request: { kind: SettingsCredentialTestKind },
     ): Promise<SettingsCredentialTestResult | undefined> => {
       const tester = getCredentialTester(service);
-      return tester.lastResult(request.kind);
+      return tester.lastResult(request.kind) ?? startupCredentialResult(request.kind);
     },
   );
 

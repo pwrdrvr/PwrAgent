@@ -478,6 +478,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return this.options.config.authorizedActorIds.map((contact) => contact.id);
   }
 
+  readCredentialMetadata(): { account?: string; detail?: string } | undefined {
+    if (!this.botUsername) return undefined;
+    return {
+      account: `@${this.botUsername}`,
+      detail: "api.telegram.org",
+    };
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     this.options.config.authorizedActorIds = telegramContactsFromIds(
       update.authorizedActorIds,

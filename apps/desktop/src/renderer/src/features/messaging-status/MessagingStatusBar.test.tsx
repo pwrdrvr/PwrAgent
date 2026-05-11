@@ -31,6 +31,8 @@ describe("MessagingStatusBar", () => {
         ],
         health: "degraded",
         platform: "telegram",
+        account: "@pwragent_bot",
+        detail: "api.telegram.org",
       },
     ] satisfies MessagingPlatformStatus[];
     const desktopApi: DesktopApi = {
@@ -50,5 +52,7 @@ describe("MessagingStatusBar", () => {
     });
     expect(chip).toHaveTextContent("Rate limited");
     expect(chip).toHaveTextContent("Telegram group -100123");
+    expect(chip).toHaveTextContent("Bot: @pwragent_bot");
+    expect(chip).toHaveTextContent("Account detail: api.telegram.org");
   });
 });

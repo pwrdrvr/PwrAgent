@@ -392,6 +392,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     return this.authorizedActorIdsValue;
   }
 
+  readCredentialMetadata(): { account?: string; detail?: string } | undefined {
+    if (!this.botUsername && !this.botUserId) return undefined;
+    const account = this.botUsername ?? this.botUserId;
+    return {
+      ...(account ? { account } : {}),
+      detail: hostFromUrl(this.config.serverUrl),
+    };
+  }
+
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     this.config.authorizedActorIds = mattermostContactsFromIds(
@@ -2440,6 +2449,14 @@ function clampHeader(text: string): string {
   return text.length > MATTERMOST_CHANNEL_HEADER_LIMIT
     ? text.slice(0, MATTERMOST_CHANNEL_HEADER_LIMIT)
     : text;
+}
+
+function hostFromUrl(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return serverUrl;
+  }
 }
 
 /**

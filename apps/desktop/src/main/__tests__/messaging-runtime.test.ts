@@ -72,6 +72,34 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("surfaces adapter startup credential metadata in platform status", async () => {
+    const { runtime } = await createRuntimeHarness({
+      adapter: createAdapter("telegram", {
+        readCredentialMetadata: () => ({
+          account: "@pwragent_bot",
+          detail: "api.telegram.org",
+        }),
+      }),
+    });
+
+    await runtime.start();
+
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        account: "@pwragent_bot",
+        detail: "api.telegram.org",
+        health: "enabled",
+        platform: "telegram",
+      }),
+    ]);
+    expect(runtime.getPlatformCredentialMetadata("telegram")).toEqual(
+      expect.objectContaining({
+        account: "@pwragent_bot",
+        detail: "api.telegram.org",
+      }),
+    );
+  });
+
   it("routes adversarial Telegram inbound text literally without mutating SQLite state", async () => {
     const { runtime, adapter, bridge } = await createRuntimeHarness();
     const { getAppStateDb } = await import("../state/app-state");
@@ -1870,7 +1898,9 @@ describe("DesktopMessagingRuntime", () => {
   });
 });
 
-async function createRuntimeHarness(): Promise<{
+async function createRuntimeHarness(options: {
+  adapter?: ReturnType<typeof createAdapter>;
+} = {}): Promise<{
   DesktopMessagingRuntime: typeof DesktopMessagingRuntime;
   adapter: ReturnType<typeof createAdapter>;
   bridge: ReturnType<typeof createBackendBridge>;
@@ -1879,7 +1909,7 @@ async function createRuntimeHarness(): Promise<{
 }> {
   await prepareRuntimeStore();
 
-  const adapter = createAdapter("telegram");
+  const adapter = options.adapter ?? createAdapter("telegram");
   const bridge = createBackendBridge();
   const { DesktopMessagingRuntime: Runtime } = await import(
     "../messaging/messaging-runtime"
