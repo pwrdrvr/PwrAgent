@@ -106,6 +106,7 @@ export type TelegramUser = {
 
 export type TelegramChat = {
   id: number;
+  is_forum?: true;
   title?: string;
   type: "private" | "group" | "supergroup" | "channel";
 };
@@ -2168,7 +2169,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private messageThreadIdFromMessage(message: TelegramMessage): number | undefined {
     return message.message_thread_id ??
-      (message.is_topic_message === true ? TELEGRAM_GENERAL_TOPIC_THREAD_ID : undefined);
+      (message.is_topic_message === true ||
+      (message.chat.type === "supergroup" && message.chat.is_forum === true)
+        ? TELEGRAM_GENERAL_TOPIC_THREAD_ID
+        : undefined);
   }
 
   /**

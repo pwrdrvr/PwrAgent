@@ -2288,6 +2288,7 @@ describe("TelegramAdapter", () => {
       message: {
         chat: {
           id: -1003711601984,
+          is_forum: true,
           title: "PwrDrvr",
           type: "supergroup",
         },
@@ -2296,7 +2297,6 @@ describe("TelegramAdapter", () => {
           id: 42,
           is_bot: false,
         },
-        is_topic_message: true,
         message_id: 106,
         text: "/status",
       },
