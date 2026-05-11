@@ -54,6 +54,25 @@ describe("GitDirectoryService", () => {
     });
   });
 
+  it("falls back to local mode when a worktree launchpad targets a non-git directory", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-non-git-directory-"));
+    cleanupPaths.push(directory);
+    const service = new GitDirectoryService();
+
+    await expect(
+      service.prepareLaunchpadWorkspace({
+        directoryKind: "directory",
+        directoryLabel: "Projects",
+        directoryPath: directory,
+        workMode: "worktree",
+        branchName: "main",
+      }),
+    ).resolves.toEqual({
+      cwd: directory,
+      workMode: "local",
+    });
+  });
+
   it("reports default and available handoff branches", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

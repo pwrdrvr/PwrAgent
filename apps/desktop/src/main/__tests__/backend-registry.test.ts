@@ -1496,6 +1496,56 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("starts requested worktree threads as local when the cwd is not a git repository", async () => {
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/Users/test/.pwragent/projects",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/Users/test/.pwragent/projects",
+      workMode: "worktree",
+      branchName: "main",
+    });
+
+    expect(codexClient.lastStartThreadParams?.cwd).toBe(
+      "/Users/test/.pwragent/projects",
+    );
+    expect(recordCodexWorktreeOwnerThread).not.toHaveBeenCalled();
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        projectKey: "/Users/test/.pwragent/projects",
+        linkedDirectories: [
+          {
+            id: "/Users/test/.pwragent/projects",
+            kind: "local",
+            label: "projects",
+            path: "/Users/test/.pwragent/projects",
+          },
+        ],
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("materializes workspace launchpads into a scratch directory instead of the workspace root", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },

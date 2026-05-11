@@ -22,6 +22,7 @@ import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
 const RESUME_BROWSER_NAV_ACTION_COUNT = 5;
+const WORKSPACES_SCRATCHPAD_LABEL = "Workspaces Scratchpad";
 
 export function resumeBrowserPageSize(
   profile?: MessagingCapabilityProfile,
@@ -242,9 +243,10 @@ function buildProjectPickerIntent(params: {
   const page = paginate(allProjects, params.session.pageIndex, params.session.pageSize);
   const actions: MessagingSurfaceAction[] = [
     ...page.items.map((project, index) => {
+      const projectLabel = formatProjectPickerLabel(project, params.session);
       const value: Record<string, MessagingJsonValue> = {
         directoryKey: project.key,
-        label: project.label,
+        label: projectLabel,
       };
       if (typeof project.path === "string") {
         value.path = project.path;
@@ -252,7 +254,7 @@ function buildProjectPickerIntent(params: {
 
       return {
         id: "browse:select-project",
-        label: `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
+        label: `${page.startIndex + index + 1}. ${projectLabel} (${project.threadKeys.length})`,
         style: "primary" as const,
         fallbackText: String(index + 1),
         value,
@@ -334,19 +336,89 @@ function projectsForSession(
   session: MessagingBrowseSessionRecord,
 ): NavigationDirectorySummary[] {
   const query = session.query?.trim().toLowerCase();
-  return [...navigation.directories]
+  const directories =
+    session.launchAction === "start_new_thread"
+      ? collapseWorkspaceScratchpadDirectories(navigation.directories)
+      : navigation.directories;
+
+  return [...directories]
     .filter((directory) => {
       if (!query) {
         return true;
       }
-      return [directory.label, directory.path, directory.key]
+      return [
+        formatProjectPickerLabel(directory, session),
+        directory.label,
+        directory.path,
+        directory.key,
+      ]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(query));
     })
     .sort((left, right) => {
+      if (session.launchAction === "start_new_thread") {
+        const leftRank = isWorkspaceScratchpadDirectory(left) ? 0 : 1;
+        const rightRank = isWorkspaceScratchpadDirectory(right) ? 0 : 1;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+      }
       const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
       return updatedDelta !== 0 ? updatedDelta : left.label.localeCompare(right.label);
     });
+}
+
+function collapseWorkspaceScratchpadDirectories(
+  directories: NavigationDirectorySummary[],
+): NavigationDirectorySummary[] {
+  const scratchpads = directories.filter(isWorkspaceScratchpadDirectory);
+  if (scratchpads.length <= 1) {
+    return directories;
+  }
+
+  const preferred = [...scratchpads].sort(compareWorkspaceScratchpadPreference)[0]!;
+  const threadKeys = new Set<string>();
+  let needsAttentionCount = 0;
+  let latestUpdatedAt = 0;
+  for (const scratchpad of scratchpads) {
+    for (const threadKey of scratchpad.threadKeys) {
+      threadKeys.add(threadKey);
+    }
+    needsAttentionCount += scratchpad.needsAttentionCount;
+    latestUpdatedAt = Math.max(latestUpdatedAt, scratchpad.latestUpdatedAt ?? 0);
+  }
+
+  return [
+    {
+      ...preferred,
+      threadKeys: [...threadKeys],
+      needsAttentionCount,
+      latestUpdatedAt,
+    },
+    ...directories.filter((directory) => !isWorkspaceScratchpadDirectory(directory)),
+  ];
+}
+
+function compareWorkspaceScratchpadPreference(
+  left: NavigationDirectorySummary,
+  right: NavigationDirectorySummary,
+): number {
+  const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+  return updatedDelta !== 0 ? updatedDelta : left.key.localeCompare(right.key);
+}
+
+function isWorkspaceScratchpadDirectory(directory: NavigationDirectorySummary): boolean {
+  return directory.kind === "workspace";
+}
+
+function formatProjectPickerLabel(
+  project: NavigationDirectorySummary,
+  session: MessagingBrowseSessionRecord,
+): string {
+  return session.launchAction === "start_new_thread" &&
+    isWorkspaceScratchpadDirectory(project)
+    ? WORKSPACES_SCRATCHPAD_LABEL
+    : project.label;
 }
 
 // Explicit row sentinels for the resume browser footer. Items above are
@@ -505,10 +577,10 @@ function projectPickerFallbackText(
   ].filter(Boolean);
   return [
     projectPickerPromptText(session, page.totalPages, page.totalItems),
-    ...page.items.map(
-      (project, index) =>
-        `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
-    ),
+    ...page.items.map((project, index) => {
+      const projectLabel = formatProjectPickerLabel(project, session);
+      return `${page.startIndex + index + 1}. ${projectLabel} (${project.threadKeys.length})`;
+    }),
     page.totalItems > 0
       ? `Reply with a number, or reply ${formatControlList(controls)}.`
       : `Reply ${formatControlList(controls)}.`,

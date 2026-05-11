@@ -25,6 +25,30 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+function errorText(error: unknown): string {
+  const parts = [error instanceof Error ? error.message : String(error)];
+  const stderr = (error as { stderr?: unknown })?.stderr;
+  if (typeof stderr === "string") {
+    parts.push(stderr);
+  }
+  return parts.join("\n");
+}
+
+function isNotGitRepositoryError(error: unknown): boolean {
+  return errorText(error).includes("not a git repository");
+}
+
+async function readGitRoot(cwd: string): Promise<string | undefined> {
+  try {
+    return await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  } catch (error) {
+    if (isNotGitRepositoryError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export async function recordCodexWorktreeOwnerThread(params: {
   worktreePath: string;
   threadId: string;
@@ -439,7 +463,14 @@ export class GitDirectoryService {
       };
     }
 
-    const repoRoot = await runGit(directoryPath, ["rev-parse", "--show-toplevel"]);
+    const repoRoot = await readGitRoot(directoryPath);
+    if (!repoRoot) {
+      return {
+        cwd: directoryPath,
+        workMode: "local",
+      };
+    }
+
     const baseBranch =
       sanitizeBranchName(launchpad.branchName ?? "") ||
       sanitizeBranchName(await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])) ||

@@ -158,12 +158,16 @@ describe("MessagingController", () => {
       body: expect.stringContaining("PwrAgent"),
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
-        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
         expect.objectContaining({ id: "browse:new:streaming" }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
+      ]),
+    });
+    expect(readyIntent).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
     expect(readyIntent).toMatchObject({
@@ -358,6 +362,70 @@ describe("MessagingController", () => {
         executionMode: "default",
         workMode: "worktree",
         branchName: "release/v2",
+      }),
+    });
+  });
+
+  it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: Local"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:base-branch" }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:workspace:worktree",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: Local"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.not.stringContaining("Base branch:"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:base-branch" }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug locally"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        workMode: "local",
       }),
     });
   });
@@ -558,6 +626,73 @@ describe("MessagingController", () => {
       kind: "project_picker",
       prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
     });
+  });
+
+  it("pins the Workspaces Scratchpad first without listing duplicate workspace roots", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories = [
+      {
+        ...navigation.directories[0]!,
+        latestUpdatedAt: 9_000,
+      },
+      {
+        key: "workspace:/Users/test/.pwragent/profiles/default/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:profile-scratchpad-1", "codex:profile-scratchpad-2"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_500,
+      },
+      {
+        key: "workspace:/Users/test/.pwragent/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/projects",
+        threadKeys: ["codex:scratchpad-thread"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 1_000,
+      },
+      {
+        key: "directory:giphy-demo",
+        kind: "directory",
+        label: "giphy-demo",
+        path: "/repo/giphy-demo",
+        threadKeys: ["codex:giphy-thread"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_000,
+      },
+    ];
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+
+    const pickerIntent = harness.delivered.at(-1);
+    if (pickerIntent?.kind !== "project_picker") {
+      throw new Error("Expected project picker intent");
+    }
+
+    expect(
+      pickerIntent.page.actions.filter((action) => action.id === "browse:select-project"),
+    ).toEqual([
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "1. Workspaces Scratchpad (3)",
+        value: {
+          directoryKey: "workspace:/Users/test/.pwragent/profiles/default/projects",
+          label: "Workspaces Scratchpad",
+          path: "/Users/test/.pwragent/profiles/default/projects",
+        },
+      }),
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "2. PwrAgent (1)",
+      }),
+      expect.objectContaining({
+        id: "browse:select-project",
+        label: "3. giphy-demo (1)",
+      }),
+    ]);
   });
 
   it("debounces split first prompts before creating a messaging-started thread", async () => {
@@ -5672,6 +5807,11 @@ function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {
   const snapshot = buildNavigationSnapshot();
   snapshot.directories[0] = {
     ...snapshot.directories[0]!,
+    gitStatus: {
+      currentBranch: "feature/current",
+      defaultBranch: "main",
+      branches: ["main", "feature/current"],
+    },
     launchpad: {
       directoryKey: "directory:pwragent",
       directoryKind: "directory",
