@@ -504,7 +504,7 @@ describe("TelegramAdapter", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses General topic routing state for typing without threading message sends", async () => {
+  it("uses unthreaded General topic routing for typing and message sends", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
@@ -560,10 +560,14 @@ describe("TelegramAdapter", () => {
     });
 
     expect(api.sendChatAction).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        message_thread_id: expect.any(Number),
+      }),
+    );
+    expect(api.sendChatAction).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "typing",
         chat_id: -1003711601984,
-        message_thread_id: 1,
       }),
     );
     expect(api.sendMessage).toHaveBeenCalledWith(
