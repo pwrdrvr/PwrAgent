@@ -3,6 +3,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 
+const compactMarkdownTable = `| Key | Value |
+|---|---|
+| Mode | Shadow |
+| Owner | Billing |`;
+
+const wideMarkdownTable = `| # | Sev | File | Issue | Fix |
+|---:|:---:|---|---|---|
+| 1 | P1 | [InvoiceDispatcher.scala (line 48)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48) | A retry-suppressed invoice falls through to the standard path because fallback only checks \`queuedInvoices.isEmpty\`. | Distinguish terminal states like \`Retry suppressed\`; only fallback on intentional misses. |`;
+
+const oversizedMarkdownTable = `| Metric | North America | Europe | Asia Pacific | South America | Middle East | Reliability Notes |
+|---|---|---|---|---|---|---|
+| Request fingerprint | \`north-america-invoice-pacing-window-retry-suppressed-001\` | \`europe-invoice-pacing-window-retry-suppressed-002\` | \`asia-pacific-invoice-pacing-window-retry-suppressed-003\` | \`south-america-invoice-pacing-window-retry-suppressed-004\` | \`middle-east-invoice-pacing-window-retry-suppressed-005\` | Keep the table horizontally scrollable rather than compressing prose or token cells into unreadable slivers. |`;
+
 describe("TranscriptList", () => {
   let scrollHeight = 480;
   let clientHeight = 240;
@@ -265,6 +278,169 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("$frontend-design").closest("article")
     ).toHaveClass("transcript-message--user");
+  });
+
+  it("keeps prose in readable bubbles while wide markdown tables get their own wide bubble", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-table",
+            role: "assistant",
+            text: `Intro prose should stay in the normal readable assistant bubble.\n\n${wideMarkdownTable}\n\nFollow-up prose should not inherit the table width.`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(3);
+    expect(articles[0]).not.toHaveClass("transcript-message--table");
+    expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
+    expect(articles[1]).toHaveClass("transcript-message--table");
+    expect(articles[1]).toHaveClass("transcript-message--table-wide");
+    expect(articles[2]).not.toHaveClass("transcript-message--table");
+    expect(articles[2]).not.toHaveClass("transcript-message--table-wide");
+    expect(screen.getAllByText("Assistant")).toHaveLength(1);
+    expect(screen.getByText("Intro prose should stay", { exact: false })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
+  });
+
+  it("preserves reference-style links inside split wide markdown tables", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-reference-table",
+            role: "assistant",
+            text: `Review summary.\n\n| # | Sev | File | Issue | Fix |
+|---:|:---:|---|---|---|
+| 1 | P1 | [Invoice dispatcher][invoice-dispatcher] | A retry-suppressed invoice falls through to the standard path because fallback only checks \`queuedInvoices.isEmpty\`. | Keep reference-style file links clickable after table splitting. |
+
+[invoice-dispatcher]: /Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(2);
+    expect(articles[1]).toHaveClass("transcript-message--table-wide");
+    expect(screen.getByRole("link", { name: "Invoice dispatcher" })).toHaveAttribute(
+      "href",
+      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48"
+    );
+    expect(container).not.toHaveTextContent("[invoice-dispatcher]:");
+  });
+
+  it("preserves indented code blocks around split wide markdown tables", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-indented-code-table",
+            role: "assistant",
+            text: `Before:\n\n    pnpm test before\n\n${wideMarkdownTable}\n\nAfter:\n\n    pnpm test after`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(3);
+    expect(articles[1]).toHaveClass("transcript-message--table-wide");
+    expect(container.querySelectorAll("pre code")).toHaveLength(2);
+    expect(screen.getByText("pnpm test before", { selector: "pre code" })).toBeInTheDocument();
+    expect(screen.getByText("pnpm test after", { selector: "pre code" })).toBeInTheDocument();
+  });
+
+  it("leaves compact markdown tables inside normal readable bubbles", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-compact-table",
+            role: "assistant",
+            text: `Compact summary:\n\n${compactMarkdownTable}`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(1);
+    expect(articles[0]).not.toHaveClass("transcript-message--table");
+    expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
+    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Key" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Billing" })).toBeInTheDocument();
+  });
+
+  it("marks oversized markdown tables as wide so they can scroll inside the table bubble", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-oversized-table",
+            role: "assistant",
+            text: oversizedMarkdownTable,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const tableArticle = container.querySelector("article.transcript-message--table");
+    expect(tableArticle).toHaveClass("transcript-message--table-wide");
+    expect(container.querySelector(".thread-markdown__table-scroll")).toBeInTheDocument();
+    expect(
+      screen.getByText("north-america-invoice-pacing-window-retry-suppressed-001")
+    ).toBeInTheDocument();
+  });
+
+  it("does not split table-looking text inside fenced code blocks", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-code-table",
+            role: "assistant",
+            text: "```md\n| Key | Value |\n|---|---|\n| Mode | Shadow |\n```",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(container.querySelectorAll("article.transcript-message--assistant")).toHaveLength(1);
+    expect(container.querySelector("article.transcript-message--table")).toBeNull();
+    expect(container.querySelector("table")).toBeNull();
+    expect(container.querySelector("pre code")).toHaveTextContent("| Key | Value |");
   });
 
   it("opens transcript file links in the configured editor", async () => {
