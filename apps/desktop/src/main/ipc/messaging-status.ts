@@ -162,6 +162,30 @@ function buildPairingApprovalPatch(
         patch: { messaging: { slack: { authorizedUserIds: merged.contacts } } },
       };
     }
+    case "line": {
+      if (entry.scope === "bucket") {
+        if (contact.id.startsWith("C")) {
+          const merged = merge(snapshot.messaging.line.authorizedGroups.value);
+          return {
+            added: merged.added,
+            patch: { messaging: { line: { authorizedGroups: merged.contacts } } },
+          };
+        }
+        if (contact.id.startsWith("R")) {
+          const merged = merge(snapshot.messaging.line.authorizedRooms.value);
+          return {
+            added: merged.added,
+            patch: { messaging: { line: { authorizedRooms: merged.contacts } } },
+          };
+        }
+        throw new Error("LINE bucket pairing requires a group or room ID.");
+      }
+      const merged = merge(snapshot.messaging.line.authorizedUserIds.value);
+      return {
+        added: merged.added,
+        patch: { messaging: { line: { authorizedUserIds: merged.contacts } } },
+      };
+    }
     default:
       throw new Error(`Pairing approval is not supported for ${entry.platform}.`);
   }
