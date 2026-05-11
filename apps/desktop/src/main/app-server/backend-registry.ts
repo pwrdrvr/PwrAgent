@@ -1608,6 +1608,7 @@ export class DesktopBackendRegistry {
         ? await this.createScratchProjectDirectory()
         : request.cwd;
     let resolvedLinkedDirectories = linkedDirectories;
+    let effectiveWorkMode = workMode;
     if (workMode === "worktree" && request.cwd?.trim()) {
       const preparedWorkspace =
         await this.gitDirectoryService.prepareLaunchpadWorkspace({
@@ -1619,11 +1620,15 @@ export class DesktopBackendRegistry {
           workMode: "worktree",
         });
       cwd = preparedWorkspace.cwd;
-      resolvedLinkedDirectories = buildWorktreeLinkedDirectory({
-        label: path.basename(request.cwd) || request.cwd,
-        repositoryPath: preparedWorkspace.repositoryPath ?? request.cwd,
-        worktreePath: preparedWorkspace.cwd,
-      });
+      effectiveWorkMode = preparedWorkspace.workMode;
+      resolvedLinkedDirectories =
+        preparedWorkspace.workMode === "worktree"
+          ? buildWorktreeLinkedDirectory({
+              label: path.basename(request.cwd) || request.cwd,
+              repositoryPath: preparedWorkspace.repositoryPath ?? request.cwd,
+              worktreePath: preparedWorkspace.cwd,
+            })
+          : buildLocalLinkedDirectory(cwd);
     }
 
     const result = await this.getClient(backend, executionMode).startThread({
@@ -1653,7 +1658,7 @@ export class DesktopBackendRegistry {
         gitBranch,
       },
     );
-    if (workMode === "worktree") {
+    if (effectiveWorkMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
         backend,
         threadId: result.threadId,
