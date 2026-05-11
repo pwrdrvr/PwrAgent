@@ -227,8 +227,6 @@ describe("ThreadMarkdown", () => {
     expect(tableScroll).not.toBeNull();
     expect(table).not.toBeNull();
     expect(tableScroll).toContainElement(table);
-    expect(tableScroll).toHaveClass("thread-markdown__table-scroll--review-findings");
-    expect(table).toHaveClass("thread-markdown__table--review-findings");
     expect(container.querySelectorAll("th.thread-markdown__th")).toHaveLength(5);
     expect(container.querySelectorAll("td.thread-markdown__td")).toHaveLength(25);
     expect(screen.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
@@ -243,7 +241,25 @@ describe("ThreadMarkdown", () => {
     expect(container).toHaveTextContent("failure-heavy behavior explicitly");
   });
 
-  it("does not apply review findings table sizing to unrelated wide tables", () => {
+  it("profiles review findings columns by content shape (tag / label / prose)", () => {
+    const { container } = render(
+      <ThreadMarkdown text={`## Findings\n\n${sanitizedReviewFindingsTable}`} />
+    );
+
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    expect(headerCellKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
+
+    const firstRowCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("tbody tr:first-child td")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    expect(firstRowCellKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
+  });
+
+  it("profiles a generic wide table without applying review-findings sizing", () => {
     const { container } = render(
       <ThreadMarkdown
         text={`| Metric | North America | Europe | Asia Pacific |
@@ -252,14 +268,52 @@ describe("ThreadMarkdown", () => {
       />
     );
 
-    expect(container.querySelector(".thread-markdown__table-scroll")).not.toHaveClass(
-      "thread-markdown__table-scroll--review-findings"
-    );
-    expect(container.querySelector(".thread-markdown__table")).not.toHaveClass(
-      "thread-markdown__table--review-findings"
-    );
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    // Metric column has a single short two-word value -> label.
+    // Regional columns hold long unbroken identifiers -> prose.
+    expect(headerCellKinds).toEqual(["label", "prose", "prose", "prose"]);
     expect(screen.getByRole("columnheader", { name: "Metric" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "North America" })).toBeInTheDocument();
+  });
+
+  it("classifies a compact key/value table as label/label", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Key | Value |
+|---|---|
+| Mode | Shadow |
+| Owner | Billing |`}
+      />
+    );
+
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    // 5-7 char values, single word -> label (not tag, since "Shadow"=6 chars > 4)
+    expect(headerCellKinds).toEqual(["label", "label"]);
+  });
+
+  it("classifies short flag-like columns as tag", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| OK | Stat | Note |
+|---|---|---|
+| ✓ | P1 | Critical retry suppression issue blocking the rollout |
+| ✗ | P2 | Cross-tenant identity merging detected by snapshot test |
+| ✓ | P3 | Sampling key drift across repeat customer requests |`}
+      />
+    );
+
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    // ✓/✗ -> tag, P1/P2/P3 -> tag, long Note prose -> prose
+    expect(headerCellKinds).toEqual(["tag", "tag", "prose"]);
   });
 
   it("skips raw html parsing for oversized html-like messages", () => {

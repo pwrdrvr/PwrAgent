@@ -8,6 +8,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SkillChip } from "../composer/SkillChip";
+import { remarkTableProfile } from "./remark-table-profile";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -166,28 +167,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <pre className="transcript-message__pre">{preProps.children}</pre>;
       },
       table(tableProps) {
-        const tableKind = classifyMarkdownTable(sourceForNode(props.text, tableProps.node));
-
         return (
-          <div
-            className={[
-              "thread-markdown__table-scroll",
-              tableKind ? `thread-markdown__table-scroll--${tableKind}` : undefined,
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            tabIndex={0}
-          >
-            <table
-              className={[
-                "thread-markdown__table",
-                tableKind ? `thread-markdown__table--${tableKind}` : undefined,
-              ]
-              .filter(Boolean)
-              .join(" ")}
-            >
-              {tableProps.children}
-            </table>
+          <div className="thread-markdown__table-scroll" tabIndex={0}>
+            <table className="thread-markdown__table">{tableProps.children}</table>
           </div>
         );
       },
@@ -195,10 +177,24 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
       },
       td(tableCellProps) {
-        return <td className="thread-markdown__td">{tableCellProps.children}</td>;
+        return (
+          <td
+            className="thread-markdown__td"
+            data-col-kind={dataColKind(tableCellProps.node)}
+          >
+            {tableCellProps.children}
+          </td>
+        );
       },
       th(tableHeaderCellProps) {
-        return <th className="thread-markdown__th">{tableHeaderCellProps.children}</th>;
+        return (
+          <th
+            className="thread-markdown__th"
+            data-col-kind={dataColKind(tableHeaderCellProps.node)}
+          >
+            {tableHeaderCellProps.children}
+          </th>
+        );
       },
       thead(tableHeadProps) {
         return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
@@ -225,7 +221,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
-        remarkPlugins={[remarkBreaks, remarkGfm]}
+        remarkPlugins={[remarkBreaks, remarkGfm, remarkTableProfile]}
         urlTransform={normalizeMarkdownUrl}
       >
         {props.text}
@@ -291,6 +287,12 @@ function isImplicitBareAutolink(params: {
   );
 }
 
+function dataColKind(node: unknown): string | undefined {
+  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
+  return typeof value === "string" ? value : undefined;
+}
+
 function sourceForNode(
   markdown: string,
   node: unknown,
@@ -316,35 +318,6 @@ function sourceForNode(
   }
 
   return markdown.slice(start, end);
-}
-
-function classifyMarkdownTable(source?: string): "review-findings" | undefined {
-  const header = source?.split("\n")[0];
-  if (!header) {
-    return undefined;
-  }
-
-  const cells = splitMarkdownTableCells(header).map((cell) => cell.toLowerCase());
-  if (
-    cells[0] === "#" &&
-    cells[1] === "sev" &&
-    cells[2] === "file" &&
-    cells[3] === "issue" &&
-    cells[4] === "fix"
-  ) {
-    return "review-findings";
-  }
-
-  return undefined;
-}
-
-function splitMarkdownTableCells(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
 }
 
 function normalizeSkillPath(href: string): string | undefined {
