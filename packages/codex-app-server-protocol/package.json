@@ -4,7 +4,7 @@
   "private": true,
   "description": "TypeScript types for the Codex App Server JSON-RPC protocol, generated from `codex app-server generate-ts`.",
   "author": "PwrDrvr LLC",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

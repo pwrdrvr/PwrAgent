@@ -1,12 +1,13 @@
 # PwrAgent
 
-> **Closed-source preview.** Copyright © 2026 PwrDrvr LLC. All rights reserved.
-> See [LICENSE](LICENSE).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 PwrAgent is a thread-centric coding agent desktop app. This repository contains
-the proprietary source code for PwrDrvr LLC's PwrAgent product. It is not open
-source. Distribution of source, binaries, or derivative works requires prior
-written consent from PwrDrvr LLC.
+the Electron desktop shell, shared contracts, messaging adapters, and agent-core
+runtime used by PwrDrvr LLC's PwrAgent product.
+
+Project status: alpha. Expect active development and breaking changes while the
+desktop app settles.
 
 ## Data Storage Architecture
 
@@ -89,9 +90,8 @@ See [docs/state-layout.md](docs/state-layout.md) for full directory layout, envi
 - `packages/agent-core` — internal agent runtime and domain services
 - `packages/messaging/*` — internal messaging adapters
 
-These packages are internal to PwrDrvr LLC and not intended for external
-consumption. Workspace `package.json` files are marked `private: true` and
-licensed `UNLICENSED`.
+Workspace packages remain marked `private: true` for publishing control, but
+the source in this repository is MIT-licensed.
 
 ### Messaging Integrations
 
@@ -120,6 +120,7 @@ platform user IDs.
 - `pnpm test`
 - `pnpm typecheck`
 - `pnpm test:desktop-e2e`
+- `pnpm licenses:check`
 
 Desktop replay-backed Electron coverage lives under `apps/desktop/e2e`.
 
@@ -166,6 +167,21 @@ Release plan and brainstorm context:
 
 - [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 - [docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md](docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, issue/PR
+expectations, and dependency-boundary rules. See
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community conduct expectations.
+Security reports should follow [SECURITY.md](SECURITY.md), not public issues.
+
+## License
+
+PwrAgent is licensed under the [MIT License](LICENSE). Third-party dependency
+notices are aggregated in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) and
+shipped with desktop distributions. See
+[docs/third-party-license-notices.md](docs/third-party-license-notices.md) for
+the Electron/Chromium runtime notice policy and links.
 
 ## Developer Diagnostics
 

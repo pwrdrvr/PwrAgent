@@ -80,6 +80,9 @@ function maybeDecodeAppleApiKey() {
 }
 
 // 2. Build (electron-vite -> apps/desktop/out/).
+step("license notices check");
+runChecked("pnpm", ["licenses:check"], { cwd: repoRoot });
+
 step("electron-vite build");
 runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
@@ -95,7 +98,7 @@ runChecked(
   { cwd: repoRoot },
 );
 
-// 4. Copy the build output and electron-builder inputs into the stage so
+// 4. Copy the build output, license notices, and electron-builder inputs into the stage so
 //    electron-builder finds them at well-known paths.
 //    pnpm deploy copies the package source tree (including out/ if it exists)
 //    into the stage. Remove stale copies before our controlled cp to avoid
@@ -109,6 +112,9 @@ for (const dir of ["out", "build"]) {
   run(`cp -R ${join(desktopRoot, dir)} ${target}`);
 }
 run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
+for (const file of ["LICENSE", "THIRD_PARTY_LICENSES"]) {
+  run(`cp ${join(repoRoot, file)} ${join(stageDir, file)}`);
+}
 
 // 5. electron-builder.
 step(`electron-builder --mac --arm64 (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);

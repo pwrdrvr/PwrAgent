@@ -1188,6 +1188,49 @@ describe("SettingsScreen", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("renders About license attribution and opens bundled notices", async () => {
+    const readLicenseDocument = vi.fn(async (kind: string) => ({
+      kind,
+      title: kind === "license" ? "MIT License" : "Third-Party Licenses",
+      content:
+        kind === "license"
+          ? "MIT License\n\nPermission is hereby granted."
+          : "PwrAgent Third-Party Licenses\n\nreact@19.2.5",
+    }));
+    const desktopApi = {
+      readAppMetadata: vi.fn(async () => ({
+        applicationName: "PwrAgent",
+        applicationVersion: "1.0.0-alpha.8",
+        copyright: "Copyright © 2026 PwrDrvr LLC.",
+        homepage: "https://pwrdrvr.com",
+        electronVersion: "41.2.1",
+        chromeVersion: "142.0.0.0",
+        nodeVersion: "24.0.0",
+      })),
+      readLicenseDocument,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="about"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("PwrAgent is licensed under MIT.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Third-party licenses" }));
+
+    await waitFor(() => {
+      expect(readLicenseDocument).toHaveBeenCalledWith("third-party-licenses");
+    });
+    expect(await screen.findByLabelText("Third-Party Licenses")).toHaveTextContent(
+      "react@19.2.5",
+    );
+  });
+
   it("renders the chrome with brand in the nav masthead and breadcrumb + MessagingStatusBar in the right-pane title bar", async () => {
     // Lock the new chrome contract: brand sits in the LEFT nav's
     // `__masthead` (mirrors `.sidebar__masthead` on the main app

@@ -133,6 +133,7 @@ import {
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+  APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -190,7 +191,12 @@ import {
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
-import type { AppMetadata, AppUpdateCheckResult } from "../shared/app-metadata";
+import type {
+  AppLicenseDocument,
+  AppLicenseDocumentKind,
+  AppMetadata,
+  AppUpdateCheckResult,
+} from "../shared/app-metadata";
 
 function recordPreloadLog(
   level: "info" | "warn",
@@ -219,6 +225,10 @@ const desktopApi = Object.freeze({
   },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
+  readLicenseDocument: async (
+    kind: AppLicenseDocumentKind,
+  ): Promise<AppLicenseDocument> =>
+    await ipcRenderer.invoke(APP_LICENSE_DOCUMENT_READ_CHANNEL, kind),
   checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>

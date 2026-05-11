@@ -1,6 +1,6 @@
 # Desktop Distribution Phase 2 Runbook
 
-> Closed-source preview. Copyright © 2026 PwrDrvr LLC.
+> MIT-licensed desktop distribution planning.
 >
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
@@ -21,7 +21,7 @@ external testers can install).
 Pick exactly one. All three end with `latest-mac.yml` + `.zip` reachable at a
 public URL; the only differences are who hosts and how access is controlled.
 
-### Option A — Open-source the source repo
+### Option A — Open-source the source repo (chosen license posture)
 
 Make `pwrdrvr/PwrAgent` public. GitHub Releases attached to a public repo are
 public-readable, so `electron-updater` no longer needs a token.
@@ -30,26 +30,26 @@ Required changes:
 - `electron-builder.yml` `publish:` → set `private: false`
 - Remove the runtime `GH_TOKEN` requirement from
   `apps/desktop/src/main/auto-updater.ts` (it becomes a no-op for public repos)
-- Update `package.json` `license` to whatever OSS license is chosen, drop
-  `UNLICENSED`, add an OSS LICENSE file, rewrite the README
+- Keep `package.json` `license` declarations on `MIT`, ship the repo-root
+  `LICENSE`, and keep `THIRD_PARTY_LICENSES` current with `pnpm licenses:check`.
 
 Trade-offs:
 - ✅ Zero infra change beyond toggling repo visibility.
 - ✅ No second repo, no S3 bucket, no secret to rotate.
 - ✅ Update channel works for everyone with no token plumbing.
-- ❌ Source becomes public. This is a strategic product decision, not just a
-  distribution decision. Coordinate separately with PwrDrvr LLC.
+- ❌ Source becomes public. This remains a strategic product decision, not just a
+  distribution decision.
 
 ### Option B — Public release-only repo (recommended default)
 
 Keep `pwrdrvr/PwrAgent` private. Create a new public repo `pwrdrvr/PwrAgent-Releases`
-that holds *only* a README, the LICENSE/EULA, and GitHub Releases with the
-signed artifacts. `electron-updater` points at the public repo. This is what
-Hyper, early Linear, and several other closed-source Electron apps use.
+that holds *only* a README, license notices, and GitHub Releases with the signed
+artifacts. `electron-updater` points at the public repo.
 
 Required changes:
-- Create the public repo. Push a small README that says "Release artifacts for
-  PwrAgent. Source is proprietary."
+- Create the public repo. Push a small README that says it contains release
+  artifacts for PwrAgent and points back to the MIT-licensed source repo when
+  that repo is public.
 - `electron-builder.yml` `publish:` →
   ```yaml
   publish:
@@ -69,7 +69,7 @@ Required changes:
 Trade-offs:
 - ✅ Source stays private; binaries are public.
 - ✅ Cost: $0. GitHub-hosted, no infra to run.
-- ✅ Conventional pattern; many closed-source apps use it.
+- ✅ Conventional pattern for separating source and binary release channels.
 - ❌ Two repos to keep coordinated (release tags must be cut on the public
   repo even though source lives in the private one).
 
@@ -126,8 +126,8 @@ For solo Phase 1 (only the developer running the binary), this is irrelevant
 Before flipping to Phase 2:
 
 - [ ] One channel (A, B, or C above) chosen and recorded in this doc.
-- [ ] If A or B: any OSS license / proprietary repo decisions with PwrDrvr LLC
-      are recorded.
+- [ ] If A or B: MIT source/license disclosure expectations are recorded for
+      the selected channel.
 - [ ] If C: bucket provisioned, DNS resolves, CDN cache headers set.
 - [ ] `auto-updater.ts` updated (token requirement removed if A or B; provider
       changed if C).

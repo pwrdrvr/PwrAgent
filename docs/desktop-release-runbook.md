@@ -1,6 +1,6 @@
 # Desktop Release Runbook
 
-> Closed-source preview. Copyright © 2026 PwrDrvr LLC.
+> MIT-licensed desktop release pipeline.
 >
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
@@ -51,10 +51,12 @@ since it is not a secret.
 # 1. Bump the desktop version and add a matching top CHANGELOG.md entry.
 # Treat apps/desktop/package.json as the release version source.
 RELEASE_TAG=v1.0.0-alpha.7 pnpm release:check
+pnpm licenses:generate
+pnpm licenses:check
 
 # 2. Commit the release metadata and land it on main.
 # Preferred: direct signed push by a maintainer with branch-protection bypass.
-git add apps/desktop/package.json CHANGELOG.md
+git add apps/desktop/package.json CHANGELOG.md THIRD_PARTY_LICENSES
 git commit -S -m "chore(release): prepare v1.0.0-alpha.7"
 git push origin HEAD:main
 
@@ -69,12 +71,14 @@ git push origin v1.0.0-alpha.7
 The `Release Desktop (macOS arm64)` workflow on `macos-15` triggers, runs
 typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
 
-1. Builds main/preload/renderer with electron-vite.
-2. Runs `pnpm deploy --prod` to materialize a flat `node_modules` tree under
+1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
+2. Builds main/preload/renderer with electron-vite.
+3. Runs `pnpm deploy --prod` to materialize a flat `node_modules` tree under
    `apps/desktop/release-stage/`.
-3. Seeds the stage with `out/` + `build/` + `electron-builder.yml`.
-4. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
-5. Runs `electron-builder --mac --arm64 --publish always` which signs every
+4. Seeds the stage with `out/`, `build/`, `electron-builder.yml`, `LICENSE`,
+   and `THIRD_PARTY_LICENSES`.
+5. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
+6. Runs `electron-builder --mac --arm64 --publish always` which signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and ZIP, generates `latest-mac.yml`, and uploads everything to a GitHub
@@ -117,6 +121,10 @@ pnpm --filter @pwragent/desktop package         # signed + notarized, no publish
 pnpm --filter @pwragent/desktop release         # signed + notarized + publish
 ```
 
+The release orchestrator runs `pnpm licenses:check` before packaging. If
+dependencies changed, run `pnpm licenses:generate`, review the
+`THIRD_PARTY_LICENSES` diff, and commit it before cutting the release.
+
 Verify the produced `.app`:
 
 ```bash
@@ -136,6 +144,10 @@ ls "$APP/Contents/Frameworks/" | grep -i electron && echo "FAIL: leaked Electron
 
 # Fuses (ASAR integrity must be enabled)
 npx --yes @electron/fuses read --app "$APP"
+
+# First-party and third-party license disclosures must ship in Resources
+test -f "$APP/Contents/Resources/LICENSE"
+test -f "$APP/Contents/Resources/THIRD_PARTY_LICENSES"
 ```
 
 ---

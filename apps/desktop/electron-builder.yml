@@ -1,6 +1,6 @@
 appId: com.pwrdrvr.pwragent
 productName: PwrAgent
-copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+copyright: "Copyright © 2026 PwrDrvr LLC."
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
@@ -53,6 +53,12 @@ files:
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"
 
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD_PARTY_LICENSES
+    to: THIRD_PARTY_LICENSES
+
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.
 electronFuses:
@@ -85,7 +91,7 @@ mac:
   helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
   helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
-    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     LSMinimumSystemVersion: "12.0"
     LSApplicationCategoryType: public.app-category.developer-tools
   target:

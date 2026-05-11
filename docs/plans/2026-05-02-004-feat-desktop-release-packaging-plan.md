@@ -231,7 +231,7 @@ crash reporting is added later (out of scope for this plan), upload sourcemaps s
 ```yaml
 appId: com.pwrdrvr.pwragent
 productName: PwrAgent
-copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+copyright: "<PwrDrvr LLC copyright metadata>"
 
 # Bundle layout
 asar: true
@@ -274,7 +274,7 @@ mac:
   helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
   helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
-    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+    NSHumanReadableCopyright: "<PwrDrvr LLC copyright metadata>"
     LSMinimumSystemVersion: "12.0"   # macOS Monterey baseline; reasonable in 2026
     LSApplicationCategoryType: public.app-category.developer-tools
   target:
@@ -394,22 +394,11 @@ contains all six values above.
       - Add `"description"` matching root
       - Add `"license": "UNLICENSED"`
       - Confirm `"productName": "PwrAgent"` (already set)
-      - Add `"copyright": "Copyright © 2026 PwrDrvr LLC. All rights reserved."` at the top
-        level (electron-builder reads this if `electron-builder.yml` does not override).
-- [ ] **B3.** Add `LICENSE` at repo root with proprietary boilerplate:
-      ```text
-      Copyright © 2026 PwrDrvr LLC. All rights reserved.
-
-      This software and associated documentation files (the "Software") are
-      proprietary to PwrDrvr LLC. No part of the Software may be reproduced,
-      distributed, modified, reverse-engineered, or used to create derivative
-      works without the prior written consent of PwrDrvr LLC. Use of the
-      Software is governed solely by the terms of the end-user license
-      agreement under which it is distributed.
-      ```
-      Note: a fuller EULA with warranty disclaimers, choice-of-law, and arbitration
-      clauses is recommended before paid launch but is **out of scope** for v1.0 (origin §
-      Scope Boundaries).
+      - Add PwrDrvr LLC copyright metadata at the top level (electron-builder reads this
+        if `electron-builder.yml` does not override).
+- [ ] **B3.** Add the canonical first-party license text at repo root in
+      [`LICENSE`](LICENSE). Keep legal boilerplate centralized there instead of copying it
+      into docs or source files.
 - [ ] **B4.** Wire `app.setAboutPanelOptions` in
       [`apps/desktop/src/main/index.ts`](apps/desktop/src/main/index.ts) inside
       `bootstrapApp()` immediately after `app.setName(APP_NAME)`:
@@ -417,7 +406,7 @@ contains all six values above.
       app.setAboutPanelOptions({
         applicationName: APP_NAME,
         applicationVersion: app.getVersion(),
-        copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved.",
+        copyright: "<PwrDrvr LLC copyright metadata>",
         version: app.getVersion(),
       });
       ```
@@ -444,8 +433,8 @@ contains all six values above.
       - Drop or rephrase "Workspace" section's framing of internal packages as if for
         external consumers
       - Remove or rewrite any "fork-friendly" phrasing
-      - Add a top-of-file note: "Closed-source preview. Copyright © 2026 PwrDrvr LLC.
-        Internal use only."
+      - Keep project posture in the README's normal prose instead of adding a legal
+        boilerplate banner.
       - Move developer-only sections (Heap Diagnostics, Startup CPU Profiling) under a
         clearly-marked `## Developer` section so a future reader does not assume they are
         end-user docs.
@@ -496,7 +485,7 @@ with the PwrDrvr LLC copyright; Settings → About shows the right version.
 **Acceptance:** `pnpm --filter @pwragent/desktop package:dryrun` produces a `.app` under
 `apps/desktop/dist/mac-arm64/PwrAgent.app` that:
 - Has `Info.plist` `CFBundleName: PwrAgent`, `CFBundleIdentifier: com.pwrdrvr.pwragent`,
-  `NSHumanReadableCopyright: Copyright © 2026 PwrDrvr LLC. All rights reserved.`
+  `NSHumanReadableCopyright` set to PwrDrvr LLC copyright metadata.
 - Has helper bundles named `PwrAgent Helper`, `PwrAgent Helper (Renderer)`,
   `PwrAgent Helper (GPU)`, `PwrAgent Helper (Plugin)`
 - Launches and renders the UI when right-clicked → Open (signing not yet wired)
@@ -557,8 +546,7 @@ notarization.
         the staple worked.
       - Activity Monitor shows `PwrAgent`, `PwrAgent Helper (Renderer)`,
         `PwrAgent Helper (GPU)` — **no** `Electron Helper`. (Origin success criterion.)
-      - About PwrAgent menu shows `Copyright © 2026 PwrDrvr LLC. All rights reserved.`
-        and the correct version.
+      - About PwrAgent menu shows PwrDrvr LLC copyright metadata and the correct version.
 - [ ] **E6.** Save the notarization submission ID; if anything goes wrong run
       `xcrun notarytool log <submission-id> --key ...` to fetch the JSON failure log.
 
@@ -856,11 +844,11 @@ Helper" regression automatically.
 - [ ] [R2] `defaults read /Applications/PwrAgent.app/Contents/Info.plist CFBundleIdentifier`
       reports `com.pwrdrvr.pwragent`.
 - [ ] [R3] `defaults read .../Info.plist NSHumanReadableCopyright` reports
-      `Copyright © 2026 PwrDrvr LLC. All rights reserved.`
+      PwrDrvr LLC copyright metadata.
 - [ ] [R3] `package.json` `author` is `PwrDrvr LLC` at root and in `apps/desktop/`.
 - [ ] [R3] About panel (App menu → About PwrAgent) shows the same copyright.
 - [ ] [R3] Settings → About row shows app name, version, and copyright.
-- [ ] [R3] `LICENSE` file exists at repo root with proprietary boilerplate.
+- [ ] [R3] `LICENSE` file exists at repo root with the canonical first-party license text.
 - [ ] [R4] `codesign -dv --verbose=4 PwrAgent.app` reports
       `Authority=Developer ID Application: PwrDrvr LLC (TEAMID)`.
 - [ ] [R5] `spctl -a -vv PwrAgent.app` reports `accepted, source=Notarized Developer ID`.

@@ -118,6 +118,8 @@ import type {
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type {
+  AppLicenseDocument,
+  AppLicenseDocumentKind,
   AppMetadata,
   AppUpdateCheckResult,
 } from "../../../shared/app-metadata";
@@ -126,6 +128,9 @@ export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
+  readLicenseDocument?: (
+    kind: AppLicenseDocumentKind,
+  ) => Promise<AppLicenseDocument>;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (

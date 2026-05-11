@@ -1,0 +1,14 @@
+name: Security disclosure
+description: Read the private security reporting instructions.
+title: "security: "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities in public issues.
+
+        Use GitHub private vulnerability reporting if it is enabled for this
+        repository. If that is unavailable, email security@pwrdrvr.com.
+
+        See SECURITY.md for the full policy.

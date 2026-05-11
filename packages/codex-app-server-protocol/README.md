@@ -49,3 +49,7 @@ PwrAgent's desktop Codex adapter talks to a locally installed Codex App Server o
 ## Source of truth
 
 The Rust source for the protocol is in the Codex repo under `app-server/`. The generator emits one TypeScript file per protocol type, plus barrel `index.ts` files. Commit regenerated output as a generated-file diff.
+
+## License
+
+MIT. See the repository root [LICENSE](../../LICENSE).

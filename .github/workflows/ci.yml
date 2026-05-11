@@ -37,6 +37,14 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
+      - name: License metadata
+        run: |
+          if ! pnpm licenses:check; then
+            echo "License check failed; forcing pnpm to relink dependencies before retrying."
+            pnpm install --frozen-lockfile --force
+            pnpm licenses:check
+          fi
+
       - name: Type check
         run: pnpm typecheck
 
