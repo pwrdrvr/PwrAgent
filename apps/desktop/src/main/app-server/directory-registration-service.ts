@@ -1,15 +1,12 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { stat as fsStat } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type {
   AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
   RegisterDirectoryFromDiskFailureReason,
   RegisterDirectoryFromDiskResponse,
 } from "@pwragent/shared";
-
-const execFile = promisify(execFileCallback);
+import { runGitCommand } from "./git-executable";
 
 /**
  * Validate `path` and seed a launchpad for the project-directory
@@ -51,10 +48,7 @@ export type DirectoryRegistrationDeps = {
 };
 
 async function defaultRunGit(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFile("git", ["-C", cwd, ...args], {
-    env: process.env,
-  });
-  return stdout.trim();
+  return (await runGitCommand(cwd, args)).stdout;
 }
 
 async function defaultStat(

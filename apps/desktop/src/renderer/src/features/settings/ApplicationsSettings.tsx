@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationKind,
+  DesktopGitDiscoveryCandidate,
   DesktopGhDiscoveryCandidate,
   DesktopSettingsSnapshot,
   GhStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -26,6 +28,7 @@ export function ApplicationsSettings(props: {
     kind: DesktopApplicationKind,
     preferredId: string,
   ) => Promise<void>;
+  onRefresh: () => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   return (
@@ -54,6 +57,12 @@ export function ApplicationsSettings(props: {
         title="Terminal"
         onPreferredApplicationChange={props.onPreferredApplicationChange}
       />
+      <GitStatusPanel
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onRefresh={props.onRefresh}
+      />
       <GhStatusPanel
         desktopApi={props.desktopApi}
         saving={props.saving}
@@ -61,6 +70,135 @@ export function ApplicationsSettings(props: {
         onSaveGhPath={props.onSaveGhPath}
       />
     </SettingsSectionStack>
+  );
+}
+
+const XCODE_LICENSE_REMEDIATION_COMMAND = "sudo xcodebuild -license";
+
+function GitStatusPanel(props: {
+  desktopApi?: DesktopApi;
+  saving: boolean;
+  snapshot: DesktopSettingsSnapshot;
+  onRefresh: () => Promise<void>;
+}) {
+  const [loading, setLoading] = useState(false);
+  const discovery = props.snapshot.applications.git.discovery;
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const hasWorkingGit = discovery.candidates.some((candidate) => candidate.executable);
+  const visibleCandidates = discovery.candidates.filter(
+    (candidate) =>
+      candidate.executable || isXcodeLicenseCandidate(candidate) || !hasWorkingGit,
+  );
+  const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
+    isXcodeLicenseCandidate(candidate)
+  );
+  const pill = describeGitStatusPill(discovery, xcodeLicenseCandidate);
+
+  const refresh = async (): Promise<void> => {
+    setLoading(true);
+    try {
+      await props.onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SettingsSection
+      eyebrow="Applications"
+      title="Git"
+      description={
+        <>
+          PwrAgent uses <code>git</code> to inspect repositories and create
+          worktrees for new threads.
+        </>
+      }
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Command status"
+          sub="Checks the git command PwrAgent will use for repository and worktree operations."
+          source={selected?.source ?? "auto"}
+          control={
+            <div className="settings-gh-status">
+              <span className={`settings-pill settings-pill--${pill.tone}`}>
+                {pill.label}
+              </span>
+              {selected?.command ? (
+                <span className="settings-pathrow__path">
+                  Path: <code>{selected.command}</code>
+                </span>
+              ) : null}
+              {selected?.version ? (
+                <span className="settings-pathrow__path">
+                  Version: <code>{selected.version}</code>
+                </span>
+              ) : null}
+              {xcodeLicenseCandidate ? (
+                <div className="settings-gh-status">
+                  <span className="settings-pathrow__path settings-error">
+                    Apple&apos;s Git at <code>{xcodeLicenseCandidate.command}</code>{" "}
+                    is blocked by the Xcode license check.
+                  </span>
+                  <span className="settings-pathrow__path">
+                    Run this in Terminal, then follow the prompts:
+                  </span>
+                  <span className="settings-pathrow__path">
+                    <code>{XCODE_LICENSE_REMEDIATION_COMMAND}</code>
+                  </span>
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={() =>
+                        void copyText(
+                          XCODE_LICENSE_REMEDIATION_COMMAND,
+                          props.desktopApi,
+                        )
+                      }
+                    >
+                      Copy command
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={loading || props.saving}
+                  type="button"
+                  onClick={() => void refresh()}
+                >
+                  {loading ? "Checking…" : "Re-check"}
+                </button>
+              </div>
+            </div>
+          }
+        />
+        <SettingsField
+          label="Available paths"
+          sub={
+            hasWorkingGit
+              ? "Detected on this machine. The selected path is used."
+              : "No working git executable was found. These are the paths PwrAgent checked."
+          }
+          control={
+            <div className="settings-paths" aria-label="Git discovery">
+              {visibleCandidates.length === 0 ? (
+                <p className="settings-empty">No git candidates found.</p>
+              ) : (
+                visibleCandidates.map((candidate) => (
+                  <GitCandidateRow
+                    key={`${candidate.source}:${candidate.command}`}
+                    candidate={candidate}
+                  />
+                ))
+              )}
+            </div>
+          }
+        />
+      </div>
+    </SettingsSection>
   );
 }
 
@@ -247,6 +385,36 @@ function GhStatusPanel(props: {
   );
 }
 
+function GitCandidateRow(props: {
+  candidate: DesktopGitDiscoveryCandidate;
+}) {
+  const candidate = props.candidate;
+  const failureLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const chips: SettingsPathRowChip[] = [
+    { label: describeGitCandidateSource(candidate.source), tone: "muted" },
+  ];
+  if (candidate.executable) {
+    chips.push({
+      label: candidate.version ?? "version unknown",
+      tone: candidate.version ? "muted" : "err",
+    });
+  } else {
+    chips.push({
+      label: failureLabel ?? "Unavailable",
+      tone: isXcodeLicenseCandidate(candidate) ? "warn" : "err",
+    });
+  }
+
+  return (
+    <SettingsPathRow
+      title={candidate.command}
+      chips={chips}
+      selected={candidate.selected}
+      disabled
+    />
+  );
+}
+
 function GhCandidateRow(props: {
   candidate: DesktopGhDiscoveryCandidate;
   disabled?: boolean;
@@ -289,12 +457,56 @@ function GhCandidateRow(props: {
   );
 }
 
+function describeGitStatusPill(
+  discovery: DesktopSettingsSnapshot["applications"]["git"]["discovery"],
+  xcodeLicenseCandidate?: DesktopGitDiscoveryCandidate,
+): {
+  tone: "ok" | "warn" | "bad" | "neutral";
+  label: string;
+} {
+  if (discovery.selectedCommand) {
+    return xcodeLicenseCandidate
+      ? { tone: "warn", label: "Available" }
+      : { tone: "ok", label: "Available" };
+  }
+  if (xcodeLicenseCandidate) {
+    return { tone: "bad", label: "Xcode license required" };
+  }
+  return { tone: "bad", label: "Not available" };
+}
+
+function describeGitCandidateSource(
+  source: DesktopGitDiscoveryCandidate["source"],
+): string {
+  if (source === "xcode") return "Apple Git";
+  if (source === "homebrew") return "Homebrew";
+  if (source === "env") return "env";
+  if (source === "path") return "PATH";
+  return source;
+}
+
 function describeCommandDiscoveryFailure(reason?: string): string | undefined {
   if (!reason) return undefined;
   if (reason === "not_found") return "Missing";
   if (reason === "not_executable") return "Not executable";
   if (reason === "version_not_reported") return "Version unknown";
+  if (isXcodeLicenseFailure(reason)) return "Xcode license";
   return reason;
+}
+
+function isXcodeLicenseCandidate(
+  candidate: DesktopGitDiscoveryCandidate,
+): boolean {
+  return candidate.command === "/usr/bin/git"
+    && isXcodeLicenseFailure(candidate.failureReason ?? candidate.versionFailureReason);
+}
+
+function isXcodeLicenseFailure(reason?: string): boolean {
+  return Boolean(
+    reason?.includes("Xcode license")
+      || reason?.includes("license agreements")
+      || reason?.includes("xcodebuild -license"),
+  );
 }
 
 function describeGhStatusPill(status: GhStatus | undefined): {

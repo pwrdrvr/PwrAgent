@@ -317,6 +317,7 @@ function SettingsSectionBody(props: {
                 : { terminal: { preferredId } },
           });
         }}
+        onRefresh={props.settings.refresh}
         onSaveGhPath={async (path) => {
           await props.settings.writeConfig({
             applications: {

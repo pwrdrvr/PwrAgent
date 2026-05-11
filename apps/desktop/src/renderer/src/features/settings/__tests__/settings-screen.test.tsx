@@ -200,6 +200,21 @@ function createSnapshot(
         path: { value: "", source: "default" },
         discovery: { candidates: [] },
       },
+      git: {
+        discovery: {
+          selectedCommand: "/opt/homebrew/bin/git",
+          selectedSource: "homebrew",
+          candidates: [
+            {
+              command: "/opt/homebrew/bin/git",
+              source: "homebrew",
+              executable: true,
+              selected: true,
+              version: "2.39.1",
+            },
+          ],
+        },
+      },
     },
     worktrees: {
       storage: { value: "user-home", source: "default" },
@@ -446,6 +461,63 @@ describe("SettingsScreen", () => {
       });
     });
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
+  });
+
+  it("shows Git discovery and Xcode license remediation", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.git = {
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/git",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/git",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.39.1",
+          },
+          {
+            command: "/usr/bin/git",
+            executable: false,
+            selected: false,
+            source: "xcode",
+            failureReason:
+              "You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license'",
+          },
+          {
+            command: "/usr/local/bin/git",
+            executable: false,
+            selected: false,
+            source: "homebrew",
+            failureReason: "not_found",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const copyTextMock = vi.fn(async () => undefined);
+
+    render(
+      <SettingsScreen
+        desktopApi={{ copyText: copyTextMock }}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const gitPanel = screen.getByRole("heading", { name: "Git" }).closest("section")!;
+    expect(within(gitPanel).getAllByText("/opt/homebrew/bin/git").length).toBeGreaterThanOrEqual(1);
+    expect(within(gitPanel).getByText(/Apple's Git at/)).toBeInTheDocument();
+    expect(within(gitPanel).queryByText("/usr/local/bin/git")).not.toBeInTheDocument();
+    expect(
+      within(gitPanel).getByText("sudo xcodebuild -license"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(gitPanel).getByRole("button", { name: "Copy command" }));
+    await waitFor(() => {
+      expect(copyTextMock).toHaveBeenCalledWith("sudo xcodebuild -license");
+    });
   });
 
   it("renders the Mattermost section and saves edits via writeConfig", async () => {

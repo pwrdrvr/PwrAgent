@@ -49,6 +49,9 @@ describe("ThreadMarkdown", () => {
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
+          git: {
+            discovery: { candidates: [] },
+          },
         }}
         desktopApi={{ openApplication }}
         text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
