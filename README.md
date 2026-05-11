@@ -2,10 +2,11 @@
 
 **Run a coding agent. Drive it from your messenger.**
 
-PwrAgent is a thread-first desktop app that pairs a coding agent with the
-chat platforms you already use. Start a thread on your laptop, follow it
-from Telegram, approve a destructive command from Discord, hand the
-conversation back to the desktop when you're ready to read the diff.
+PwrAgent lets you start a thread on your laptop, refine the requirements
+with it from Slack, review a potentially dangerous command from Telegram,
+and pick the thread back up on the desktop when you return to your desk.
+One conversation, one approval surface, one agent — wherever you happen
+to be.
 
 > **Status: beta — macOS only today.** Steady cadence, non-destructive
 > between releases.
@@ -21,6 +22,13 @@ conversation back to the desktop when you're ready to read the diff.
   protocol, so your thread list is the same one Codex sees and there's
   no separate login. Try it for a day, use it for a month — switch back
   to the official Codex client whenever.
+- **Per-thread cost and risk controls.** Set Fast mode, model,
+  reasoning effort, and permissions mode independently on every
+  thread — not globally. Run an experiment on a cheap model with
+  default access while a refactor uses a stronger model with full
+  access; the settings stay scoped to their thread. Codex Desktop only
+  exposes these as global settings, which makes mixing high-stakes and
+  low-stakes work in the same session painful.
 - **Safe upgrades and downgrades.** Config and state migrate forward
   without breaking older installs. Run two versions side-by-side or
   downgrade after an update without losing settings or threads. See
@@ -37,8 +45,10 @@ conversation back to the desktop when you're ready to read the diff.
 - **Find threads how you remember them.** Search and filter by branch
   name, PR, emoji marker, or messaging binding — pick whichever you
   actually recall.
-- **Markdown composer.** Write in the markdown you already use; the
-  composer renders bold, code blocks, links, and the rest.
+- **Markdown composer that gets out of your way.** Triple backticks +
+  space opens a code block, `>` + space opens a blockquote, and the
+  usual inline formatting (bold, italic, inline code, links) works as
+  you type. Codex Desktop doesn't have a markdown composer yet.
 
 ## Take a look
 
@@ -75,6 +85,47 @@ pnpm dev
 Configure your coding-agent credentials either in your shell environment
 or in `~/.config/grok-app-server/config.toml`. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
+
+## Is this safe for work?
+
+**Research and comply with your company's policies and procedures
+before installing PwrAgent on a work machine or connecting it to a
+work messaging platform.** That responsibility is yours, not the
+project's.
+
+The broader picture is moving fast. Jensen Huang said at the 2026
+NVIDIA convention that *"every company needs an OpenClaw strategy,"*
+and large employers — Microsoft among the names making news on this —
+are actively investigating how to incorporate OpenClaw-like tools into
+their workflows. That signal is real. It does **not** mean that
+PwrAgent specifically is approved at your company, or that the risks
+are zero. It means the category is worth a conversation with the right
+people inside your org.
+
+A sensible path:
+
+- **Start on a personal project.** Run it locally without messaging
+  enabled, or pair it to a personal Telegram or Discord bot. Get a
+  feel for what the agent does and what data it touches.
+- **Confirm policy before installing on a work machine.** Some
+  employers disallow third-party developer tools by default; some
+  allow them only after a security review.
+- **If you bind PwrAgent to a messaging platform at work, use only
+  your employer's approved platform** (often Slack or Mattermost) and
+  walk the integration through your security team first. What ends up
+  in your messenger from the agent matters as much as the agent
+  itself.
+- **Don't mix work and personal.** Don't connect a work installation
+  to a personal Telegram bot, and don't point a work Slack workspace
+  at a personal experimentation install.
+
+PwrAgent's design tries to make these decisions inspectable: secrets
+are encrypted at rest, messaging is closed by default, destructive
+actions prompt for approval, and the entire state surface lives at
+`~/.pwragent/` (documented in
+[docs/state-layout.md](docs/state-layout.md)). What the project can't
+do is tell you whether the policies at your employer permit any of
+this. That's still your call to make.
 
 ## Roadmap
 
