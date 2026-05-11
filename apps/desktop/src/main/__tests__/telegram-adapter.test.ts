@@ -504,6 +504,75 @@ describe("TelegramAdapter", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("uses General topic routing state for typing without threading message sends", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      now: () => 1000,
+    });
+    const audit = {
+      actor: {
+        platformUserId: "42",
+      },
+      channel: {
+        channel: "telegram" as const,
+        conversation: {
+          id: "-1003711601984",
+          kind: "channel" as const,
+          title: "PwrDrvr",
+        },
+      },
+      occurredAt: 1000,
+    };
+    const generalTopicSurface = {
+      channel: "telegram" as const,
+      id: "binding:general",
+      state: {
+        opaque: {
+          chatId: -1003711601984,
+          messageThreadId: 1,
+        },
+      },
+    };
+
+    await adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1000,
+      state: "active",
+      audit,
+      targetSurface: generalTopicSurface,
+    });
+    await adapter.deliver({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1000,
+      audit,
+      targetSurface: generalTopicSurface,
+      parts: [{ type: "text", text: "Done", markdown: "plain" }],
+      role: "assistant",
+    });
+
+    expect(api.sendChatAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "typing",
+        chat_id: -1003711601984,
+        message_thread_id: 1,
+      }),
+    );
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        message_thread_id: expect.any(Number),
+      }),
+    );
+  });
+
   it("returns failed delivery results instead of throwing Telegram API errors", async () => {
     const api = createApi();
     const logger = {
@@ -2196,6 +2265,62 @@ describe("TelegramAdapter", () => {
     });
 
     expect(events).toEqual([]);
+  });
+
+  it("preserves Telegram General topic id in opaque routing state", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 7,
+      message: {
+        chat: {
+          id: -1003711601984,
+          is_forum: true,
+          title: "PwrDrvr",
+          type: "supergroup",
+        },
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 106,
+        text: "/status",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "-1003711601984",
+            kind: "channel",
+            title: "PwrDrvr",
+          },
+        },
+        routingState: {
+          opaque: {
+            chatId: -1003711601984,
+            messageThreadId: 1,
+          },
+        },
+      }),
+    ]);
   });
 
   it("ignores Telegram messages authored by the configured bot", async () => {

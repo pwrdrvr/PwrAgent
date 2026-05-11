@@ -1223,6 +1223,126 @@ describe("MessagingController", () => {
     });
   });
 
+  it("echoes binding routing state into typing activity intents", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "-1003711601984",
+            kind: "channel",
+            title: "PwrDrvr",
+          },
+        },
+        routingState: {
+          opaque: {
+            chatId: -1003711601984,
+            messageThreadId: 1,
+          },
+        },
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+      audit: {
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "-1003711601984",
+            kind: "channel",
+          },
+        },
+      },
+      targetSurface: {
+        channel: "telegram",
+        state: {
+          opaque: {
+            chatId: -1003711601984,
+            messageThreadId: 1,
+          },
+        },
+      },
+    });
+  });
+
+  it("refreshes stale binding routing state before typing activity", async () => {
+    const harness = await createHarness();
+    const generalChannel = {
+      channel: "telegram" as const,
+      conversation: {
+        id: "-1003711601984",
+        kind: "channel" as const,
+        title: "PwrDrvr",
+      },
+    };
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel: generalChannel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("start work", {
+        channel: generalChannel,
+        routingState: {
+          opaque: {
+            chatId: -1003711601984,
+            messageThreadId: 1,
+          },
+        },
+      }),
+    );
+
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "activity" && intent.state === "active",
+      ),
+    ).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      targetSurface: {
+        channel: "telegram",
+        state: {
+          opaque: {
+            chatId: -1003711601984,
+            messageThreadId: 1,
+          },
+        },
+      },
+    });
+  });
+
   it("drops typing activity during provider cool-off without spending write budget", async () => {
     let now = 1_000;
     const scope: MessagingDeliveryScope = {
@@ -5654,14 +5774,20 @@ function buildCommandEvent(
   };
 }
 
-function buildTextEvent(text: string): MessagingInboundTextEvent {
+function buildTextEvent(
+  text: string,
+  params: {
+    channel?: MessagingInboundTextEvent["channel"];
+    routingState?: MessagingInboundTextEvent["routingState"];
+  } = {},
+): MessagingInboundTextEvent {
   return {
     id: "event-text",
     kind: "text",
     actor: {
       platformUserId: "user-1",
     },
-    channel: {
+    channel: params.channel ?? {
       channel: "telegram",
       conversation: {
         id: "chat-1",
@@ -5669,6 +5795,7 @@ function buildTextEvent(text: string): MessagingInboundTextEvent {
       },
     },
     receivedAt: 1000,
+    routingState: params.routingState,
     text,
   };
 }
@@ -5694,6 +5821,7 @@ function buildToolCompletedEvent(id: string, command: string): AgentEvent {
 
 function buildCallbackEvent(params: {
   actionId: string;
+  channel?: MessagingInboundCallbackEvent["channel"];
   interactionId?: string;
   routingState?: MessagingInboundCallbackEvent["routingState"];
   value?: MessagingInboundCallbackEvent["value"];
@@ -5704,7 +5832,7 @@ function buildCallbackEvent(params: {
     actor: {
       platformUserId: "user-1",
     },
-    channel: {
+    channel: params.channel ?? {
       channel: "telegram",
       conversation: {
         id: "chat-1",

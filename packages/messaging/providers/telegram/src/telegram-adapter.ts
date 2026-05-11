@@ -59,6 +59,7 @@ const TELEGRAM_STREAM_GROUP_FAST_INTERVAL_MS = 1_000;
 const TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS = 2_000;
 const TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS = 3_100;
 const TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS = 100;
+const TELEGRAM_GENERAL_TOPIC_THREAD_ID = 1;
 
 type TelegramDeliveryTarget = {
   chatId: number | string;
@@ -107,6 +108,7 @@ export type TelegramUser = {
 
 export type TelegramChat = {
   id: number;
+  is_forum?: true;
   title?: string;
   type: "private" | "group" | "supergroup" | "channel";
 };
@@ -145,6 +147,7 @@ export type TelegramMessage = {
   from?: TelegramUser;
   general_forum_topic_hidden?: Record<string, never>;
   general_forum_topic_unhidden?: Record<string, never>;
+  is_topic_message?: true;
   message_id: number;
   message_thread_id?: number;
   photo?: Array<{
@@ -1640,6 +1643,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private resolveTarget(intent: MessagingSurfaceIntent): TelegramDeliveryTarget | undefined {
+    if (intent.kind === "activity") {
+      return (
+        this.telegramStateFromSurface(intent.targetSurface?.state) ??
+        (intent.audit?.channel
+          ? this.telegramStateFromChannel(intent.audit.channel.conversation)
+          : undefined)
+      );
+    }
+
     if (intent.delivery?.mode === "update" || intent.kind === "dismiss") {
       return (
         this.telegramStateFromSurface(intent.targetSurface?.state) ??
@@ -2064,7 +2076,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         .join(" ") || undefined;
     const chatTitle = message.chat.title ?? senderName;
 
-    if (message.message_thread_id) {
+    const messageThreadId = this.messageThreadIdFromMessage(message);
+    if (
+      messageThreadId !== undefined &&
+      messageThreadId !== TELEGRAM_GENERAL_TOPIC_THREAD_ID
+    ) {
       // Topic-bound messages: title slot belongs to the topic itself.
       // Look up the cached topic name (populated from
       // `forum_topic_created` / `forum_topic_edited` service messages
@@ -2074,12 +2090,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // back to a literal "Topic" placeholder.
       const topicTitle = this.lookupTopicName(
         message.chat.id,
-        message.message_thread_id,
+        messageThreadId,
       );
       return {
         channel: this.channel,
         conversation: {
-          id: String(message.message_thread_id),
+          id: String(messageThreadId),
           kind: "topic",
           parentId: String(message.chat.id),
           title: topicTitle,
@@ -2164,12 +2180,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private routingStateFromMessage(message: TelegramMessage): MessagingAdapterState {
+    const messageThreadId = this.messageThreadIdFromMessage(message);
     return {
       opaque: {
         chatId: message.chat.id,
-        messageThreadId: message.message_thread_id ?? null,
+        messageThreadId: messageThreadId ?? null,
       },
     };
+  }
+
+  private messageThreadIdFromMessage(message: TelegramMessage): number | undefined {
+    return message.message_thread_id ??
+      (message.is_topic_message === true ||
+      (message.chat.type === "supergroup" && message.chat.is_forum === true)
+        ? TELEGRAM_GENERAL_TOPIC_THREAD_ID
+        : undefined);
   }
 
   /**

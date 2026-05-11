@@ -34,6 +34,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
+  MessagingAdapterState,
   MessagingJsonValue,
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
@@ -681,14 +682,17 @@ export class MessagingController {
       parentTitle: incoming.parentTitle ?? stored.parentTitle,
       ancestorTitle: incoming.ancestorTitle ?? stored.ancestorTitle,
     };
+    const routingState = event.routingState ?? binding.routingState;
     const changed =
       merged.title !== stored.title
       || merged.parentTitle !== stored.parentTitle
-      || merged.ancestorTitle !== stored.ancestorTitle;
+      || merged.ancestorTitle !== stored.ancestorTitle
+      || !messagingAdapterStateEqual(routingState, binding.routingState);
     if (!changed) return;
     await this.options.store.upsertBinding({
       ...binding,
       channel: { ...binding.channel, conversation: merged },
+      routingState,
       updatedAt: this.now(),
     });
     // The chip now has fresher breadcrumbs in the store; nudge the
@@ -5109,6 +5113,9 @@ export class MessagingController {
     if (!channel) {
       return intent;
     }
+    const targetRoutingState =
+      event?.routingState ??
+      (intent.kind === "activity" ? binding?.routingState : undefined);
 
     return {
       ...intent,
@@ -5125,12 +5132,12 @@ export class MessagingController {
       }),
       ...(intent.targetSurface
         ? { targetSurface: intent.targetSurface }
-        : event?.routingState
+        : targetRoutingState
           ? {
               targetSurface: {
                 channel: channel.channel,
-                id: event.id,
-                state: event.routingState,
+                id: event?.id ?? binding?.id ?? intent.id,
+                state: targetRoutingState,
               },
             }
           : {}),
@@ -6292,6 +6299,13 @@ function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
   if (intent.kind === "approval") return "Sent approval request";
   if (intent.kind === "error") return "Sent error notice";
   return `Sent ${intent.kind}`;
+}
+
+function messagingAdapterStateEqual(
+  left: MessagingAdapterState | undefined,
+  right: MessagingAdapterState | undefined,
+): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 function describeConversation(
