@@ -262,6 +262,8 @@ export type DesktopSettingsSnapshot = {
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedTeams: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedConversations: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
     slack: {
       enabled: DesktopSettingsValue<boolean>;
@@ -333,6 +335,8 @@ export type DesktopSettingsConfigPatch = {
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedTeams?: DesktopAuthorizedContact[];
+      authorizedConversations?: DesktopAuthorizedContact[];
     };
     slack?: {
       enabled?: boolean;

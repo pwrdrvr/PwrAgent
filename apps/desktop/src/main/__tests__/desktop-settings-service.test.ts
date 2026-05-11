@@ -691,6 +691,12 @@ describe("DesktopSettingsService", () => {
             { id: "userA", displayName: "Alice" },
             { id: "userB", displayName: "Bob" },
           ],
+          authorizedTeams: [
+            { id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" },
+          ],
+          authorizedConversations: [
+            { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
+          ],
         },
       },
     });
@@ -708,6 +714,10 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("[[messaging.mattermost.authorized_users]]");
     expect(contents).toContain('id = "userA"');
     expect(contents).toContain('display_name = "Alice"');
+    expect(contents).toContain("[[messaging.mattermost.authorized_teams]]");
+    expect(contents).toContain('id = "teamabcdefghijklmnopqrstu1"');
+    expect(contents).toContain("[[messaging.mattermost.authorized_conversations]]");
+    expect(contents).toContain('id = "channelabcdefghijklmn12345"');
     // Bot token + HMAC secret never written to TOML
     expect(contents).not.toContain("token-abc");
     expect(contents).not.toContain("hmac-secret");
@@ -736,6 +746,12 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.mattermost.authorizedUserIds.value).toEqual([
       { id: "userA", displayName: "Alice" },
       { id: "userB", displayName: "Bob" },
+    ]);
+    expect(snapshot.messaging.mattermost.authorizedTeams.value).toEqual([
+      { id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" },
+    ]);
+    expect(snapshot.messaging.mattermost.authorizedConversations.value).toEqual([
+      { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
     ]);
     expect(snapshot.messaging.mattermost.botToken).toMatchObject({
       configured: true,

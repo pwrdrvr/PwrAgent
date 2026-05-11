@@ -76,6 +76,8 @@ export type DesktopSettingsConfig = {
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedTeams?: AuthorizedContactConfig[];
+      authorizedConversations?: AuthorizedContactConfig[];
     };
     slack?: {
       enabled?: boolean;
@@ -384,6 +386,24 @@ export function desktopSettingsPatchToEdits(
       ["authorized_user_ids_list"],
     );
   }
+  if (mattermost?.authorizedTeams !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "mattermost"],
+      "authorized_team_ids",
+      "authorized_teams",
+      mattermost.authorizedTeams,
+      ["authorized_team_ids_list"],
+    );
+  }
+  if (mattermost?.authorizedConversations !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "mattermost"],
+      "authorized_conversation_ids",
+      "authorized_conversations",
+      mattermost.authorizedConversations,
+      ["authorized_conversation_ids_list"],
+    );
+  }
 
   const slack = patch.messaging?.slack;
   if (slack?.enabled !== undefined) {
@@ -528,6 +548,18 @@ function normalizeDesktopConfig(
           mattermost?.authorized_users,
           mattermost?.authorized_user_ids_list,
           mattermost?.authorized_user_ids,
+        ),
+        authorizedTeams: readAuthorizedContacts(
+          mattermost?.authorized_teams,
+          mattermost?.authorized_teams_list,
+          mattermost?.authorized_team_ids_list,
+          mattermost?.authorized_team_ids,
+        ),
+        authorizedConversations: readAuthorizedContacts(
+          mattermost?.authorized_conversations,
+          mattermost?.authorized_conversations_list,
+          mattermost?.authorized_conversation_ids_list,
+          mattermost?.authorized_conversation_ids,
         ),
       },
       slack: {

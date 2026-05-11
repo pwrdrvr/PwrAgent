@@ -1113,37 +1113,6 @@ export class SlackAdapter implements SlackProviderAdapter {
   }): boolean {
     if (params.pairing) return true;
 
-    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id);
-    if (
-      params.teamId !== undefined
-      && !allowedTeams?.includes(params.teamId)
-    ) {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason: "unauthorized-conversation",
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
-      return false;
-    }
-    if (
-      params.teamId === undefined
-      && params.channel.conversation.kind !== "dm"
-    ) {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason: "unauthorized-conversation",
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
-      return false;
-    }
     if (!this.authorizedActorIds.includes(params.actor.platformUserId)) {
       this.emitInboundRejected({
         id: this.newEventId("slack-rejected"),
@@ -1156,23 +1125,33 @@ export class SlackAdapter implements SlackProviderAdapter {
       });
       return false;
     }
-    const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id);
-    if (
-      allowedConversations?.length
-      && !allowedConversations.includes(params.channel.conversation.id)
-    ) {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason: "unauthorized-conversation",
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
-      return false;
+
+    if (params.channel.conversation.kind === "dm") {
+      return true;
     }
-    return true;
+
+    const allowedConversations = this.config.authorizedConversationIds?.map((item) => item.id)
+      ?? [];
+    if (allowedConversations.includes(params.channel.conversation.id)) {
+      return true;
+    }
+
+    const allowedTeams = this.config.authorizedTeamIds?.map((item) => item.id)
+      ?? [];
+    if (params.teamId !== undefined && allowedTeams.includes(params.teamId)) {
+      return true;
+    }
+
+    this.emitInboundRejected({
+      id: this.newEventId("slack-rejected"),
+      kind: params.kind,
+      actor: params.actor,
+      channel: params.channel,
+      receivedAt: this.now(),
+      reason: "unauthorized-conversation",
+      ...(params.routingState ? { routingState: params.routingState } : {}),
+    });
+    return false;
   }
 
   private async channelRefForSlack(params: {

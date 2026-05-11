@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import {
   buildDiscordPatchDelta,
+  buildMattermostPatchDelta,
   buildTelegramPatchDelta,
 } from "../settings-patch-delta";
 
 type Telegram = DesktopSettingsSnapshot["messaging"]["telegram"];
 type Discord = DesktopSettingsSnapshot["messaging"]["discord"];
+type Mattermost = DesktopSettingsSnapshot["messaging"]["mattermost"];
 
 function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
   return {
@@ -27,6 +29,23 @@ function discordSnapshot(overrides: Partial<Discord> = {}): Discord {
     applicationId: { value: "", source: "default" },
     authorizedUserIds: { value: [], source: "default" },
     authorizedGuilds: { value: [], source: "default" },
+    ...overrides,
+  };
+}
+
+function mattermostSnapshot(overrides: Partial<Mattermost> = {}): Mattermost {
+  return {
+    enabled: { value: false, source: "default" },
+    streamingResponses: { value: false, source: "default" },
+    botToken: { configured: false, source: "unset", writable: true },
+    hmacSecret: { configured: false, source: "unset", writable: true },
+    serverUrl: { value: "", source: "default" },
+    callbackBaseUrl: { value: "", source: "default" },
+    slashCommandPrefix: { value: "pwragent_", source: "default" },
+    registerSlashCommands: { value: false, source: "default" },
+    authorizedUserIds: { value: [], source: "default" },
+    authorizedTeams: { value: [], source: "default" },
+    authorizedConversations: { value: [], source: "default" },
     ...overrides,
   };
 }
@@ -147,5 +166,31 @@ describe("buildDiscordPatchDelta", () => {
     const delta = buildDiscordPatchDelta(snapshot, candidate);
     expect(delta).toEqual({ enabled: true });
     expect(delta).not.toHaveProperty("applicationId");
+  });
+});
+
+describe("buildMattermostPatchDelta", () => {
+  it("emits shared-surface authorization changes", () => {
+    const snapshot = mattermostSnapshot();
+    const candidate: Mattermost = {
+      ...snapshot,
+      authorizedTeams: {
+        ...snapshot.authorizedTeams,
+        value: [{ id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" }],
+      },
+      authorizedConversations: {
+        ...snapshot.authorizedConversations,
+        value: [{ id: "channelabcdefghijklmn12345", displayName: "Town Square" }],
+      },
+    };
+
+    expect(buildMattermostPatchDelta(snapshot, candidate)).toEqual({
+      authorizedTeams: [
+        { id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" },
+      ],
+      authorizedConversations: [
+        { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
+      ],
+    });
   });
 });

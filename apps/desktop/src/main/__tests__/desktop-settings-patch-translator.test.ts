@@ -17,6 +17,12 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
             { id: "abc", displayName: "Alice" },
             { id: "def", displayName: "Dev Team" },
           ],
+          authorizedTeams: [
+            { id: "teamabcdefghijklmnopqrstu1", displayName: "Dev Team" },
+          ],
+          authorizedConversations: [
+            { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
+          ],
         },
       },
     });
@@ -90,6 +96,84 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
         value: [
           { id: "abc", display_name: "Alice" },
           { id: "def", display_name: "Dev Team" },
+        ],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_team_ids"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_team_ids"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_teams_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_teams_list"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_team_ids_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_team_ids_list"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_teams"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_teams"],
+      },
+      {
+        op: "setTableArray",
+        path: ["messaging", "mattermost", "authorized_teams"],
+        value: [
+          { id: "teamabcdefghijklmnopqrstu1", display_name: "Dev Team" },
+        ],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_conversation_ids"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_conversation_ids"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_conversations_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_conversations_list"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_conversation_ids_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_conversation_ids_list"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_conversations"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_conversations"],
+      },
+      {
+        op: "setTableArray",
+        path: ["messaging", "mattermost", "authorized_conversations"],
+        value: [
+          { id: "channelabcdefghijklmn12345", display_name: "Town Square" },
         ],
       },
     ]);

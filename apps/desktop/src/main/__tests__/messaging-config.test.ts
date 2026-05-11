@@ -9,6 +9,8 @@ import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
   MATTERMOST_BOT_TOKEN_ENV,
@@ -180,6 +182,8 @@ describe("desktop messaging config", () => {
       [MATTERMOST_SERVER_URL_ENV]: "https://chat.example.com",
       [MATTERMOST_CALLBACK_BASE_URL_ENV]:
         "https://pwragent.example.com/messaging/mattermost/callback",
+      [MATTERMOST_AUTHORIZED_TEAMS_ENV]: "teamabcdefghijklmnopqrstu1",
+      [MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV]: "channelabcdefghijklmn12345",
     });
 
     expect(config).toEqual({
@@ -215,6 +219,12 @@ describe("desktop messaging config", () => {
           "https://pwragent.example.com/messaging/mattermost/callback",
         streamingResponses: false,
         authorizedActorIds: [],
+        authorizedTeamIds: [
+          { id: "teamabcdefghijklmnopqrstu1", displayName: "" },
+        ],
+        authorizedConversationIds: [
+          { id: "channelabcdefghijklmn12345", displayName: "" },
+        ],
       },
     });
   });
@@ -443,6 +453,8 @@ describe("desktop messaging config", () => {
         channel: "mattermost",
         botToken: "settings-mattermost-token",
         authorizedActorIds: [],
+        authorizedTeamIds: [],
+        authorizedConversationIds: [],
       },
     });
     expect(messagingLog.warn).toHaveBeenCalledWith(

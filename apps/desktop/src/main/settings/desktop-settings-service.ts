@@ -33,6 +33,8 @@ import {
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
   GH_COMMAND_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -317,6 +319,14 @@ export class DesktopSettingsService {
           authorizedUserIds: this.resolveList(
             config.messaging?.mattermost?.authorizedUserIds,
             MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+          ),
+          authorizedTeams: this.resolveList(
+            config.messaging?.mattermost?.authorizedTeams,
+            MATTERMOST_AUTHORIZED_TEAMS_ENV,
+          ),
+          authorizedConversations: this.resolveList(
+            config.messaging?.mattermost?.authorizedConversations,
+            MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
           ),
         },
         slack: {

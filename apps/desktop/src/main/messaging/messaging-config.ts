@@ -17,6 +17,8 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -58,6 +60,8 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
+  MATTERMOST_AUTHORIZED_TEAMS_ENV,
   MATTERMOST_AUTHORIZED_USER_IDS_ENV,
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
@@ -314,6 +318,12 @@ export function loadDesktopMessagingConfig(
   const mattermostAuthorizedActorIds = parseContactList(
     env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
   );
+  const mattermostAuthorizedTeamIds = parseContactList(
+    env[MATTERMOST_AUTHORIZED_TEAMS_ENV],
+  );
+  const mattermostAuthorizedConversationIds = parseContactList(
+    env[MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV],
+  );
   const mattermostCallbackHmacSecret = readEnv(
     env,
     MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
@@ -404,6 +414,8 @@ export function loadDesktopMessagingConfig(
               MATTERMOST_STREAMING_RESPONSES_ENV,
             ).value ?? false,
             authorizedActorIds: mattermostAuthorizedActorIds,
+            authorizedTeamIds: mattermostAuthorizedTeamIds,
+            authorizedConversationIds: mattermostAuthorizedConversationIds,
           },
         }
       : {}),
@@ -474,6 +486,12 @@ export async function loadDesktopMessagingConfigFromSettings(
   const mattermostAuthorizedActorIds =
     envConfig.mattermost?.authorizedActorIds
     ?? snapshot.messaging.mattermost.authorizedUserIds.value;
+  const mattermostAuthorizedTeamIds =
+    envConfig.mattermost?.authorizedTeamIds
+    ?? snapshot.messaging.mattermost.authorizedTeams.value;
+  const mattermostAuthorizedConversationIds =
+    envConfig.mattermost?.authorizedConversationIds
+    ?? snapshot.messaging.mattermost.authorizedConversations.value;
   const slackAuthorizedActorIds =
     envConfig.slack?.authorizedActorIds
     ?? snapshot.messaging.slack.authorizedUserIds.value;
@@ -625,6 +643,8 @@ export async function loadDesktopMessagingConfigFromSettings(
             streamingResponses:
               snapshot.messaging.mattermost.streamingResponses.value,
             authorizedActorIds: mattermostAuthorizedActorIds,
+            authorizedTeamIds: mattermostAuthorizedTeamIds,
+            authorizedConversationIds: mattermostAuthorizedConversationIds,
           },
         }
       : {};
@@ -768,6 +788,9 @@ export function redactDesktopMessagingConfig(
             config.mattermost.registerSlashCommands ?? false,
           streamingResponses: config.mattermost.streamingResponses ?? false,
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
+          authorizedWorkspaceCount: config.mattermost.authorizedTeamIds?.length ?? 0,
+          authorizedConversationCount:
+            config.mattermost.authorizedConversationIds?.length ?? 0,
         }
       : undefined,
     slack: config.slack
