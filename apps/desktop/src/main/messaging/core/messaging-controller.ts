@@ -5080,6 +5080,9 @@ export class MessagingController {
     if (!channel) {
       return intent;
     }
+    const targetRoutingState =
+      event?.routingState ??
+      (intent.kind === "activity" ? binding?.routingState : undefined);
 
     return {
       ...intent,
@@ -5096,12 +5099,12 @@ export class MessagingController {
       }),
       ...(intent.targetSurface
         ? { targetSurface: intent.targetSurface }
-        : event?.routingState
+        : targetRoutingState
           ? {
               targetSurface: {
                 channel: channel.channel,
-                id: event.id,
-                state: event.routingState,
+                id: event?.id ?? binding?.id ?? intent.id,
+                state: targetRoutingState,
               },
             }
           : {}),
