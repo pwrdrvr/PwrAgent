@@ -29,6 +29,11 @@ export function usePullRequestRefresh(params: {
 }): { prefetch: (thread: NavigationThreadSummary) => void } {
   const desktopApi = params.desktopApi;
   const onRefreshNavigation = params.onRefreshNavigation;
+  const onRefreshNavigationRef = useRef(onRefreshNavigation);
+  useEffect(() => {
+    onRefreshNavigationRef.current = onRefreshNavigation;
+  }, [onRefreshNavigation]);
+
   const refresh = useCallback(
     (thread: NavigationThreadSummary): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
@@ -47,13 +52,13 @@ export function usePullRequestRefresh(params: {
           if (prSummariesEqual(thread.prs, response.prs)) {
             return;
           }
-          void onRefreshNavigation?.();
+          void onRefreshNavigationRef.current?.();
         })
         .catch(() => {
           // Logged in main — keep the renderer silent.
         });
     },
-    [desktopApi, onRefreshNavigation],
+    [desktopApi],
   );
 
   const selected = params.selectedThread;

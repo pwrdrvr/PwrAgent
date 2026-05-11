@@ -1872,6 +1872,38 @@ describe("useThreadNavigation", () => {
     ).toBe("discord");
   });
 
+  it("keeps the public refresh callback stable across navigation renders", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    const initialRefresh = result.current.refresh;
+
+    act(() => {
+      result.current.setBrowseMode("directories");
+    });
+
+    expect(result.current.refresh).toBe(initialRefresh);
+  });
+
   describe("pickAndRegisterDirectory (issue #223)", () => {
     function buildBaseDesktopApi(
       overrides: Partial<DesktopApi> = {},

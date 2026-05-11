@@ -134,6 +134,39 @@ describe("usePullRequestRefresh", () => {
     expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
   });
 
+  it("does not refresh again when only the navigation refresh callback changes", async () => {
+    const response = buildResponse({ prs: [] });
+    const refreshThreadPullRequests = vi.fn(async () => response);
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    const { rerender } = renderHook(
+      ({ onRefreshNavigation }: { onRefreshNavigation: () => Promise<void> }) =>
+        usePullRequestRefresh({
+          desktopApi,
+          onRefreshNavigation,
+          selectedThread: buildThread({ prs: [] }),
+        }),
+      {
+        initialProps: {
+          onRefreshNavigation: vi.fn(async () => undefined),
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+    });
+
+    rerender({
+      onRefreshNavigation: vi.fn(async () => undefined),
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+  });
+
   it("refreshes again when the selected thread PR request changes", async () => {
     const response = buildResponse({ prs: [] });
     const refreshThreadPullRequests = vi.fn(async () => response);
