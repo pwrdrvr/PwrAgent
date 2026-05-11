@@ -5,11 +5,14 @@ import path from "node:path";
 import { expect } from "@playwright/test";
 import Database from "better-sqlite3";
 
-export async function createBranchDriftFixture(): Promise<{
+export async function createBranchDriftFixture(options: {
+  expectedBranch?: string;
+} = {}): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
   homeDir: string;
 }> {
+  const expectedBranch = options.expectedBranch ?? "codex/expected-branch";
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   // Use the legacy "pwragnt" directory name because the migration code in
@@ -59,7 +62,7 @@ export async function createBranchDriftFixture(): Promise<{
             backend: "codex",
             threadId: "thread-branch-drift",
             executionMode: "default",
-            observedGitBranch: "codex/expected-branch",
+            observedGitBranch: expectedBranch,
             extraLinkedDirectories: [
               {
                 id: "pwragent-handoff:codex:thread-branch-drift",
@@ -112,7 +115,7 @@ export async function createBranchDriftFixture(): Promise<{
                 summary: "A thread whose checkout changed branch.",
                 source: "codex",
                 executionMode: "default",
-                gitBranch: "codex/expected-branch",
+                gitBranch: expectedBranch,
                 linkedDirectories: [],
                 updatedAt: 1_760_000_000_000,
               },
