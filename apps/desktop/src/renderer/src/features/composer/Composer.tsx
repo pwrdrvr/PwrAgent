@@ -162,6 +162,8 @@ type ComposerDropdownOption = {
 };
 
 type QueuedTurnDraft = {
+  id: string;
+  input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   text: string;
 };
@@ -222,6 +224,13 @@ type ReviewConfigState = {
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
+
+let queuedTurnIdSequence = 0;
+
+function createQueuedTurnId(): string {
+  queuedTurnIdSequence += 1;
+  return `queued-turn-${Date.now().toString(36)}-${queuedTurnIdSequence.toString(36)}`;
+}
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -860,8 +869,8 @@ export function Composer(props: ComposerProps) {
   const localDraftStore = useComposerDraftStore();
   const draftStore = props.draftStore ?? localDraftStore;
   const savedInitialDraft = draftStore.get(composerScopeKey);
-  const savedInitialQueuedTurn = props.thread
-    ? draftStore.getQueuedTurn(composerScopeKey)
+  const savedInitialQueuedTurns = props.thread
+    ? draftStore.getQueuedTurns(composerScopeKey)
     : undefined;
   const savedInitialPendingSteer = props.thread
     ? draftStore.getPendingSteer(composerScopeKey)
@@ -915,8 +924,8 @@ export function Composer(props: ComposerProps) {
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
-  const [queuedTurn, setQueuedTurnState] = useState<QueuedTurnDraft | undefined>(
-    savedInitialQueuedTurn
+  const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
+    savedInitialQueuedTurns ?? []
   );
   const [pendingSteer, setPendingSteerState] = useState<
     PendingSteerDraft | undefined
@@ -968,6 +977,7 @@ export function Composer(props: ComposerProps) {
   );
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
+  const queuedTurn = queuedTurns[0];
   launchpadUpdateRef.current = props.onUpdateLaunchpad;
   latestDraftSnapshotRef.current = {
     scopeKey: composerScopeKey,
@@ -1051,24 +1061,60 @@ export function Composer(props: ComposerProps) {
 
     draftStore.setPendingSteer(scopeKey, state);
   };
-  const saveQueuedTurnSnapshot = (
+  const saveQueuedTurnSnapshots = (
     scopeKey: string,
-    state?: ComposerQueuedTurnSnapshot,
+    state: ComposerQueuedTurnSnapshot[],
   ): void => {
     if (!isQueuedTurnStoreScope(scopeKey)) {
       return;
     }
 
-    if (!state || (!state.text.trim() && state.imageAttachments.length === 0)) {
+    const snapshots = state.filter(
+      (entry) =>
+        entry.text.trim() || entry.imageAttachments.length > 0 || entry.input?.length,
+    );
+
+    if (snapshots.length === 0) {
       draftStore.deleteQueuedTurn(scopeKey);
       return;
     }
 
-    draftStore.setQueuedTurn(scopeKey, state);
+    draftStore.setQueuedTurns(scopeKey, snapshots);
+  };
+  const setQueuedTurns = (nextQueuedTurns: QueuedTurnDraft[]): void => {
+    saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
+    setQueuedTurnsState(nextQueuedTurns);
   };
   const setQueuedTurn = (nextQueuedTurn?: QueuedTurnDraft): void => {
-    saveQueuedTurnSnapshot(composerScopeKey, nextQueuedTurn);
-    setQueuedTurnState(nextQueuedTurn);
+    setQueuedTurns(nextQueuedTurn ? [nextQueuedTurn] : []);
+  };
+  const enqueueQueuedTurn = (nextQueuedTurn: QueuedTurnDraft): void => {
+    setQueuedTurnsState((current) => {
+      const nextQueuedTurns = [...current, nextQueuedTurn];
+      saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
+      return nextQueuedTurns;
+    });
+  };
+  const removeQueuedTurnAt = (index: number): void => {
+    setQueuedTurnsState((current) => {
+      const nextQueuedTurns = current.filter((_, candidateIndex) => {
+        return candidateIndex !== index;
+      });
+      saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
+      return nextQueuedTurns;
+    });
+  };
+  const removeQueuedTurn = (queued: QueuedTurnDraft): void => {
+    setQueuedTurnsState((current) => {
+      const nextQueuedTurns = current.filter((candidate) => {
+        return candidate.id !== queued.id;
+      });
+      if (nextQueuedTurns.length === current.length) {
+        return current;
+      }
+      saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
+      return nextQueuedTurns;
+    });
   };
   const setPendingSteer = (nextPendingSteer?: PendingSteerDraft): void => {
     if (nextPendingSteer?.status === "pending") {
@@ -1269,7 +1315,7 @@ export function Composer(props: ComposerProps) {
     if (props.thread) {
       const saved = draftStore.get(composerScopeKey);
       const savedPendingSteer = draftStore.getPendingSteer(composerScopeKey);
-      const savedQueuedTurn = draftStore.getQueuedTurn(composerScopeKey);
+      const savedQueuedTurns = draftStore.getQueuedTurns(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setEditorDocument(saved?.editorDocument);
       setImageAttachments(saved?.imageAttachments ?? []);
@@ -1277,10 +1323,10 @@ export function Composer(props: ComposerProps) {
       setPendingSteerState(
         savedPendingSteer ? { ...savedPendingSteer, status: "pending" } : undefined
       );
-      setQueuedTurnState(savedQueuedTurn);
+      setQueuedTurnsState(savedQueuedTurns);
     } else {
       setPendingSteerState(undefined);
-      setQueuedTurnState(undefined);
+      setQueuedTurnsState([]);
     }
     setSending(false);
     setInterrupting(false);
@@ -1389,7 +1435,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setQueuedTurnState(undefined);
+    setQueuedTurnsState([]);
     setPendingSteer(undefined);
     window.setTimeout(() => {
       inputRef.current?.focus();
@@ -1499,6 +1545,7 @@ export function Composer(props: ComposerProps) {
             setImageAttachments(pendingSteer.imageAttachments);
           } else {
             setQueuedTurn({
+              id: createQueuedTurnId(),
               text: pendingSteer.text,
               imageAttachments: pendingSteer.imageAttachments,
             });
@@ -1744,7 +1791,7 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       if (queued) {
-        setQueuedTurn(undefined);
+        removeQueuedTurn(queued);
       } else {
         clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
@@ -1794,6 +1841,7 @@ export function Composer(props: ComposerProps) {
       setImageAttachments(pendingSteer.imageAttachments);
     } else {
       setQueuedTurn({
+        id: createQueuedTurnId(),
         text: pendingSteer.text,
         imageAttachments: pendingSteer.imageAttachments,
       });
@@ -1805,12 +1853,15 @@ export function Composer(props: ComposerProps) {
     if (!hasComposerContent && imageAttachments.length === 0) {
       return;
     }
-    if (queuedTurn) {
-      setSendError("A message is already queued.");
+
+    const payload = buildTurnPayload(canonicalDraft, imageAttachments);
+    if (payload.input.length === 0) {
       return;
     }
 
-    setQueuedTurn({
+    enqueueQueuedTurn({
+      id: createQueuedTurnId(),
+      input: payload.input,
       text: canonicalDraft,
       imageAttachments,
     });
@@ -1861,6 +1912,7 @@ export function Composer(props: ComposerProps) {
           setImageAttachments(pending.imageAttachments);
         } else {
           setQueuedTurn({
+            id: createQueuedTurnId(),
             text: pending.text,
             imageAttachments: pending.imageAttachments,
           });
@@ -1900,6 +1952,7 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     setPendingSteer({
+      id: pending.id,
       text: pending.text,
       imageAttachments: pending.imageAttachments,
       status: "pending",
@@ -1924,6 +1977,7 @@ export function Composer(props: ComposerProps) {
     }
 
     createPendingSteer({
+      id: createQueuedTurnId(),
       text: canonicalDraft,
       imageAttachments,
     });
@@ -1933,7 +1987,7 @@ export function Composer(props: ComposerProps) {
     if (!createPendingSteer(queued)) {
       return;
     }
-    setQueuedTurn(undefined);
+    removeQueuedTurn(queued);
     if (activeTurnIdRef.current) {
       void submitPendingSteer(queued);
     }
@@ -2824,15 +2878,21 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
-      {queuedTurn ? (
-        <div className="composer__queued" aria-label="Queued message">
+      {queuedTurns.map((queued, index) => (
+        <div
+          className="composer__queued"
+          aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
+          key={`${index}:${queued.text}:${queued.imageAttachments.length}`}
+        >
           <div className="composer__queued-copy">
-            <span className="composer__queued-label">Queued next</span>
+            <span className="composer__queued-label">
+              {index === 0 ? "Queued next" : `Queued #${index + 1}`}
+            </span>
             <span className="composer__queued-text">
-              {formatDraftPreview(queuedTurn)}
+              {formatDraftPreview(queued)}
             </span>
           </div>
-          <QueuedImageAttachments attachments={queuedTurn.imageAttachments} />
+          <QueuedImageAttachments attachments={queued.imageAttachments} />
           <div className="composer__queued-actions">
             {supportsSteering ? (
               <button
@@ -2840,7 +2900,7 @@ export function Composer(props: ComposerProps) {
                 disabled={props.disabled || steering || !activeTurnId}
                 type="button"
                 onClick={() => {
-                  steerQueuedTurn(queuedTurn);
+                  steerQueuedTurn(queued);
                 }}
               >
                 {steering ? "Steering..." : "Steer"}
@@ -2850,9 +2910,9 @@ export function Composer(props: ComposerProps) {
               className="composer__secondary-action"
               type="button"
               onClick={() => {
-                setComposerDraftFromCanonical(queuedTurn.text);
-                setImageAttachments(queuedTurn.imageAttachments);
-                setQueuedTurn(undefined);
+                setComposerDraftFromCanonical(queued.text);
+                setImageAttachments(queued.imageAttachments);
+                removeQueuedTurnAt(index);
                 requestAnimationFrame(() => inputRef.current?.focus());
               }}
             >
@@ -2862,14 +2922,14 @@ export function Composer(props: ComposerProps) {
               className="composer__secondary-action"
               type="button"
               onClick={() => {
-                setQueuedTurn(undefined);
+                removeQueuedTurnAt(index);
               }}
             >
               Delete
             </button>
           </div>
         </div>
-      ) : null}
+      ))}
 
       <div className="composer__input-wrap" ref={inputWrapRef}>
         {isReviewComposerOpen ? (

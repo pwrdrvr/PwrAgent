@@ -77,7 +77,7 @@ function chooseDropdownOption(label: string, optionName: string): void {
 function createComposerDraftStore(): ComposerDraftStore {
   const drafts = new Map<string, ComposerDraftSnapshot>();
   const pendingSteers = new Map<string, ComposerPendingSteerSnapshot>();
-  const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot>();
+  const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot[]>();
   return {
     delete: (scopeKey) => {
       drafts.delete(scopeKey);
@@ -90,12 +90,56 @@ function createComposerDraftStore(): ComposerDraftStore {
       queuedTurns.delete(scopeKey);
     },
     getPendingSteer: (scopeKey) => pendingSteers.get(scopeKey),
-    getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey),
+    getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey)?.[0],
+    getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
+    removeQueuedTurnAt: (scopeKey, index) => {
+      const current = queuedTurns.get(scopeKey) ?? [];
+      const next = [...current];
+      const [removed] = next.splice(index, 1);
+      if (next.length > 0) {
+        queuedTurns.set(scopeKey, next);
+      } else {
+        queuedTurns.delete(scopeKey);
+      }
+      return removed;
+    },
+    removeQueuedTurnById: (scopeKey, id) => {
+      const current = queuedTurns.get(scopeKey) ?? [];
+      const index = current.findIndex((entry) => entry.id === id);
+      if (index === -1) {
+        return undefined;
+      }
+      const next = [...current];
+      const [removed] = next.splice(index, 1);
+      if (next.length > 0) {
+        queuedTurns.set(scopeKey, next);
+      } else {
+        queuedTurns.delete(scopeKey);
+      }
+      return removed;
+    },
+    shiftQueuedTurn: (scopeKey) => {
+      const current = queuedTurns.get(scopeKey) ?? [];
+      const [first, ...rest] = current;
+      if (rest.length > 0) {
+        queuedTurns.set(scopeKey, rest);
+      } else {
+        queuedTurns.delete(scopeKey);
+      }
+      return first;
+    },
     setPendingSteer: (scopeKey, snapshot) => {
       pendingSteers.set(scopeKey, snapshot);
     },
     setQueuedTurn: (scopeKey, snapshot) => {
-      queuedTurns.set(scopeKey, snapshot);
+      queuedTurns.set(scopeKey, [snapshot]);
+    },
+    setQueuedTurns: (scopeKey, snapshots) => {
+      if (snapshots.length > 0) {
+        queuedTurns.set(scopeKey, snapshots);
+      } else {
+        queuedTurns.delete(scopeKey);
+      }
     },
     set: (scopeKey, snapshot) => {
       drafts.set(scopeKey, snapshot);
@@ -582,6 +626,147 @@ describe("Composer", () => {
         })
       );
     });
+  });
+
+  it("keeps active-turn messages in oldest-first queue order", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Active turn",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "First queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "Second queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "First queued reply"
+    );
+    expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
+      "Second queued reply"
+    );
+    expect(screen.queryByText("A message is already queued.")).not.toBeInTheDocument();
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "First queued reply" }],
+        })
+      );
+    });
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Second queued reply"
+    );
+  });
+
+  it("does not remove the next queued message when the in-flight queued chip is edited", async () => {
+    let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>((resolve) => {
+          resolveStartTurn = () =>
+            resolve({
+              backend: request.backend,
+              threadId: request.threadId,
+              turnId: "turn-2",
+            });
+        })
+    );
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Active turn",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "First queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "Second queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [{ type: "text", text: "First queued reply" }],
+        })
+      );
+    });
+
+    fireEvent.click(
+      within(screen.getByLabelText("Queued message")).getByRole("button", {
+        name: "Edit",
+      })
+    );
+
+    expect(textarea).toHaveValue("First queued reply");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Second queued reply"
+    );
+
+    await act(async () => {
+      resolveStartTurn?.({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-2",
+      });
+    });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Second queued reply"
+    );
   });
 
   it("restores a queued active-turn message after navigating away and back", async () => {
