@@ -337,8 +337,8 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
+    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(6);
+    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(6);
     fireEvent.click(
       screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
     );
@@ -657,7 +657,10 @@ describe("SettingsScreen", () => {
       "placeholder",
       "https://line-webhook.example.com/",
     );
-    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
+    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAccessibleName(
+      "Local Webhook Listener",
+    );
+    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAttribute(
       "placeholder",
       "http://127.0.0.1:47822",
     );
