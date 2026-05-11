@@ -156,6 +156,12 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the startup thread detail empty state off the sidebar edge", () => {
+    const emptyStateRule = extractRuleBody(css, ".thread-empty-state");
+
+    expect(emptyStateRule).toContain("padding: 0 16px;");
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/
