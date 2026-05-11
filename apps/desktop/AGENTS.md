@@ -65,6 +65,53 @@ after you close the Electron window or quit the app. Use this for visual
 inspection of the dialog instead of the normal `thread-branch-drift.spec.ts`,
 which closes Electron automatically after assertions pass.
 
+## Capturing README Screenshots
+
+The PNGs and animated GIF the top-level README references under
+`docs/assets/screenshots/` are produced by an inspect-style Playwright
+spec that drives five known UI surfaces and shells out to Swift for
+native macOS window capture (with stoplights, drop shadow, and retina
+resolution — Playwright's `Page.screenshot()` only grabs the renderer
+DOM, which loses the OS chrome).
+
+Re-capture all five with:
+
+```bash
+pnpm --filter @pwragent/desktop screenshot:readme
+```
+
+The script builds the desktop app, launches it headed against curated
+replay fixtures + state-seeded sqlite rows, takes the screenshots, and
+exits. macOS Screen Recording permission is required for whichever
+terminal/IDE runs the spec — the first invocation triggers the system
+prompt; subsequent runs are silent.
+
+Pieces, all under `apps/desktop/`:
+
+| File | What it does |
+|---|---|
+| `e2e/readme-screenshots.inspect.spec.ts` | Five tests, one per surface. Gated behind `PWRAGENT_SCREENSHOT_CAPTURE=1`. |
+| `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
+| `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
+| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Optional `--title=<substring>` for multi-window apps. |
+| `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
+| `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |
+
+To produce a new multi-frame demo GIF outside the README spec:
+
+```bash
+pnpm --filter @pwragent/desktop exec tsx \
+  apps/desktop/scripts/stitch-demo-gif.ts \
+  --output docs/assets/screenshots/screenshot-some-demo.gif \
+  --frame-duration-ms 1500 \
+  docs/assets/screenshots/some-demo-frame-1.png \
+  docs/assets/screenshots/some-demo-frame-2.png \
+  docs/assets/screenshots/some-demo-frame-3.png
+```
+
+Works for 2+ frames; the indicator scales horizontally with frame
+count.
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read

@@ -450,8 +450,13 @@ async function navigateToTelegramPairing(
  * step-indicator overlay (so viewers can tell which frame of the
  * sequence they're on). The actual stitcher + overlay renderer live
  * in sibling `scripts/` files so they can be reused for any future
- * demo GIF — this function is a thin wrapper that calls the script
- * via `tsx` with the right args.
+ * demo GIF — this function is a thin wrapper that runs the script
+ * via `pnpm exec tsx`.
+ *
+ * We invoke through `pnpm exec` (rather than reaching directly into
+ * `node_modules/.bin/tsx`) so the resolution survives changes to
+ * pnpm's hoisting layout. Cost is one extra process spawn per stitch,
+ * which is rounding error against the GIF-encode time.
  */
 function stitchGif(params: {
   framePaths: string[];
@@ -459,14 +464,16 @@ function stitchGif(params: {
   /** Milliseconds per frame; default 1500. */
   frameDurationMs?: number;
 }): void {
-  const stitcher = path.resolve(specDir, "../scripts/stitch-demo-gif.ts");
-  const tsxBin = path.resolve(
-    specDir,
-    "../node_modules/.bin/tsx",
+  const desktopPackageDir = path.resolve(specDir, "..");
+  const stitcher = path.join(
+    desktopPackageDir,
+    "scripts/stitch-demo-gif.ts",
   );
   execFileSync(
-    tsxBin,
+    "pnpm",
     [
+      "exec",
+      "tsx",
       stitcher,
       "--output",
       params.outputPath,
@@ -474,7 +481,7 @@ function stitchGif(params: {
       String(params.frameDurationMs ?? 1500),
       ...params.framePaths,
     ],
-    { stdio: "inherit" },
+    { stdio: "inherit", cwd: desktopPackageDir },
   );
 }
 

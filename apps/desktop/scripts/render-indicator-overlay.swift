@@ -4,6 +4,7 @@ import AppKit
 import CoreGraphics
 import CoreText
 import Foundation
+import UniformTypeIdentifiers
 
 // render-indicator-overlay.swift
 //
@@ -215,7 +216,7 @@ let outURL = URL(fileURLWithPath: outputPath)
 guard
   let dest = CGImageDestinationCreateWithURL(
     outURL as CFURL,
-    kUTTypePNG,
+    UTType.png.identifier as CFString,
     1,
     nil
   )
