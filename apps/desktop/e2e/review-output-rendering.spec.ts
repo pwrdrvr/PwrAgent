@@ -49,6 +49,11 @@ test("renders captured Codex review findings once in the review card", async () 
 
     const reviewCard = transcript.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toBeVisible();
+    const reviewTime = reviewCard.locator("time").first();
+    await expect(reviewTime).toBeVisible();
+    const reviewTimeBox = await reviewTime.boundingBox();
+    expect(reviewTimeBox).not.toBeNull();
+    expect(reviewTimeBox!.height).toBeLessThanOrEqual(18);
     await expect(reviewCard).toContainText(
       "The thread draft preservation path fixes the covered scenario"
     );

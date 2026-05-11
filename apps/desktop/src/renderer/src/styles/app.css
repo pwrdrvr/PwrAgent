@@ -1478,6 +1478,13 @@ textarea,
   font-weight: 500;
 }
 
+.transcript-message__time {
+  flex: 0 0 auto;
+  line-height: 1.2;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .thread-row__time {
   transition: opacity 120ms ease;
 }
