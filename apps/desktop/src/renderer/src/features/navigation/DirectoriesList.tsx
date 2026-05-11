@@ -5,7 +5,12 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  comparePinnedThreads,
+  isPinnedThread,
+  moveThreadKey,
+} from "@pwragent/shared";
 import { FolderIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
 import { ThreadRow } from "./ThreadRow";
 
@@ -25,6 +30,10 @@ type DirectoriesListProps = {
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onReorderThreadPins?: (
+    backend: AppServerBackendKind,
+    threadIds: string[],
+  ) => Promise<void>;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -65,6 +74,125 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [props.threads]
   );
+  const pinnedThreads = useMemo(
+    () =>
+      props.threads
+        .filter(isPinnedThread)
+        .sort(comparePinnedThreads),
+    [props.threads],
+  );
+  const pinnedThreadKeys = useMemo(
+    () =>
+      pinnedThreads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+    [pinnedThreads],
+  );
+
+  const pinnedThreadKeysForBackend = (backend: AppServerBackendKind): string[] =>
+    pinnedThreads
+      .filter((thread) => thread.source === backend)
+      .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
+
+  const reorderPins = (
+    backend: AppServerBackendKind,
+    nextThreadKeys: string[],
+  ): void => {
+    const ids = nextThreadKeys
+      .filter((threadKey) => threadsByKey.get(threadKey)?.source === backend)
+      .map((threadKey) => threadsByKey.get(threadKey)?.id)
+      .filter((threadId): threadId is string => Boolean(threadId));
+    void props.onReorderThreadPins?.(backend, ids);
+  };
+
+  const buildDirectoryPinnedKeys = (
+    directory: NavigationDirectorySummary,
+    backend: AppServerBackendKind,
+  ): string[] =>
+    pinnedThreadKeys.filter(
+      (threadKey) =>
+        directory.threadKeys.includes(threadKey) &&
+        threadsByKey.get(threadKey)?.source === backend,
+    );
+
+  const moveDirectoryPin = (
+    directory: NavigationDirectorySummary,
+    draggedKey: string,
+    targetKey: string,
+    position: "before" | "after",
+  ): void => {
+    if (!directory.threadKeys.includes(draggedKey)) return;
+
+    const draggedThread = threadsByKey.get(draggedKey);
+    const targetThread = threadsByKey.get(targetKey);
+    if (!draggedThread || !targetThread || draggedThread.source !== targetThread.source) {
+      return;
+    }
+
+    const backendPinnedThreadKeys = pinnedThreadKeysForBackend(draggedThread.source);
+    const sourceKeys = backendPinnedThreadKeys.includes(draggedKey)
+      ? backendPinnedThreadKeys
+      : [...backendPinnedThreadKeys, draggedKey];
+    reorderPins(
+      draggedThread.source,
+      moveThreadKey(sourceKeys, draggedKey, targetKey, position),
+    );
+  };
+
+  const dropThreadAfterDirectoryPins = (
+    directory: NavigationDirectorySummary,
+    draggedKey: string,
+  ): void => {
+    if (!directory.threadKeys.includes(draggedKey)) return;
+
+    const draggedThread = threadsByKey.get(draggedKey);
+    if (!draggedThread) return;
+
+    const backendPinnedThreadKeys = pinnedThreadKeysForBackend(draggedThread.source);
+    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(
+      directory,
+      draggedThread.source,
+    );
+    const targetKey = directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
+
+    if (!targetKey) {
+      if (backendPinnedThreadKeys.includes(draggedKey)) return;
+      reorderPins(draggedThread.source, [...backendPinnedThreadKeys, draggedKey]);
+      return;
+    }
+
+    moveDirectoryPin(
+      directory,
+      draggedKey,
+      targetKey,
+      "after",
+    );
+  };
+
+  const movePinnedThreadByKeyboard = (
+    directory: NavigationDirectorySummary,
+    thread: NavigationThreadSummary,
+    direction: "up" | "down",
+  ): void => {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(
+      directory,
+      thread.source,
+    );
+    const currentIndex = directoryPinnedThreadKeys.indexOf(threadKey);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    const targetKey = directoryPinnedThreadKeys[targetIndex];
+    if (!targetKey) return;
+
+    moveDirectoryPin(
+      directory,
+      threadKey,
+      targetKey,
+      direction === "up" ? "before" : "after",
+    );
+  };
 
   useEffect(() => {
     const selectedItemKey = props.selectedItemKey;
@@ -111,6 +239,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
         const visibleThreads = directory.threadKeys
           .map((threadKey) => threadsByKey.get(threadKey))
           .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+        const directoryPinnedThreads = visibleThreads
+          .filter(isPinnedThread)
+          .sort(comparePinnedThreads);
+        const directoryUnpinnedThreads = visibleThreads.filter(
+          (thread) => !isPinnedThread(thread),
+        );
 
         return (
           <section key={directory.key} className="directory-row">
@@ -174,18 +308,95 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <div className="directory-row__details">
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
-                    {visibleThreads.map((thread) => {
+                    {directoryPinnedThreads.map((thread) => {
                       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
                       return (
                         <ThreadRow
                           key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                           compact
+                          draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode="kind"
                           selectedThreadKey={props.selectedItemKey}
                           thinkingThreadKeys={props.thinkingThreadKeys}
                           thread={thread}
+                          onDragOverThread={(event) => {
+                            event.preventDefault();
+                          }}
+                          onDragStartThread={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", threadKey);
+                          }}
+                          onDropOnThread={(event) => {
+                            event.preventDefault();
+                            const draggedKey = event.dataTransfer.getData("text/plain");
+                            if (!draggedKey) return;
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            const position = event.clientY > rect.top + rect.height / 2
+                              ? "after"
+                              : "before";
+                            moveDirectoryPin(
+                              directory,
+                              draggedKey,
+                              threadKey,
+                              position,
+                            );
+                          }}
+                          onMovePinnedThread={(pinnedThread, direction) => {
+                            movePinnedThreadByKeyboard(
+                              directory,
+                              pinnedThread,
+                              direction,
+                            );
+                          }}
+                          onOpenContextMenu={props.onOpenThreadContextMenu}
+                          onPrefetchPullRequests={props.onPrefetchPullRequests}
+                          onSelectThread={props.onSelectThread}
+                          onSetReaction={props.onSetReaction}
+                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+                        />
+                      );
+                    })}
+
+                    {directoryPinnedThreads.length > 0 &&
+                    directoryUnpinnedThreads.length > 0 ? (
+                      <div
+                        className="recents-pinned-divider directory-row__thread-divider"
+                        role="separator"
+                        aria-label={`Directory threads for ${directory.label}`}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          dropThreadAfterDirectoryPins(
+                            directory,
+                            event.dataTransfer.getData("text/plain"),
+                          );
+                        }}
+                      >
+                        <span>Directory threads</span>
+                      </div>
+                    ) : null}
+
+                    {directoryUnpinnedThreads.map((thread) => {
+                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+                      return (
+                        <ThreadRow
+                          key={`${directory.key}:${threadKey}`}
+                          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          compact
+                          draggable={Boolean(props.onReorderThreadPins)}
+                          includeLinkedDirectories
+                          linkedDirectoryMode="kind"
+                          selectedThreadKey={props.selectedItemKey}
+                          thinkingThreadKeys={props.thinkingThreadKeys}
+                          thread={thread}
+                          onDragStartThread={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", threadKey);
+                          }}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}

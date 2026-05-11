@@ -127,6 +127,14 @@ const directories: NavigationDirectorySummary[] = [
   },
 ];
 
+function createDataTransfer(threadKey: string) {
+  return {
+    effectAllowed: "move",
+    getData: vi.fn((type: string) => (type === "text/plain" ? threadKey : "")),
+    setData: vi.fn(),
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   cleanup();
@@ -611,6 +619,192 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
 
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+  });
+
+  it("renders pinned threads above directory threads inside each expanded directory", () => {
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directoryWithPinnedThread]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const directoryThreads = screen
+      .getByRole("separator", { name: "Directory threads for PwrAgent" })
+      .closest(".directory-row__threads") as HTMLElement;
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+
+    const rows = within(directoryThreads).getAllByRole("button", {
+      name: /Cross-project cleanup|Updated thread/i,
+    });
+    expect(rows[0]).toHaveTextContent("Updated thread");
+    expect(rows[0]).toHaveTextContent("Pinned");
+    expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+  });
+
+  it("does not render a directory pin divider when no directory threads are pinned", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("separator", {
+        name: "Directory threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("pins a same-directory thread by dropping it on the directory divider", () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directoryWithPinnedThread]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    fireEvent.drop(
+      screen.getByRole("separator", { name: "Directory threads for PwrAgent" }),
+      { dataTransfer: createDataTransfer("codex:thread-1") },
+    );
+
+    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
+      "thread-updated",
+      "thread-1",
+    ]);
+  });
+
+  it("ignores attempts to drop a thread on another directory pin divider", () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const projectBPinnedThread = {
+      ...sharedThread,
+      id: "thread-project-b-pinned",
+      title: "Project B pinned setup",
+      pinnedRank: "2048",
+      linkedDirectories: [
+        {
+          id: "dir-b",
+          label: "ProjectB",
+          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          kind: "local" as const,
+        },
+      ],
+    };
+    const projectBUnpinnedThread = {
+      ...projectBPinnedThread,
+      id: "thread-project-b-unpinned",
+      title: "Project B setup",
+      pinnedRank: undefined,
+    };
+    const projectBDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      kind: "directory",
+      label: "ProjectB",
+      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      threadKeys: ["codex:thread-project-b-pinned", "codex:thread-project-b-unpinned"],
+      needsAttentionCount: 0,
+      latestUpdatedAt: projectBPinnedThread.updatedAt,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directories[0], projectBDirectory]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, projectBPinnedThread, projectBUnpinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const projectBSummary = screen
+      .getAllByRole("button", { name: /ProjectB/i })
+      .find((button) => button.getAttribute("aria-expanded") === "false");
+    expect(projectBSummary).toBeDefined();
+
+    fireEvent.click(projectBSummary!);
+    fireEvent.drop(
+      screen.getByRole("separator", { name: "Directory threads for ProjectB" }),
+      { dataTransfer: createDataTransfer("codex:thread-1") },
+    );
+
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
   it("shows copy actions below the thread context menu divider", () => {
