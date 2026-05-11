@@ -1,5 +1,3 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   shortenDerivedThreadTitle,
@@ -107,7 +105,6 @@ type CodexClientOptions = {
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
-  sessionIndexPath?: string;
   clientVersion?: string;
 };
 
@@ -132,11 +129,9 @@ type SkillCatalogEntry = {
   skills: AppServerSkillSummary[];
 };
 
-type CodexSessionIndexEntry = {
+type CodexThreadNameRecord = {
   id: string;
-  source: "pwragent";
-  thread_name: string;
-  updated_at: string;
+  threadName: string;
 };
 
 type CodexClientRequestMethod = CodexClientRequest["method"];
@@ -2466,19 +2461,17 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
   );
 }
 
-function extractThreadIndexEntryFromValue(
+function extractThreadNameRecordFromValue(
   value: unknown,
-): CodexSessionIndexEntry | undefined {
+): CodexThreadNameRecord | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
   }
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
-  const threadPath =
-    pickString(record, ["path"]) ?? pickString(threadRecord ?? {}, ["path"]);
   const threadId = extractThreadIdFromValue(value);
-  if (!threadId || !threadPath) {
+  if (!threadId) {
     return undefined;
   }
 
@@ -2497,31 +2490,10 @@ function extractThreadIndexEntryFromValue(
     );
   const indexName =
     rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
-  const updatedAt =
-    normalizeEpochTimestamp(
-      pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
-        pickNumber(threadRecord ?? {}, [
-          "updatedAt",
-          "updated_at",
-          "lastActivityAt",
-          "createdAt",
-        ])
-    ) ?? Date.now();
-
   return {
     id: threadId,
-    source: "pwragent",
-    thread_name: indexName?.trim() || "Untitled thread",
-    updated_at: new Date(updatedAt).toISOString(),
+    threadName: indexName?.trim() || "Untitled thread",
   };
-}
-
-async function appendCodexSessionIndexEntry(
-  sessionIndexPath: string,
-  entry: CodexSessionIndexEntry,
-): Promise<void> {
-  await mkdir(path.dirname(sessionIndexPath), { recursive: true });
-  await appendFile(sessionIndexPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
 function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
@@ -3404,7 +3376,7 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
-  private readonly indexedThreads = new Map<string, CodexSessionIndexEntry>();
+  private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -3453,7 +3425,7 @@ export class CodexAppServerClient {
       }
 
       if (method === "thread/started") {
-        await this.recordThreadInSessionIndex(params);
+        await this.recordThreadNameWithCodex(params);
       }
 
       const normalized = normalizeServerNotification(
@@ -3516,6 +3488,7 @@ export class CodexAppServerClient {
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.pendingFirstTurnThreadResults.clear();
+    this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
     this.helperTurnTitleObjects.clear();
@@ -3547,62 +3520,66 @@ export class CodexAppServerClient {
     return this.initializeResult ?? {};
   }
 
-  private getSessionIndexPath(): string {
-    const codexHome = this.options.env?.CODEX_HOME?.trim() || process.env.CODEX_HOME?.trim();
-    return (
-      this.options.sessionIndexPath?.trim() ||
-      path.join(codexHome || path.join(os.homedir(), ".codex"), "session_index.jsonl")
-    );
-  }
-
-  private async recordThreadInSessionIndex(value: unknown): Promise<void> {
-    const entry = extractThreadIndexEntryFromValue(value);
-    const previous = entry ? this.indexedThreads.get(entry.id) : undefined;
+  private async recordThreadNameWithCodex(value: unknown): Promise<void> {
+    const entry = extractThreadNameRecordFromValue(value);
+    const previous = entry ? this.recordedThreadNames.get(entry.id) : undefined;
     if (
       !entry ||
       (previous &&
-        (previous.thread_name === entry.thread_name ||
-          !isPlaceholderThreadName(previous.thread_name)))
+        (previous === entry.threadName ||
+          !isPlaceholderThreadName(previous)))
     ) {
       return;
     }
 
     try {
-      await appendCodexSessionIndexEntry(this.getSessionIndexPath(), entry);
-      this.indexedThreads.set(entry.id, entry);
+      await this.setThreadNameWithCodex({
+        threadId: entry.id,
+        name: entry.threadName,
+      });
+      this.recordedThreadNames.set(entry.id, entry.threadName);
     } catch (error) {
-      codexClientLog.warn("failed to append codex session index", {
+      codexClientLog.warn("failed to set codex thread name", {
         threadId: entry.id,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
-  private async recordDerivedThreadNameInSessionIndex(params: {
+  private async recordDerivedThreadNameWithCodex(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
   }): Promise<void> {
-    const previous = this.indexedThreads.get(params.threadId);
+    const previous = this.recordedThreadNames.get(params.threadId);
     const threadName = deriveThreadNameFromInput(params.input);
-    if (!previous || !threadName || !isPlaceholderThreadName(previous.thread_name)) {
+    if (!previous || !threadName || !isPlaceholderThreadName(previous)) {
       return;
     }
 
-    const entry: CodexSessionIndexEntry = {
-      ...previous,
-      thread_name: threadName,
-      updated_at: new Date().toISOString(),
-    };
-
     try {
-      await appendCodexSessionIndexEntry(this.getSessionIndexPath(), entry);
-      this.indexedThreads.set(entry.id, entry);
+      await this.setThreadNameWithCodex({
+        threadId: params.threadId,
+        name: threadName,
+      });
+      this.recordedThreadNames.set(params.threadId, threadName);
     } catch (error) {
-      codexClientLog.warn("failed to append derived codex session index title", {
-        threadId: entry.id,
+      codexClientLog.warn("failed to set derived codex thread name", {
+        threadId: params.threadId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async setThreadNameWithCodex(params: {
+    threadId: string;
+    name: string;
+  }): Promise<unknown> {
+    return await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/name/set"],
+      payloads: [{ threadId: params.threadId, name: params.name }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
   }
 
   private handleHelperThreadNotification(
@@ -3967,7 +3944,7 @@ export class CodexAppServerClient {
     }
 
     this.pendingFirstTurnThreadResults.set(threadId, result);
-    await this.recordThreadInSessionIndex(result);
+    await this.recordThreadNameWithCodex(result);
 
     return {
       threadId,
@@ -4051,7 +4028,7 @@ export class CodexAppServerClient {
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
     this.pendingFirstTurnThreadResults.delete(params.threadId);
-    await this.recordDerivedThreadNameInSessionIndex({
+    await this.recordDerivedThreadNameWithCodex({
       threadId: params.threadId,
       input: params.input,
     });
@@ -4246,15 +4223,12 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/name/set"],
-      payloads: [{ threadId: params.threadId, name: params.name }],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    });
+    const result = await this.setThreadNameWithCodex(params);
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    this.recordedThreadNames.set(threadId, params.name);
 
     return {
-      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+      threadId,
     };
   }
 

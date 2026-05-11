@@ -3190,9 +3190,8 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("updates placeholder session index names after the first turn starts", async () => {
+  it("sets placeholder Codex thread names through the app server before the first turn", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
-    const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
       thread: {
         id: "019dd225-74fb-7a83-b4e4-5970680d9382",
@@ -3214,7 +3213,6 @@ describe("CodexAppServerClient", () => {
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
-        sessionIndexPath,
       });
 
       await client.startThread({
@@ -3231,31 +3229,58 @@ describe("CodexAppServerClient", () => {
       });
       await client.close();
 
-      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const transport = MockTransport.instances.at(-1);
+      const nameRequests = transport?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .filter((message) => message.method === "thread/name/set");
 
-      expect(indexLines).toEqual([
-        {
-          id: "019dd225-74fb-7a83-b4e4-5970680d9382",
-          source: "pwragent",
-          thread_name: "Untitled thread",
-          updated_at: "2026-04-28T03:32:43.000Z",
-        },
-        {
-          id: "019dd225-74fb-7a83-b4e4-5970680d9382",
-          source: "pwragent",
-          thread_name: "Figure out why new Codex threads keep showing as untitled in PwrAgent",
-          updated_at: expect.any(String),
-        },
+      expect(nameRequests).toEqual([
+        expect.objectContaining({
+          params: {
+            threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
+            name: "Untitled thread",
+          },
+        }),
+        expect.objectContaining({
+          params: {
+            threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
+            name: "Figure out why new Codex threads keep showing as untitled in PwrAgent",
+          },
+        }),
       ]);
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
 
-  it("writes the session index under CODEX_HOME from the client environment", async () => {
+  it("does not derive a Codex thread name for resumed threads with unknown current names", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [
+        {
+          type: "text",
+          text: "Geography",
+        },
+      ],
+    });
+    await client.close();
+
+    const transport = MockTransport.instances.at(-1);
+    const nameRequests = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .filter((message) => message.method === "thread/name/set");
+
+    expect(nameRequests).toEqual([]);
+  });
+
+  it("does not write the session index under CODEX_HOME from the client environment", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const codexHome = path.join(tempDir, "codex-profile-home");
     const sessionIndexPath = path.join(codexHome, "session_index.jsonl");
@@ -3285,26 +3310,27 @@ describe("CodexAppServerClient", () => {
       });
       await client.close();
 
-      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      await expect(fs.access(sessionIndexPath)).rejects.toThrow();
 
-      expect(indexLines).toEqual([
-        expect.objectContaining({
-          id: "thread-profile-home",
-          source: "pwragent",
-          thread_name: "Use selected Codex home for helper state",
-        }),
-      ]);
+      const transport = MockTransport.instances.at(-1);
+      const nameRequest = transport?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .find((message) => message.method === "thread/name/set");
+
+      expect(nameRequest).toMatchObject({
+        method: "thread/name/set",
+        params: {
+          threadId: "thread-profile-home",
+          name: "Use selected Codex home for helper state",
+        },
+      });
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
   });
 
-  it("records a derived session-index name when Codex returns the placeholder name", async () => {
+  it("sets a derived Codex thread name when Codex returns the placeholder name", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
-    const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-placeholder-title",
@@ -3323,7 +3349,6 @@ describe("CodexAppServerClient", () => {
       const client = new CodexAppServerClient({
         command: "codex",
         directoryResolver: async () => [],
-        sessionIndexPath,
       });
 
       await client.startThread({
@@ -3331,18 +3356,18 @@ describe("CodexAppServerClient", () => {
       });
       await client.close();
 
-      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const transport = MockTransport.instances.at(-1);
+      const nameRequest = transport?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .find((message) => message.method === "thread/name/set");
 
-      expect(indexLines).toEqual([
-        expect.objectContaining({
-          id: "thread-placeholder-title",
-          source: "pwragent",
-          thread_name: "Why do all the worktree-hashes start with `moi`?",
-        }),
-      ]);
+      expect(nameRequest).toMatchObject({
+        method: "thread/name/set",
+        params: {
+          threadId: "thread-placeholder-title",
+          name: "Why do all the worktree-hashes start with `moi`?",
+        },
+      });
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
