@@ -1338,6 +1338,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     },
     [performRefresh]
   );
+  const refreshNavigation = useCallback(async (): Promise<void> => {
+    await refresh();
+  }, [refresh]);
 
   const scheduleRefresh = useCallback(
     (
@@ -2706,7 +2709,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     renameThreadError,
     loading: state.loading,
     refreshing: state.refreshing,
-    refresh: async () => await refresh(),
+    refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
     openDirectoryLaunchpad,
     pickAndRegisterDirectory,
