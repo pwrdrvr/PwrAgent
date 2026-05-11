@@ -93,7 +93,7 @@ a project that aimed to be the best Codex integration-for-coding into Telegram a
 PwrAgent supersedes it: a desktop-first, thread-centric coding-agent
 shell with first-class messenger integration, and a generic messaging
 protocol that lets a single workflow layer drive Telegram, Discord,
-Mattermost, and Slack from the same code path. That protocol is now
+Mattermost, Slack, and LINE from the same code path. That protocol is now
 stable across 5 messaging providers and is now a candidate submit to OpenClaw.
 
 ## Going deeper
