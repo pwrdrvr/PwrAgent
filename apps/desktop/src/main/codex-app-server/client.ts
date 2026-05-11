@@ -3552,7 +3552,7 @@ export class CodexAppServerClient {
   }): Promise<void> {
     const previous = this.recordedThreadNames.get(params.threadId);
     const threadName = deriveThreadNameFromInput(params.input);
-    if (!threadName || (previous && !isPlaceholderThreadName(previous))) {
+    if (!previous || !threadName || !isPlaceholderThreadName(previous)) {
       return;
     }
 

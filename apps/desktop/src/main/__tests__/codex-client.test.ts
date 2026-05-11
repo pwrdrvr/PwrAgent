@@ -3253,6 +3253,33 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("does not derive a Codex thread name for resumed threads with unknown current names", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-2",
+      input: [
+        {
+          type: "text",
+          text: "Geography",
+        },
+      ],
+    });
+    await client.close();
+
+    const transport = MockTransport.instances.at(-1);
+    const nameRequests = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .filter((message) => message.method === "thread/name/set");
+
+    expect(nameRequests).toEqual([]);
+  });
+
   it("does not write the session index under CODEX_HOME from the client environment", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const codexHome = path.join(tempDir, "codex-profile-home");
