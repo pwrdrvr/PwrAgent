@@ -35,6 +35,21 @@ function createComposerDraftStore(): ComposerDraftStore {
       }
       return removed;
     },
+    removeQueuedTurnById: (scopeKey, id) => {
+      const current = queuedTurns.get(scopeKey) ?? [];
+      const index = current.findIndex((entry) => entry.id === id);
+      if (index === -1) {
+        return undefined;
+      }
+      const next = [...current];
+      const [removed] = next.splice(index, 1);
+      if (next.length > 0) {
+        queuedTurns.set(scopeKey, next);
+      } else {
+        queuedTurns.delete(scopeKey);
+      }
+      return removed;
+    },
     shiftQueuedTurn: (scopeKey) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const [first, ...rest] = current;
@@ -123,11 +138,13 @@ describe("useQueuedTurnRelease", () => {
     const composerDraftStore = createComposerDraftStore();
     composerDraftStore.setQueuedTurns("thread:codex:thread-a", [
       {
+        id: "queued-1",
         text: "First background reply",
         imageAttachments: [],
         input: [{ type: "text", text: "First background reply" }],
       },
       {
+        id: "queued-2",
         text: "Second background reply",
         imageAttachments: [],
         input: [{ type: "text", text: "Second background reply" }],
@@ -178,6 +195,102 @@ describe("useQueuedTurnRelease", () => {
     ).toBe("Second background reply");
   });
 
+  it("does not remove the next background queued message when the started item changed while in flight", async () => {
+    let resolveStartTurn: (() => void) | undefined;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(
+      () =>
+        new Promise<{
+          backend: "codex";
+          threadId: string;
+          turnId: string;
+        }>((resolve) => {
+          resolveStartTurn = () => {
+            resolve({
+              backend: "codex",
+              threadId: "thread-a",
+              turnId: "turn-next",
+            });
+          };
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurns("thread:codex:thread-a", [
+      {
+        id: "queued-1",
+        text: "First background reply",
+        imageAttachments: [],
+        input: [{ type: "text", text: "First background reply" }],
+      },
+      {
+        id: "queued-2",
+        text: "Second background reply",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Second background reply" }],
+      },
+    ]);
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [{ type: "text", text: "First background reply" }],
+        })
+      );
+    });
+
+    composerDraftStore.removeQueuedTurnAt("thread:codex:thread-a", 0);
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("Second background reply");
+
+    await act(async () => {
+      resolveStartTurn?.();
+    });
+
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("Second background reply");
+  });
+
   it("leaves the focused thread queue for the mounted composer to release", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn();
@@ -192,6 +305,7 @@ describe("useQueuedTurnRelease", () => {
     };
     const composerDraftStore = createComposerDraftStore();
     composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-1",
       text: "Focused reply",
       imageAttachments: [],
       input: [{ type: "text", text: "Focused reply" }],

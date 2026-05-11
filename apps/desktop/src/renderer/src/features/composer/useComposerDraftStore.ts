@@ -14,12 +14,14 @@ export type ComposerDraftSnapshot = {
 };
 
 export type ComposerQueuedTurnSnapshot = {
+  id: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
 };
 
 export type ComposerPendingSteerSnapshot = {
+  id: string;
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
 };
@@ -33,6 +35,7 @@ export type ComposerDraftStore = {
   getQueuedTurn(scopeKey: string): ComposerQueuedTurnSnapshot | undefined;
   getQueuedTurns(scopeKey: string): ComposerQueuedTurnSnapshot[];
   removeQueuedTurnAt(scopeKey: string, index: number): ComposerQueuedTurnSnapshot | undefined;
+  removeQueuedTurnById(scopeKey: string, id: string): ComposerQueuedTurnSnapshot | undefined;
   shiftQueuedTurn(scopeKey: string): ComposerQueuedTurnSnapshot | undefined;
   setPendingSteer(scopeKey: string, snapshot: ComposerPendingSteerSnapshot): void;
   setQueuedTurn(scopeKey: string, snapshot: ComposerQueuedTurnSnapshot): void;
@@ -63,6 +66,21 @@ export function useComposerDraftStore(): ComposerDraftStore {
       removeQueuedTurnAt: (scopeKey, index) => {
         const current = queuedTurnStoreRef.current.get(scopeKey) ?? [];
         if (index < 0 || index >= current.length) {
+          return undefined;
+        }
+        const next = [...current];
+        const [removed] = next.splice(index, 1);
+        if (next.length === 0) {
+          queuedTurnStoreRef.current.delete(scopeKey);
+        } else {
+          queuedTurnStoreRef.current.set(scopeKey, next);
+        }
+        return removed;
+      },
+      removeQueuedTurnById: (scopeKey, id) => {
+        const current = queuedTurnStoreRef.current.get(scopeKey) ?? [];
+        const index = current.findIndex((entry) => entry.id === id);
+        if (index === -1) {
           return undefined;
         }
         const next = [...current];

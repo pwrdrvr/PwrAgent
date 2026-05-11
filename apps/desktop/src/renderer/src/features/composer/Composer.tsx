@@ -162,6 +162,7 @@ type ComposerDropdownOption = {
 };
 
 type QueuedTurnDraft = {
+  id: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   text: string;
@@ -223,6 +224,13 @@ type ReviewConfigState = {
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
+
+let queuedTurnIdSequence = 0;
+
+function createQueuedTurnId(): string {
+  queuedTurnIdSequence += 1;
+  return `queued-turn-${Date.now().toString(36)}-${queuedTurnIdSequence.toString(36)}`;
+}
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -1098,10 +1106,12 @@ export function Composer(props: ComposerProps) {
   };
   const removeQueuedTurn = (queued: QueuedTurnDraft): void => {
     setQueuedTurnsState((current) => {
-      const removeIndex = current.findIndex((candidate) => candidate === queued);
-      const nextQueuedTurns = current.filter((_, candidateIndex) => {
-        return candidateIndex !== (removeIndex === -1 ? 0 : removeIndex);
+      const nextQueuedTurns = current.filter((candidate) => {
+        return candidate.id !== queued.id;
       });
+      if (nextQueuedTurns.length === current.length) {
+        return current;
+      }
       saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
       return nextQueuedTurns;
     });
@@ -1535,6 +1545,7 @@ export function Composer(props: ComposerProps) {
             setImageAttachments(pendingSteer.imageAttachments);
           } else {
             setQueuedTurn({
+              id: createQueuedTurnId(),
               text: pendingSteer.text,
               imageAttachments: pendingSteer.imageAttachments,
             });
@@ -1830,6 +1841,7 @@ export function Composer(props: ComposerProps) {
       setImageAttachments(pendingSteer.imageAttachments);
     } else {
       setQueuedTurn({
+        id: createQueuedTurnId(),
         text: pendingSteer.text,
         imageAttachments: pendingSteer.imageAttachments,
       });
@@ -1848,6 +1860,7 @@ export function Composer(props: ComposerProps) {
     }
 
     enqueueQueuedTurn({
+      id: createQueuedTurnId(),
       input: payload.input,
       text: canonicalDraft,
       imageAttachments,
@@ -1899,6 +1912,7 @@ export function Composer(props: ComposerProps) {
           setImageAttachments(pending.imageAttachments);
         } else {
           setQueuedTurn({
+            id: createQueuedTurnId(),
             text: pending.text,
             imageAttachments: pending.imageAttachments,
           });
@@ -1938,6 +1952,7 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     setPendingSteer({
+      id: pending.id,
       text: pending.text,
       imageAttachments: pending.imageAttachments,
       status: "pending",
@@ -1962,6 +1977,7 @@ export function Composer(props: ComposerProps) {
     }
 
     createPendingSteer({
+      id: createQueuedTurnId(),
       text: canonicalDraft,
       imageAttachments,
     });

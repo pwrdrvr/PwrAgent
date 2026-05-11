@@ -130,7 +130,7 @@ export function useQueuedTurnRelease(params: {
 
       const input = buildQueuedTurnInput(queuedTurn);
       if (input.length === 0) {
-        current.composerDraftStore.shiftQueuedTurn(scopeKey);
+        current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
         return;
       }
 
@@ -172,7 +172,7 @@ export function useQueuedTurnRelease(params: {
             : undefined,
       })
         .then(() => {
-          current.composerDraftStore.shiftQueuedTurn(scopeKey);
+          current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
         })
         .finally(() => {
           inFlightScopeKeysRef.current.delete(scopeKey);
