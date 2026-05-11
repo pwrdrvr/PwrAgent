@@ -128,6 +128,10 @@ export function useQueuedTurnRelease(params: {
         return;
       }
 
+      if (thread.gitBranch && current.desktopApi?.checkThreadBranchDrift) {
+        return;
+      }
+
       const input = buildQueuedTurnInput(queuedTurn);
       if (input.length === 0) {
         current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);

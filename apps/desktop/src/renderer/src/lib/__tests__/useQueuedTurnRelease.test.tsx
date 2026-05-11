@@ -102,7 +102,10 @@ function backendSummary(): BackendSummary {
   };
 }
 
-function thread(id: string): NavigationThreadSummary {
+function thread(
+  id: string,
+  overrides: Partial<NavigationThreadSummary> = {},
+): NavigationThreadSummary {
   return {
     id,
     title: `Thread ${id}`,
@@ -111,6 +114,7 @@ function thread(id: string): NavigationThreadSummary {
     executionMode: "default",
     linkedDirectories: [],
     inbox: { inInbox: false },
+    ...overrides,
   };
 }
 
@@ -289,6 +293,68 @@ describe("useQueuedTurnRelease", () => {
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Second background reply");
+  });
+
+  it("does not background-release a branch-tracked thread that needs the drift guard", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn();
+    const checkThreadBranchDrift = vi.fn();
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-branch",
+      text: "Guarded background reply",
+      imageAttachments: [],
+      input: [{ type: "text", text: "Guarded background reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", { gitBranch: "feature/expected" }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(checkThreadBranchDrift).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("Guarded background reply");
   });
 
   it("leaves the focused thread queue for the mounted composer to release", async () => {
