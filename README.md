@@ -121,14 +121,17 @@ A sensible path:
   at a personal experimentation install.
 
 **Messaging is closed by default — and stays that way.** Only platform
-user IDs you've explicitly allowlisted can DM the bot, and even
-authorized users have to be inside an allowlisted Slack workspace,
-Discord server, or Telegram supergroup before the bot will respond to
-them. Unauthorized attempts are denied and surfaced in PwrAgent's
-messaging activity log, so you can see who tried and from where.
-Adding a new authorized user or space is a deliberate, opt-in change
-made from the desktop — never a side effect of someone discovering the
-bot.
+user IDs you've explicitly allowlisted can DM the bot. Inside shared
+spaces — Slack workspaces, Discord servers, Telegram supergroups —
+authorization is two-keyed: the space has to be on the allowlist *and*
+the user has to be on the allowlist. Inviting the bot into a workspace,
+server, or supergroup doesn't authorize anyone in it; the space still
+has to be added to the allowlist separately. And being in an authorized
+space doesn't authorize a user — they still have to be on the user
+allowlist. Unauthorized attempts are denied and surfaced in PwrAgent's
+messaging activity log, so you can see who tried and from where. Adding
+a new authorized user or space is a deliberate, opt-in change made from
+the desktop — never a side effect of someone discovering the bot.
 
 PwrAgent's design tries to make the rest of these decisions
 inspectable: secrets are encrypted at rest, destructive actions prompt
