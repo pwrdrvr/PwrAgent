@@ -2276,6 +2276,7 @@ describe("TelegramAdapter", () => {
         channel: "telegram",
         botToken: "telegram-token",
         authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1003711601984", displayName: "PwrDrvr" }],
       },
       pollOnStart: false,
     });
