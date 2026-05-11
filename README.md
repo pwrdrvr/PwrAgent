@@ -55,7 +55,7 @@ to be.
 | | |
 |---|---|
 | ![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png) <br/>*Bound thread — desktop and messenger stay in sync* | ![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png) <br/>*Messenger status at a glance* |
-| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.gif) <br/>*Paste-token pairing with in-app connection test* | ![Approval gate](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — destructive actions need approval* |
+| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.gif) <br/>*Paste-token pairing with in-app connection test* | ![Messaging activity with denied unauthorized users](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — only allowlisted users can reach the bot* |
 
 Screenshots are produced by an inspect-style Playwright spec that drives
 known UI surfaces. To regenerate them, see
@@ -119,13 +119,22 @@ A sensible path:
   to a personal Telegram bot, and don't point a work Slack workspace
   at a personal experimentation install.
 
-PwrAgent's design tries to make these decisions inspectable: secrets
-are encrypted at rest, messaging is closed by default, destructive
-actions prompt for approval, and the entire state surface lives at
-`~/.pwragent/` (documented in
-[docs/state-layout.md](docs/state-layout.md)). What the project can't
-do is tell you whether the policies at your employer permit any of
-this. That's still your call to make.
+**Messaging is closed by default — and stays that way.** Only platform
+user IDs you've explicitly allowlisted can DM the bot, and even
+authorized users have to be inside an allowlisted Slack workspace,
+Discord server, or Telegram supergroup before the bot will respond to
+them. Unauthorized attempts are denied and surfaced in PwrAgent's
+messaging activity log, so you can see who tried and from where.
+Adding a new authorized user or space is a deliberate, opt-in change
+made from the desktop — never a side effect of someone discovering the
+bot.
+
+PwrAgent's design tries to make the rest of these decisions
+inspectable: secrets are encrypted at rest, destructive actions prompt
+for approval, and the entire state surface lives at `~/.pwragent/`
+(documented in [docs/state-layout.md](docs/state-layout.md)). What the
+project can't do is tell you whether the policies at your employer
+permit any of this. That's still your call to make.
 
 ## Roadmap
 
