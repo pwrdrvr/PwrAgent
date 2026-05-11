@@ -6,6 +6,15 @@ import type {
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 
+// SCHEMA-DRIFT-CHECKPOINT: when bumping CURRENT_MESSAGING_STORE_VERSION,
+// also audit `apps/desktop/e2e/fixtures/readme-state-seeding.ts`. Its
+// `seedTelegramBinding` / `seedActivityEntries` / `seedPairingEntry`
+// helpers write directly to the messaging tables, bypassing
+// `SqliteMessagingStore.upsertBinding` and friends — so any new
+// required column or sanitization rule introduced with a schema bump
+// must also land in the seed module, or the README screenshot capture
+// (`pnpm --filter @pwragent/desktop screenshot:readme`) silently
+// produces broken UI shots.
 export const CURRENT_MESSAGING_STORE_VERSION = 2;
 
 export type MessagingDeliveryRecord = MessagingDeliveryResult & {

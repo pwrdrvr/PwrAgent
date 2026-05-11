@@ -243,7 +243,7 @@ export function MessagingSettings(props: {
             )}
             label="Authorized User IDs"
             sub="Telegram user IDs that can DM the bot."
-            help="Numeric peer ID, e.g. 8460800771. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
+            help="Numeric peer ID, e.g. 5550199999. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
             source={optionalListSourceBadge(telegram.authorizedUserIds)}
             validateEntry={validateTelegramUserIdEntry}
             value={telegram.authorizedUserIds.value}
@@ -1865,10 +1865,10 @@ function validateTelegramUserIdEntry(value: string): string | undefined {
     {
       format:
         value.startsWith("@") || /^[A-Za-z][A-Za-z0-9_]*$/.test(value)
-          ? "That looks like a Telegram username, not a peer ID. Use the numeric form (e.g. 8460800771)."
-          : "Use a positive numeric Telegram peer ID, e.g. 8460800771.",
+          ? "That looks like a Telegram username, not a peer ID. Use the numeric form (e.g. 5550199999)."
+          : "Use a positive numeric Telegram peer ID, e.g. 5550199999.",
       length: "Telegram peer IDs must fit the decimal numeric ID form.",
-      range: "Use a positive Telegram peer ID, e.g. 8460800771.",
+      range: "Use a positive Telegram peer ID, e.g. 5550199999.",
     },
   );
 }

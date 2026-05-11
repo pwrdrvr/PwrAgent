@@ -1,0 +1,167 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "readme-recents-hero",
+    "threadId": "thread-recents-hero-primary",
+    "note": "Hand-crafted fixture for the README hero screenshot. Populates Recents with several plausible coding-agent threads and gives the primary thread a short, realistic transcript. Not derived from a live capture — edit by hand."
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-recents-hero-primary",
+          "title": "Migrate auth from JWT to session cookies",
+          "titleSource": "explicit",
+          "summary": "Cut over the web app to first-party session cookies and retire the JWT middleware.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            { "id": "dir-web-app", "label": "web-app", "path": "/Users/riley/code/web-app", "kind": "local" }
+          ],
+          "inbox": { "inInbox": false, "reason": "none" },
+          "updatedAt": 1715431200000
+        },
+        {
+          "id": "thread-recents-hero-telegram",
+          "title": "Fix flaky messaging E2E suite",
+          "titleSource": "explicit",
+          "summary": "Two specs intermittently time out on CI; reproduce locally and stabilize.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
+          ],
+          "inbox": { "inInbox": true, "reason": "new-thread" },
+          "updatedAt": 1715424600000
+        },
+        {
+          "id": "thread-recents-hero-backoff",
+          "title": "Add Telegram polling backoff",
+          "titleSource": "explicit",
+          "summary": "Implement exponential backoff for getUpdates on rate-limit errors.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
+          ],
+          "inbox": { "inInbox": false, "reason": "none" },
+          "updatedAt": 1715418000000
+        },
+        {
+          "id": "thread-recents-hero-cpu",
+          "title": "Investigate slow startup CPU profile",
+          "titleSource": "explicit",
+          "summary": "Profile cold-start; renderer eats 1.2s before first paint.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "dir-pwragent-cpu-worktree",
+              "label": "startup-cpu (worktree)",
+              "path": "/Users/riley/code/pwragent",
+              "kind": "worktree",
+              "worktreePath": "/Users/riley/code/pwragent/.worktrees/startup-cpu"
+            }
+          ],
+          "inbox": { "inInbox": false, "reason": "none" },
+          "updatedAt": 1715411400000
+        },
+        {
+          "id": "thread-recents-hero-refactor",
+          "title": "Refactor approval gate state machine",
+          "titleSource": "explicit",
+          "summary": "Collapse the queued / pending / applying transitions into one reducer.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
+          ],
+          "inbox": { "inInbox": false, "reason": "none" },
+          "updatedAt": 1715404800000
+        },
+        {
+          "id": "thread-recents-hero-changelog",
+          "title": "Wire ship-changelog window",
+          "titleSource": "explicit",
+          "summary": "Surface release notes inside the app on update.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/riley/code/pwragent", "kind": "local" }
+          ],
+          "inbox": { "inInbox": false, "reason": "none" },
+          "updatedAt": 1715398200000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "msg-1",
+            "role": "user",
+            "text": "Let's plan the JWT → session cookie cutover. The middleware lives in `apps/web/src/middleware/auth.ts` and the JWT verification runs on every request."
+          },
+          {
+            "type": "message",
+            "id": "msg-2",
+            "role": "assistant",
+            "text": "Here's the plan:\n\n1. Add a `session_cookies` table with a CSRF secret per session.\n2. Stand up a `withSession()` middleware behind a feature flag.\n3. Mirror writes to both stores during the rollout window.\n4. Cut reads to the new store; verify error rates flat.\n5. Retire the JWT middleware and the `jsonwebtoken` dep.\n\nWant me to start with the migration and the middleware in parallel?"
+          },
+          {
+            "type": "message",
+            "id": "msg-3",
+            "role": "user",
+            "text": "Yes — keep both paths live for the first week."
+          }
+        ],
+        "messages": [
+          {
+            "id": "msg-1",
+            "role": "user",
+            "text": "Let's plan the JWT → session cookie cutover. The middleware lives in `apps/web/src/middleware/auth.ts` and the JWT verification runs on every request."
+          },
+          {
+            "id": "msg-2",
+            "role": "assistant",
+            "text": "Here's the plan:\n\n1. Add a `session_cookies` table with a CSRF secret per session.\n2. Stand up a `withSession()` middleware behind a feature flag.\n3. Mirror writes to both stores during the rollout window.\n4. Cut reads to the new store; verify error rates flat.\n5. Retire the JWT middleware and the `jsonwebtoken` dep.\n\nWant me to start with the migration and the middleware in parallel?"
+          },
+          {
+            "id": "msg-3",
+            "role": "user",
+            "text": "Yes — keep both paths live for the first week."
+          }
+        ],
+        "lastUserMessage": "Yes — keep both paths live for the first week.",
+        "lastAssistantMessage": "Here's the plan:\n\n1. Add a `session_cookies` table with a CSRF secret per session.\n2. Stand up a `withSession()` middleware behind a feature flag.\n3. Mirror writes to both stores during the rollout window.\n4. Cut reads to the new store; verify error rates flat.\n5. Retire the JWT middleware and the `jsonwebtoken` dep.\n\nWant me to start with the migration and the middleware in parallel?",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

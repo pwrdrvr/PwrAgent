@@ -1,0 +1,6 @@
+# Captured README demo artifacts. Tag as binary so git doesn't try to
+# diff them on every recapture (each `pnpm --filter @pwragent/desktop
+# screenshot:readme` run regenerates these PNGs and the GIF, and the
+# diffs are noise).
+docs/assets/screenshots/*.png binary
+docs/assets/screenshots/*.gif binary
