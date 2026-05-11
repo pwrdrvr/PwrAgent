@@ -91,6 +91,47 @@ describe("LineAdapter", () => {
     );
   });
 
+  it("hot-applies authorization and rendering preferences", async () => {
+    const adapter = new LineAdapter({
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({
+        authorizedGroupIds: [
+          { id: "C0123456789abcdef0123456789abcdef", displayName: "Old group" },
+        ],
+        authorizedRoomIds: [
+          { id: "R0123456789abcdef0123456789abcdef", displayName: "Old room" },
+        ],
+        streamingResponses: false,
+      }),
+    });
+    adapters.push(adapter);
+
+    await adapter.updateAuthorization({
+      authorizedActorIds: ["U22222222222222222222222222222222"],
+      authorizedConversationIds: [
+        "C22222222222222222222222222222222",
+        "R22222222222222222222222222222222",
+      ],
+    });
+    await adapter.updateRenderingPreferences({ streamingResponses: true });
+
+    expect(adapter.authorizedActorIds).toEqual([
+      "U22222222222222222222222222222222",
+    ]);
+    expect(lineAdapterConfig(adapter)).toMatchObject({
+      authorizedActorIds: [
+        { id: "U22222222222222222222222222222222", displayName: "" },
+      ],
+      authorizedGroupIds: [
+        { id: "C22222222222222222222222222222222", displayName: "" },
+      ],
+      authorizedRoomIds: [
+        { id: "R22222222222222222222222222222222", displayName: "" },
+      ],
+      streamingResponses: true,
+    });
+  });
+
   it("reports outbound delivery as failed until a channel access token is configured", async () => {
     const adapter = new LineAdapter({
       callbackHandleStore: createCallbackStore(),
@@ -474,6 +515,10 @@ function createApi(): LineApi & {
       sentMessages: [{ id: "sent-1" }],
     })),
   };
+}
+
+function lineAdapterConfig(adapter: LineAdapter): LineMessagingConfig {
+  return (adapter as unknown as { config: LineMessagingConfig }).config;
 }
 
 function createCallbackStore() {

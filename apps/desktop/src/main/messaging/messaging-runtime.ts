@@ -1813,7 +1813,8 @@ function isDesktopMessagingConfigChannel(
   return channel === "telegram"
     || channel === "discord"
     || channel === "mattermost"
-    || channel === "slack";
+    || channel === "slack"
+    || channel === "line";
 }
 
 function stableStringify(value: unknown): string {

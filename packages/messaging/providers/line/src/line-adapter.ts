@@ -4,6 +4,8 @@ import { Readable } from "node:stream";
 import { messagingApi } from "@line/bot-sdk";
 import type {
   MessagingActorIdentity,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
   MessagingAdapterState,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
@@ -90,6 +92,8 @@ export type LineProviderAdapter = {
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop(): Promise<void>;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(update: MessagingAdapterRenderingPreferencesUpdate): Promise<void>;
 };
 
 export type LineAdapterOptions = {
@@ -185,8 +189,6 @@ export class LineAdapter implements LineProviderAdapter {
       supportsRemoteImageUrl: true,
     },
   };
-  readonly authorizedActorIds: readonly string[];
-
   private readonly api?: LineApi;
   private readonly callbackHandleStore: MessagingCallbackHandleStore;
   private readonly config: LineMessagingConfig;
@@ -194,6 +196,7 @@ export class LineAdapter implements LineProviderAdapter {
   private readonly now: () => number;
   private readonly server: Server;
   private readonly signingSecret: string;
+  private authorizedActorIdsValue: string[];
   private listener: LineInboundListener | undefined;
   private botUserId: string | undefined;
   private started = false;
@@ -208,7 +211,7 @@ export class LineAdapter implements LineProviderAdapter {
     this.callbackHandleStore = options.callbackHandleStore;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
-    this.authorizedActorIds = options.config.authorizedActorIds.map((actor) => actor.id);
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map((actor) => actor.id);
     this.signingSecret = createHash("sha256")
       .update(options.config.channelSecret)
       .digest("hex");
@@ -216,6 +219,34 @@ export class LineAdapter implements LineProviderAdapter {
     this.server = createServer((request, response) => {
       void this.handleWebhookRequest(request, response);
     });
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.authorizedActorIdsValue;
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    this.config.authorizedActorIds = lineContactsFromIds(
+      update.authorizedActorIds,
+      this.config.authorizedActorIds,
+    );
+    this.config.authorizedGroupIds = lineContactsFromIds(
+      (update.authorizedConversationIds ?? []).filter((id) => id.startsWith("C")),
+      this.config.authorizedGroupIds,
+    );
+    this.config.authorizedRoomIds = lineContactsFromIds(
+      (update.authorizedConversationIds ?? []).filter((id) => id.startsWith("R")),
+      this.config.authorizedRoomIds,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.config.streamingResponses = update.streamingResponses;
+    }
   }
 
   async start(listener: LineInboundListener): Promise<void> {
@@ -1119,6 +1150,14 @@ function callbackAllowedActorIds(intent: MessagingSurfaceIntent): string[] {
   return intent.allowedActorIds && intent.allowedActorIds.length > 0
     ? intent.allowedActorIds
     : [intent.audit?.actor.platformUserId ?? "unknown"];
+}
+
+function lineContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): { id: string; displayName: string }[] {
+  const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
+  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
 }
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {

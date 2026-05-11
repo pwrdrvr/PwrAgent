@@ -61,6 +61,7 @@ describe("desktop messaging config", () => {
       "discord",
       "enabled",
       "inputDebounceMs",
+      "line",
       "mattermost",
       "slack",
       "telegram",
@@ -111,6 +112,20 @@ describe("desktop messaging config", () => {
       "slashCommandPrefix",
       "streamingResponses",
       "workspaceUrl",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.line).sort()).toEqual([
+      "authorizedActorIds",
+      "authorizedGroupIds",
+      "authorizedRoomIds",
+      "botUserId",
+      "callbackBaseUrl",
+      "channel",
+      "channelAccessToken",
+      "channelSecret",
+      "enabled",
+      "streamingResponses",
+      "webhookPath",
+      "webhookUrl",
     ]);
   });
 
