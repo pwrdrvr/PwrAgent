@@ -134,11 +134,14 @@ a new authorized user or space is a deliberate, opt-in change made from
 the desktop — never a side effect of someone discovering the bot.
 
 PwrAgent's design tries to make the rest of these decisions
-inspectable: secrets are encrypted at rest, destructive actions prompt
-for approval, and the entire state surface lives at `~/.pwragent/`
-(documented in [docs/state-layout.md](docs/state-layout.md)). What the
-project can't do is tell you whether the policies at your employer
-permit any of this. That's still your call to make.
+inspectable: secrets are encrypted at rest, and the entire state
+surface lives at `~/.pwragent/` (documented in
+[docs/state-layout.md](docs/state-layout.md)). The agent's permissions
+mode is set per thread (Default Access or Full Access — see the
+in-app description before changing it), and the bound messenger
+mirrors whatever the agent does. What the project can't do is tell
+you whether the policies at your employer permit any of this. That's
+still your call to make.
 
 ## Roadmap
 
