@@ -718,12 +718,12 @@ export class LineAdapter implements LineProviderAdapter {
     const groupIds = this.config.authorizedGroupIds?.map((entry) => entry.id) ?? [];
     const roomIds = this.config.authorizedRoomIds?.map((entry) => entry.id) ?? [];
     if (channel.conversation.id.startsWith("C")) {
-      return groupIds.length === 0 || groupIds.includes(channel.conversation.id);
+      return groupIds.includes(channel.conversation.id);
     }
     if (channel.conversation.id.startsWith("R")) {
-      return roomIds.length === 0 || roomIds.includes(channel.conversation.id);
+      return roomIds.includes(channel.conversation.id);
     }
-    return true;
+    return false;
   }
 
   private shouldAcceptTextEvent(

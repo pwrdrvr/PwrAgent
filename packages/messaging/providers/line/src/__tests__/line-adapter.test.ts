@@ -5,6 +5,7 @@ import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   type MessagingCallbackHandleRecord,
   type MessagingInboundEvent,
+  type MessagingRejectedInboundEvent,
 } from "@pwragent/messaging-interface";
 import { LineAdapter, verifyLineSignature, type LineApi } from "../line-adapter.ts";
 import type { LineMessagingConfig } from "../line-config.ts";
@@ -357,9 +358,82 @@ describe("LineAdapter", () => {
     });
   });
 
-  it("drops group join lifecycle events without a source user id", async () => {
+  it("rejects shared conversation events when no group allowlist is configured", async () => {
     const port = await getFreePort();
     const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+    });
+    adapters.push(adapter);
+    const events: MessagingInboundEvent[] = [];
+    const rejections: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejections.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await postLineWebhook(port, config.channelSecret, {
+      events: [lineGroupTextEvent({ text: "/status" })],
+    });
+    await waitFor(() => rejections.length === 1);
+
+    expect(events).toHaveLength(0);
+    expect(rejections[0]).toMatchObject({
+      kind: "text",
+      reason: "unauthorized-conversation",
+      channel: {
+        conversation: {
+          id: "C0123456789abcdef0123456789abcdef",
+          kind: "channel",
+        },
+      },
+    });
+  });
+
+  it("allows pairing tokens from shared conversations before group authorization", async () => {
+    const port = await getFreePort();
+    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+    });
+    adapters.push(adapter);
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    await postLineWebhook(port, config.channelSecret, {
+      events: [lineGroupTextEvent({ text: `pair ${token}` })],
+    });
+    await waitFor(() => events.length === 1);
+
+    expect(events[0]).toMatchObject({
+      kind: "text",
+      text: `pair ${token}`,
+      channel: {
+        conversation: {
+          id: "C0123456789abcdef0123456789abcdef",
+          kind: "channel",
+        },
+      },
+    });
+  });
+
+  it("drops group join lifecycle events without a source user id", async () => {
+    const port = await getFreePort();
+    const config = createConfig({
+      authorizedGroupIds: [
+        { id: "C0123456789abcdef0123456789abcdef", displayName: "Team" },
+      ],
+      callbackBaseUrl: `http://127.0.0.1:${port}/`,
+    });
     const logger = { debug: vi.fn() };
     const adapter = new LineAdapter({
       api: createApi(),
@@ -574,6 +648,23 @@ async function postLineWebhook(
       "x-line-signature": signature,
     },
   });
+}
+
+function lineGroupTextEvent(params: { text: string }): unknown {
+  return {
+    type: "message",
+    webhookEventId: "event-group-text",
+    source: {
+      type: "group",
+      groupId: "C0123456789abcdef0123456789abcdef",
+      userId: "U0123456789abcdef0123456789abcdef",
+    },
+    message: {
+      id: "12345",
+      type: "text",
+      text: params.text,
+    },
+  };
 }
 
 function extractFirstPostbackData(api: ReturnType<typeof createApi>): string {
