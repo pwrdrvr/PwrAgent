@@ -3560,6 +3560,19 @@ describe("CodexAppServerClient", () => {
 
     transport!.emitInbound({
       jsonrpc: "2.0",
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "thread-title-helper",
+          preview: "",
+          ephemeral: true,
+          name: null,
+        },
+      },
+    });
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
       method: "turn/completed",
       params: {
         threadId: "thread-title-helper",
@@ -3612,6 +3625,14 @@ describe("CodexAppServerClient", () => {
           outputSchema: expect.objectContaining({
             type: "object",
           }),
+        }),
+      })
+    );
+    expect(requests).not.toContainEqual(
+      expect.objectContaining({
+        method: "thread/name/set",
+        params: expect.objectContaining({
+          threadId: "thread-title-helper",
         }),
       })
     );
