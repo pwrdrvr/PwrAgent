@@ -119,6 +119,7 @@ export function buildLineActionBubble(params: {
             type: "postback" as const,
             label: truncateLineText(action.label, maxLabelLength),
             data: postbackData,
+            displayText: truncateLineText(action.fallbackText ?? action.label, 300),
           },
         },
       };

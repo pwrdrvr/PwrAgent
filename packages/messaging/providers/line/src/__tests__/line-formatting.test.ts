@@ -44,7 +44,7 @@ describe("LINE formatting", () => {
     );
   });
 
-  it("omits postback display text so button taps do not print magic commands", () => {
+  it("sets postback display text so button taps echo the selected action", () => {
     const bubble = buildLineActionBubble({
       actions: [
         {
@@ -63,7 +63,7 @@ describe("LINE formatting", () => {
 
     expect(button?.type).toBe("button");
     expect(button?.type === "button" ? button.action.displayText : undefined)
-      .toBeUndefined();
+      .toBe("detach");
   });
 
   it("flows status-sized action sets into compact rows by default", () => {
