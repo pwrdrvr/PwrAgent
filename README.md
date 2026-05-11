@@ -3,8 +3,9 @@
 **Run a coding agent. Drive it from your messenger.**
 
 PwrAgent lets you start a thread on your laptop, refine the requirements
-with it from Slack, review a potentially dangerous command from Telegram,
-and pick the thread back up on the desktop when you return to your desk.
+with it from Slack, approve a Default Access command request from
+Telegram, and pick the thread back up on the desktop when you return to
+your desk.
 One conversation, one approval surface, one agent — wherever you happen
 to be.
 
