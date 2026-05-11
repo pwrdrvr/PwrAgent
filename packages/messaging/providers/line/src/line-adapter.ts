@@ -73,6 +73,9 @@ export type LineApi = {
   downloadMessageContent(messageId: string): Promise<Uint8Array>;
   getBotInfo(): Promise<LineBotInfo>;
   pushMessage(params: { messages: LineMessage[]; to: string }): Promise<LineSendResult>;
+  showLoadingAnimation?(
+    params: { chatId: string; loadingSeconds?: number },
+  ): Promise<unknown>;
 };
 
 export type LineSendResult = {
@@ -337,6 +340,9 @@ export class LineAdapter implements LineProviderAdapter {
         errorMessage: "LINE channel access token is required to send messages",
       };
     }
+    if (intent.kind === "activity") {
+      return await this.deliverActivity(intent, target, deliveredAt);
+    }
     if (text) {
       messages.push({ type: "text", text });
     }
@@ -439,6 +445,36 @@ export class LineAdapter implements LineProviderAdapter {
       mimeType: request.attachment.mimeType,
       sizeBytes: data.byteLength,
     };
+  }
+
+  private async deliverActivity(
+    intent: MessagingSurfaceIntent & { kind: "activity" },
+    target: { channelRef: MessagingChannelRef; conversationId: string },
+    deliveredAt: number,
+  ): Promise<MessagingDeliveryResult> {
+    if (
+      intent.activity !== "typing"
+      || intent.state !== "active"
+      || target.channelRef.conversation.kind !== "dm"
+      || !this.api?.showLoadingAnimation
+    ) {
+      return { channel: "line", deliveredAt, outcome: "discarded" };
+    }
+
+    try {
+      await this.api.showLoadingAnimation({
+        chatId: target.conversationId,
+        loadingSeconds: lineLoadingSecondsForLease(intent.leaseMs),
+      });
+      return { channel: "line", deliveredAt: this.now(), outcome: "signaled" };
+    } catch (error) {
+      return {
+        channel: "line",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async handleWebhookRequest(
@@ -1069,6 +1105,9 @@ export function createLineApi(channelAccessToken: string): LineApi {
     async pushMessage(params) {
       return await client.pushMessage(params);
     },
+    async showLoadingAnimation(params) {
+      return await client.showLoadingAnimation(params);
+    },
     async downloadMessageContent(messageId) {
       const content = await blobClient.getMessageContent(messageId);
       return await readableToUint8Array(content);
@@ -1169,6 +1208,15 @@ function titleForLineActionBubble(
     default:
       return text || intent.fallbackText || "PwrAgent";
   }
+}
+
+function lineLoadingSecondsForLease(leaseMs: number | undefined): number {
+  if (leaseMs === undefined) {
+    return 5;
+  }
+  const seconds = Math.ceil(leaseMs / 1000);
+  const rounded = Math.ceil(seconds / 5) * 5;
+  return Math.max(5, Math.min(60, rounded));
 }
 
 function lineEventRequiresUserId(event: LineWebhookEvent): boolean {

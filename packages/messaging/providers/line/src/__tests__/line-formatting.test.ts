@@ -126,6 +126,16 @@ describe("LINE formatting", () => {
     })).toBe(fallbackText);
   });
 
+  it("does not render activity as a LINE chat message", () => {
+    expect(textForLineIntent({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+      createdAt: 1,
+    })).toBe("");
+  });
+
   it("requires postback button data to be opaque persisted handles", () => {
     expect(() =>
       buildLineActionBubble({

@@ -206,7 +206,7 @@ export function textForLineIntent(intent: MessagingSurfaceIntent): string {
     case "error":
       return [intent.title, intent.body].filter(Boolean).join("\n\n");
     case "activity":
-      return intent.state === "active" ? "Working..." : "";
+      return "";
     case "dismiss":
       return "";
     default: {

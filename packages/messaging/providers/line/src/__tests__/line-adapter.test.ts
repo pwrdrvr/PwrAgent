@@ -333,6 +333,64 @@ describe("LineAdapter", () => {
     expect(api.pushMessage).not.toHaveBeenCalled();
   });
 
+  it("uses LINE loading animation for DM activity instead of sending Working text", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    const result = await adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+      leaseMs: 11_000,
+      createdAt: 1234,
+      audit: lineDmAudit(),
+    });
+
+    expect(result).toMatchObject({
+      channel: "line",
+      outcome: "signaled",
+    });
+    expect(api.showLoadingAnimation).toHaveBeenCalledWith({
+      chatId: "U0123456789abcdef0123456789abcdef",
+      loadingSeconds: 15,
+    });
+    expect(api.pushMessage).not.toHaveBeenCalled();
+  });
+
+  it("discards LINE group activity because loading animation is DM-only", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    const result = await adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+      createdAt: 1234,
+      audit: lineGroupAudit(),
+    });
+
+    expect(result).toMatchObject({
+      channel: "line",
+      outcome: "discarded",
+    });
+    expect(api.showLoadingAnimation).not.toHaveBeenCalled();
+    expect(api.pushMessage).not.toHaveBeenCalled();
+  });
+
   it("persists callback handles with audit fallback actor and binding scope", async () => {
     const api = createApi();
     const store = createCallbackStore();
@@ -671,6 +729,9 @@ function createConfig(overrides: Partial<LineMessagingConfig> = {}): LineMessagi
 function createApi(): LineApi & {
   downloadMessageContent: ReturnType<typeof vi.fn<LineApi["downloadMessageContent"]>>;
   pushMessage: ReturnType<typeof vi.fn<LineApi["pushMessage"]>>;
+  showLoadingAnimation: ReturnType<
+    typeof vi.fn<NonNullable<LineApi["showLoadingAnimation"]>>
+  >;
 } {
   return {
     downloadMessageContent: vi.fn(async () => new Uint8Array([1, 2, 3])),
@@ -681,6 +742,7 @@ function createApi(): LineApi & {
     pushMessage: vi.fn(async () => ({
       sentMessages: [{ id: "sent-1" }],
     })),
+    showLoadingAnimation: vi.fn(async () => undefined),
   };
 }
 
@@ -692,6 +754,20 @@ function lineDmAudit() {
       conversation: {
         id: "U0123456789abcdef0123456789abcdef",
         kind: "dm" as const,
+      },
+    },
+    occurredAt: 1234,
+  };
+}
+
+function lineGroupAudit() {
+  return {
+    actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+    channel: {
+      channel: "line" as const,
+      conversation: {
+        id: "C0123456789abcdef0123456789abcdef",
+        kind: "channel" as const,
       },
     },
     occurredAt: 1234,
