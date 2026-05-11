@@ -895,7 +895,9 @@ export function MessagingSettings(props: {
           <TextField
             disabled={props.saving}
             label="Webhook URL"
-            sub="Public HTTPS URL configured in the LINE Developers console."
+            sub="Public HTTPS URL configured in the LINE Developers console. This should point at your tunnel hostname."
+            help={<code>https://line-webhook.example.com/</code>}
+            placeholder="https://line-webhook.example.com/"
             source={optionalStringSourceBadge(line.webhookUrl)}
             value={line.webhookUrl.value}
             onSave={(webhookUrl) => {
@@ -907,9 +909,10 @@ export function MessagingSettings(props: {
           />
           <TextField
             disabled={props.saving}
-            label="Callback Base URL"
-            sub="Local listener URL or tunnel-forwarded public URL. The local listener binds to the URL's port if present, otherwise to 47822."
-            help={<code>https://line-callback.example.com/</code>}
+            label="Local Webhook Listener"
+            sub="Where PwrAgent listens locally before the tunnel forwards LINE webhooks. The listener binds to the URL's host and port."
+            help={<code>http://127.0.0.1:47822</code>}
+            placeholder="http://127.0.0.1:47822"
             source={optionalStringSourceBadge(line.callbackBaseUrl)}
             value={line.callbackBaseUrl.value}
             onSave={(callbackBaseUrl) => {
@@ -1125,6 +1128,7 @@ function TextField(props: {
   label: string;
   sub?: ReactNode;
   help?: ReactNode;
+  placeholder?: string;
   source: string;
   value: string;
   onSave: (value: string) => void;
@@ -1142,6 +1146,7 @@ function TextField(props: {
           aria-label={props.label}
           className="settings-input"
           disabled={props.disabled}
+          placeholder={props.placeholder}
           value={value}
           onBlur={() => props.onSave(value.trim())}
           onChange={(event) => setValue(event.currentTarget.value)}

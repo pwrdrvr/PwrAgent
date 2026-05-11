@@ -556,6 +556,27 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("labels LINE webhook settings as public URL and local listener", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByLabelText("Webhook URL")).toHaveAttribute(
+      "placeholder",
+      "https://line-webhook.example.com/",
+    );
+    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
+      "placeholder",
+      "http://127.0.0.1:47822",
+    );
+    expect(screen.getByText(/forwards LINE webhooks/)).toBeInTheDocument();
+    expect(screen.queryByText("https://line-callback.example.com/")).not.toBeInTheDocument();
+  });
+
   it("looks up blank messaging display names from the settings screen", async () => {
     const settings = createSettingsState();
     const resolveMessagingContact = vi.fn(async () => ({

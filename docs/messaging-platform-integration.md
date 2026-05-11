@@ -313,12 +313,13 @@ public HTTPS URL and configure that URL in the LINE Developers console.
    Keychain. Add the Channel Access Token later once LINE lets you issue it;
    outbound messages and attachment downloads stay disabled until the token is
    configured.
-4. Set Callback Base URL to the local listener/tunnel target. If the URL has an
-   explicit port, PwrAgent binds that port on `127.0.0.1`; otherwise it binds
-   `47822`.
+4. Set Local Webhook Listener to the local address cloudflared forwards to,
+   normally `http://127.0.0.1:47822`. If the URL has an explicit port, PwrAgent
+   binds that port on the URL's host; otherwise it binds `47822`.
 5. Configure Webhook URL in the LINE Developers console to the public HTTPS URL
-   that forwards to the Callback Base URL. Cloudflare Tunnel, Tailscale Funnel,
-   or ngrok all fit this shape.
+   that forwards to the local listener, for example
+   `https://line-webhook.example.com/`. Cloudflare Tunnel, Tailscale Funnel, or
+   ngrok all fit this shape.
 6. Add allowlisted LINE user IDs (`U` + 32 lowercase hex chars). Add group IDs
    (`C...`) and room IDs (`R...`) when the bot should run in shared chats.
 7. Use the Connection test button to call `getBotInfo`; the returned bot user ID
