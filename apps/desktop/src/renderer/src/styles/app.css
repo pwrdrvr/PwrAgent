@@ -4249,8 +4249,6 @@ textarea,
 
 .thread-markdown__th,
 .thread-markdown__td {
-  min-width: 150px;
-  max-width: 42ch;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-subtle);
   border-left: 1px solid var(--border-subtle);
@@ -4270,57 +4268,43 @@ textarea,
 .thread-markdown__th {
   color: var(--text-primary);
   font-weight: 650;
-  white-space: nowrap;
 }
 
 .thread-markdown__td {
   color: var(--text-secondary);
 }
 
-.thread-markdown__th:first-child,
-.thread-markdown__td:first-child {
-  min-width: 132px;
+/* Content-aware column sizing.
+   The remark-table-profile plugin stamps each <th>/<td> with a
+   data-col-kind attribute based on the column's content shape:
+     - tag:   every cell is <=4 chars (e.g. "#", "Sev", "P1", "✓")
+     - label: longest cell is <=40 chars and <=4 words (e.g. file paths,
+              short identifiers, key names) — should not wrap when possible
+     - prose: longer or multi-sentence content — wraps and shares space */
+.thread-markdown__th[data-col-kind="tag"],
+.thread-markdown__td[data-col-kind="tag"] {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--text-primary);
+  text-align: center;
 }
 
-.thread-markdown__table--review-findings .thread-markdown__th:nth-child(1),
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(1) {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
-  color: var(--text-primary);
+.thread-markdown__th[data-col-kind="label"],
+.thread-markdown__td[data-col-kind="label"] {
+  min-width: max-content;
+  max-width: 36ch;
   white-space: nowrap;
 }
 
-.thread-markdown__table--review-findings .thread-markdown__th:nth-child(2),
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(2) {
-  width: 48px;
-  min-width: 48px;
-  max-width: 48px;
-  color: var(--text-primary);
+.thread-markdown__th[data-col-kind="prose"],
+.thread-markdown__td[data-col-kind="prose"] {
+  min-width: 24ch;
+  max-width: 48ch;
+}
+
+/* Headers are typically short enough to stay on one line regardless of kind */
+.thread-markdown__th {
   white-space: nowrap;
-}
-
-.thread-markdown__table--review-findings .thread-markdown__th:nth-child(3),
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(3) {
-  width: 190px;
-  min-width: 190px;
-  max-width: 190px;
-}
-
-.thread-markdown__table--review-findings .thread-markdown__th:nth-child(4),
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(4) {
-  width: 310px;
-  min-width: 310px;
-}
-
-.thread-markdown__table--review-findings .thread-markdown__th:nth-child(5),
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(5) {
-  width: 312px;
-  min-width: 312px;
-}
-
-.thread-markdown__table--review-findings .thread-markdown__td:nth-child(n + 4) {
-  min-width: 280px;
 }
 
 .thread-markdown__td .transcript-message__code {
@@ -4333,6 +4317,14 @@ textarea,
 .thread-markdown__td .transcript-message__link {
   overflow-wrap: anywhere;
   word-break: normal;
+}
+
+/* Label cells: links and code chips are allowed to break if the cell
+   still overflows after honoring max-width — prevents a long path from
+   pushing the table beyond the scroll wrapper without a break opportunity */
+.thread-markdown__td[data-col-kind="label"] .transcript-message__link,
+.thread-markdown__td[data-col-kind="label"] .transcript-message__code {
+  white-space: normal;
 }
 
 .transcript-message__image-button {

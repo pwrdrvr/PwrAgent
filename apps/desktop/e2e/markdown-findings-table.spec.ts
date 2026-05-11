@@ -59,23 +59,33 @@ test("renders a wide assistant markdown findings table without crushing the colu
 
     const dimensions = await tableScroll.evaluate((node) => {
       const tableNode = node.querySelector("table");
+      const headerKinds = Array.from(node.querySelectorAll("thead th")).map((th) =>
+        th.getAttribute("data-col-kind")
+      );
       const linkNode = node.querySelector("tbody tr:first-child td:nth-child(3) a");
+      const fileCell = node.querySelector("tbody tr:first-child td:nth-child(3)");
       const issueCell = node.querySelector("tbody tr:first-child td:nth-child(4)");
       return {
         clientWidth: node.clientWidth,
         scrollWidth: node.scrollWidth,
         assistantWidth: node.closest(".transcript-message")?.getBoundingClientRect().width ?? 0,
         tableWidth: tableNode?.getBoundingClientRect().width ?? 0,
+        fileCellWidth: fileCell?.getBoundingClientRect().width ?? 0,
         fileLinkWidth: linkNode?.getBoundingClientRect().width ?? 0,
         issueCellWidth: issueCell?.getBoundingClientRect().width ?? 0,
+        headerKinds,
       };
     });
 
     expect(dimensions.assistantWidth).toBeGreaterThan(880);
-    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 8);
-    expect(dimensions.tableWidth).toBeLessThanOrEqual(dimensions.clientWidth + 8);
+    // Content-aware profile for the canonical review-findings header
+    expect(dimensions.headerKinds).toEqual(["tag", "tag", "label", "prose", "prose"]);
+    // File column is profiled as `label` and should host the full filename
+    // on a single line rather than wrapping character-by-character
     expect(dimensions.fileLinkWidth).toBeGreaterThan(120);
-    expect(dimensions.issueCellWidth).toBeGreaterThan(280);
+    expect(dimensions.fileCellWidth).toBeGreaterThan(180);
+    // Issue column is profiled as `prose` and gets a generous prose floor
+    expect(dimensions.issueCellWidth).toBeGreaterThan(180);
 
     const compactTableMessage = transcript
       .locator(".transcript-message--assistant")

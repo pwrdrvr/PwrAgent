@@ -66,6 +66,18 @@
             "id": "message-assistant-2",
             "role": "assistant",
             "text": "Compact summary:\n\n| Key | Value |\n|---|---|\n| Mode | Shadow |\n| Owner | Billing |\n\nOversized regional matrix:\n\n| Metric | North America | Europe | Asia Pacific | South America | Middle East | Reliability Notes |\n|---|---|---|---|---|---|---|\n| Request fingerprint | `north-america-invoice-pacing-window-retry-suppressed-001` | `europe-invoice-pacing-window-retry-suppressed-002` | `asia-pacific-invoice-pacing-window-retry-suppressed-003` | `south-america-invoice-pacing-window-retry-suppressed-004` | `middle-east-invoice-pacing-window-retry-suppressed-005` | Keep this table horizontally scrollable rather than compressing regional token cells into unreadable slivers. |"
+          },
+          {
+            "type": "message",
+            "id": "message-assistant-3",
+            "role": "assistant",
+            "text": "Status checklist (narrow-value case — tag / tag / prose):\n\n| OK | Sev | Note |\n|:---:|:---:|---|\n| ✓ | P1 | Critical retry suppression issue blocking the rollout. Needs distinguishing terminal states from normal no-listing results before enabling enforcement. |\n| ✗ | P2 | Cross-tenant identity merging detected by snapshot test. Multiple tenants with the same period and bucket ids end up in one bucket. |\n| ✓ | P3 | Sampling key drift across repeat customer requests in the same time window can flip to all-or-nothing behavior under load. |"
+          },
+          {
+            "type": "message",
+            "id": "message-assistant-4",
+            "role": "assistant",
+            "text": "Alternate review header schema (proves the classifier is content-aware, not keyed to the literal `# / Sev / File / Issue / Fix` header). Same content shape, different labels — expect tag / label / prose / prose:\n\n| Severity | Module | Symptom | Fix |\n|:---:|---|---|---|\n| P0 | billing/dispatch | Duplicate-notice emission after retry suppression, observed in shadow rollouts at 0.3% rate. Caused by fallback path not respecting suppression flag. | Propagate suppression flag into the secondary provider path and gate the fallback emission behind it. Add an integration test that exercises the suppression interleaving. |\n| P1 | window/ledger | Tenant identity merging across cache normalization. Two tenants with the same period and bucket ids are indistinguishable to the cache key. | Add `tenantId` to the `LedgerIdentity` tuple, the `stableKey` serializer, and the sorting comparator. Regression test in `window/ledger.spec.ts`. |\n| P2 | window/observation | Failure-heavy buckets remain sparse indefinitely because the call-count threshold excludes failures from observed calls. | Switch the threshold input to total attempts, keep the win-ratio math on resolved auctions, and add a failure-heavy regression test. |"
           }
         ],
         "messages": [
@@ -83,6 +95,16 @@
             "id": "message-assistant-2",
             "role": "assistant",
             "text": "Compact summary:\n\n| Key | Value |\n|---|---|\n| Mode | Shadow |\n| Owner | Billing |\n\nOversized regional matrix:\n\n| Metric | North America | Europe | Asia Pacific | South America | Middle East | Reliability Notes |\n|---|---|---|---|---|---|---|\n| Request fingerprint | `north-america-invoice-pacing-window-retry-suppressed-001` | `europe-invoice-pacing-window-retry-suppressed-002` | `asia-pacific-invoice-pacing-window-retry-suppressed-003` | `south-america-invoice-pacing-window-retry-suppressed-004` | `middle-east-invoice-pacing-window-retry-suppressed-005` | Keep this table horizontally scrollable rather than compressing regional token cells into unreadable slivers. |"
+          },
+          {
+            "id": "message-assistant-3",
+            "role": "assistant",
+            "text": "Status checklist (narrow-value case — tag / tag / prose):\n\n| OK | Sev | Note |\n|:---:|:---:|---|\n| ✓ | P1 | Critical retry suppression issue blocking the rollout. Needs distinguishing terminal states from normal no-listing results before enabling enforcement. |\n| ✗ | P2 | Cross-tenant identity merging detected by snapshot test. Multiple tenants with the same period and bucket ids end up in one bucket. |\n| ✓ | P3 | Sampling key drift across repeat customer requests in the same time window can flip to all-or-nothing behavior under load. |"
+          },
+          {
+            "id": "message-assistant-4",
+            "role": "assistant",
+            "text": "Alternate review header schema (proves the classifier is content-aware, not keyed to the literal `# / Sev / File / Issue / Fix` header). Same content shape, different labels — expect tag / label / prose / prose:\n\n| Severity | Module | Symptom | Fix |\n|:---:|---|---|---|\n| P0 | billing/dispatch | Duplicate-notice emission after retry suppression, observed in shadow rollouts at 0.3% rate. Caused by fallback path not respecting suppression flag. | Propagate suppression flag into the secondary provider path and gate the fallback emission behind it. Add an integration test that exercises the suppression interleaving. |\n| P1 | window/ledger | Tenant identity merging across cache normalization. Two tenants with the same period and bucket ids are indistinguishable to the cache key. | Add `tenantId` to the `LedgerIdentity` tuple, the `stableKey` serializer, and the sorting comparator. Regression test in `window/ledger.spec.ts`. |\n| P2 | window/observation | Failure-heavy buckets remain sparse indefinitely because the call-count threshold excludes failures from observed calls. | Switch the threshold input to total attempts, keep the win-ratio math on resolved auctions, and add a failure-heavy regression test. |"
           }
         ],
         "lastUserMessage": "Review the billing pacing change and present the findings in a compact table.",
