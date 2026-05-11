@@ -165,6 +165,47 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       pre(preProps) {
         return <pre className="transcript-message__pre">{preProps.children}</pre>;
       },
+      table(tableProps) {
+        const tableKind = classifyMarkdownTable(sourceForNode(props.text, tableProps.node));
+
+        return (
+          <div
+            className={[
+              "thread-markdown__table-scroll",
+              tableKind ? `thread-markdown__table-scroll--${tableKind}` : undefined,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            tabIndex={0}
+          >
+            <table
+              className={[
+                "thread-markdown__table",
+                tableKind ? `thread-markdown__table--${tableKind}` : undefined,
+              ]
+              .filter(Boolean)
+              .join(" ")}
+            >
+              {tableProps.children}
+            </table>
+          </div>
+        );
+      },
+      tbody(tableBodyProps) {
+        return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
+      },
+      td(tableCellProps) {
+        return <td className="thread-markdown__td">{tableCellProps.children}</td>;
+      },
+      th(tableHeaderCellProps) {
+        return <th className="thread-markdown__th">{tableHeaderCellProps.children}</th>;
+      },
+      thead(tableHeadProps) {
+        return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
+      },
+      tr(tableRowProps) {
+        return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
+      },
       ul(listProps) {
         return <ul className="transcript-message__list">{listProps.children}</ul>;
       },
@@ -275,6 +316,35 @@ function sourceForNode(
   }
 
   return markdown.slice(start, end);
+}
+
+function classifyMarkdownTable(source?: string): "review-findings" | undefined {
+  const header = source?.split("\n")[0];
+  if (!header) {
+    return undefined;
+  }
+
+  const cells = splitMarkdownTableCells(header).map((cell) => cell.toLowerCase());
+  if (
+    cells[0] === "#" &&
+    cells[1] === "sev" &&
+    cells[2] === "file" &&
+    cells[3] === "issue" &&
+    cells[4] === "fix"
+  ) {
+    return "review-findings";
+  }
+
+  return undefined;
+}
+
+function splitMarkdownTableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
 }
 
 function normalizeSkillPath(href: string): string | undefined {

@@ -3,6 +3,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
+const sanitizedReviewFindingsTable = `| # | Sev | File | Issue | Fix |
+|---:|:---:|---|---|---|
+| 1 | P1 | [InvoiceDispatcher.scala (line 48)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48) | A retry-suppressed invoice falls through to the standard path because fallback only checks \`queuedInvoices.isEmpty\`. Why it matters: \`enforce=true\` can still make a second provider call and emit a duplicate notice after suppression was explicitly requested, so throttling does not reliably reduce calls or preserve invoice semantics. | Distinguish "normal no invoice ready" from terminal states like \`Retry suppressed\`; only fallback on intentional misses. |
+| 2 | P2 | [LedgerWindow.scala (line 16)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerWindow.scala:16) | \`LedgerIdentity\` drops \`tenantId\` when normalizing matched cache items. Why it matters: the existing cache counting treats \`(tenantId, accountId, periodId, bucketId)\` as the unique ledger identity, so two tenants with the same period/bucket ids are merged and can cross-throttle each other. | Include \`tenantId\` in \`LedgerIdentity\`, \`stableKey\`, sorting, and tests. |
+| 3 | P2 | [AttemptObservation.scala (line 56)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/AttemptObservation.scala:56) | \`observedCalls\` excludes failures, while \`Failure\` still counts as an attempted provider call. Why it matters: \`minObservedCalls\` is based on wins and losses only, so a failure-heavy bucket can remain sparse indefinitely and continue sending 100% of traffic during an outage pattern. | Use \`attempts\` for the minimum call threshold and keep win-ratio math on wins/losses, or rename the threshold and test failure-heavy behavior explicitly. |
+| 4 | P2 | [InvoiceDispatcher.scala (line 87)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:87) | The no-cache path always gives pacing an empty matched-account set, which becomes an allow-without-bucket decision. Why it matters: \`billing.enforce=true\` silently has no effect for \`createWithoutCache\` and no observations are accumulated even though pacing is enabled. | Fail fast or disable enforcement when the active-account cache is unavailable, or introduce a deliberate fallback bucket if no-cache pacing is expected to work. |
+| 5 | P3 | [LedgerController.scala (line 72)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerController.scala:72) | The deterministic sampling key is customer/page scoped and has no per-opportunity component. Why it matters: repeated requests from the same customer for the same bucket in one interval all make the same allow/throttle decision, and missing/shared customer ids can turn a configured probability into all-or-nothing behavior. | Include a stable opportunity/request identifier, or at least the full targeting tuple, in the sampling key and add tests for repeated same-customer requests. |`;
+
 describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
@@ -204,6 +212,54 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain(
       "![Transcript preview](https://example.com/preview.png)"
     );
+  });
+
+  it("renders wide review-style markdown tables with transcript table chrome", () => {
+    const { container } = render(
+      <ThreadMarkdown text={`## Findings\n\n${sanitizedReviewFindingsTable}`} />
+    );
+
+    const tableScroll = container.querySelector<HTMLDivElement>(
+      ".thread-markdown__table-scroll"
+    );
+    const table = container.querySelector<HTMLTableElement>(".thread-markdown__table");
+
+    expect(tableScroll).not.toBeNull();
+    expect(table).not.toBeNull();
+    expect(tableScroll).toContainElement(table);
+    expect(tableScroll).toHaveClass("thread-markdown__table-scroll--review-findings");
+    expect(table).toHaveClass("thread-markdown__table--review-findings");
+    expect(container.querySelectorAll("th.thread-markdown__th")).toHaveLength(5);
+    expect(container.querySelectorAll("td.thread-markdown__td")).toHaveLength(25);
+    expect(screen.getByRole("columnheader", { name: "Issue" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Fix" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "InvoiceDispatcher.scala (line 48)" })
+    ).toHaveAttribute(
+      "href",
+      "file:///Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48"
+    );
+    expect(container).toHaveTextContent("Retry suppressed");
+    expect(container).toHaveTextContent("failure-heavy behavior explicitly");
+  });
+
+  it("does not apply review findings table sizing to unrelated wide tables", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Metric | North America | Europe | Asia Pacific |
+|---|---|---|---|
+| Request fingerprint | \`north-america-invoice-pacing-window-retry-suppressed-001\` | \`europe-invoice-pacing-window-retry-suppressed-002\` | \`asia-pacific-invoice-pacing-window-retry-suppressed-003\` |`}
+      />
+    );
+
+    expect(container.querySelector(".thread-markdown__table-scroll")).not.toHaveClass(
+      "thread-markdown__table-scroll--review-findings"
+    );
+    expect(container.querySelector(".thread-markdown__table")).not.toHaveClass(
+      "thread-markdown__table--review-findings"
+    );
+    expect(screen.getByRole("columnheader", { name: "Metric" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "North America" })).toBeInTheDocument();
   });
 
   it("skips raw html parsing for oversized html-like messages", () => {

@@ -1,0 +1,97 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "markdown-findings-table",
+    "sourceCaptureId": "synthetic-sanitized-2026-05-11",
+    "threadId": "thread-markdown-findings-table"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-markdown-findings-table",
+          "title": "Sanitized Markdown table",
+          "titleSource": "explicit",
+          "summary": "Synthetic assistant response with a wide review findings table",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1778500906000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-user-1",
+            "role": "user",
+            "text": "Review the billing pacing change and present the findings in a compact table."
+          },
+          {
+            "type": "message",
+            "id": "message-assistant-1",
+            "role": "assistant",
+            "text": "**Verdict: Not ready for enforcement.** The shadow path is close, but enforcement has correctness and lifecycle risks. I'd fix P1/P2 before enabling `billing.pacing.enforce`.\n\n## Findings\n\n| # | Sev | File | Issue | Fix |\n|---:|:---:|---|---|---|\n| 1 | P1 | [InvoiceDispatcher.scala (line 48)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48) | A retry-suppressed invoice falls through to the standard path because fallback only checks `queuedInvoices.isEmpty`. Why it matters: `enforce=true` can still make a second provider call and emit a duplicate notice after suppression was explicitly requested, so throttling does not reliably reduce calls or preserve invoice semantics. | Distinguish \"normal no invoice ready\" from terminal states like `Retry suppressed`; only fallback on intentional misses. |\n| 2 | P2 | [LedgerWindow.scala (line 16)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerWindow.scala:16) | `LedgerIdentity` drops `tenantId` when normalizing matched cache items. Why it matters: the existing cache counting treats `(tenantId, accountId, periodId, bucketId)` as the unique ledger identity, so two tenants with the same period/bucket ids are merged and can cross-throttle each other. | Include `tenantId` in `LedgerIdentity`, `stableKey`, sorting, and tests. |\n| 3 | P2 | [AttemptObservation.scala (line 56)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/AttemptObservation.scala:56) | `observedCalls` excludes failures, while `Failure` still counts as an attempted provider call. Why it matters: `minObservedCalls` is based on wins and losses only, so a failure-heavy bucket can remain sparse indefinitely and continue sending 100% of traffic during an outage pattern. | Use `attempts` for the minimum call threshold and keep win-ratio math on wins/losses, or rename the threshold and test failure-heavy behavior explicitly. |\n| 4 | P2 | [InvoiceDispatcher.scala (line 87)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:87) | The no-cache path always gives pacing an empty matched-account set, which becomes an allow-without-bucket decision. Why it matters: `billing.enforce=true` silently has no effect for `createWithoutCache` and no observations are accumulated even though pacing is enabled. | Fail fast or disable enforcement when the active-account cache is unavailable, or introduce a deliberate fallback bucket if no-cache pacing is expected to work. |\n| 5 | P3 | [LedgerController.scala (line 72)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerController.scala:72) | The deterministic sampling key is customer/page scoped and has no per-opportunity component. Why it matters: repeated requests from the same customer for the same bucket in one interval all make the same allow/throttle decision, and missing/shared customer ids can turn a configured probability into all-or-nothing behavior. | Include a stable opportunity/request identifier, or at least the full targeting tuple, in the sampling key and add tests for repeated same-customer requests. |"
+          },
+          {
+            "type": "message",
+            "id": "message-assistant-2",
+            "role": "assistant",
+            "text": "Compact summary:\n\n| Key | Value |\n|---|---|\n| Mode | Shadow |\n| Owner | Billing |\n\nOversized regional matrix:\n\n| Metric | North America | Europe | Asia Pacific | South America | Middle East | Reliability Notes |\n|---|---|---|---|---|---|---|\n| Request fingerprint | `north-america-invoice-pacing-window-retry-suppressed-001` | `europe-invoice-pacing-window-retry-suppressed-002` | `asia-pacific-invoice-pacing-window-retry-suppressed-003` | `south-america-invoice-pacing-window-retry-suppressed-004` | `middle-east-invoice-pacing-window-retry-suppressed-005` | Keep this table horizontally scrollable rather than compressing regional token cells into unreadable slivers. |"
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-user-1",
+            "role": "user",
+            "text": "Review the billing pacing change and present the findings in a compact table."
+          },
+          {
+            "id": "message-assistant-1",
+            "role": "assistant",
+            "text": "**Verdict: Not ready for enforcement.** The shadow path is close, but enforcement has correctness and lifecycle risks. I'd fix P1/P2 before enabling `billing.pacing.enforce`.\n\n## Findings\n\n| # | Sev | File | Issue | Fix |\n|---:|:---:|---|---|---|\n| 1 | P1 | [InvoiceDispatcher.scala (line 48)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:48) | A retry-suppressed invoice falls through to the standard path because fallback only checks `queuedInvoices.isEmpty`. Why it matters: `enforce=true` can still make a second provider call and emit a duplicate notice after suppression was explicitly requested, so throttling does not reliably reduce calls or preserve invoice semantics. | Distinguish \"normal no invoice ready\" from terminal states like `Retry suppressed`; only fallback on intentional misses. |\n| 2 | P2 | [LedgerWindow.scala (line 16)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerWindow.scala:16) | `LedgerIdentity` drops `tenantId` when normalizing matched cache items. Why it matters: the existing cache counting treats `(tenantId, accountId, periodId, bucketId)` as the unique ledger identity, so two tenants with the same period/bucket ids are merged and can cross-throttle each other. | Include `tenantId` in `LedgerIdentity`, `stableKey`, sorting, and tests. |\n| 3 | P2 | [AttemptObservation.scala (line 56)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/AttemptObservation.scala:56) | `observedCalls` excludes failures, while `Failure` still counts as an attempted provider call. Why it matters: `minObservedCalls` is based on wins and losses only, so a failure-heavy bucket can remain sparse indefinitely and continue sending 100% of traffic during an outage pattern. | Use `attempts` for the minimum call threshold and keep win-ratio math on wins/losses, or rename the threshold and test failure-heavy behavior explicitly. |\n| 4 | P2 | [InvoiceDispatcher.scala (line 87)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/invoice/InvoiceDispatcher.scala:87) | The no-cache path always gives pacing an empty matched-account set, which becomes an allow-without-bucket decision. Why it matters: `billing.enforce=true` silently has no effect for `createWithoutCache` and no observations are accumulated even though pacing is enabled. | Fail fast or disable enforcement when the active-account cache is unavailable, or introduce a deliberate fallback bucket if no-cache pacing is expected to work. |\n| 5 | P3 | [LedgerController.scala (line 72)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerController.scala:72) | The deterministic sampling key is customer/page scoped and has no per-opportunity component. Why it matters: repeated requests from the same customer for the same bucket in one interval all make the same allow/throttle decision, and missing/shared customer ids can turn a configured probability into all-or-nothing behavior. | Include a stable opportunity/request identifier, or at least the full targeting tuple, in the sampling key and add tests for repeated same-customer requests. |"
+          },
+          {
+            "id": "message-assistant-2",
+            "role": "assistant",
+            "text": "Compact summary:\n\n| Key | Value |\n|---|---|\n| Mode | Shadow |\n| Owner | Billing |\n\nOversized regional matrix:\n\n| Metric | North America | Europe | Asia Pacific | South America | Middle East | Reliability Notes |\n|---|---|---|---|---|---|---|\n| Request fingerprint | `north-america-invoice-pacing-window-retry-suppressed-001` | `europe-invoice-pacing-window-retry-suppressed-002` | `asia-pacific-invoice-pacing-window-retry-suppressed-003` | `south-america-invoice-pacing-window-retry-suppressed-004` | `middle-east-invoice-pacing-window-retry-suppressed-005` | Keep this table horizontally scrollable rather than compressing regional token cells into unreadable slivers. |"
+          }
+        ],
+        "lastUserMessage": "Review the billing pacing change and present the findings in a compact table.",
+        "lastAssistantMessage": "**Verdict: Not ready for enforcement.** The shadow path is close, but enforcement has correctness and lifecycle risks. I'd fix P1/P2 before enabling `billing.pacing.enforce`.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
