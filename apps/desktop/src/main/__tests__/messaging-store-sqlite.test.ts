@@ -191,6 +191,41 @@ describe("SqliteMessagingStore", () => {
       .toBeDefined();
   });
 
+  it("finds active bindings scoped to a backend", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({ id: "binding-codex" }));
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-grok",
+        backend: "grok",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-grok", kind: "dm" },
+        },
+        threadId: "thread-grok",
+      }),
+    );
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-legacy",
+        backend: undefined as unknown as "codex",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-legacy", kind: "dm" },
+        },
+        threadId: "thread-legacy",
+      }),
+    );
+    await store.revokeBinding({ bindingId: "binding-grok", revokedAt: 3000 });
+
+    await expect(
+      store.findActiveBindingsForBackend({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "binding-codex" }),
+      expect.objectContaining({ id: "binding-legacy" }),
+    ]);
+  });
+
   it("can delete callback handles for a binding without revoking it", async () => {
     const store = await createStore();
     await store.upsertCallbackHandle(buildCallbackHandle());

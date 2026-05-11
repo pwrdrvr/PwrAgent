@@ -96,6 +96,21 @@ export class SqliteMessagingStore {
       });
   }
 
+  async findActiveBindingsForBackend(params: {
+    backend: MessagingBindingRecord["backend"];
+  }): Promise<MessagingBindingRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM bindings WHERE status = 'active'")
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
+      .filter((binding) => {
+        if (binding.revokedAt) return false;
+        if (!binding.backend) return true;
+        return binding.backend === params.backend;
+      });
+  }
+
   async revokeBinding(params: {
     bindingId: string;
     revokedAt?: number;
@@ -711,6 +726,7 @@ export type MessagingStoreLike = Pick<
   | "upsertBinding"
   | "getBinding"
   | "findActiveBindingForChannel"
+  | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
   | "revokeBinding"
   | "upsertPendingIntent"

@@ -30,6 +30,20 @@ async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
@@ -763,6 +777,15 @@ function createMessagingArchiveCleanupStoreMock(options?: {
           (!binding.backend || binding.backend === params.backend),
       );
     },
+    async findActiveBindingsForBackend(params: {
+      backend: "codex" | "grok";
+    }) {
+      return [...bindings.values()].filter(
+        (binding) =>
+          !binding.revokedAt &&
+          (!binding.backend || binding.backend === params.backend),
+      );
+    },
     async revokeBinding(params: { bindingId: string; revokedAt?: number }) {
       const binding = bindings.get(params.bindingId);
       if (!binding) return undefined;
@@ -786,10 +809,14 @@ function createMessagingArchiveCleanupStoreMock(options?: {
   };
 }
 
-function createMessagingArchiveCleanerMock(result = {
-  notifiedCount: 1,
-  revokedCount: 1,
-}) {
+function createMessagingArchiveCleanerMock(
+  result:
+    | Promise<{ notifiedCount: number; revokedCount: number }>
+    | { notifiedCount: number; revokedCount: number } = {
+    notifiedCount: 1,
+    revokedCount: 1,
+  },
+) {
   const requests: Array<{
     backend: "codex" | "grok";
     threadId: string;
@@ -3082,6 +3109,75 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("coalesces repeated archive messaging cleanup before invoking the cleaner", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [thread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const cleanerReleased = createDeferred<{
+      notifiedCount: number;
+      revokedCount: number;
+    }>();
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock(
+      cleanerReleased.promise,
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const archivePromise = registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    while (messagingArchiveCleaner.requests.length === 0) {
+      await flushAsync();
+    }
+    const notificationPromise = codexClient.emit({
+      method: "thread/archived",
+      params: { threadId: "thread-1" },
+    });
+    await flushAsync();
+
+    expect(messagingArchiveCleaner.requests).toEqual([
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        origin: "thread-archive",
+      },
+    ]);
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
+
+    cleanerReleased.resolve({ notifiedCount: 1, revokedCount: 1 });
+    await Promise.all([archivePromise, notificationPromise]);
+    await registry.listThreads({ backend: "codex", archived: true });
+
+    expect(messagingArchiveCleaner.requests).toHaveLength(1);
+    expect(messagingStore.deletedPendingThreads).toHaveLength(1);
+
+    await registry.close();
+  });
+
   it("cleans messaging state when archived threads are discovered by refresh", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -3113,6 +3209,47 @@ describe("DesktopBackendRegistry", () => {
       registry.listThreads({ backend: "codex", archived: true }),
     ).resolves.toMatchObject([archivedThread]);
 
+    expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("cleans messaging state for bound threads missing from the active refresh", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archived elsewhere",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [archivedThread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+
+    expect(codexClient.lastListThreadsDiagnostics).toEqual({
+      callerReason: "archive-bound-binding-cleanup",
+      ownerId: expect.any(String),
+    });
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
     expect(messagingStore.deletedPendingThreads).toEqual([
       { backend: "codex", threadId: "thread-1" },

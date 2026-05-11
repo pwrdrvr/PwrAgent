@@ -826,6 +826,7 @@ let threadListCacheSequence = 0;
 type MessagingArchiveCleanupStore = Pick<
   MessagingStoreLike,
   | "deletePendingIntentsForThread"
+  | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
   | "revokeBinding"
 >;
@@ -1065,6 +1066,11 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
+  private readonly archivedMessagingCleanupInFlight = new Map<
+    string,
+    Promise<MessagingArchiveCleanupResult>
+  >();
+  private readonly archivedMessagingCleanupCompleted = new Set<string>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
@@ -3245,6 +3251,10 @@ export class DesktopBackendRegistry {
     const nextActiveThreadIds = new Set(params.threads.map((thread) => thread.id));
     const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
+    await this.cleanupArchivedBindingsMissingFromActiveList({
+      backend: params.backend,
+      activeThreadIds: nextActiveThreadIds,
+    });
     if (!previousActiveThreadIds) {
       return;
     }
@@ -3284,6 +3294,63 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async cleanupArchivedBindingsMissingFromActiveList(params: {
+    activeThreadIds: Set<string>;
+    backend: AppServerBackendKind;
+  }): Promise<void> {
+    const store = this.resolveMessagingArchiveCleanupStore();
+    if (!store) return;
+
+    let bindings;
+    try {
+      bindings = await store.findActiveBindingsForBackend({
+        backend: params.backend,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("archived binding lookup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const missingBoundThreadIds = [
+      ...new Set(
+        bindings
+          .map((binding) => binding.threadId)
+          .filter((threadId) => !params.activeThreadIds.has(threadId)),
+      ),
+    ];
+    if (missingBoundThreadIds.length === 0) return;
+
+    try {
+      const archivedThreads = await this.getClient(params.backend).listThreads({
+        archived: true,
+      }, {
+        callerReason: "archive-bound-binding-cleanup",
+        ownerId: this.threadListCacheOwnerId,
+      });
+      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      await Promise.all(
+        missingBoundThreadIds
+          .filter((threadId) => archivedThreadIds.has(threadId))
+          .map((threadId) =>
+            this.cleanupMessagingForArchivedThread({
+              backend: params.backend,
+              threadId,
+              origin: "state-refresh",
+            }),
+          ),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("archived bound binding cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadIds: missingBoundThreadIds,
+      });
+    }
+  }
+
   private resolveMessagingArchiveCleanupStore(): MessagingArchiveCleanupStore | undefined {
     if (this.messagingStore === null) {
       return undefined;
@@ -3303,6 +3370,34 @@ export class DesktopBackendRegistry {
   }
 
   private async cleanupMessagingForArchivedThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin: "state-refresh" | "thread-archive";
+  }): Promise<MessagingArchiveCleanupResult> {
+    const key = `${params.backend}:${params.threadId}`;
+    const existing = this.archivedMessagingCleanupInFlight.get(key);
+    if (existing) {
+      return await existing;
+    }
+    if (this.archivedMessagingCleanupCompleted.has(key)) {
+      return { pendingIntentCount: 0, revokedCount: 0 };
+    }
+
+    const cleanup = this.runMessagingCleanupForArchivedThread(params)
+      .then((result) => {
+        if (result.pendingIntentCount > 0 || result.revokedCount > 0) {
+          this.archivedMessagingCleanupCompleted.add(key);
+        }
+        return result;
+      })
+      .finally(() => {
+        this.archivedMessagingCleanupInFlight.delete(key);
+      });
+    this.archivedMessagingCleanupInFlight.set(key, cleanup);
+    return await cleanup;
+  }
+
+  private async runMessagingCleanupForArchivedThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
     origin: "state-refresh" | "thread-archive";

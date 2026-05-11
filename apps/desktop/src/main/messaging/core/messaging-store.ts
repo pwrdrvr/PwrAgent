@@ -82,6 +82,20 @@ export class MessagingStore {
     );
   }
 
+  async findActiveBindingsForBackend(params: {
+    backend: MessagingBindingRecord["backend"];
+  }): Promise<MessagingBindingRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.bindings)
+        .filter(
+          (binding) =>
+            !binding.revokedAt &&
+            (!binding.backend || binding.backend === params.backend),
+        )
+        .map((binding) => structuredClone(binding)),
+    );
+  }
+
   async revokeBinding(params: {
     bindingId: string;
     revokedAt?: number;
