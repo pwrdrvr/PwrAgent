@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   MessagingActivityEntry,
   MessagingActivityKind,
 } from "@pwragent/shared";
-import { DiscordIcon, LineIcon, MattermostIcon, TelegramIcon } from "../../icons";
+import {
+  DiscordIcon,
+  LineIcon,
+  MattermostIcon,
+  SlackIcon,
+  TelegramIcon,
+  type IconProps,
+} from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -25,6 +32,15 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
   outbound: "muted",
   binding: "ok",
   diagnostic: "warning",
+};
+const PLATFORM_ICONS: Partial<
+  Record<MessagingActivityEntry["platform"], (props: IconProps) => ReactElement>
+> = {
+  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
+  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
+  mattermost: ({ size }) => <MattermostIcon size={size} />,
+  slack: ({ size }) => <SlackIcon size={size} />,
+  line: ({ size }) => <LineIcon size={size} />,
 };
 
 /**
@@ -157,17 +173,12 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const tone = KIND_TONE[entry.kind];
   const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
   const copyFields = copyFieldsForEntry(entry);
+  const Icon = PLATFORM_ICONS[entry.platform];
   return (
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
-        {entry.platform === "telegram" ? (
-          <TelegramIcon size={14} variant="color" />
-        ) : entry.platform === "discord" ? (
-          <DiscordIcon size={14} variant="white" />
-        ) : entry.platform === "mattermost" ? (
-          <MattermostIcon size={14} />
-        ) : entry.platform === "line" ? (
-          <LineIcon size={14} />
+        {Icon ? (
+          <Icon size={14} />
         ) : (
           <span>{entry.platform.slice(0, 2)}</span>
         )}
