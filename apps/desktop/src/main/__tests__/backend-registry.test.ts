@@ -20,6 +20,7 @@ import type {
   ThreadOverlayState,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
@@ -336,6 +337,35 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    appendMessagingBindingTransition: async ({
+      backend,
+      threadId,
+      transition,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      transition: import("@pwragent/shared").ThreadMessagingBindingTransition;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const nextLog = [
+        ...(current.messagingBindingTransitionLog ?? []),
+        transition,
+      ];
+      const trimmed =
+        nextLog.length > 100 ? nextLog.slice(nextLog.length - 100) : nextLog;
+      const next = {
+        ...current,
+        messagingBindingTransitionLog: trimmed,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
@@ -453,6 +483,7 @@ class MockBackendClient {
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
       listThreadsError?: Error;
+      archivedThreads?: AppServerThreadSummary[];
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -481,7 +512,14 @@ class MockBackendClient {
     if (this.options.listThreadsError) {
       throw this.options.listThreadsError;
     }
+    if (params?.archived === true && this.options.archivedThreads) {
+      return this.options.archivedThreads;
+    }
     return this.options.threads ?? [];
+  }
+
+  setThreads(threads: AppServerThreadSummary[]): void {
+    this.options.threads = threads;
   }
 
   async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
@@ -676,6 +714,76 @@ class MockBackendClient {
     }
     return await listener(request);
   }
+}
+
+function createMessagingArchiveCleanupStoreMock(options?: {
+  bindings?: Array<{
+    backend?: "codex" | "grok";
+    channel?: "telegram" | "discord";
+    id: string;
+    threadId: string;
+  }>;
+  pendingIntentIds?: string[];
+}) {
+  const revokedBindingIds: string[] = [];
+  const deletedPendingThreads: Array<{ backend: "codex" | "grok"; threadId: string }> = [];
+  const bindings = new Map<string, MessagingBindingRecord>(
+    (options?.bindings ?? []).map((binding) => [
+      binding.id,
+      {
+        id: binding.id,
+        backend: binding.backend ?? "codex",
+        threadId: binding.threadId,
+        channel: {
+          channel: binding.channel ?? "telegram",
+          conversation: {
+            kind: "dm",
+            id: `${binding.id}:conversation`,
+            title: `${binding.id} conversation`,
+          },
+        },
+        authorizedActorIds: [`${binding.id}:actor`],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]),
+  );
+
+  return {
+    revokedBindingIds,
+    deletedPendingThreads,
+    async findActiveBindingsForThread(params: {
+      backend: "codex" | "grok";
+      threadId: string;
+    }) {
+      return [...bindings.values()].filter(
+        (binding) =>
+          !binding.revokedAt &&
+          binding.threadId === params.threadId &&
+          (!binding.backend || binding.backend === params.backend),
+      );
+    },
+    async revokeBinding(params: { bindingId: string; revokedAt?: number }) {
+      const binding = bindings.get(params.bindingId);
+      if (!binding) return undefined;
+      const revokedAt = params.revokedAt ?? Date.now();
+      const revoked = {
+        ...binding,
+        revokedAt,
+        updatedAt: revokedAt,
+      };
+      bindings.set(params.bindingId, revoked);
+      revokedBindingIds.push(params.bindingId);
+      return revoked;
+    },
+    async deletePendingIntentsForThread(params: {
+      backend: "codex" | "grok";
+      threadId: string;
+    }) {
+      deletedPendingThreads.push(params);
+      return params.threadId === "thread-1" ? options?.pendingIntentIds ?? [] : [];
+    },
+  };
 }
 
 describe("DesktopBackendRegistry", () => {
@@ -2833,6 +2941,161 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
+
+    await registry.close();
+  });
+
+  it("revokes messaging bindings and clears pending intents when archiving a thread", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [
+        { id: "binding-telegram", threadId: "thread-1", channel: "telegram" },
+        { id: "binding-discord", threadId: "thread-1", channel: "discord" },
+        { id: "binding-other", threadId: "thread-2", channel: "telegram" },
+      ],
+      pendingIntentIds: ["intent-approval", "intent-question"],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingStore,
+      overlayStore,
+    });
+
+    await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(messagingStore.revokedBindingIds).toEqual([
+      "binding-telegram",
+      "binding-discord",
+    ]);
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      messagingBindingTransitionLog: [
+        expect.objectContaining({
+          action: "unbound",
+          bindingId: "binding-telegram",
+          platform: "telegram",
+        }),
+        expect.objectContaining({
+          action: "unbound",
+          bindingId: "binding-discord",
+          platform: "discord",
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("cleans messaging state when archived threads are discovered by refresh", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archived elsewhere",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [archivedThread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex", archived: true }),
+    ).resolves.toMatchObject([archivedThread]);
+
+    expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("cleans messaging state when an active thread refresh transitions to archived", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archived elsewhere",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [thread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toMatchObject([
+      thread,
+    ]);
+    codexClient.setThreads([]);
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "another-thread",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+
+    expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
 
     await registry.close();
   });
