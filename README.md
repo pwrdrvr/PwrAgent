@@ -45,12 +45,12 @@ conversation back to the desktop when you're ready to read the diff.
 | | |
 |---|---|
 | ![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png) <br/>*Bound thread — desktop and messenger stay in sync* | ![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png) <br/>*Messenger status at a glance* |
-| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.png) <br/>*Paste-token pairing with in-app connection test* | ![Approval gate](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — destructive actions need approval* |
+| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.gif) <br/>*Paste-token pairing with in-app connection test* | ![Approval gate](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — destructive actions need approval* |
 
-<!-- screenshot: screenshot-bound-thread.png — Thread detail view with the linked messenger context visible. -->
-<!-- screenshot: screenshot-messenger-status.png — Settings or status surface showing Telegram/Discord/Mattermost connection state. -->
-<!-- screenshot: screenshot-pairing.png — Pairing / binding flow (or a clean settings card if there is no dedicated wizard). -->
-<!-- screenshot: screenshot-closed-by-default.png — Approval gate UI / closed state that conveys "the agent isn't acting on its own." -->
+Screenshots are produced by an inspect-style Playwright spec that drives
+known UI surfaces. To regenerate them, see
+[`apps/desktop/AGENTS.md`](apps/desktop/AGENTS.md) → "Capturing README
+Screenshots."
 
 ## Quick Start
 
