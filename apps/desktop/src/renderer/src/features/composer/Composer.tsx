@@ -2380,6 +2380,11 @@ export function Composer(props: ComposerProps) {
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
+  const launchpadWorkspaceValue =
+    props.launchpad &&
+    launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
+      ? props.launchpad.workMode
+      : "local";
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
@@ -3265,7 +3270,7 @@ export function Composer(props: ComposerProps) {
                 !props.onUpdateLaunchpad ||
                 launchpadWorkspaceOptions.length <= 1
               }
-              value={props.launchpad.workMode}
+              value={launchpadWorkspaceValue}
               options={launchpadWorkspaceOptions.map((option) => ({
                 label: option.label,
                 value: option.value,
@@ -3327,7 +3332,7 @@ export function Composer(props: ComposerProps) {
           ) : null}
 
           {props.launchpad &&
-          props.launchpad.workMode === "worktree" &&
+          launchpadWorkspaceValue === "worktree" &&
           (props.directory?.gitStatus?.branches?.length ?? 0) > 0 ? (
             <ComposerDropdown
               ariaLabel="Base branch"
@@ -4044,7 +4049,7 @@ function buildLaunchpadWorkspaceOptions(
     { value: "local", label: localLabel ?? "Local" },
   ];
 
-  if (canCreateWorktree || launchpad.workMode === "worktree") {
+  if (canCreateWorktree) {
     options.push({ value: "worktree", label: "New worktree" });
   }
 

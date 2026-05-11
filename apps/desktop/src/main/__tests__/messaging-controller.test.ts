@@ -158,12 +158,16 @@ describe("MessagingController", () => {
       body: expect.stringContaining("PwrAgent"),
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "browse:new:workspace:local", label: "Local ✓" }),
-        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
         expect.objectContaining({ id: "browse:new:permissions" }),
         expect.objectContaining({ id: "browse:new:fast" }),
         expect.objectContaining({ id: "browse:new:streaming" }),
         expect.objectContaining({ id: "browse:new:model" }),
         expect.objectContaining({ id: "browse:new:reasoning" }),
+      ]),
+    });
+    expect(readyIntent).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
       ]),
     });
     expect(readyIntent).toMatchObject({
@@ -358,6 +362,70 @@ describe("MessagingController", () => {
         executionMode: "default",
         workMode: "worktree",
         branchName: "release/v2",
+      }),
+    });
+  });
+
+  it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: Local"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:base-branch" }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:workspace:worktree",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: Local"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.not.stringContaining("Base branch:"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:base-branch" }),
+      ]),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug locally"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        workMode: "local",
       }),
     });
   });
@@ -5672,6 +5740,11 @@ function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {
   const snapshot = buildNavigationSnapshot();
   snapshot.directories[0] = {
     ...snapshot.directories[0]!,
+    gitStatus: {
+      currentBranch: "feature/current",
+      defaultBranch: "main",
+      branches: ["main", "feature/current"],
+    },
     launchpad: {
       directoryKey: "directory:pwragent",
       directoryKind: "directory",

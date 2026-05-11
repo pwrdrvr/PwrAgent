@@ -2493,6 +2493,21 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:workspace:worktree") {
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
+      if (!canCreateNewThreadWorktree(directory)) {
+        await this.presentNewThreadPromptGate(
+          {
+            ...nextSession,
+            workMode: "local",
+            branchName: undefined,
+          },
+          event,
+          navigation,
+        );
+        return;
+      }
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -2505,6 +2520,21 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:base-branch") {
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
+      if (!canCreateNewThreadWorktree(directory)) {
+        await this.presentNewThreadPromptGate(
+          {
+            ...nextSession,
+            workMode: "local",
+            branchName: undefined,
+          },
+          event,
+          navigation,
+        );
+        return;
+      }
       await this.presentNewThreadBranchPicker(nextSession, navigation, event);
       return;
     }
@@ -2524,6 +2554,21 @@ export class MessagingController {
       const branchName = readStringValue(event.value, "branchName");
       if (!branchName) {
         await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
+      if (!canCreateNewThreadWorktree(directory)) {
+        await this.presentNewThreadPromptGate(
+          {
+            ...nextSession,
+            workMode: "local",
+            branchName: undefined,
+          },
+          event,
+          navigation,
+        );
         return;
       }
       await this.presentNewThreadPromptGate(
@@ -2801,17 +2846,21 @@ export class MessagingController {
     }
 
     const directory = directoryForProjectSelection(navigation, project);
+    const workMode = resolveNewThreadWorkMode({
+      requestedWorkMode:
+        session.workMode ??
+        directory?.launchpad?.workMode ??
+        navigation.launchpadDefaults.workMode ??
+        "local",
+      directory,
+    });
     await this.presentNewThreadPromptGate(
       {
         ...session,
         mode: "new_thread_options",
         pageIndex: 0,
-        workMode:
-          session.workMode ??
-          directory?.launchpad?.workMode ??
-          navigation.launchpadDefaults.workMode ??
-          "local",
-        branchName: session.branchName,
+        workMode,
+        branchName: workMode === "worktree" ? session.branchName : undefined,
         selectedProject: project,
         updatedAt: this.now(),
         expiresAt: this.now() + this.pendingIntentTtlMs,
@@ -2838,6 +2887,7 @@ export class MessagingController {
       directory,
       this.streamingResponsesDefault,
     );
+    const canCreateWorktree = canCreateNewThreadWorktree(directory);
     await this.options.store.upsertBrowseSession(session);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -2861,12 +2911,20 @@ export class MessagingController {
           style: options.workMode === "local" ? "primary" : "secondary",
           fallbackText: "local",
         },
-        {
-          id: "browse:new:workspace:worktree",
-          label: options.workMode === "worktree" ? "New Worktree ✓" : "New Worktree",
-          style: options.workMode === "worktree" ? "primary" : "secondary",
-          fallbackText: "worktree",
-        },
+        ...(canCreateWorktree
+          ? [
+              {
+                id: "browse:new:workspace:worktree",
+                label:
+                  options.workMode === "worktree" ? "New Worktree ✓" : "New Worktree",
+                style:
+                  options.workMode === "worktree"
+                    ? "primary" as const
+                    : "secondary" as const,
+                fallbackText: "worktree",
+              },
+            ]
+          : []),
         ...(options.workMode === "worktree"
           ? [
               {
@@ -2929,6 +2987,8 @@ export class MessagingController {
 
     const updatedSession = {
       ...session,
+      workMode: options.workMode,
+      branchName: options.workMode === "worktree" ? options.branchName : undefined,
       surface: result.surface,
       updatedAt: this.now(),
     };
@@ -5487,11 +5547,14 @@ function newThreadOptionsForSession(
   directory: NavigationDirectorySummary | undefined,
   streamingResponsesDefault: boolean,
 ): NewThreadOptionsSummary {
-  const workMode =
-    session.workMode ??
-    directory?.launchpad?.workMode ??
-    navigation.launchpadDefaults.workMode ??
-    "local";
+  const workMode = resolveNewThreadWorkMode({
+    requestedWorkMode:
+      session.workMode ??
+      directory?.launchpad?.workMode ??
+      navigation.launchpadDefaults.workMode ??
+      "local",
+    directory,
+  });
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   return {
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
@@ -5511,6 +5574,27 @@ function newThreadOptionsForSession(
         : streamingMode === "enabled",
     workMode,
   };
+}
+
+function canCreateNewThreadWorktree(
+  directory: NavigationDirectorySummary | undefined,
+): boolean {
+  return Boolean(
+    directory?.path &&
+      directory.kind === "directory" &&
+      (directory.gitStatus?.currentBranch ||
+        (directory.gitStatus?.branches?.length ?? 0) > 0),
+  );
+}
+
+function resolveNewThreadWorkMode(params: {
+  requestedWorkMode: LaunchpadWorkMode;
+  directory: NavigationDirectorySummary | undefined;
+}): LaunchpadWorkMode {
+  return params.requestedWorkMode === "worktree" &&
+    canCreateNewThreadWorktree(params.directory)
+    ? "worktree"
+    : "local";
 }
 
 function newThreadPromptGateBody(

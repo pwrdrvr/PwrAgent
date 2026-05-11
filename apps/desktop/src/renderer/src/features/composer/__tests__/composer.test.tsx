@@ -2291,6 +2291,46 @@ describe("Composer", () => {
     });
   });
 
+  it("does not offer worktree launchpad mode for non-git directories", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex"),
+        ]}
+        directory={{
+          key: "directory:/Users/huntharo/.pwragent/projects",
+          kind: "directory",
+          label: "Projects",
+          path: "/Users/huntharo/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/.pwragent/projects",
+          directoryKind: "directory",
+          directoryLabel: "Projects",
+          directoryPath: "/Users/huntharo/.pwragent/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeDisabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(workspaceMode).toHaveTextContent("Local");
+    fireEvent.click(workspaceMode);
+    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+  });
+
   it("renders the worktree base branch menu as a branch chooser", () => {
     render(
       <Composer
