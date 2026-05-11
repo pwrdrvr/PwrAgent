@@ -11,6 +11,7 @@ describe("TranscriptReview", () => {
   it("renders review summary metadata and prioritized findings", () => {
     render(
       <TranscriptReview
+        directoryPaths={["/repo/apps/desktop/src/renderer"]}
         entry={{
           type: "review",
           id: "review-1",
@@ -47,8 +48,15 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("1 finding")).toBeInTheDocument();
     expect(screen.getByText("87% confidence")).toBeInTheDocument();
     expect(screen.getByText("P1")).toBeInTheDocument();
+    expect(screen.getByText("P1")).toHaveClass("transcript-review__priority--p1");
     expect(screen.getByText("Hydrate review transcript items")).toBeInTheDocument();
-    expect(screen.getByText("src/lib/useThreadSessionState.ts")).toBeInTheDocument();
+    const fileLink = screen.getByRole("link", {
+      name: "src/lib/useThreadSessionState.ts",
+    });
+    expect(fileLink).toHaveAttribute(
+      "href",
+      "file:///repo/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts:845"
+    );
     expect(screen.getByText("Lines 845-848")).toBeInTheDocument();
   });
 
@@ -71,6 +79,7 @@ describe("TranscriptReview", () => {
   it("renders plain Codex review comments as review findings", () => {
     render(
       <TranscriptReview
+        directoryPaths={["/repo/apps/desktop/src/renderer/src"]}
         entry={{
           type: "review",
           id: "review-exited-1",
@@ -85,16 +94,23 @@ describe("TranscriptReview", () => {
       screen.getByText("The change fixes the covered scenario, but one edge case remains.")
     ).toBeInTheDocument();
     expect(screen.getByText("P2")).toBeInTheDocument();
+    expect(screen.getByText("P2")).toHaveClass("transcript-review__priority--p2");
     expect(
       screen.getByText("Preserve async pasted images for launchpad scopes")
     ).toBeInTheDocument();
-    expect(screen.getByText("features/composer/Composer.tsx")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "features/composer/Composer.tsx" })
+    ).toHaveAttribute(
+      "href",
+      "file:///repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971"
+    );
     expect(screen.getByText("Lines 971-979")).toBeInTheDocument();
   });
 
   it("renders full review comments as separate finding cards", () => {
     render(
       <TranscriptReview
+        directoryPaths={["/repo/apps/desktop/src/renderer/src"]}
         entry={{
           type: "review",
           id: "review-exited-2",
@@ -115,5 +131,30 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("Lines 618-622")).toBeInTheDocument();
     expect(screen.getByText("Lines 660-667")).toBeInTheDocument();
     expect(screen.queryByText("Full review comments:")).not.toBeInTheDocument();
+  });
+
+  it("colors every supported review severity and preserves absolute outside paths", () => {
+    render(
+      <TranscriptReview
+        directoryPaths={["/repo"]}
+        entry={{
+          type: "review",
+          id: "review-severity-paths",
+          displayText: "Code review",
+          review: "Review severities.\n\nFull review comments:\n\n- [P0] Critical issue — /outside/repository/VeryLongOutsideFileName.ts:1\n  Critical body.\n\n- [P1] High issue — /repo/packages/app/high.ts:2\n  High body.\n\n- [P2] Medium issue — /repo/packages/app/medium.ts:3\n  Medium body.\n\n- [P3] Low issue — /repo/packages/app/low.ts:4\n  Low body.",
+        }}
+      />
+    );
+
+    for (const priority of [0, 1, 2, 3]) {
+      expect(screen.getByText(`P${priority}`)).toHaveClass(
+        `transcript-review__priority--p${priority}`
+      );
+    }
+
+    expect(
+      screen.getByRole("link", { name: "/outside/repository/VeryLongOutsideFileName.ts" })
+    ).toHaveAttribute("href", "file:///outside/repository/VeryLongOutsideFileName.ts:1");
+    expect(screen.getByRole("link", { name: "packages/app/high.ts" })).toBeInTheDocument();
   });
 });

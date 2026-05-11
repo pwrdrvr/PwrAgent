@@ -1,0 +1,75 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "review-path-wrapping",
+    "threadId": "thread-review-path-wrapping"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-review-path-wrapping",
+          "title": "Review path wrapping",
+          "titleSource": "explicit",
+          "summary": "Review renderer path wrapping regression",
+          "projectKey": "/Users/huntharo/work/PwrAgent",
+          "source": "codex",
+          "executionMode": "default",
+          "gitBranch": "fix/review-path-wrapping",
+          "linkedDirectories": [
+            {
+              "id": "directory:/Users/huntharo/work/PwrAgent",
+              "label": "PwrAgent",
+              "path": "/Users/huntharo/work/PwrAgent",
+              "kind": "local"
+            }
+          ],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1777425951000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "review",
+            "id": "review-path-wrapping-result",
+            "displayText": "Code review",
+            "review": "The review renderer should keep file locations readable without widening the transcript.\n\nFull review comments:\n\n- [P3] Keep linked directory paths compact — /Users/huntharo/work/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx:2013-2014\n  Paths inside the thread directory should render relative to that directory and keep the full absolute target in the link destination.\n\n- [P0] Wrap external review file paths — /Volumes/ExternalReviewArchive/OutsideRepositoryPathWithAnExcessivelyLongSingleFilenameSegmentThatMustWrapInsideTheReviewRendererBecauseItCannotBeReducedByTheCurrentWorkingDirectoryBoundary.tsx:88-91\n  Paths outside the current working directory cannot be shortened by prefix stripping, so the location row must wrap the long linked filename instead of overflowing horizontally."
+          }
+        ],
+        "messages": [],
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
