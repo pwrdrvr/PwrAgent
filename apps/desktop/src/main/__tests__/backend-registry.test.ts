@@ -786,6 +786,29 @@ function createMessagingArchiveCleanupStoreMock(options?: {
   };
 }
 
+function createMessagingArchiveCleanerMock(result = {
+  notifiedCount: 1,
+  revokedCount: 1,
+}) {
+  const requests: Array<{
+    backend: "codex" | "grok";
+    threadId: string;
+    origin: "thread-archive";
+  }> = [];
+
+  return {
+    requests,
+    async requestBindingRevokeAllForThread(request: {
+      backend: "codex" | "grok";
+      threadId: string;
+      origin: "thread-archive";
+    }) {
+      requests.push(request);
+      return result;
+    },
+  };
+}
+
 describe("DesktopBackendRegistry", () => {
   it("reports backend availability and capabilities", async () => {
     const codexClient = new MockBackendClient({
@@ -3004,6 +3027,57 @@ describe("DesktopBackendRegistry", () => {
         }),
       ],
     });
+
+    await registry.close();
+  });
+
+  it("routes archive binding revocation through the messaging archive cleaner when available", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock({
+      notifiedCount: 1,
+      revokedCount: 1,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(messagingStore.deletedPendingThreads).toEqual([
+      { backend: "codex", threadId: "thread-1" },
+    ]);
+    expect(messagingArchiveCleaner.requests).toEqual([
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        origin: "thread-archive",
+      },
+    ]);
+    expect(messagingStore.revokedBindingIds).toEqual([]);
 
     await registry.close();
   });

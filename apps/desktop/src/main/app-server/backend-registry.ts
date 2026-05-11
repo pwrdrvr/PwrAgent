@@ -830,7 +830,19 @@ type MessagingArchiveCleanupStore = Pick<
   | "revokeBinding"
 >;
 
+type MessagingArchiveCleaner = {
+  requestBindingRevokeAllForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin: "thread-archive";
+  }): Promise<{
+    notifiedCount: number;
+    revokedCount: number;
+  }>;
+};
+
 type MessagingArchiveCleanupResult = {
+  notifiedCount?: number;
   pendingIntentCount: number;
   revokedCount: number;
 };
@@ -1052,6 +1064,7 @@ export class DesktopBackendRegistry {
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
+  private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
@@ -1101,6 +1114,7 @@ export class DesktopBackendRegistry {
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     messagingStore?: MessagingArchiveCleanupStore | null;
+    messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     createScratchProjectDirectory?: () => Promise<string>;
     threadTitleGenerationService?: ThreadTitleService | null;
   }) {
@@ -1183,6 +1197,7 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
     this.messagingStore = options?.messagingStore;
+    this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
@@ -1227,6 +1242,12 @@ export class DesktopBackendRegistry {
     return () => {
       this.eventListeners.delete(listener);
     };
+  }
+
+  setMessagingArchiveCleaner(
+    cleaner: MessagingArchiveCleaner | null | undefined,
+  ): void {
+    this.messagingArchiveCleaner = cleaner;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -3288,15 +3309,44 @@ export class DesktopBackendRegistry {
   }): Promise<MessagingArchiveCleanupResult> {
     try {
       const store = this.resolveMessagingArchiveCleanupStore();
+      const pendingIntentIds = store
+        ? await store.deletePendingIntentsForThread({
+            backend: params.backend,
+            threadId: params.threadId,
+          })
+        : [];
+
+      if (this.messagingArchiveCleaner) {
+        const revokeResult =
+          await this.messagingArchiveCleaner.requestBindingRevokeAllForThread({
+            backend: params.backend,
+            threadId: params.threadId,
+            origin: "thread-archive",
+          });
+
+        if (revokeResult.revokedCount > 0 || pendingIntentIds.length > 0) {
+          backendRegistryLog.info("archived thread messaging cleanup completed", {
+            backend: params.backend,
+            notifiedCount: revokeResult.notifiedCount,
+            origin: params.origin,
+            pendingIntentCount: pendingIntentIds.length,
+            revokedCount: revokeResult.revokedCount,
+            threadId: params.threadId,
+          });
+        }
+
+        return {
+          notifiedCount: revokeResult.notifiedCount,
+          pendingIntentCount: pendingIntentIds.length,
+          revokedCount: revokeResult.revokedCount,
+        };
+      }
+
       if (!store) {
         return { pendingIntentCount: 0, revokedCount: 0 };
       }
 
       const bindings = await store.findActiveBindingsForThread({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      const pendingIntentIds = await store.deletePendingIntentsForThread({
         backend: params.backend,
         threadId: params.threadId,
       });

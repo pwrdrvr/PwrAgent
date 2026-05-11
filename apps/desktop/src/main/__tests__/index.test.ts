@@ -28,6 +28,8 @@ const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
+const requestBindingRevokeAllForThreadMock = vi.fn();
+const setMessagingArchiveCleanerMock = vi.fn();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -140,10 +142,17 @@ vi.mock("../log", () => ({
 vi.mock("../messaging/messaging-runtime", () => ({
   getDesktopMessagingRuntime: vi.fn(() => ({
     start: messagingRuntimeStartMock,
+    requestBindingRevokeAllForThread: requestBindingRevokeAllForThreadMock,
     onPlatformStatus: vi.fn(() => () => {}),
     getPlatformStatuses: vi.fn(() => []),
   })),
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
+}));
+
+vi.mock("../app-server/backend-registry", () => ({
+  getDesktopBackendRegistry: vi.fn(() => ({
+    setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
+  })),
 }));
 
 vi.mock("../ipc/messaging-status", () => ({
@@ -187,6 +196,8 @@ describe("bootstrapApp", () => {
     mainLogErrorMock.mockReset();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
+    requestBindingRevokeAllForThreadMock.mockReset();
+    setMessagingArchiveCleanerMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockReset();
     registerMessagingStatusIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();

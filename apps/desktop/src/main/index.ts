@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
+import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeAppMetadataIpcHandlers,
@@ -122,6 +123,10 @@ export function bootstrapApp(): void {
         options,
       ),
     );
+    getDesktopBackendRegistry().setMessagingArchiveCleaner({
+      requestBindingRevokeAllForThread: (request) =>
+        messagingRuntime.requestBindingRevokeAllForThread(request),
+    });
     const messagingOverride = resolveRuntimeMessagingOverride();
     if (messagingOverride.disabled) {
       mainLog.info("messaging runtime disabled for this app instance", {
