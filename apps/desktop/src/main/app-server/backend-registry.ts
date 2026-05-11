@@ -557,13 +557,25 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
   };
 }
 
-function buildCodexClientArgs(): string[] {
-  return [
+function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
+  const args = [
     "-c",
     'approval_policy="on-request"',
     "-c",
     'sandbox_mode="workspace-write"',
   ];
+  const pathValue = env?.PATH?.trim();
+  if (pathValue) {
+    args.push(
+      "-c",
+      `shell_environment_policy.set.PATH=${formatTomlString(pathValue)}`,
+    );
+  }
+  return args;
+}
+
+function formatTomlString(value: string): string {
+  return JSON.stringify(value);
 }
 
 function buildPendingRequestKey(params: {
@@ -1180,7 +1192,7 @@ export class DesktopBackendRegistry {
       options?.codexClient ??
       replayClients?.codexClient ??
       new CodexAppServerClient({
-        args: buildCodexClientArgs(),
+        args: buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
         env: codexEnv,

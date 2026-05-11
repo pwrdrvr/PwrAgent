@@ -290,6 +290,22 @@ describe("DesktopBackendRegistry replay isolation", () => {
 
     await registry.close();
   });
+
+  it("sets the Codex command shell PATH from the live client env", async () => {
+    settingsState.codexEnv = {
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+    } as NodeJS.ProcessEnv;
+
+    const registry = new DesktopBackendRegistry({
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(constructorState.codexArgs[0]).toContain(
+      'shell_environment_policy.set.PATH="/opt/homebrew/bin:/usr/bin:/bin"',
+    );
+
+    await registry.close();
+  });
 });
 
 function writeFixture(fixture: unknown): string {
