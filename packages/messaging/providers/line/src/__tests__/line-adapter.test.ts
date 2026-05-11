@@ -240,6 +240,99 @@ describe("LineAdapter", () => {
     );
   });
 
+  it("uses concise LINE flex titles instead of repeating full picker fallback text", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    await adapter.deliver({
+      id: "intent-picker",
+      kind: "thread_picker",
+      createdAt: 1234,
+      fallbackText: [
+        "Showing recent PwrAgent threads. Page 1/7.",
+        "1. First thread",
+        "Reply with a number, or reply next, projects, new, or cancel.",
+      ].join("\n"),
+      navigation: {
+        backend: "all",
+        fetchedAt: 1234,
+        unchanged: false,
+      },
+      page: {
+        actions: [{ id: "browse:select-thread", label: "1. First thread" }],
+        items: [],
+        pageIndex: 0,
+        pageSize: 8,
+        totalItems: 1,
+      },
+      prompt: "Showing recent PwrAgent threads. Page 1/7.",
+      audit: lineDmAudit(),
+    });
+
+    const messages = api.pushMessage.mock.calls[0]?.[0].messages ?? [];
+    const textMessage = messages.find((message) => message.type === "text");
+    const flexMessage = messages.find((message) => message.type === "flex");
+    const title = flexMessage?.type === "flex"
+      ? flexMessage.contents.body?.contents[0]
+      : undefined;
+
+    expect(textMessage?.type === "text" ? textMessage.text : "").toBe([
+      "Showing recent PwrAgent threads. Page 1/7.",
+      "1. First thread",
+      "Reply with a number, or reply next, projects, new, or cancel.",
+    ].join("\n"));
+    expect(title?.type === "text" ? title.text : "").toBe(
+      "Showing recent PwrAgent threads. Page 1/7.",
+    );
+  });
+
+  it("discards LINE status updates that would require editing an old message", async () => {
+    const api = createApi();
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig(),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    const result = await adapter.deliver({
+      id: "status-update",
+      kind: "status",
+      status: "working",
+      text: "Turn: working",
+      actions: [{ id: "status:refresh", label: "Refresh" }],
+      createdAt: 1234,
+      delivery: {
+        mode: "update",
+        fallback: "present_new",
+      },
+      targetSurface: {
+        channel: "line",
+        id: "sent-1",
+        state: {
+          opaque: {
+            conversationId: "U0123456789abcdef0123456789abcdef",
+            conversationKind: "dm",
+          },
+        },
+      },
+      audit: lineDmAudit(),
+    });
+
+    expect(result).toMatchObject({
+      channel: "line",
+      outcome: "discarded",
+    });
+    expect(api.pushMessage).not.toHaveBeenCalled();
+  });
+
   it("persists callback handles with audit fallback actor and binding scope", async () => {
     const api = createApi();
     const store = createCallbackStore();
@@ -588,6 +681,20 @@ function createApi(): LineApi & {
     pushMessage: vi.fn(async () => ({
       sentMessages: [{ id: "sent-1" }],
     })),
+  };
+}
+
+function lineDmAudit() {
+  return {
+    actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+    channel: {
+      channel: "line" as const,
+      conversation: {
+        id: "U0123456789abcdef0123456789abcdef",
+        kind: "dm" as const,
+      },
+    },
+    occurredAt: 1234,
   };
 }
 

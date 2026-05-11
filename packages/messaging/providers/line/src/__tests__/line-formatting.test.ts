@@ -5,6 +5,7 @@ import {
   buildLineActionBubble,
   clampLineMessage,
   imageMessagesForLineIntent,
+  textForLineIntent,
 } from "../line-formatting.ts";
 
 describe("LINE formatting", () => {
@@ -94,6 +95,35 @@ describe("LINE formatting", () => {
     expect(rows).toHaveLength(7);
     expect(buttonCount).toBe(13);
     expect(rows[0]?.type === "box" ? rows[0].contents : []).toHaveLength(2);
+  });
+
+  it("does not duplicate picker prompts in text fallback", () => {
+    const prompt = "Showing recent PwrAgent threads. Page 1/7.";
+    const fallbackText = [
+      prompt,
+      "1. First thread",
+      "Reply with a number, or reply next, projects, new, or cancel.",
+    ].join("\n");
+
+    expect(textForLineIntent({
+      id: "intent-picker",
+      kind: "thread_picker",
+      createdAt: 1,
+      fallbackText,
+      navigation: {
+        backend: "all",
+        fetchedAt: 1,
+        unchanged: false,
+      },
+      page: {
+        actions: [],
+        items: [],
+        pageIndex: 0,
+        pageSize: 8,
+        totalItems: 1,
+      },
+      prompt,
+    })).toBe(fallbackText);
   });
 
   it("requires postback button data to be opaque persisted handles", () => {

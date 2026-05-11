@@ -341,6 +341,9 @@ export class LineAdapter implements LineProviderAdapter {
       messages.push({ type: "text", text });
     }
     messages.push(...imageMessagesForLineIntent(intent));
+    if (shouldDiscardLineStatusUpdate(intent)) {
+      return { channel: "line", deliveredAt, outcome: "discarded" };
+    }
     let actionMessage: LineMessage | undefined;
     try {
       actionMessage = buildLineActionBubble({
@@ -354,7 +357,7 @@ export class LineAdapter implements LineProviderAdapter {
         }),
         capabilityProfile: this.capabilityProfile,
         layout: intent.actionLayout,
-        title: text || intent.fallbackText || "PwrAgent",
+        title: titleForLineActionBubble(intent, text),
       });
       await Promise.all(callbackHandleWrites);
     } catch (error) {
@@ -1134,6 +1137,38 @@ function stripSelfMention(
   const selfMention = mention?.mentionees?.find((entry) => entry.isSelf);
   if (!selfMention) return text;
   return text.replace(/^@\S+\s*/, "").trimStart();
+}
+
+function shouldDiscardLineStatusUpdate(intent: MessagingSurfaceIntent): boolean {
+  return (
+    intent.kind === "status"
+    && intent.delivery?.mode === "update"
+    && intent.targetSurface !== undefined
+  );
+}
+
+function titleForLineActionBubble(
+  intent: MessagingSurfaceIntent,
+  text: string,
+): string {
+  switch (intent.kind) {
+    case "thread_picker":
+    case "project_picker":
+    case "single_select":
+    case "multi_select":
+      return intent.prompt;
+    case "approval":
+    case "confirmation":
+      return intent.title;
+    case "status":
+      return "Thread status";
+    case "questionnaire": {
+      const question = intent.questions[intent.currentIndex] ?? intent.questions[0];
+      return question?.header || question?.question || "PwrAgent";
+    }
+    default:
+      return text || intent.fallbackText || "PwrAgent";
+  }
 }
 
 function lineEventRequiresUserId(event: LineWebhookEvent): boolean {
