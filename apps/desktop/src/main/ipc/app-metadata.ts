@@ -3,14 +3,18 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { app, ipcMain } from "electron";
 import {
+  APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
+  APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
 } from "../../shared/ipc";
 import type {
+  AppChangelogDocument,
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
 } from "../../shared/app-metadata";
+import { showChangelogWindow } from "../changelog-window";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 const APP_HOMEPAGE = "https://pwrdrvr.com";
@@ -29,6 +33,10 @@ export function resolveAppMetadata(): AppMetadata {
 
 function resolveLicenseDocumentPath(kind: AppLicenseDocumentKind): string {
   const fileName = kind === "license" ? "LICENSE" : "THIRD_PARTY_LICENSES";
+  return resolveBundledDocumentPath(fileName);
+}
+
+function resolveBundledDocumentPath(fileName: string): string {
   const candidates = [
     resolve(process.resourcesPath, fileName),
     resolve(app.getAppPath(), "..", "..", fileName),
@@ -57,9 +65,20 @@ export async function readAppLicenseDocument(
   };
 }
 
+export async function readAppChangelogDocument(): Promise<AppChangelogDocument> {
+  const content = await readFile(resolveBundledDocumentPath("CHANGELOG.md"), "utf8");
+  return {
+    kind: "changelog",
+    title: "Changelog",
+    content,
+  };
+}
+
 export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_METADATA_READ_CHANNEL);
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
   ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
     resolveAppMetadata(),
   );
@@ -70,9 +89,18 @@ export function registerAppMetadataIpcHandlers(): void {
       kind: AppLicenseDocumentKind,
     ): Promise<AppLicenseDocument> => readAppLicenseDocument(kind),
   );
+  ipcMain.handle(
+    APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
+    async (): Promise<AppChangelogDocument> => readAppChangelogDocument(),
+  );
+  ipcMain.handle(APP_CHANGELOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
+    showChangelogWindow();
+  });
 }
 
 export function disposeAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_METADATA_READ_CHANNEL);
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
 }

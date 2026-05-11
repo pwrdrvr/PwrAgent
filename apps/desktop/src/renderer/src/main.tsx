@@ -1,6 +1,7 @@
 import React, { type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { ChangelogWindow } from "./features/changelog/ChangelogWindow";
 import { MessagingActivityWindow } from "./features/messaging-activity/MessagingActivityWindow";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
@@ -27,6 +28,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "messaging-activity",
     render: () => <MessagingActivityWindow />,
+  },
+  {
+    match: (hash) => hash === "changelog",
+    render: () => <ChangelogWindow />,
   },
 ];
 

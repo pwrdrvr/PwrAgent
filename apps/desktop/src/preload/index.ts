@@ -133,6 +133,8 @@ import {
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+  APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
+  APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
@@ -192,6 +194,7 @@ import {
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
 import type {
+  AppChangelogDocument,
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
@@ -229,6 +232,11 @@ const desktopApi = Object.freeze({
     kind: AppLicenseDocumentKind,
   ): Promise<AppLicenseDocument> =>
     await ipcRenderer.invoke(APP_LICENSE_DOCUMENT_READ_CHANNEL, kind),
+  readChangelogDocument: async (): Promise<AppChangelogDocument> =>
+    await ipcRenderer.invoke(APP_CHANGELOG_DOCUMENT_READ_CHANNEL),
+  openChangelogWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  },
   checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>

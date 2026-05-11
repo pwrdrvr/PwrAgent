@@ -145,9 +145,10 @@ ls "$APP/Contents/Frameworks/" | grep -i electron && echo "FAIL: leaked Electron
 # Fuses (ASAR integrity must be enabled)
 npx --yes @electron/fuses read --app "$APP"
 
-# First-party and third-party license disclosures must ship in Resources
+# First-party notices, third-party notices, and release notes must ship in Resources
 test -f "$APP/Contents/Resources/LICENSE"
 test -f "$APP/Contents/Resources/THIRD_PARTY_LICENSES"
+test -f "$APP/Contents/Resources/CHANGELOG.md"
 ```
 
 ---

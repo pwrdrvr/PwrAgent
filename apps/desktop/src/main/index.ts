@@ -9,6 +9,7 @@ import {
   initAutoUpdater,
   registerAppUpdateIpcHandlers,
 } from "./auto-updater";
+import { showChangelogWindow } from "./changelog-window";
 import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
@@ -72,6 +73,12 @@ function installApplicationMenu(): void {
           label: `About ${APP_NAME}`,
           click: () => {
             app.showAboutPanel();
+          },
+        },
+        {
+          label: "Changelog",
+          click: () => {
+            showChangelogWindow();
           },
         },
         {

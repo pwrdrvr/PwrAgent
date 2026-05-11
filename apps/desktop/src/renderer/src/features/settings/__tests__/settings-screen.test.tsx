@@ -1189,6 +1189,7 @@ describe("SettingsScreen", () => {
   });
 
   it("renders About license attribution and opens bundled notices", async () => {
+    const openChangelogWindow = vi.fn(async () => undefined);
     const readLicenseDocument = vi.fn(async (kind: string) => ({
       kind,
       title: kind === "license" ? "MIT License" : "Third-Party Licenses",
@@ -1207,6 +1208,7 @@ describe("SettingsScreen", () => {
         chromeVersion: "142.0.0.0",
         nodeVersion: "24.0.0",
       })),
+      openChangelogWindow,
       readLicenseDocument,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
@@ -1220,6 +1222,9 @@ describe("SettingsScreen", () => {
     );
 
     expect(await screen.findByText("PwrAgent is licensed under MIT.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open changelog" }));
+    expect(openChangelogWindow).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "Third-party licenses" }));
 

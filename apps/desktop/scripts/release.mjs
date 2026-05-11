@@ -98,7 +98,7 @@ runChecked(
   { cwd: repoRoot },
 );
 
-// 4. Copy the build output, license notices, and electron-builder inputs into the stage so
+// 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
 //    electron-builder finds them at well-known paths.
 //    pnpm deploy copies the package source tree (including out/ if it exists)
 //    into the stage. Remove stale copies before our controlled cp to avoid
@@ -112,7 +112,7 @@ for (const dir of ["out", "build"]) {
   run(`cp -R ${join(desktopRoot, dir)} ${target}`);
 }
 run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
-for (const file of ["LICENSE", "THIRD_PARTY_LICENSES"]) {
+for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
   run(`cp ${join(repoRoot, file)} ${join(stageDir, file)}`);
 }
 
