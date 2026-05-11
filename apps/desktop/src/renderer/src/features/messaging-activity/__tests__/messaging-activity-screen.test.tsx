@@ -113,5 +113,8 @@ describe("MessagingActivityScreen", () => {
       .toHaveTextContent("Workspace ID");
     expect(screen.getByText("C079K80HTGS").closest("button"))
       .toHaveTextContent("Channel ID");
+    const row = screen.getByText("Observed pairing token").closest("li");
+    expect(row).not.toHaveTextContent("sl");
+    expect(row?.querySelector("img")).toBeInTheDocument();
   });
 });
