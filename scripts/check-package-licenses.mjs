@@ -10,6 +10,8 @@ function* walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (
       entry.name === ".git" ||
+      entry.name === ".worktrees" ||
+      entry.name === ".claude" ||
       entry.name === "node_modules" ||
       entry.name === "release-stage" ||
       entry.name === "dist" ||

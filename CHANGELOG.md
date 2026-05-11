@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.1 - 2026-05-11
+
+- Moved the desktop release channel from alpha to beta after the latest dogfooding fixes.
+- Expanded messaging with Slack support, pairing-code authorization, channel binding notifications, slow-mode handling, long-lived status callbacks, hot-applied runtime and authorization updates, startup bot/account metadata, and a redesigned mobile-first handoff branch workflow.
+- Improved Codex and desktop workflow safety with auth profile mapping, local-mode fallback outside git repositories, safer handoff behavior that avoids rewriting rollout files, grouped profile scratch projects, and clearer branch-drift dialogs.
+- Added navigation and workspace polish with recents thread pins, directory-scoped pinned threads, refreshed git and PR metadata, archive cleanup failure reporting, and transcript/composer spacing fixes.
+- Updated distribution readiness with the placeholder `pwragent` npm package, MIT license metadata, generated third-party license disclosures, and release packaging checks that ship first-party and third-party license files.
+- Hardened messaging and desktop edge cases around Telegram General topic routing, typing renewal, deferred new-thread failures, callback persistence, unbound callback cleanup, thread creation gating, empty-state layout, runtime tooltips, and thread name routing through the app server.
+
 ## v1.0.0-alpha.8 - 2026-05-08
 
 - Fixed workspace handoff controls so directory/workspace migration is blocked while a thread has an active turn, including active turns reported by backend lifecycle notifications and messaging callbacks.
