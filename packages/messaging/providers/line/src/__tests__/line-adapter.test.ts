@@ -45,6 +45,81 @@ describe("LineAdapter", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("starts the webhook listener with only a channel secret", async () => {
+    const port = await getFreePort();
+    const adapter = new LineAdapter({
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({
+        callbackBaseUrl: `http://127.0.0.1:${port}/`,
+        channelAccessToken: undefined,
+      }),
+    });
+    adapters.push(adapter);
+    await adapter.start(async () => {});
+
+    const rawBody = JSON.stringify({ events: [] });
+    const signature = createHmac("sha256", "secret").update(rawBody).digest("base64");
+    const response = await fetch(`http://127.0.0.1:${port}/`, {
+      body: rawBody,
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("reports outbound delivery as failed until a channel access token is configured", async () => {
+    const adapter = new LineAdapter({
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({ channelAccessToken: undefined }),
+      now: () => 1234,
+    });
+    adapters.push(adapter);
+
+    const result = await adapter.deliver({
+      id: "intent-1",
+      kind: "message",
+      role: "assistant",
+      parts: [{ type: "text", text: "Ready" }],
+      audit: {
+        actor: { platformUserId: "U0123456789abcdef0123456789abcdef" },
+        channel: {
+          channel: "line",
+          conversation: {
+            id: "U0123456789abcdef0123456789abcdef",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1234,
+      },
+      createdAt: 1234,
+    });
+
+    expect(result).toMatchObject({
+      channel: "line",
+      outcome: "failed",
+      errorMessage: "LINE channel access token is required to send messages",
+    });
+  });
+
+  it("rejects attachment downloads until a channel access token is configured", async () => {
+    const adapter = new LineAdapter({
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({ channelAccessToken: undefined }),
+    });
+    adapters.push(adapter);
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "123",
+        kind: "file",
+        name: "file.bin",
+        disposition: "available",
+      },
+      maxBytes: 10,
+    })).rejects.toThrow(/channel access token/);
+  });
+
   it("delivers text and action chips as LINE push messages", async () => {
     const api = createApi();
     const store = createCallbackStore();

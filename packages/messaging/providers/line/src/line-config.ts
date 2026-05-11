@@ -10,7 +10,7 @@ export type LineMessagingConfig = {
   botUserId?: string;
   callbackBaseUrl: string;
   channel: "line";
-  channelAccessToken: string;
+  channelAccessToken?: string;
   channelSecret: string;
   enabled?: boolean;
   streamingResponses?: boolean;

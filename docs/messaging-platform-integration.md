@@ -306,9 +306,13 @@ LINE is webhook-only. Operators must expose PwrAgent's local listener through a
 public HTTPS URL and configure that URL in the LINE Developers console.
 
 1. Create or choose a LINE Messaging API channel in the LINE Developers console.
-2. Issue a long-lived channel access token and copy the channel secret.
-3. In PwrAgent Settings > Messaging > LINE, store the Channel Access Token and
-   Channel Secret in Keychain.
+2. Copy the channel secret. PwrAgent can start the local webhook listener with
+   only this secret so LINE's webhook verification can pass before a channel
+   access token exists.
+3. In PwrAgent Settings > Messaging > LINE, store the Channel Secret in
+   Keychain. Add the Channel Access Token later once LINE lets you issue it;
+   outbound messages and attachment downloads stay disabled until the token is
+   configured.
 4. Set Callback Base URL to the local listener/tunnel target. If the URL has an
    explicit port, PwrAgent binds that port on `127.0.0.1`; otherwise it binds
    `47822`.

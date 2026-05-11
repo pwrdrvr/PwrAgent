@@ -493,16 +493,17 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
-    ...(lineChannelAccessToken
-      && lineChannelSecret
+    ...(lineChannelSecret
       && lineCallbackBaseUrl
       ? {
           line: {
             channel: "line" as const,
             enabled: true,
-            channelAccessToken: lineChannelAccessToken,
             channelSecret: lineChannelSecret,
             callbackBaseUrl: lineCallbackBaseUrl,
+            ...(lineChannelAccessToken
+              ? { channelAccessToken: lineChannelAccessToken }
+              : {}),
             ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
             ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
             streamingResponses: readEnvBoolean(
@@ -792,7 +793,7 @@ export async function loadDesktopMessagingConfigFromSettings(
       log,
       channel: "line",
       enabled: lineEnabled,
-      hasToken: Boolean(lineChannelAccessToken) && Boolean(lineChannelSecret),
+      hasToken: Boolean(lineChannelSecret),
       logStartupEligibility: options.logStartupEligibility === true,
       authorizedActorCount: lineAuthorizedActorIds.length,
     })
@@ -801,9 +802,11 @@ export async function loadDesktopMessagingConfigFromSettings(
           line: {
             channel: "line" as const,
             enabled: true,
-            channelAccessToken: lineChannelAccessToken!,
             channelSecret: lineChannelSecret!,
             callbackBaseUrl: lineCallbackBaseUrl,
+            ...(lineChannelAccessToken
+              ? { channelAccessToken: lineChannelAccessToken }
+              : {}),
             ...(lineWebhookUrl ? { webhookUrl: lineWebhookUrl } : {}),
             ...(lineBotUserId ? { botUserId: lineBotUserId } : {}),
             streamingResponses: snapshot.messaging.line.streamingResponses.value,
@@ -949,7 +952,9 @@ export function redactDesktopMessagingConfig(
       ? {
           channel: config.line.channel,
           enabled: config.line.enabled !== false,
-          channelAccessToken: "[REDACTED]",
+          ...(config.line.channelAccessToken
+            ? { channelAccessToken: "[REDACTED]" }
+            : {}),
           channelSecret: "[REDACTED]",
           callbackBaseUrl: config.line.callbackBaseUrl,
           webhookUrl: config.line.webhookUrl,

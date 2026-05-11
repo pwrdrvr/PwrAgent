@@ -186,7 +186,7 @@ export class LineAdapter implements LineProviderAdapter {
   };
   readonly authorizedActorIds: readonly string[];
 
-  private readonly api: LineApi;
+  private readonly api?: LineApi;
   private readonly callbackHandleStore: MessagingCallbackHandleStore;
   private readonly config: LineMessagingConfig;
   private readonly logger: LineProviderLogger;
@@ -200,7 +200,10 @@ export class LineAdapter implements LineProviderAdapter {
 
   constructor(options: LineAdapterOptions) {
     this.config = options.config;
-    this.api = options.api ?? createLineApi(options.config.channelAccessToken);
+    this.api = options.api ??
+      (options.config.channelAccessToken
+        ? createLineApi(options.config.channelAccessToken)
+        : undefined);
     this.callbackHandleStore = options.callbackHandleStore;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
@@ -217,7 +220,7 @@ export class LineAdapter implements LineProviderAdapter {
   async start(listener: LineInboundListener): Promise<void> {
     if (this.started) return;
     this.listener = listener;
-    if (!this.botUserId) {
+    if (!this.botUserId && this.api) {
       try {
         const botInfo = await this.api.getBotInfo();
         this.botUserId = botInfo.userId;
@@ -293,6 +296,14 @@ export class LineAdapter implements LineProviderAdapter {
     const actions = actionsForLineIntent(intent);
     const callbackHandleWrites: Promise<void>[] = [];
     const messages: LineMessage[] = [];
+    if (!this.api) {
+      return {
+        channel: "line",
+        deliveredAt,
+        outcome: "failed",
+        errorMessage: "LINE channel access token is required to send messages",
+      };
+    }
     if (text) {
       messages.push({ type: "text", text });
     }
@@ -367,6 +378,9 @@ export class LineAdapter implements LineProviderAdapter {
     const messageId = readAttachmentMessageId(request.attachment);
     if (!messageId) {
       throw new Error("LINE attachment is missing a message id");
+    }
+    if (!this.api) {
+      throw new Error("LINE channel access token is required to download attachments");
     }
     const providerMaxBytes = this.capabilityProfile.inboundAttachments?.maxDownloadBytes;
     const maxBytes = providerMaxBytes === undefined
