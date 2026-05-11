@@ -13,6 +13,8 @@ import type {
   GetNavigationSnapshotRequest,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
@@ -87,6 +89,9 @@ export type MessagingBackendBridge = {
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  materializeDirectoryLaunchpad?(
+    request: MaterializeDirectoryLaunchpadRequest,
+  ): Promise<MaterializeDirectoryLaunchpadResponse>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;

@@ -10,7 +10,6 @@ const constructorState = vi.hoisted(() => ({
   codexCount: 0,
   codexArgs: [] as Array<string[] | undefined>,
   codexEnvs: [] as Array<NodeJS.ProcessEnv | undefined>,
-  codexMetadataHomes: [] as Array<string | undefined>,
   grokCount: 0,
 }));
 
@@ -69,18 +68,6 @@ vi.mock("../codex-app-server/client", () => ({
       return { threadId: "noop-thread", turnId: "noop-turn" };
     }
   }
-}));
-
-vi.mock("../app-server/codex-session-metadata-service", () => ({
-  CodexSessionMetadataService: class {
-    constructor(options?: { codexHome?: string }) {
-      constructorState.codexMetadataHomes.push(options?.codexHome);
-    }
-
-    async updateThreadCwd() {
-      return { updated: false, reason: "missing-session" };
-    }
-  },
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -178,7 +165,6 @@ beforeEach(() => {
   constructorState.codexCount = 0;
   constructorState.codexArgs = [];
   constructorState.codexEnvs = [];
-  constructorState.codexMetadataHomes = [];
   constructorState.grokCount = 0;
   settingsState.codexEnv = undefined;
 });
@@ -289,7 +275,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
     await registry.close();
   });
 
-  it("passes the selected Codex home to the live client and metadata helper", async () => {
+  it("passes the selected Codex home to the live client", async () => {
     const codexHome = path.join(os.tmpdir(), "pwragent-codex-profile-home");
     settingsState.codexEnv = {
       CODEX_HOME: codexHome,
@@ -301,7 +287,6 @@ describe("DesktopBackendRegistry replay isolation", () => {
 
     expect(constructorState.codexCount).toBe(1);
     expect(constructorState.codexEnvs[0]?.CODEX_HOME).toBe(codexHome);
-    expect(constructorState.codexMetadataHomes).toEqual([codexHome]);
 
     await registry.close();
   });

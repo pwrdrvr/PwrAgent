@@ -426,6 +426,7 @@ async function createLocalHandoffSessionFixture(): Promise<{
 
 function readOverlayState(homeRoot: string): {
   directoryLaunchpads: Record<string, unknown>;
+  threads: Record<string, unknown>;
 } {
   const dbPath = path.join(
     homeRoot,
@@ -444,7 +445,14 @@ function readOverlayState(homeRoot: string): {
     for (const row of rows) {
       directoryLaunchpads[row.directory_path] = JSON.parse(row.payload);
     }
-    return { directoryLaunchpads };
+    const threadRows = db
+      .prepare("SELECT thread_id, payload FROM threads")
+      .all() as Array<{ thread_id: string; payload: string }>;
+    const threads: Record<string, unknown> = {};
+    for (const row of threadRows) {
+      threads[row.thread_id] = JSON.parse(row.payload);
+    }
+    return { directoryLaunchpads, threads };
   } finally {
     db.close();
   }
@@ -734,8 +742,9 @@ test("directory launchpad keeps new worktree as the sticky default after startin
   }
 });
 
-test("local-to-worktree handoff updates Codex session cwd metadata", async () => {
+test("local-to-worktree handoff records PwrAgent workspace state without rewriting Codex sessions", async () => {
   const fixture = await createLocalHandoffSessionFixture();
+  const originalSessionJsonl = await readFile(fixture.sessionPath, "utf8");
   const app = await launchElectronApp({
     env: {
       CODEX_HOME: fixture.codexHome,
@@ -763,18 +772,34 @@ test("local-to-worktree handoff updates Codex session cwd metadata", async () =>
 
     await expect
       .poll(async () => {
-        const firstLine = (await readFile(fixture.sessionPath, "utf8")).split("\n")[0]!;
-        return JSON.parse(firstLine).payload.cwd as string;
+        const overlay = await readOverlayState(app.homeRoot);
+        return overlay.threads[`codex:${fixture.threadId}`];
       })
-      .toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
+      .toMatchObject({
+        extraLinkedDirectories: [
+          expect.objectContaining({
+            kind: "worktree",
+            path: expect.stringContaining(`${path.sep}FixtureRepo`),
+            worktreePath: expect.stringContaining(
+              `${path.sep}.codex${path.sep}worktrees${path.sep}`,
+            ),
+          }),
+        ],
+      });
 
-    const firstLine = (await readFile(fixture.sessionPath, "utf8")).split("\n")[0]!;
-    const cwd = JSON.parse(firstLine).payload.cwd as string;
+    await expect(readFile(fixture.sessionPath, "utf8")).resolves.toBe(originalSessionJsonl);
+
+    const overlay = await readOverlayState(app.homeRoot);
+    const threadOverlay = overlay.threads[`codex:${fixture.threadId}`] as {
+      extraLinkedDirectories?: Array<{ worktreePath?: string }>;
+    };
+    const cwd = threadOverlay.extraLinkedDirectories?.[0]?.worktreePath;
+    expect(cwd).toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
     expect(cwd).not.toBe(fixture.repoDir);
 
     const ownerFile = execFileSync(
       "git",
-      ["-C", cwd, "rev-parse", "--git-path", "codex-thread.json"],
+      ["-C", cwd!, "rev-parse", "--git-path", "codex-thread.json"],
       { encoding: "utf8" },
     ).trim();
     await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({

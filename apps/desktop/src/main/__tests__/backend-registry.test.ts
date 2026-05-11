@@ -1534,6 +1534,64 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("updates Codex git metadata when materializing a git-backed launchpad", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
+    const repo = path.join(root, "app");
+    await mkdir(repo, { recursive: true });
+    await git(repo, ["init", "-b", "feature/metadata"]);
+    await git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
+    ]);
+
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repo}`,
+        launchpad: {
+          directoryKey: `directory:${repo}`,
+          directoryKind: "directory",
+          directoryLabel: "app",
+          directoryPath: repo,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-1",
+        gitInfo: {
+          branch: "feature/metadata",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records Codex owner metadata when materializing a worktree launchpad", async () => {
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({
@@ -1554,7 +1612,7 @@ describe("DesktopBackendRegistry", () => {
       } as never,
     });
 
-    await registry.materializeDirectoryLaunchpad({
+    const response = await registry.materializeDirectoryLaunchpad({
       directoryKey: "directory:/repo/app",
       launchpad: {
         directoryKey: "directory:/repo/app",
@@ -1575,6 +1633,13 @@ describe("DesktopBackendRegistry", () => {
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
       worktreePath: "/repo/app/.worktrees/thread-1/app",
       threadId: "thread-1",
+    });
+    expect(response.linkedDirectory).toEqual({
+      id: "/repo/app",
+      kind: "worktree",
+      label: "app",
+      path: "/repo/app",
+      worktreePath: "/repo/app/.worktrees/thread-1/app",
     });
 
     await registry.close();
@@ -2272,6 +2337,148 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("emits local turn lifecycle events for registry-started Codex turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-1",
+            role: "assistant",
+            text: "Done from replay.",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Desktop-originated turn" }],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+        },
+      },
+    });
+
+    await waitForCondition(() => events.length === 2);
+    expect(events).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        notification: expect.objectContaining({
+          method: "turn/started",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+          }),
+        }),
+      }),
+      {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: expect.objectContaining({
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done from replay." }],
+            }),
+          },
+        },
+      },
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("does not synthesize completion from in-progress replay text", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-1",
+            role: "assistant",
+            text: "Partial replay text.",
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Desktop-originated turn" }],
+    });
+    await waitForCondition(() => codexClient.lastReadThreadParams !== undefined);
+    await flushAsync();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        notification: expect.objectContaining({
+          method: "turn/started",
+          params: expect.objectContaining({
+            threadId: "thread-1",
+          }),
+        }),
+      }),
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("emits server request resolution when a pending request is submitted externally", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -2729,7 +2936,6 @@ describe("DesktopBackendRegistry", () => {
       completedAt: 1000,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
-    const updateThreadCwd = vi.fn(async () => ({ updated: true }));
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
@@ -2742,9 +2948,6 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
       gitDirectoryService: {
         recordCodexWorktreeOwnerThread,
-      } as never,
-      codexSessionMetadataService: {
-        updateThreadCwd,
       } as never,
       gitWorkspaceHandoffService: {
         handoff,
@@ -2770,10 +2973,6 @@ describe("DesktopBackendRegistry", () => {
     expect(response.workMode).toBe("worktree");
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
       worktreePath: "/repo/app/.worktrees/app-feature-handoff",
-      threadId: "thread-1",
-    });
-    expect(updateThreadCwd).toHaveBeenCalledWith({
-      cwd: "/repo/app/.worktrees/app-feature-handoff",
       threadId: "thread-1",
     });
     expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
@@ -2843,9 +3042,6 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      codexSessionMetadataService: {
-        updateThreadCwd: vi.fn(async () => ({ updated: true })),
-      } as never,
       gitDirectoryService: {
         recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
       } as never,
@@ -2919,9 +3115,6 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      codexSessionMetadataService: {
-        updateThreadCwd: vi.fn(async () => ({ updated: true })),
-      } as never,
       gitDirectoryService: {
         recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
       } as never,
@@ -3015,7 +3208,6 @@ describe("DesktopBackendRegistry", () => {
       warnings: [],
       completedAt: 1000,
     }));
-    const updateThreadCwd = vi.fn(async () => ({ updated: true }));
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
@@ -3026,9 +3218,6 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
-      codexSessionMetadataService: {
-        updateThreadCwd,
-      } as never,
       gitWorkspaceHandoffService: {
         handoff,
       } as never,
@@ -3045,10 +3234,6 @@ describe("DesktopBackendRegistry", () => {
       gitInfo: {
         branch: "HEAD",
       },
-    });
-    expect(updateThreadCwd).toHaveBeenCalledWith({
-      cwd: "/repo/app",
-      threadId: "thread-1",
     });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),

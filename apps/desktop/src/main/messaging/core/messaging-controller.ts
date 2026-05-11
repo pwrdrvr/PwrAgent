@@ -12,6 +12,7 @@ import type {
   LaunchpadWorkMode,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadMessagingBindingTransition,
@@ -2773,7 +2774,7 @@ export class MessagingController {
     navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
     project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
   ): Promise<void> {
-    if (!this.options.backend.startThread) {
+    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("new-thread-unavailable"),
@@ -2788,12 +2789,17 @@ export class MessagingController {
       return;
     }
 
+    const directory = directoryForProjectSelection(navigation, project);
     await this.presentNewThreadPromptGate(
       {
         ...session,
         mode: "new_thread_options",
         pageIndex: 0,
-        workMode: session.workMode ?? navigation.launchpadDefaults.workMode ?? "local",
+        workMode:
+          session.workMode ??
+          directory?.launchpad?.workMode ??
+          navigation.launchpadDefaults.workMode ??
+          "local",
         branchName: session.branchName,
         selectedProject: project,
         updatedAt: this.now(),
@@ -3134,7 +3140,7 @@ export class MessagingController {
       return;
     }
 
-    if (!this.options.backend.startThread) {
+    if (!this.options.backend.materializeDirectoryLaunchpad && !this.options.backend.startThread) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("new-thread-unavailable"),
@@ -3161,7 +3167,21 @@ export class MessagingController {
       directory,
       this.streamingResponsesDefault,
     );
-    const started = await this.options.backend.startThread({
+    const materialized = this.options.backend.materializeDirectoryLaunchpad
+      ? await this.options.backend.materializeDirectoryLaunchpad({
+          directoryKey: messagingLaunchpadMaterializationKey(bundle.session),
+          launchpad: launchpadForMessagingProject({
+            directory,
+            navigation,
+            preferences,
+            project,
+            now: this.now(),
+            workMode: options.workMode,
+            branchName: options.branchName,
+          }),
+        })
+      : undefined;
+    const started = materialized ?? (await this.options.backend.startThread!({
       backend: navigation.launchpadDefaults.backend,
       cwd: directory?.path ?? project.path,
       executionMode: options.executionMode,
@@ -3176,7 +3196,7 @@ export class MessagingController {
             branchName: options.branchName,
           }
         : {}),
-    });
+    }));
     const binding = await this.bindChannelToThread(event, {
       backend: started.backend,
       threadId: started.threadId,
@@ -3195,12 +3215,14 @@ export class MessagingController {
       backend: started.backend,
       directory,
       executionMode: started.executionMode,
+      linkedDirectory: materialized?.linkedDirectory,
       navigation,
       now: this.now(),
       preferences,
       project,
       threadId: started.threadId,
-      workMode: options.workMode,
+      worktreePath: materialized?.linkedDirectory?.worktreePath,
+      workMode: materialized?.workMode ?? options.workMode,
     });
     await this.options.store.deleteBrowseSession(bundle.session.id);
     await this.startPreparedInput({
@@ -5451,7 +5473,11 @@ function newThreadOptionsForSession(
   directory: NavigationDirectorySummary | undefined,
   streamingResponsesDefault: boolean,
 ): NewThreadOptionsSummary {
-  const workMode = session.workMode ?? navigation.launchpadDefaults.workMode ?? "local";
+  const workMode =
+    session.workMode ??
+    directory?.launchpad?.workMode ??
+    navigation.launchpadDefaults.workMode ??
+    "local";
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
   return {
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
@@ -6043,12 +6069,14 @@ function navigationWithStartedThread(params: {
   backend: AppServerBackendKind;
   directory?: NavigationDirectorySummary;
   executionMode?: ThreadExecutionMode;
+  linkedDirectory?: LinkedDirectorySummary;
   navigation: NavigationSnapshot;
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
   threadId: ThreadIdentifier;
-  workMode?: LaunchpadWorkMode;
+  worktreePath?: string;
+  workMode: LaunchpadWorkMode;
 }): NavigationSnapshot {
   const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
   if (
@@ -6061,12 +6089,12 @@ function navigationWithStartedThread(params: {
 
   const directoryPath = params.directory?.path ?? params.project.path;
   const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
-    ? {
+    ? params.linkedDirectory ?? {
         id: params.directory?.key ?? directoryPath,
-        kind: params.workMode === "worktree" ? "worktree" : "local",
+        kind: params.workMode === "worktree" && params.worktreePath ? "worktree" : "local",
         label: params.directory?.label ?? params.project.label,
         path: directoryPath,
-        ...(params.workMode === "worktree" ? { worktreePath: directoryPath } : {}),
+        ...(params.worktreePath ? { worktreePath: params.worktreePath } : {}),
       }
     : undefined;
 
@@ -6114,6 +6142,60 @@ function navigationWithStartedThread(params: {
       ? params.navigation.inboxThreadKeys
       : [threadKey, ...params.navigation.inboxThreadKeys],
   };
+}
+
+function launchpadForMessagingProject(params: {
+  branchName: string;
+  directory?: NavigationDirectorySummary;
+  navigation: NavigationSnapshot;
+  now: number;
+  preferences?: MessagingBrowseSessionRecord["preferences"];
+  project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
+  workMode: LaunchpadWorkMode;
+}): NavigationLaunchpadDraft {
+  const defaults = params.navigation.launchpadDefaults;
+  const directoryPath = params.directory?.path ?? params.project.path;
+  const base: NavigationLaunchpadDraft = params.directory?.launchpad ?? {
+    directoryKey:
+      params.directory?.key ??
+      params.project.directoryKey ??
+      params.project.path ??
+      params.project.label,
+    directoryKind: params.directory?.kind ?? "directory",
+    directoryLabel: params.directory?.label ?? params.project.label,
+    directoryPath,
+    backend: defaults.backend,
+    executionMode: defaults.executionMode,
+    model: defaults.model,
+    reasoningEffort: defaults.reasoningEffort,
+    serviceTier: defaults.serviceTier,
+    fastMode: defaults.fastMode,
+    prompt: "",
+    workMode: params.workMode,
+    branchName: params.branchName,
+    createdAt: params.now,
+    updatedAt: params.now,
+  };
+
+  return {
+    ...base,
+    backend: base.backend,
+    executionMode: params.preferences?.executionMode ?? base.executionMode,
+    model: params.preferences?.model ?? base.model,
+    reasoningEffort: params.preferences?.reasoningEffort ?? base.reasoningEffort,
+    serviceTier: params.preferences?.serviceTier ?? base.serviceTier,
+    fastMode: params.preferences?.fastMode ?? base.fastMode,
+    prompt: "",
+    workMode: params.workMode,
+    branchName: params.branchName,
+    updatedAt: params.now,
+  };
+}
+
+function messagingLaunchpadMaterializationKey(
+  session: MessagingBrowseSessionRecord,
+): string {
+  return `messaging:${session.id}`;
 }
 
 function parseTextCommand(text: string): string | undefined {

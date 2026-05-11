@@ -8,6 +8,7 @@ import type {
   CancelThreadExecutionModeQueueRequest,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
   MessagingToolUpdateMode,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
@@ -146,6 +147,7 @@ describe("MessagingController", () => {
     );
 
     expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toBeUndefined();
@@ -173,15 +175,23 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
-    expect(harness.startThread).toHaveBeenCalledWith({
-      backend: "codex",
-      cwd: "/repo/pwragent",
-      executionMode: "default",
-      fastMode: undefined,
-      model: undefined,
-      reasoningEffort: undefined,
-      serviceTier: undefined,
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "codex",
+        directoryKey: "directory:pwragent",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        executionMode: "default",
+        fastMode: undefined,
+        model: undefined,
+        prompt: "",
+        reasoningEffort: undefined,
+        serviceTier: undefined,
+        workMode: "local",
+      }),
     });
+    expect(harness.startThread).not.toHaveBeenCalled();
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: "codex",
@@ -338,16 +348,17 @@ describe("MessagingController", () => {
     );
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug in a worktree"));
 
-    expect(harness.startThread).toHaveBeenCalledWith({
-      backend: "codex",
-      cwd: "/repo/pwragent",
-      executionMode: "default",
-      fastMode: undefined,
-      model: undefined,
-      reasoningEffort: undefined,
-      serviceTier: undefined,
-      workMode: "worktree",
-      branchName: "release/v2",
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "codex",
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        executionMode: "default",
+        workMode: "worktree",
+        branchName: "release/v2",
+      }),
     });
   });
 
@@ -427,6 +438,40 @@ describe("MessagingController", () => {
     );
   });
 
+  it("uses the materialized worktree path in the optimistic status for messaging-started threads", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeLaunchpadNavigationSnapshot());
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        directoryKey: "directory:pwragent",
+        directoryPath: "/repo/pwragent",
+        workMode: "worktree",
+      }),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Directory: /repo/pwragent"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Worktree: /repo/pwragent/.worktrees/new-thread-1"),
+    });
+  });
+
   it("cancels a pending new-thread prompt without creating a thread", async () => {
     const harness = await createHarness();
 
@@ -448,6 +493,7 @@ describe("MessagingController", () => {
     );
 
     expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
@@ -507,6 +553,7 @@ describe("MessagingController", () => {
     );
 
     expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
       prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
@@ -531,26 +578,30 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("First prompt chunk"));
     await harness.controller.handleInboundEvent(buildTextEvent("second prompt chunk"));
     expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
 
     await new Promise((resolve) => setTimeout(resolve, 25));
 
-    expect(harness.startThread).toHaveBeenCalledTimes(1);
-    expect(harness.startTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "codex",
-        threadId: "new-thread-1",
-        input: [
-          {
-            type: "text",
-            text: "First prompt chunk",
-          },
-          {
-            type: "text",
-            text: "second prompt chunk",
-          },
-        ],
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(harness.startThread).not.toHaveBeenCalled();
+      expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+      expect(harness.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "new-thread-1",
+          input: [
+            {
+              type: "text",
+              text: "First prompt chunk",
+            },
+            {
+              type: "text",
+              text: "second prompt chunk",
+            },
+          ],
+        }),
+      );
+    });
   });
 
   it("surfaces debounced new-thread creation failures", async () => {
@@ -562,7 +613,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       inputDebounceMs: 10,
       logger,
-      startThread: async () => {
+      materializeDirectoryLaunchpad: async () => {
         throw new Error("backend unavailable");
       },
     });
@@ -581,9 +632,11 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("Fix bug"));
 
     expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
     await new Promise((resolve) => setTimeout(resolve, 25));
 
-    expect(harness.startThread).toHaveBeenCalledTimes(1);
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
     expect(harness.startTurn).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
@@ -5121,6 +5174,9 @@ async function createHarness(options?: {
   channel?: MessagingChannelKind;
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  materializeDirectoryLaunchpad?: NonNullable<
+    MessagingBackendBridge["materializeDirectoryLaunchpad"]
+  >;
   streamingResponsesDefault?: boolean;
   /**
    * Set to `false` to construct the controller WITHOUT an
@@ -5143,6 +5199,7 @@ async function createHarness(options?: {
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
   listBackends: ReturnType<typeof vi.fn>;
+  materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
@@ -5194,6 +5251,28 @@ async function createHarness(options?: {
         backend: request.backend,
         threadId: "new-thread-1",
         executionMode: request.executionMode ?? "default",
+      })),
+  );
+  const materializeDirectoryLaunchpad = vi.fn(
+    options?.materializeDirectoryLaunchpad ??
+      (async (
+        request: MaterializeDirectoryLaunchpadRequest,
+      ) => ({
+        backend: request.launchpad?.backend ?? "codex",
+        threadId: "new-thread-1",
+        executionMode: request.launchpad?.executionMode ?? "default",
+        ...(request.launchpad?.workMode === "worktree"
+          ? {
+              linkedDirectory: {
+                id: request.launchpad.directoryKey,
+                kind: "worktree" as const,
+                label: request.launchpad.directoryLabel,
+                path: request.launchpad.directoryPath ?? request.launchpad.directoryKey,
+                worktreePath: "/repo/pwragent/.worktrees/new-thread-1",
+              },
+            }
+          : {}),
+        workMode: request.launchpad?.workMode ?? "local",
       })),
   );
   const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -5307,6 +5386,7 @@ async function createHarness(options?: {
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
     listBackends,
+    materializeDirectoryLaunchpad,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
@@ -5350,6 +5430,7 @@ async function createHarness(options?: {
     handoffThreadWorkspace,
     interruptTurn,
     listBackends,
+    materializeDirectoryLaunchpad,
     onBindingChanged,
     readThreadStatus,
     recordMessagingBindingTransition,
@@ -5465,6 +5546,26 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
     },
   };
+}
+
+function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.directories[0] = {
+    ...snapshot.directories[0]!,
+    launchpad: {
+      directoryKey: "directory:pwragent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/repo/pwragent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+  };
+  return snapshot;
 }
 
 function buildLocalHandoffNavigationSnapshot(): NavigationSnapshot {

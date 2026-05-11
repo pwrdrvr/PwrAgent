@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerMcpElicitationResponse,
   AppServerNotification,
+  LinkedDirectorySummary,
   ThreadExecutionMode,
   AppServerReviewDelivery,
   AppServerReviewTarget,
@@ -280,6 +281,7 @@ export type MaterializeDirectoryLaunchpadResponse = {
   threadId: ThreadIdentifier;
   turnId?: string;
   executionMode: ThreadExecutionMode;
+  linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
 };
 
