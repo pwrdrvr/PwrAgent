@@ -46,6 +46,7 @@ type TranscriptListProps = {
   activeTurnStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<DesktopApi, "openApplication">;
+  directoryPaths?: string[];
   entries: AppServerThreadEntry[];
   error?: string;
   loading: boolean;
@@ -708,6 +709,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   key={item.id}
                   applications={props.applications}
                   collapsible={item.collapsible}
+                  directoryPaths={props.directoryPaths}
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
@@ -735,6 +737,7 @@ export function TranscriptList(props: TranscriptListProps) {
               <TranscriptReview
                 key={entry.id}
                 applications={props.applications}
+                directoryPaths={props.directoryPaths}
                 desktopApi={props.desktopApi}
                 entry={entry}
               />

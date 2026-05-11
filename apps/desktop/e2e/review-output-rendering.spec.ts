@@ -49,6 +49,11 @@ test("renders captured Codex review findings once in the review card", async () 
 
     const reviewCard = transcript.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toBeVisible();
+    const reviewTime = reviewCard.locator("time").first();
+    await expect(reviewTime).toBeVisible();
+    const reviewTimeBox = await reviewTime.boundingBox();
+    expect(reviewTimeBox).not.toBeNull();
+    expect(reviewTimeBox!.height).toBeLessThanOrEqual(18);
     await expect(reviewCard).toContainText(
       "The thread draft preservation path fixes the covered scenario"
     );
@@ -57,6 +62,9 @@ test("renders captured Codex review findings once in the review card", async () 
       "Preserve async pasted images for launchpad scopes"
     );
     await expect(reviewCard).toContainText("features/composer/Composer.tsx");
+    await expect(reviewCard).not.toContainText(
+      "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moja6ucz"
+    );
     await expect(reviewCard).toContainText("Lines 971-979");
 
     await expect(
@@ -67,6 +75,63 @@ test("renders captured Codex review findings once in the review card", async () 
     ).toHaveCount(1);
     await expect(transcript.getByText("Review changes against main")).toHaveCount(1);
     await expect(transcript.getByText("changes against 'main'")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("wraps unstripped long review paths and strips paths inside the thread directory", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/review-path-wrapping/replay.fixture.json"
+    ),
+    windowSize: {
+      width: 900,
+      height: 720,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Review path wrapping/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Review path wrapping",
+      })
+    ).toBeVisible();
+
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const reviewCard = transcript.getByRole("group", { name: "Code review" }).last();
+    await expect(reviewCard).toBeVisible();
+    await expect(reviewCard).toContainText(
+      "apps/desktop/src/renderer/src/features/composer/Composer.tsx"
+    );
+    await expect(reviewCard).not.toContainText(
+      "/Users/huntharo/work/PwrAgent/apps/desktop"
+    );
+
+    const outsidePathLink = reviewCard.getByRole("link", {
+      name: /OutsideRepositoryPathWithAnExcessivelyLongSingleFilenameSegment/,
+    });
+    await expect(outsidePathLink).toBeVisible();
+    await expect(outsidePathLink).toHaveAttribute(
+      "href",
+      /\/Volumes\/ExternalReviewArchive\//
+    );
+
+    const linkBox = await outsidePathLink.boundingBox();
+    const cardBox = await reviewCard.boundingBox();
+    expect(linkBox).not.toBeNull();
+    expect(cardBox).not.toBeNull();
+    expect(linkBox!.height).toBeGreaterThan(24);
+    expect(linkBox!.x + linkBox!.width).toBeLessThanOrEqual(
+      cardBox!.x + cardBox!.width + 1
+    );
   } finally {
     await app.close();
   }

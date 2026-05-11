@@ -14,6 +14,7 @@ import { TranscriptReview } from "./TranscriptReview";
 type TranscriptWorkPhaseGroupProps = {
   applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
+  directoryPaths?: string[];
   desktopApi?: Pick<DesktopApi, "openApplication">;
   entries: AppServerThreadEntry[];
   expanded: boolean;
@@ -36,6 +37,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
       {props.entries.map((entry) =>
         renderEntry({
           applications: props.applications,
+          directoryPaths: props.directoryPaths,
           desktopApi: props.desktopApi,
           entry,
           onOpenImage: props.onOpenImage,
@@ -72,6 +74,7 @@ TranscriptWorkPhaseGroup.displayName = "TranscriptWorkPhaseGroup";
 
 function renderEntry(params: {
   applications?: DesktopApplicationsSnapshot;
+  directoryPaths?: string[];
   desktopApi?: Pick<DesktopApi, "openApplication">;
   entry: AppServerThreadEntry;
   skills: AppServerSkillSummary[];
@@ -91,6 +94,7 @@ function renderEntry(params: {
     <TranscriptReview
       key={entry.id}
       applications={params.applications}
+      directoryPaths={params.directoryPaths}
       desktopApi={params.desktopApi}
       entry={entry}
     />

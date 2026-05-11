@@ -558,6 +558,78 @@ function normalizeTranscriptText(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
+function isPlainReviewFindingText(text: string): boolean {
+  return (
+    /\b(?:full\s+)?review comments?:/i.test(text) &&
+    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
+  );
+}
+
+function shouldUseAssistantReviewText(params: {
+  assistantText: string;
+  reviewText: string;
+}): boolean {
+  if (!isPlainReviewFindingText(params.assistantText)) {
+    return false;
+  }
+
+  const normalizedAssistant = normalizeTranscriptText(params.assistantText);
+  const normalizedReview = normalizeTranscriptText(params.reviewText);
+  return (
+    !normalizedReview ||
+    normalizedAssistant === normalizedReview ||
+    normalizedAssistant.startsWith(normalizedReview) ||
+    normalizedAssistant.includes(normalizedReview)
+  );
+}
+
+function coalesceReviewAssistantMessages(
+  entries: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  const output: AppServerThreadEntry[] = [];
+
+  for (const entry of entries) {
+    if (
+      entry.type === "message" &&
+      entry.role === "assistant" &&
+      shouldUseAssistantReviewText({
+        assistantText: entry.text,
+        reviewText: "",
+      })
+    ) {
+      const matchingReviewIndex = output.findLastIndex((candidate) => {
+        if (candidate.type !== "review") {
+          return false;
+        }
+        if (
+          entry.turn?.id &&
+          candidate.turn?.id &&
+          entry.turn.id !== candidate.turn.id
+        ) {
+          return false;
+        }
+        return shouldUseAssistantReviewText({
+          assistantText: entry.text,
+          reviewText: candidate.review,
+        });
+      });
+
+      if (matchingReviewIndex !== -1) {
+        const reviewEntry = output[matchingReviewIndex] as AppServerThreadReviewEntry;
+        output[matchingReviewIndex] = {
+          ...reviewEntry,
+          review: entry.text,
+        };
+        continue;
+      }
+    }
+
+    output.push(entry);
+  }
+
+  return output;
+}
+
 function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
   const output = new Set<string>();
   for (const entry of entries) {
@@ -2847,9 +2919,10 @@ export function useThreadSessionState(params: {
         selectedSession?.response?.replay.entries ?? [],
         visibleOptimisticEntries
       );
+      const coalescedEntries = coalesceReviewAssistantMessages(mergedEntries);
       return suppressReviewDuplicateMessages(
-        mergedEntries,
-        reviewResultTexts(mergedEntries)
+        coalescedEntries,
+        reviewResultTexts(coalescedEntries)
       );
     },
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries]

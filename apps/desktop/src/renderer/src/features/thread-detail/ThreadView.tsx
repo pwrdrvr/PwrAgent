@@ -1577,6 +1577,7 @@ export function ThreadView(props: ThreadViewProps) {
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
               applications={props.applications}
+              directoryPaths={threadDirectoryPaths(selectedThread!)}
               desktopApi={props.desktopApi}
               error={props.transcriptError}
               loading={props.loading}
@@ -1968,4 +1969,15 @@ function formatDirectorySync(directory: NavigationDirectorySummary): string | un
   }
 
   return undefined;
+}
+
+function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
+  const linkedDirectoryPaths = thread.linkedDirectories.flatMap((directory) => {
+    const paths = [directory.path];
+    if (directory.worktreePath && directory.worktreePath !== directory.path) {
+      paths.push(directory.worktreePath);
+    }
+    return paths;
+  });
+  return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
 }

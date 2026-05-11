@@ -3,12 +3,14 @@ import type {
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
 } from "@pwragent/shared";
+import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
+  directoryPaths?: string[];
   desktopApi?: Pick<DesktopApi, "openApplication">;
   entry: AppServerThreadReviewEntry;
 };
@@ -21,14 +23,33 @@ function formatConfidence(value: number | undefined): string | undefined {
   return `${Math.round(value * 100)}% confidence`;
 }
 
-function formatPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const parts = normalized.split("/").filter(Boolean);
-  return parts.slice(-3).join("/") || path;
+function formatPath(path: string, directoryPaths: string[] | undefined): string {
+  const normalized = normalizePath(path);
+  const matchingDirectory = normalizedDirectoryPaths(directoryPaths)
+    .filter(
+      (directoryPath) =>
+        normalized === directoryPath || normalized.startsWith(`${directoryPath}/`)
+    )
+    .sort((left, right) => right.length - left.length)[0];
+
+  if (!matchingDirectory) {
+    return normalized || path;
+  }
+
+  return normalized.slice(matchingDirectory.length).replace(/^\//, "") || normalized;
 }
 
 function priorityLabel(priority: number | undefined): string {
   return typeof priority === "number" ? `P${priority}` : "P?";
+}
+
+function priorityClassName(priority: number | undefined): string {
+  const normalizedPriority =
+    typeof priority === "number" && priority >= 0 && priority <= 3
+      ? `p${priority}`
+      : "unknown";
+
+  return `transcript-review__priority transcript-review__priority--${normalizedPriority}`;
 }
 
 function shouldHideReviewBody(summary: string, review: string): boolean {
@@ -99,6 +120,34 @@ function parsePlainReview(review: string): {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
+  const editorApplication = useMemo(
+    () =>
+      props.applications?.editors.find(
+        (application) =>
+          application.canOpenWorkspace &&
+          application.id === props.applications?.preferredEditorId.value
+      ) ?? props.applications?.editors.find((application) => application.canOpenWorkspace),
+    [props.applications]
+  );
+  const openLocalFile = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, targetPath: string): void => {
+      if (!editorApplication || !props.desktopApi?.openApplication) {
+        return;
+      }
+
+      event.preventDefault();
+      void props.desktopApi
+        .openApplication({
+          applicationId: editorApplication.id,
+          kind: "editor",
+          targetPath,
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to open review file link", error);
+        });
+    },
+    [editorApplication, props.desktopApi]
+  );
   const output = props.entry.output;
   const plainReview = output ? undefined : parsePlainReview(props.entry.review);
   const findings = output?.findings ?? plainReview?.findings ?? [];
@@ -172,13 +221,15 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
             const range = finding.code_location.line_range;
+            const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
+            const displayPath = formatPath(absoluteFilePath, props.directoryPaths);
             return (
               <li
                 className="transcript-review__finding"
                 key={`${finding.code_location.absolute_file_path}:${range.start}:${index}`}
               >
                 <div className="transcript-review__finding-head">
-                  <span className="transcript-review__priority">
+                  <span className={priorityClassName(finding.priority)}>
                     {priorityLabel(finding.priority)}
                   </span>
                   <span className="transcript-review__finding-title">
@@ -192,8 +243,19 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   text={finding.body}
                 />
                 <div className="transcript-review__location">
-                  <span>{formatPath(finding.code_location.absolute_file_path)}</span>
-                  <span>
+                  <a
+                    className="transcript-review__location-path"
+                    href={fileHref(absoluteFilePath, range.start)}
+                    onClick={(event) => {
+                      openLocalFile(event, absoluteFilePath);
+                    }}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                    title={`${absoluteFilePath}:${range.start}`}
+                  >
+                    {displayPath}
+                  </a>
+                  <span className="transcript-review__location-line">
                     {range.start === range.end
                       ? `Line ${range.start}`
                       : `Lines ${range.start}-${range.end}`}
@@ -208,4 +270,22 @@ export function TranscriptReview(props: TranscriptReviewProps) {
       ) : null}
     </aside>
   );
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function normalizedDirectoryPaths(paths: string[] | undefined): string[] {
+  return (paths ?? [])
+    .map((path) => normalizePath(path))
+    .filter((path) => path.startsWith("/"));
+}
+
+function fileHref(path: string, line: number): string {
+  const encodedPath = path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `file://${encodedPath}:${line}`;
 }

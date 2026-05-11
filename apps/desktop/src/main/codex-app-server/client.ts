@@ -926,6 +926,31 @@ function isReviewActionText(text: string): boolean {
   return text.includes("<user_action>") && text.includes("<action>review</action>");
 }
 
+function isPlainReviewFindingText(text: string): boolean {
+  return (
+    /\b(?:full\s+)?review comments?:/i.test(text) &&
+    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
+  );
+}
+
+function shouldUseAssistantReviewText(params: {
+  assistantText: string;
+  reviewText: string;
+}): boolean {
+  if (!isPlainReviewFindingText(params.assistantText)) {
+    return false;
+  }
+
+  const normalizedAssistant = normalizeSuppressionText(params.assistantText);
+  const normalizedReview = normalizeSuppressionText(params.reviewText);
+  return (
+    !normalizedReview ||
+    normalizedAssistant === normalizedReview ||
+    normalizedAssistant.startsWith(normalizedReview) ||
+    normalizedAssistant.includes(normalizedReview)
+  );
+}
+
 function isCodexInternalReviewPrompt(
   record: Record<string, unknown>,
   text: string
@@ -958,6 +983,16 @@ function collectReviewSuppressionTexts(value: unknown): Set<string> {
     const record = asRecord(node);
     if (!record) {
       return;
+    }
+
+    const role = normalizeConversationRole(
+      pickString(record, ["role", "author", "speaker", "source", "type"])
+    );
+    if (role === "assistant") {
+      const text = collectLegacyMessageText(record);
+      if (isPlainReviewFindingText(text)) {
+        output.add(normalizeSuppressionText(text));
+      }
     }
 
     const reviewOutput = normalizeReviewOutput(record);
@@ -994,6 +1029,33 @@ function collectReviewSuppressionTexts(value: unknown): Set<string> {
   };
 
   visit(value);
+  return output;
+}
+
+function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const role = normalizeConversationRole(
+      pickString(item, ["role", "author", "speaker", "source", "type"])
+    );
+    if (role !== "assistant") {
+      continue;
+    }
+
+    const text = buildMessageContent(item).text;
+    if (!isPlainReviewFindingText(text)) {
+      continue;
+    }
+
+    const key = normalizeSuppressionText(text);
+    if (!seen.has(key)) {
+      seen.add(key);
+      output.push(text);
+    }
+  }
+
   return output;
 }
 
@@ -2320,7 +2382,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
+    const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
+    for (const text of assistantReviewTexts) {
+      suppressedAssistantTexts.add(normalizeSuppressionText(text));
+    }
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {
@@ -2373,7 +2439,23 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const reviewEntry = extractReviewEntryFromItem(item, createdAt, turnMetadata);
       if (reviewEntry) {
         flushActivityItems();
-        entries.push(reviewEntry);
+        const assistantReviewText =
+          reviewEntry.displayText === undefined
+            ? assistantReviewTexts.find((text) =>
+                shouldUseAssistantReviewText({
+                  assistantText: text,
+                  reviewText: reviewEntry.review,
+                })
+              )
+            : undefined;
+        entries.push(
+          assistantReviewText
+            ? {
+                ...reviewEntry,
+                review: assistantReviewText,
+              }
+            : reviewEntry
+        );
         continue;
       }
 
