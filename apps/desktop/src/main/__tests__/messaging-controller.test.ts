@@ -628,12 +628,21 @@ describe("MessagingController", () => {
     });
   });
 
-  it("pins the Workspaces Scratchpad first when choosing a project for a new thread", async () => {
+  it("pins the Workspaces Scratchpad first without listing duplicate workspace roots", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.directories = [
       {
         ...navigation.directories[0]!,
         latestUpdatedAt: 9_000,
+      },
+      {
+        key: "workspace:/Users/test/.pwragent/profiles/default/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:profile-scratchpad-1", "codex:profile-scratchpad-2"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 8_500,
       },
       {
         key: "workspace:/Users/test/.pwragent/projects",
@@ -668,11 +677,11 @@ describe("MessagingController", () => {
     ).toEqual([
       expect.objectContaining({
         id: "browse:select-project",
-        label: "1. Workspaces Scratchpad (1)",
+        label: "1. Workspaces Scratchpad (3)",
         value: {
-          directoryKey: "workspace:/Users/test/.pwragent/projects",
+          directoryKey: "workspace:/Users/test/.pwragent/profiles/default/projects",
           label: "Workspaces Scratchpad",
-          path: "/Users/test/.pwragent/projects",
+          path: "/Users/test/.pwragent/profiles/default/projects",
         },
       }),
       expect.objectContaining({

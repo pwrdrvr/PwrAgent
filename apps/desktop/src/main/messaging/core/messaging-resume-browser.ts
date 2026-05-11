@@ -336,7 +336,12 @@ function projectsForSession(
   session: MessagingBrowseSessionRecord,
 ): NavigationDirectorySummary[] {
   const query = session.query?.trim().toLowerCase();
-  return [...navigation.directories]
+  const directories =
+    session.launchAction === "start_new_thread"
+      ? collapseWorkspaceScratchpadDirectories(navigation.directories)
+      : navigation.directories;
+
+  return [...directories]
     .filter((directory) => {
       if (!query) {
         return true;
@@ -361,6 +366,45 @@ function projectsForSession(
       const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
       return updatedDelta !== 0 ? updatedDelta : left.label.localeCompare(right.label);
     });
+}
+
+function collapseWorkspaceScratchpadDirectories(
+  directories: NavigationDirectorySummary[],
+): NavigationDirectorySummary[] {
+  const scratchpads = directories.filter(isWorkspaceScratchpadDirectory);
+  if (scratchpads.length <= 1) {
+    return directories;
+  }
+
+  const preferred = [...scratchpads].sort(compareWorkspaceScratchpadPreference)[0]!;
+  const threadKeys = new Set<string>();
+  let needsAttentionCount = 0;
+  let latestUpdatedAt = 0;
+  for (const scratchpad of scratchpads) {
+    for (const threadKey of scratchpad.threadKeys) {
+      threadKeys.add(threadKey);
+    }
+    needsAttentionCount += scratchpad.needsAttentionCount;
+    latestUpdatedAt = Math.max(latestUpdatedAt, scratchpad.latestUpdatedAt ?? 0);
+  }
+
+  return [
+    {
+      ...preferred,
+      threadKeys: [...threadKeys],
+      needsAttentionCount,
+      latestUpdatedAt,
+    },
+    ...directories.filter((directory) => !isWorkspaceScratchpadDirectory(directory)),
+  ];
+}
+
+function compareWorkspaceScratchpadPreference(
+  left: NavigationDirectorySummary,
+  right: NavigationDirectorySummary,
+): number {
+  const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+  return updatedDelta !== 0 ? updatedDelta : left.key.localeCompare(right.key);
 }
 
 function isWorkspaceScratchpadDirectory(directory: NavigationDirectorySummary): boolean {
