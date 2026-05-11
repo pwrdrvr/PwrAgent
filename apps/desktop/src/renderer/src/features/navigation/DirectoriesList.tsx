@@ -139,10 +139,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   };
 
-  const dropThreadIntoDirectoryPins = (
+  const dropThreadAfterDirectoryPins = (
     directory: NavigationDirectorySummary,
     draggedKey: string,
-    position: "start" | "end",
   ): void => {
     if (!directory.threadKeys.includes(draggedKey)) return;
 
@@ -154,10 +153,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directory,
       draggedThread.source,
     );
-    const targetKey =
-      position === "start"
-        ? directoryPinnedThreadKeys[0]
-        : directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
+    const targetKey = directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
 
     if (!targetKey) {
       if (backendPinnedThreadKeys.includes(draggedKey)) return;
@@ -169,7 +165,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       directory,
       draggedKey,
       targetKey,
-      position === "start" ? "before" : "after",
+      "after",
     );
   };
 
@@ -312,25 +308,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <div className="directory-row__details">
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
-                    <div
-                      className="directory-row__pin-zone"
-                      role="separator"
-                      aria-label={`Pinned threads for ${directory.label}`}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        dropThreadIntoDirectoryPins(
-                          directory,
-                          event.dataTransfer.getData("text/plain"),
-                          "start",
-                        );
-                      }}
-                    >
-                      <span>Pinned threads</span>
-                    </div>
-
                     {directoryPinnedThreads.map((thread) => {
                       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
                       return (
@@ -382,7 +359,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       );
                     })}
 
-                    {directoryPinnedThreads.length > 0 ? (
+                    {directoryPinnedThreads.length > 0 &&
+                    directoryUnpinnedThreads.length > 0 ? (
                       <div
                         className="recents-pinned-divider directory-row__thread-divider"
                         role="separator"
@@ -392,10 +370,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         }}
                         onDrop={(event) => {
                           event.preventDefault();
-                          dropThreadIntoDirectoryPins(
+                          dropThreadAfterDirectoryPins(
                             directory,
                             event.dataTransfer.getData("text/plain"),
-                            "end",
                           );
                         }}
                       >

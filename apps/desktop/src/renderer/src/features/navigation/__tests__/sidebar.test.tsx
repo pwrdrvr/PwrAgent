@@ -651,13 +651,13 @@ describe("Sidebar", () => {
     );
 
     const directoryThreads = screen
-      .getByRole("separator", { name: "Pinned threads for PwrAgent" })
+      .getByRole("separator", { name: "Directory threads for PwrAgent" })
       .closest(".directory-row__threads") as HTMLElement;
     expect(
-      within(directoryThreads).getByRole("separator", {
-        name: "Directory threads for PwrAgent",
+      screen.queryByRole("separator", {
+        name: "Pinned threads for PwrAgent",
       }),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
 
     const rows = within(directoryThreads).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
@@ -667,7 +667,39 @@ describe("Sidebar", () => {
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
   });
 
-  it("pins a same-directory thread by dropping it into that directory pin area", () => {
+  it("does not render a directory pin divider when no directory threads are pinned", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("separator", {
+        name: "Directory threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("pins a same-directory thread by dropping it on the directory divider", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -699,22 +731,23 @@ describe("Sidebar", () => {
     );
 
     fireEvent.drop(
-      screen.getByRole("separator", { name: "Pinned threads for PwrAgent" }),
+      screen.getByRole("separator", { name: "Directory threads for PwrAgent" }),
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
 
     expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
-      "thread-1",
       "thread-updated",
+      "thread-1",
     ]);
   });
 
-  it("ignores attempts to drop a thread into another directory pin area", () => {
+  it("ignores attempts to drop a thread on another directory pin divider", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
-    const projectBThread = {
+    const projectBPinnedThread = {
       ...sharedThread,
-      id: "thread-project-b",
-      title: "Project B setup",
+      id: "thread-project-b-pinned",
+      title: "Project B pinned setup",
+      pinnedRank: "2048",
       linkedDirectories: [
         {
           id: "dir-b",
@@ -724,14 +757,20 @@ describe("Sidebar", () => {
         },
       ],
     };
+    const projectBUnpinnedThread = {
+      ...projectBPinnedThread,
+      id: "thread-project-b-unpinned",
+      title: "Project B setup",
+      pinnedRank: undefined,
+    };
     const projectBDirectory: NavigationDirectorySummary = {
       key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
       kind: "directory",
       label: "ProjectB",
       path: "/Users/huntharo/pwrdrvr/ProjectB",
-      threadKeys: ["codex:thread-project-b"],
+      threadKeys: ["codex:thread-project-b-pinned", "codex:thread-project-b-unpinned"],
       needsAttentionCount: 0,
-      latestUpdatedAt: projectBThread.updatedAt,
+      latestUpdatedAt: projectBPinnedThread.updatedAt,
     };
 
     render(
@@ -745,7 +784,7 @@ describe("Sidebar", () => {
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
-        threads={[sharedThread, projectBThread]}
+        threads={[sharedThread, projectBPinnedThread, projectBUnpinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -761,7 +800,7 @@ describe("Sidebar", () => {
 
     fireEvent.click(projectBSummary!);
     fireEvent.drop(
-      screen.getByRole("separator", { name: "Pinned threads for ProjectB" }),
+      screen.getByRole("separator", { name: "Directory threads for ProjectB" }),
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
 
