@@ -1071,6 +1071,7 @@ export class DesktopBackendRegistry {
     Promise<MessagingArchiveCleanupResult>
   >();
   private readonly archivedMessagingCleanupCompleted = new Set<string>();
+  private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
@@ -1466,6 +1467,10 @@ export class DesktopBackendRegistry {
           )
         : await this.restoreWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
+    this.clearArchivedMessagingCleanupCache({
+      backend,
+      threadId: result.threadId,
+    });
 
     return {
       backend,
@@ -3163,6 +3168,12 @@ export class DesktopBackendRegistry {
             origin: "thread-archive",
           });
         }
+        if (notification.method === "thread/unarchived") {
+          this.clearArchivedMessagingCleanupCache({
+            backend,
+            threadId: notification.params.threadId,
+          });
+        }
         await this.emit({ backend, notification });
       }),
     );
@@ -3388,7 +3399,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     origin: "state-refresh" | "thread-archive";
   }): Promise<MessagingArchiveCleanupResult> {
-    const key = `${params.backend}:${params.threadId}`;
+    const key = this.archivedMessagingCleanupKey(params);
     const existing = this.archivedMessagingCleanupInFlight.get(key);
     if (existing) {
       return await existing;
@@ -3397,9 +3408,13 @@ export class DesktopBackendRegistry {
       return { pendingIntentCount: 0, revokedCount: 0 };
     }
 
+    const generation = this.archivedMessagingCleanupGeneration.get(key) ?? 0;
     const cleanup = this.runMessagingCleanupForArchivedThread(params)
       .then((result) => {
-        if (result.pendingIntentCount > 0 || result.revokedCount > 0) {
+        if (
+          (this.archivedMessagingCleanupGeneration.get(key) ?? 0) === generation &&
+          (result.pendingIntentCount > 0 || result.revokedCount > 0)
+        ) {
           this.archivedMessagingCleanupCompleted.add(key);
         }
         return result;
@@ -3409,6 +3424,25 @@ export class DesktopBackendRegistry {
       });
     this.archivedMessagingCleanupInFlight.set(key, cleanup);
     return await cleanup;
+  }
+
+  private clearArchivedMessagingCleanupCache(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): void {
+    const key = this.archivedMessagingCleanupKey(params);
+    this.archivedMessagingCleanupCompleted.delete(key);
+    this.archivedMessagingCleanupGeneration.set(
+      key,
+      (this.archivedMessagingCleanupGeneration.get(key) ?? 0) + 1,
+    );
+  }
+
+  private archivedMessagingCleanupKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): string {
+    return `${params.backend}:${params.threadId}`;
   }
 
   private async runMessagingCleanupForArchivedThread(params: {

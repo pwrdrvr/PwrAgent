@@ -3178,6 +3178,94 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("clears archive messaging cleanup cache when a thread is restored", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me again",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/archive", "thread/unarchive"],
+      },
+      threads: [thread],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock({
+      notifiedCount: 1,
+      revokedCount: 1,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+    await registry.restoreThread({ backend: "codex", threadId: "thread-1" });
+    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+
+    expect(messagingArchiveCleaner.requests).toEqual([
+      { backend: "codex", threadId: "thread-1", origin: "thread-archive" },
+      { backend: "codex", threadId: "thread-1", origin: "thread-archive" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("clears archive messaging cleanup cache when an unarchive notification arrives", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me again",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const messagingStore = createMessagingArchiveCleanupStoreMock({
+      bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
+      pendingIntentIds: ["intent-approval"],
+    });
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock({
+      notifiedCount: 1,
+      revokedCount: 1,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      messagingArchiveCleaner,
+      messagingStore,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+    await codexClient.emit({
+      method: "thread/unarchived",
+      params: { threadId: "thread-1" },
+    });
+    await registry.archiveThread({ backend: "codex", threadId: "thread-1" });
+
+    expect(messagingArchiveCleaner.requests).toHaveLength(2);
+
+    await registry.close();
+  });
+
   it("cleans messaging state when archived threads are discovered by refresh", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-1",
