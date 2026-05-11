@@ -1738,11 +1738,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     try {
-      const typingTarget = this.typingTargetForActivity(target);
       if (intent.state === "active") {
-        await this.startTypingSignal(typingTarget, intent.leaseMs);
+        await this.startTypingSignal(target, intent.leaseMs);
       } else {
-        this.stopTypingSignal(typingTarget);
+        this.stopTypingSignal(target);
       }
       return {
         channel: this.channel,
@@ -1757,15 +1756,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         outcome: "failed",
       };
     }
-  }
-
-  private typingTargetForActivity(target: TelegramDeliveryTarget): TelegramDeliveryTarget {
-    return target.messageThreadId === TELEGRAM_GENERAL_TOPIC_THREAD_ID
-      ? {
-          ...target,
-          messageThreadId: undefined,
-        }
-      : target;
   }
 
   private async startTypingSignal(
