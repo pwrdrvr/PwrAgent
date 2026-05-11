@@ -1,8 +1,8 @@
 # Messaging Platform Integration
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram, Discord, Mattermost, or Slack user can choose a thread, bind
-the current conversation, and send free-form text into that thread. The
+allowlisted Telegram, Discord, Mattermost, Slack, Feishu/Lark, or LINE user can
+choose a thread, bind the current conversation, and send free-form text into that thread. The
 workflow logic is shared; the providers only own transport, formatting,
 callback handles, and platform limits.
 
@@ -50,8 +50,8 @@ Interactive actions can carry generic layout hints. Shared workflow code may
 request an automatic column count, explicit rows/columns, row breaks before or
 after an action, or a full-width action. Providers translate those hints into
 the closest native layout they support: Telegram inline keyboards can honor
-explicit row groupings, and Discord components use action rows with provider
-limits.
+explicit row groupings, Discord components use action rows with provider
+limits, and Feishu/Lark renders actions as interactive-card button modules.
 
 ## Workspace Handoff
 
@@ -265,6 +265,22 @@ Discord:
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
 - `PWRAGNT_MESSAGING_DISCORD_STREAMING_RESPONSES`
 
+Feishu / Lark:
+
+- `PWRAGENT_MESSAGING_FEISHU_APP_ID`
+- `PWRAGENT_MESSAGING_FEISHU_APP_SECRET`
+- `PWRAGENT_MESSAGING_FEISHU_TENANT_REGION` (`feishu` or `lark`)
+- `PWRAGENT_MESSAGING_FEISHU_TENANT_URL`
+- `PWRAGENT_MESSAGING_FEISHU_CALLBACK_BASE_URL`
+- `PWRAGENT_MESSAGING_FEISHU_VERIFICATION_TOKEN`
+- `PWRAGENT_MESSAGING_FEISHU_ENCRYPT_KEY`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_USER_IDS`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_CHATS`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_TENANTS`
+- `PWRAGENT_MESSAGING_FEISHU_SLASH_COMMAND_PREFIX`
+- `PWRAGENT_MESSAGING_FEISHU_REGISTER_SLASH_COMMANDS`
+- `PWRAGENT_MESSAGING_FEISHU_STREAMING_RESPONSES`
+
 LINE:
 
 - `PWRAGENT_MESSAGING_LINE_CHANNEL_ACCESS_TOKEN`
@@ -295,10 +311,40 @@ local migration fallbacks.
 
 The TOML equivalents are `streaming_responses = true` under a provider section,
 for example `[messaging.telegram]`, `[messaging.discord]`,
-`[messaging.mattermost]`, `[messaging.slack]`, or `[messaging.line]`. Providers default to `false`;
-the Settings > Messaging toggles and environment overrides expose the same
-booleans. Binding-level `Stream: On` can opt a single binding into
-streaming without changing the provider default.
+`[messaging.mattermost]`, `[messaging.slack]`, `[messaging.feishu]`, or
+`[messaging.line]`. Providers default to `false`; the Settings > Messaging
+toggles and environment overrides expose the same booleans. Binding-level
+`Stream: On` can opt a single binding into streaming without changing the
+provider default.
+
+## Feishu / Lark setup
+
+Feishu and Lark share the same Open Platform protocol. PwrAgent uses `feishu`
+as the code identifier and exposes the region choice in Settings: `Feishu`
+defaults to `https://open.feishu.cn`, while `Lark` defaults to
+`https://open.larksuite.com`.
+
+1. Create a Feishu / Lark custom app in the Open Platform console and enable
+   bot messaging permissions for sending and receiving IM messages.
+2. In PwrAgent Settings > Messaging > Feishu / Lark, store the App ID and App
+   Secret in Keychain. The connection test mints a tenant access token and
+   calls the app self-info endpoint.
+3. Configure event subscriptions in the Open Platform console. Point the
+   callback URL at your public tunnel, forwarding to PwrAgent's local callback
+   listener (`http://127.0.0.1:47823` by default).
+4. Store the Verification Token in Keychain. Plain callback events are rejected
+   if their token does not match. The Encryption Key field is reserved for
+   encrypted callback payloads and should match the platform console when you
+   enable encrypted events.
+5. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
+   (`oc_...`) or tenant keys for shared conversations; empty shared-surface
+   allowlists deny shared chat access.
+
+Feishu / Lark interactive cards carry only signed opaque callback handles in
+button values. The persisted handle record owns the action id, binding id,
+allowed actors, and routing state so buttons survive app restarts and fail
+closed after expiry. The v1 adapter uses direct Open Platform REST calls rather
+than the Node SDK so PwrAgent owns outbound rate-limit retry behavior.
 
 ## LINE setup
 

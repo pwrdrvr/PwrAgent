@@ -34,8 +34,9 @@ graph TB
         Discord["discord<br/>uses discord.js"]
         Mattermost["mattermost<br/>uses @mattermost/client<br/>+ HTTP callback listener"]
         Slack["slack<br/>uses @slack/web-api<br/>+ @slack/socket-mode"]
+        Feishu["feishu<br/>Feishu/Lark Open Platform REST<br/>+ webhook listener"]
         Line["line<br/>uses @line/bot-sdk<br/>+ signed webhook listener"]
-        Future["future:<br/>signal, feishu,<br/>matrix, …"]
+        Future["future:<br/>signal, matrix, …"]
     end
 
     subgraph Shared["packages/shared"]
@@ -48,6 +49,7 @@ graph TB
     Discord -->|implements adapter contract| Interface
     Mattermost -->|implements adapter contract| Interface
     Slack -->|implements adapter contract| Interface
+    Feishu -->|implements adapter contract| Interface
     Line -->|implements adapter contract| Interface
     Future -->|implements adapter contract| Interface
     Interface -->|imports app/nav types| Shared
