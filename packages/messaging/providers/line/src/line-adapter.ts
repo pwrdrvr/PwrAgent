@@ -159,7 +159,7 @@ export class LineAdapter implements LineProviderAdapter {
     actions: {
       maxActions: 13,
       maxActionsPerRow: 4,
-      maxRows: 4,
+      maxRows: 7,
       maxLabelLength: 20,
       supportsStyles: true,
       supportsDisabled: false,

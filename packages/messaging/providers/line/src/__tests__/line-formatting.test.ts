@@ -43,6 +43,37 @@ describe("LINE formatting", () => {
     );
   });
 
+  it("flows status-sized action sets into compact rows by default", () => {
+    const bubble = buildLineActionBubble({
+      actions: Array.from({ length: 13 }, (_, index) => ({
+        id: `status:${index}`,
+        label: `Action ${index + 1}`,
+      })),
+      buildPostbackData: () => signedLinePostbackData(),
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        actions: {
+          ...PERMISSIVE_CAPABILITY_PROFILE.actions!,
+          maxActions: 13,
+          maxActionsPerRow: 4,
+          maxRows: 7,
+          maxLabelLength: LINE_ACTION_LABEL_LIMIT,
+          maxCallbackPayloadBytes: 300,
+        },
+      },
+      title: "Status",
+    });
+
+    const rows = bubble?.contents.footer?.contents ?? [];
+    const buttonCount = rows.reduce((count, row) => {
+      return count + (row.type === "box" ? row.contents.length : 0);
+    }, 0);
+
+    expect(rows).toHaveLength(7);
+    expect(buttonCount).toBe(13);
+    expect(rows[0]?.type === "box" ? rows[0].contents : []).toHaveLength(2);
+  });
+
   it("requires postback button data to be opaque persisted handles", () => {
     expect(() =>
       buildLineActionBubble({

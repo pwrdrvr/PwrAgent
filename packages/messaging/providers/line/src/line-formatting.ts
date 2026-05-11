@@ -11,6 +11,7 @@ export const LINE_MESSAGE_TEXT_LIMIT = 5_000;
 export const LINE_POSTBACK_DATA_LIMIT_CHARS = 300;
 export const LINE_ACTION_LABEL_LIMIT = 20;
 export const LINE_QUICK_REPLY_ITEM_LIMIT = 13;
+const LINE_DEFAULT_ACTION_COLUMNS = 2;
 
 const LINE_POSTBACK_HANDLE_PATTERN = /^line:[A-Za-z0-9_-]{18}$/;
 const LINE_POSTBACK_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
@@ -129,7 +130,8 @@ export function buildLineActionBubble(params: {
   }
 
   const rows = layoutMessagingActionRows(items, {
-    defaultColumns: params.layout?.columns ?? 1,
+    defaultColumns: params.layout?.columns
+      ?? resolveLineDefaultActionColumns(items.length, maxColumns),
     maxColumns,
     maxRows,
   }).map((row) => ({
@@ -164,6 +166,13 @@ export function buildLineActionBubble(params: {
       },
     },
   };
+}
+
+function resolveLineDefaultActionColumns(actionCount: number, maxColumns: number): number {
+  if (actionCount <= 1) {
+    return 1;
+  }
+  return Math.min(LINE_DEFAULT_ACTION_COLUMNS, maxColumns);
 }
 
 export function textForLineIntent(intent: MessagingSurfaceIntent): string {
