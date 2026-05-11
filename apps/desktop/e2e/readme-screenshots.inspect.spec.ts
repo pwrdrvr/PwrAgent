@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication } from "@playwright/test";
@@ -447,82 +446,36 @@ async function navigateToTelegramPairing(
 }
 
 /**
- * Stitch a sequence of PNG frames into a looping GIF using ffmpeg.
- *
- * Frame timing is set via `-framerate` on the input — `0.4` fps means
- * each frame is shown for 1 / 0.4 = 2.5s before the next one. We
- * generate the GIF in two passes:
- *   1. `palettegen` — derive a 256-color palette from the input
- *      frames (`stats_mode=full` weights every pixel equally so the
- *      tangerine accent doesn't get washed out).
- *   2. `paletteuse` — quantize the frames against that palette.
- * Two-pass produces noticeably cleaner output than the default
- * 256-color reduction on the dark UI (no posterized gradients), and
- * the explicit pass split is more robust across ffmpeg versions than
- * a single `-filter_complex` graph.
- *
- * `-loop 0` makes the GIF loop forever.
+ * Stitch a sequence of PNG frames into a looping GIF with a numbered
+ * step-indicator overlay (so viewers can tell which frame of the
+ * sequence they're on). The actual stitcher + overlay renderer live
+ * in sibling `scripts/` files so they can be reused for any future
+ * demo GIF — this function is a thin wrapper that calls the script
+ * via `tsx` with the right args.
  */
 function stitchGif(params: {
   framePaths: string[];
   outputPath: string;
-  framerate?: number;
+  /** Milliseconds per frame; default 1500. */
+  frameDurationMs?: number;
 }): void {
-  const framerate = params.framerate ?? 0.4;
-
-  // ffmpeg's `-i frame_%d.png` requires sequentially-numbered frames
-  // in a single directory. Symlink the input frames into a tmp dir
-  // (cheaper than copying ~3 MB of PNG and avoids polluting
-  // docs/assets with intermediate frame files).
-  const stagingDir = mkdtempSync(path.join(tmpdir(), "pwragent-pairing-gif-"));
-  try {
-    for (let i = 0; i < params.framePaths.length; i++) {
-      symlinkSync(
-        params.framePaths[i],
-        path.join(stagingDir, `frame_${i + 1}.png`),
-      );
-    }
-    const framePattern = path.join(stagingDir, "frame_%d.png");
-    const palettePath = path.join(stagingDir, "palette.png");
-
-    // Pass 1: derive a 256-color palette weighted across all frames.
-    execFileSync(
-      "ffmpeg",
-      [
-        "-y",
-        "-framerate",
-        String(framerate),
-        "-i",
-        framePattern,
-        "-vf",
-        "palettegen=stats_mode=full",
-        palettePath,
-      ],
-      { stdio: "inherit" },
-    );
-
-    // Pass 2: quantize the frames against that palette.
-    execFileSync(
-      "ffmpeg",
-      [
-        "-y",
-        "-framerate",
-        String(framerate),
-        "-i",
-        framePattern,
-        "-i",
-        palettePath,
-        "-lavfi",
-        "paletteuse=dither=sierra2_4a",
-        "-loop",
-        "0",
-        params.outputPath,
-      ],
-      { stdio: "inherit" },
-    );
-  } finally {
-    rmSync(stagingDir, { recursive: true, force: true });
-  }
+  const stitcher = path.resolve(specDir, "../scripts/stitch-demo-gif.ts");
+  const tsxBin = path.resolve(
+    specDir,
+    "../node_modules/.bin/tsx",
+  );
+  execFileSync(
+    tsxBin,
+    [
+      stitcher,
+      "--output",
+      params.outputPath,
+      "--frame-duration-ms",
+      String(params.frameDurationMs ?? 1500),
+      ...params.framePaths,
+    ],
+    { stdio: "inherit" },
+  );
 }
 
 test("pairing — Generate → observe → approve sequence (animated GIF)", async () => {
