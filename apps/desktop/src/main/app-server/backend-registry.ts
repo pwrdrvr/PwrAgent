@@ -2649,8 +2649,10 @@ export class DesktopBackendRegistry {
       callerReason: "branch-drift",
       threadId: params.threadId,
     });
+    const overlayExpectedBranch = overlay?.gitBranch?.trim();
     const requestedExpectedBranch = params.expectedBranch?.trim();
     const expectedBranch =
+      overlayExpectedBranch ||
       requestedExpectedBranch ||
       resolveExpectedThreadBranch({
         overlay,

@@ -118,3 +118,54 @@ test("updates the expected branch when the user accepts the current branch", asy
     await fixture.cleanup();
   }
 });
+
+test("does not reopen a HEAD drift warning after accepting the current branch", async () => {
+  const fixture = await createBranchDriftFixture({ expectedBranch: "HEAD" });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      HOME: fixture.homeDir,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", {
+        name: "Accept current branch as correct. Continue working on codex/current-branch without further warnings",
+      })
+      .click();
+
+    const dialog = app.window.getByRole("dialog", {
+      name: "Thread branch changed",
+    });
+    await expect(dialog).toBeHidden();
+    expect(readThreadPayload(fixture.homeDir)).toMatchObject({
+      gitBranch: "codex/current-branch",
+      observedGitBranch: "codex/current-branch",
+    });
+
+    const staleRendererCheck = await app.window.evaluate(async () =>
+      await (window as any).pwragent.checkThreadBranchDrift({
+        backend: "codex",
+        expectedBranch: "HEAD",
+        threadId: "thread-branch-drift",
+      })
+    );
+    expect(staleRendererCheck).toMatchObject({
+      drifted: false,
+      expectedBranch: "codex/current-branch",
+      observedBranch: "codex/current-branch",
+    });
+
+    await app.electronApp.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]?.webContents.send("window:focus-sync", {
+        focusedAt: Date.now(),
+      });
+    });
+
+    await expect(dialog).toBeHidden();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
