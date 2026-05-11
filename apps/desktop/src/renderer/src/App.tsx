@@ -18,6 +18,7 @@ import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
+import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 
 export function App() {
   const desktopApi = useDesktopApi();
@@ -79,6 +80,13 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
   });
   const composerDraftStore = useComposerDraftStore();
+  useQueuedTurnRelease({
+    backends: backendSummaries.backends,
+    composerDraftStore,
+    desktopApi,
+    selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
+  });
   const session = useThreadSessionState({
     desktopApi,
     thread: navigation.selectedThread,
