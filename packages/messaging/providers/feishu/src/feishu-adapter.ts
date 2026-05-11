@@ -1,0 +1,1337 @@
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { Readable } from "node:stream";
+import type {
+  MessagingActorIdentity,
+  MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterRenderingPreferencesUpdate,
+  MessagingAdapterState,
+  MessagingAttachmentDownloadRequest,
+  MessagingAttachmentDownloadResult,
+  MessagingCallbackHandleStore,
+  MessagingCapabilityProfile,
+  MessagingChannelRef,
+  MessagingClientRateLimitStrategy,
+  MessagingConversationKind,
+  MessagingDeliveryResult,
+  MessagingDeliveryScope,
+  MessagingInboundEvent,
+  MessagingInboundRejectedListener,
+  MessagingJsonValue,
+  MessagingRateLimitInfo,
+  MessagingRejectedInboundEvent,
+  MessagingSurfaceAction,
+  MessagingSurfaceIntent,
+} from "@pwragent/messaging-interface";
+import {
+  extractMessagingPairingToken,
+  MESSAGING_CALLBACK_HANDLE_TTL_MS,
+} from "@pwragent/messaging-interface";
+import type { FeishuMessagingConfig } from "./feishu-config.ts";
+import {
+  FEISHU_BUTTON_VALUE_LIMIT,
+  actionsForFeishuIntent,
+  buildFeishuActionElements,
+  buildFeishuCardForIntent,
+  clampFeishuMessage,
+  textForFeishuIntent,
+  type FeishuInteractiveCard,
+} from "./feishu-formatting.ts";
+import {
+  logFeishuInvalidIdentifier,
+  validateFeishuCallbackHandle,
+  validateFeishuChatId,
+  validateFeishuMessageId,
+  validateFeishuOpenId,
+  validateFeishuTenantKey,
+} from "./validate-ids.ts";
+
+const DEFAULT_CALLBACK_PORT = 47823;
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
+const FEISHU_SIGNED_VALUE_VERSION = 1;
+const FEISHU_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+
+export type FeishuProviderLogger = {
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+  info?: (message: string, data?: Record<string, unknown>) => void;
+  warn?: (message: string, data?: Record<string, unknown>) => void;
+  error?: (message: string, data?: Record<string, unknown>) => void;
+};
+
+export type FeishuBotInfo = {
+  appName?: string;
+  avatarUrl?: string;
+  openId?: string;
+  tenantKey?: string;
+};
+
+export type FeishuSendMessageParams = {
+  card?: FeishuInteractiveCard;
+  receiveId: string;
+  receiveIdType: "chat_id" | "open_id";
+  text?: string;
+};
+
+export type FeishuSendMessageResult = {
+  chatId?: string;
+  messageId?: string;
+};
+
+export type FeishuApi = {
+  deleteMessage(params: { messageId: string }): Promise<void>;
+  downloadFile(params: { fileKey: string; maxBytes: number }): Promise<Uint8Array>;
+  getBotInfo(): Promise<FeishuBotInfo>;
+  sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult>;
+  updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult>;
+};
+
+export type FeishuProviderAdapter = {
+  authorizedActorIds: readonly string[];
+  capabilityProfile: MessagingCapabilityProfile;
+  channel: "feishu";
+  clientRateLimitStrategy: MessagingClientRateLimitStrategy;
+  deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  downloadAttachment(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult>;
+  onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
+  readCredentialMetadata?(): { account?: string; detail?: string } | undefined;
+  resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
+  start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  stop(): Promise<void>;
+  updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
+  updateRenderingPreferences?(update: MessagingAdapterRenderingPreferencesUpdate): Promise<void>;
+};
+
+export type FeishuAdapterOptions = {
+  api?: FeishuApi;
+  callbackHandleStore: MessagingCallbackHandleStore;
+  config: FeishuMessagingConfig;
+  logger?: FeishuProviderLogger;
+  now?: () => number;
+};
+
+type FeishuInboundListener = (event: MessagingInboundEvent) => Promise<void>;
+
+type FeishuRoutingOpaqueState = {
+  chatId?: string;
+  conversationId: string;
+  conversationKind: MessagingConversationKind;
+  messageId?: string;
+  openId?: string;
+  tenantKey?: string;
+};
+
+type FeishuEventEnvelope = {
+  challenge?: string;
+  event?: FeishuReceiveMessageEvent | FeishuCardActionEvent;
+  header?: {
+    event_id?: string;
+    event_type?: string;
+    token?: string;
+    tenant_key?: string;
+  };
+  schema?: string;
+  token?: string;
+  type?: string;
+};
+
+type FeishuReceiveMessageEvent = {
+  message?: {
+    chat_id?: string;
+    chat_type?: "group" | "p2p";
+    content?: string;
+    create_time?: string;
+    mentions?: Array<{ id?: { open_id?: string }; key?: string; name?: string; tenant_key?: string }>;
+    message_id?: string;
+    message_type?: string;
+  };
+  sender?: {
+    sender_id?: {
+      open_id?: string;
+      union_id?: string;
+      user_id?: string;
+    };
+    sender_type?: string;
+    tenant_key?: string;
+  };
+};
+
+type FeishuCardActionEvent = {
+  action?: {
+    tag?: string;
+    value?: Record<string, unknown>;
+  };
+  context?: {
+    open_message_id?: string;
+  };
+  operator?: {
+    open_id?: string;
+    union_id?: string;
+    user_id?: string;
+  };
+  tenant_key?: string;
+  token?: string;
+};
+
+export class FeishuAdapter implements FeishuProviderAdapter {
+  readonly channel = "feishu" as const;
+  readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
+  readonly capabilityProfile: MessagingCapabilityProfile = {
+    actions: {
+      // Feishu cards support button elements inside action modules. The
+      // public docs describe card module/component ceilings but not a
+      // concise cross-version button total, so keep a conservative v1
+      // budget and cite this as implementation policy in docs.
+      maxActions: 20,
+      maxActionsPerRow: 4,
+      maxRows: 5,
+      maxLabelLength: 20,
+      supportsStyles: true,
+      supportsDisabled: false,
+      supportsLayoutHints: true,
+      maxCallbackPayloadBytes: FEISHU_BUTTON_VALUE_LIMIT,
+    },
+    text: {
+      maxLength: 30_000,
+      encoding: "characters",
+      markdownDialect: "feishu-md",
+      supportsCodeBlocks: true,
+      supportsBold: true,
+      supportsItalic: true,
+      supportsInlineCode: true,
+      supportsLinks: true,
+      supportsMessageEdit: true,
+    },
+    inboundAttachments: {
+      maxAttachmentCount: 4,
+      maxDownloadBytes: 30 * 1024 * 1024,
+      supportsDownload: true,
+    },
+    outboundAttachments: {
+      maxUploadBytes: 30 * 1024 * 1024,
+      supportsFileUpload: false,
+      supportsImageUpload: false,
+      supportsRemoteImageUrl: false,
+    },
+  };
+
+  private readonly api: FeishuApi;
+  private readonly callbackHandleStore: MessagingCallbackHandleStore;
+  private readonly config: FeishuMessagingConfig;
+  private readonly logger: FeishuProviderLogger;
+  private readonly now: () => number;
+  private readonly server: Server;
+  private readonly signingSecret: string;
+  private authorizedActorIdsValue: string[];
+  private botAccount: string | undefined;
+  private botAccountDetail: string | undefined;
+  private listener: FeishuInboundListener | undefined;
+  private started = false;
+  private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
+
+  constructor(options: FeishuAdapterOptions) {
+    this.config = options.config;
+    this.api = options.api ?? createFeishuApi(options.config);
+    this.callbackHandleStore = options.callbackHandleStore;
+    this.logger = options.logger ?? {};
+    this.now = options.now ?? Date.now;
+    this.authorizedActorIdsValue = options.config.authorizedActorIds.map((actor) => actor.id);
+    this.signingSecret =
+      options.config.verificationToken?.trim()
+      || options.config.appSecret.trim()
+      || randomBytes(32).toString("hex");
+    this.server = createServer((request, response) => {
+      void this.handleWebhookRequest(request, response);
+    });
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.authorizedActorIdsValue;
+  }
+
+  readCredentialMetadata(): { account?: string; detail?: string } | undefined {
+    if (!this.botAccount && !this.botAccountDetail) return undefined;
+    return {
+      ...(this.botAccount ? { account: this.botAccount } : {}),
+      ...(this.botAccountDetail ? { detail: this.botAccountDetail } : {}),
+    };
+  }
+
+  async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    this.authorizedActorIdsValue = [...update.authorizedActorIds];
+    this.config.authorizedActorIds = feishuContactsFromIds(
+      update.authorizedActorIds,
+      this.config.authorizedActorIds,
+    );
+    this.config.authorizedChatIds = feishuContactsFromIds(
+      update.authorizedConversationIds ?? [],
+      this.config.authorizedChatIds,
+    );
+    this.config.authorizedTenantKeys = feishuContactsFromIds(
+      update.authorizedWorkspaceIds ?? [],
+      this.config.authorizedTenantKeys,
+    );
+  }
+
+  async updateRenderingPreferences(
+    update: MessagingAdapterRenderingPreferencesUpdate,
+  ): Promise<void> {
+    if (update.streamingResponses !== undefined) {
+      this.config.streamingResponses = update.streamingResponses;
+    }
+  }
+
+  onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
+    this.inboundRejectedListeners.add(listener);
+    return () => {
+      this.inboundRejectedListeners.delete(listener);
+    };
+  }
+
+  onRateLimit(listener: (info: MessagingRateLimitInfo) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => {
+      this.rateLimitListeners.delete(listener);
+    };
+  }
+
+  resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    const target = this.resolveTarget(intent);
+    return target ? this.rateLimitScopeForTarget(target) : undefined;
+  }
+
+  async start(listener: FeishuInboundListener): Promise<void> {
+    if (this.started) return;
+    this.listener = listener;
+    const botInfo = await this.api.getBotInfo();
+    this.botAccount = botInfo.appName ?? botInfo.openId;
+    this.botAccountDetail = botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
+    await this.listenForCallbacks();
+    this.started = true;
+  }
+
+  async stop(): Promise<void> {
+    if (!this.started) return;
+    await new Promise<void>((resolve, reject) => {
+      this.server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }).catch((error) => {
+      this.logger.warn?.("feishu webhook listener close failed", { error });
+    });
+    this.listener = undefined;
+    this.started = false;
+  }
+
+  async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+    const deliveredAt = this.now();
+    if (intent.kind === "activity") {
+      return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    if (intent.kind === "dismiss") {
+      return await this.deliverDismiss(intent);
+    }
+    if (intent.kind === "stream_update") {
+      return await this.deliverStreamUpdate(intent);
+    }
+
+    const target = this.resolveTarget(intent);
+    if (!target) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt,
+        errorMessage: "Feishu delivery target is missing",
+      };
+    }
+
+    const rawText = textForFeishuIntent(intent);
+    const actions = actionsForFeishuIntent(intent);
+    const callbackBuilder = this.buildCallbackValueBuilder({
+      allowedActorIds: callbackAllowedActorIds(intent, this.authorizedActorIds[0] ?? ""),
+      bindingId: callbackBindingId(intent),
+      channelRef: target.channelRef,
+      intent,
+    });
+    const actionElements = buildFeishuActionElements({
+      actions,
+      buildCallbackValue: callbackBuilder,
+      capabilityProfile: this.capabilityProfile,
+      layout: intent.actionLayout,
+    });
+    const card = buildFeishuCardForIntent({
+      actionElements,
+      intent,
+      text: rawText,
+    });
+
+    try {
+      const updated =
+        intent.delivery?.mode === "update" && target.messageId
+          ? await this.api.updateMessage({ card, messageId: target.messageId })
+          : undefined;
+      const result = updated ?? (await this.api.sendMessage({
+        card: actionElements.length > 0 || intent.kind !== "message" ? card : undefined,
+        receiveId: target.receiveId,
+        receiveIdType: target.receiveIdType,
+        text: actionElements.length > 0 || intent.kind !== "message"
+          ? undefined
+          : clampFeishuMessage(rawText || intent.fallbackText || "PwrAgent"),
+      }));
+      const messageId = result.messageId ?? target.messageId;
+      if (!messageId) {
+        return {
+          outcome: "failed",
+          channel: this.channel,
+          deliveredAt: this.now(),
+          errorMessage: "Feishu did not return a message id",
+        };
+      }
+
+      return {
+        outcome: updated ? "updated" : "presented",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        surface: {
+          channel: this.channel,
+          id: messageId,
+          state: {
+            opaque: {
+              messageId,
+              receiveId: target.receiveId,
+              receiveIdType: target.receiveIdType,
+              ...(target.tenantKey ? { tenantKey: target.tenantKey } : {}),
+            },
+          },
+        },
+      };
+    } catch (error) {
+      const rateLimit = this.emitRateLimitFromError(error, target, { retryable: true });
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(rateLimit ? { rateLimit } : {}),
+      };
+    }
+  }
+
+  async downloadAttachment(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult> {
+    const opaque = request.attachment.state?.opaque;
+    const fileKey =
+      opaque && typeof opaque === "object" && !Array.isArray(opaque)
+        ? (opaque as Record<string, unknown>).fileKey
+        : undefined;
+    if (typeof fileKey !== "string") {
+      throw new Error("Feishu attachment is missing file key");
+    }
+    const data = await this.api.downloadFile({
+      fileKey,
+      maxBytes: request.maxBytes,
+    });
+    return {
+      data,
+      fileName: request.attachment.name,
+      ...(request.attachment.mimeType ? { mimeType: request.attachment.mimeType } : {}),
+      sizeBytes: data.byteLength,
+    };
+  }
+
+  async handleWebhookPayload(payload: FeishuEventEnvelope): Promise<unknown> {
+    if (payload.type === "url_verification" && typeof payload.challenge === "string") {
+      if (!this.isValidWebhookToken(payload.token)) {
+        return { status: 401 };
+      }
+      return { challenge: payload.challenge };
+    }
+
+    if (!this.isValidWebhookToken(payload.header?.token ?? payload.token)) {
+      return { status: 401 };
+    }
+
+    const eventType = payload.header?.event_type;
+    if (eventType === "im.message.receive_v1") {
+      await this.handleMessageEvent(payload);
+    } else if (
+      eventType === "card.action.trigger"
+      || eventType === "im.message.message_read_v1"
+      || payload.event
+    ) {
+      await this.handleCardActionEvent(payload);
+    }
+    return { status: 200 };
+  }
+
+  private async deliverDismiss(intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>): Promise<MessagingDeliveryResult> {
+    const deliveredAt = this.now();
+    const opaque = intent.targetSurface.state?.opaque;
+    const messageId =
+      opaque && typeof opaque === "object" && !Array.isArray(opaque)
+        ? (opaque as Record<string, unknown>).messageId
+        : intent.targetSurface.id;
+    if (typeof messageId !== "string") {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt,
+        errorMessage: "Feishu dismiss target is missing message id",
+      };
+    }
+    try {
+      await this.api.deleteMessage({ messageId });
+      return { outcome: "dismissed", channel: this.channel, deliveredAt: this.now() };
+    } catch (error) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async deliverStreamUpdate(
+    intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
+  ): Promise<MessagingDeliveryResult> {
+    if (this.config.streamingResponses !== true && intent.policy !== "enabled") {
+      return {
+        outcome: "discarded",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
+    const target = this.resolveTarget(intent);
+    if (!target?.messageId) {
+      return {
+        outcome: "discarded",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
+    const card = buildFeishuCardForIntent({
+      intent,
+      text: intent.text,
+    });
+    try {
+      await this.api.updateMessage({ card, messageId: target.messageId });
+      return {
+        outcome: "updated",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        surface: {
+          channel: this.channel,
+          id: target.messageId,
+          state: {
+            opaque: {
+              messageId: target.messageId,
+              receiveId: target.receiveId,
+              receiveIdType: target.receiveIdType,
+            },
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async handleMessageEvent(payload: FeishuEventEnvelope): Promise<void> {
+    const event = payload.event as FeishuReceiveMessageEvent | undefined;
+    const message = event?.message;
+    const senderId = event?.sender?.sender_id?.open_id;
+    const chatId = message?.chat_id;
+    const messageId = message?.message_id;
+    const tenantKey = payload.header?.tenant_key ?? event?.sender?.tenant_key;
+    const ids = this.validateInboundIds({ chatId, messageId, openId: senderId, tenantKey });
+    if (!ids || !message) return;
+
+    const conversationKind: MessagingConversationKind =
+      message.chat_type === "p2p" ? "dm" : "channel";
+    const channelRef: MessagingChannelRef = {
+      channel: this.channel,
+      conversation: {
+        id: conversationKind === "dm" ? ids.openId : ids.chatId,
+        kind: conversationKind,
+        ...(conversationKind !== "dm" ? { parentId: ids.tenantKey } : {}),
+      },
+    };
+    const actor: MessagingActorIdentity = {
+      platformUserId: ids.openId,
+    };
+    const routingState: MessagingAdapterState = {
+      opaque: {
+        chatId: ids.chatId,
+        conversationId: channelRef.conversation.id,
+        conversationKind,
+        messageId: ids.messageId,
+        openId: ids.openId,
+        ...(ids.tenantKey ? { tenantKey: ids.tenantKey } : {}),
+      } satisfies FeishuRoutingOpaqueState,
+    };
+
+    if (!(await this.authorizeInbound({ actor, channel: channelRef, routingState }))) {
+      return;
+    }
+
+    const text = extractFeishuText(message.content);
+    const eventBase = {
+      id: payload.header?.event_id ?? ids.messageId,
+      actor,
+      channel: channelRef,
+      receivedAt: this.now(),
+      routingState,
+    };
+    const command = parseFeishuCommandText(text);
+    const pairingToken = extractMessagingPairingToken(text);
+    const inbound: MessagingInboundEvent = command
+      ? {
+          ...eventBase,
+          kind: "command",
+          command: command.command,
+          args: command.args,
+          rawText: text,
+        }
+      : pairingToken
+        ? {
+            ...eventBase,
+            kind: "command",
+            command: "pair",
+            args: [pairingToken],
+            rawText: text,
+          }
+        : {
+            ...eventBase,
+            kind: "text",
+            text: stripBotMentions(text, message.mentions),
+          };
+    await this.listener?.(inbound);
+  }
+
+  private async handleCardActionEvent(payload: FeishuEventEnvelope): Promise<void> {
+    const event = payload.event as FeishuCardActionEvent | undefined;
+    const openId = event?.operator?.open_id;
+    const tenantKey = payload.header?.tenant_key ?? event?.tenant_key;
+    const messageId = event?.context?.open_message_id;
+    const handle = event?.action?.value?.handle;
+    if (typeof handle !== "string") return;
+    const openIdValidation = validateFeishuOpenId(openId);
+    if (!openIdValidation.ok) {
+      logFeishuInvalidIdentifier({
+        field: "open_id",
+        logger: this.logger,
+        reason: openIdValidation.reason,
+        value: openId,
+      });
+      return;
+    }
+    if (messageId !== undefined) {
+      const messageValidation = validateFeishuMessageId(messageId);
+      if (!messageValidation.ok) {
+        logFeishuInvalidIdentifier({
+          field: "message_id",
+          logger: this.logger,
+          reason: messageValidation.reason,
+          value: messageId,
+        });
+        return;
+      }
+    }
+    const signed = this.parseSignedCallbackValue(handle);
+    if (!signed) return;
+    const handleValidation = validateFeishuCallbackHandle(signed.handle);
+    if (!handleValidation.ok) {
+      logFeishuInvalidIdentifier({
+        field: "callback.value",
+        logger: this.logger,
+        reason: handleValidation.reason,
+        value: signed.handle,
+      });
+      return;
+    }
+
+    const actorId = openId as string;
+    const actor = { platformUserId: actorId };
+    const channelRef: MessagingChannelRef = {
+      channel: this.channel,
+      conversation: {
+        id: actorId,
+        kind: "dm",
+        ...(tenantKey ? { parentId: tenantKey } : {}),
+      },
+    };
+    const record = await this.callbackHandleStore.resolveCallbackHandle({
+      actorId,
+      channel: channelRef,
+      handle: signed.handle,
+      now: this.now(),
+    });
+    if (!record) {
+      this.logger.warn?.("feishu callback handle rejected", {
+        handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+      });
+      return;
+    }
+
+    await this.listener?.({
+      id: payload.header?.event_id ?? `${signed.handle}:${this.now()}`,
+      kind: "callback",
+      actor,
+      channel: record.channel,
+      interaction: {
+        channel: this.channel,
+        id: signed.handle,
+        ...(record.surface?.state ? { state: record.surface.state } : {}),
+      },
+      actionId: record.actionId,
+      ...(record.value !== undefined ? { value: record.value } : {}),
+      receivedAt: this.now(),
+      ...(record.surface?.state ? { routingState: record.surface.state } : {}),
+    });
+  }
+
+  private async authorizeInbound(params: {
+    actor: MessagingActorIdentity;
+    channel: MessagingChannelRef;
+    routingState?: MessagingAdapterState;
+  }): Promise<boolean> {
+    if (!this.authorizedActorIdsValue.includes(params.actor.platformUserId)) {
+      await this.emitInboundRejected({
+        id: `${params.actor.platformUserId}:${this.now()}`,
+        kind: "text",
+        actor: params.actor,
+        channel: params.channel,
+        receivedAt: this.now(),
+        reason: "unauthorized-actor",
+        ...(params.routingState ? { routingState: params.routingState } : {}),
+      });
+      return false;
+    }
+    if (params.channel.conversation.kind !== "dm") {
+      const chatAllowed = contactIds(this.config.authorizedChatIds).includes(
+        params.channel.conversation.id,
+      );
+      const tenantAllowed =
+        params.channel.conversation.parentId !== undefined
+        && contactIds(this.config.authorizedTenantKeys).includes(
+          params.channel.conversation.parentId,
+        );
+      if (!chatAllowed && !tenantAllowed) {
+        await this.emitInboundRejected({
+          id: `${params.channel.conversation.id}:${this.now()}`,
+          kind: "text",
+          actor: params.actor,
+          channel: params.channel,
+          receivedAt: this.now(),
+          reason: "unauthorized-conversation",
+          ...(params.routingState ? { routingState: params.routingState } : {}),
+        });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {
+    for (const listener of this.inboundRejectedListeners) {
+      await listener(event);
+    }
+  }
+
+  private buildCallbackValueBuilder(params: {
+    allowedActorIds: string[];
+    bindingId?: string;
+    channelRef: MessagingChannelRef;
+    intent: MessagingSurfaceIntent;
+  }): (action: MessagingSurfaceAction) => string {
+    return (action) => {
+      const handle = `${this.channel}:${createHash("sha256")
+        .update(JSON.stringify([params.intent.id, action.id, action.value ?? null]))
+        .digest("base64url")
+        .slice(0, 18)}`;
+      const issuedAt = this.now();
+      const sig = this.signCallbackValue(handle, params.intent.id, issuedAt);
+      const surface = {
+        channel: this.channel,
+        id: params.intent.id,
+        state: {
+          opaque: {
+            intentId: params.intent.id,
+          },
+        },
+      };
+      void this.callbackHandleStore
+        .upsertCallbackHandle({
+          id: feishuCallbackRecordId(handle, params),
+          actionId: action.id,
+          allowedActorIds: params.allowedActorIds,
+          bindingId: params.bindingId,
+          channel: params.channelRef,
+          createdAt: issuedAt,
+          updatedAt: issuedAt,
+          expiresAt: issuedAt + MESSAGING_CALLBACK_HANDLE_TTL_MS,
+          handle,
+          pendingIntentId: params.intent.id,
+          surface,
+          ...(action.value !== undefined ? { value: action.value } : {}),
+        })
+        .catch((error) => {
+          this.logger.warn?.("feishu callback handle persist failed", {
+            error: error instanceof Error ? error.message : String(error),
+            handle,
+          });
+        });
+      return JSON.stringify({
+        v: FEISHU_SIGNED_VALUE_VERSION,
+        h: handle,
+        i: params.intent.id,
+        t: issuedAt,
+        s: sig,
+      });
+    };
+  }
+
+  private parseSignedCallbackValue(
+    value: string,
+  ): { handle: string; intentId: string; issuedAt: number } | undefined {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+    const record = parsed as {
+      h?: unknown;
+      i?: unknown;
+      s?: unknown;
+      t?: unknown;
+      v?: unknown;
+    };
+    if (
+      record.v !== FEISHU_SIGNED_VALUE_VERSION
+      || typeof record.h !== "string"
+      || typeof record.i !== "string"
+      || typeof record.s !== "string"
+      || typeof record.t !== "number"
+    ) {
+      return undefined;
+    }
+    const expected = this.signCallbackValue(record.h, record.i, record.t);
+    if (!safeEqual(expected, record.s)) {
+      this.logger.warn?.("feishu callback signature rejected", {
+        handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
+      });
+      return undefined;
+    }
+    return { handle: record.h, intentId: record.i, issuedAt: record.t };
+  }
+
+  private signCallbackValue(handle: string, intentId: string, issuedAt: number): string {
+    return createHmac("sha256", this.signingSecret)
+      .update(JSON.stringify([handle, intentId, issuedAt]))
+      .digest("base64url")
+      .slice(0, 32);
+  }
+
+  private validateInboundIds(params: {
+    chatId: unknown;
+    messageId: unknown;
+    openId: unknown;
+    tenantKey?: unknown;
+  }): { chatId: string; messageId: string; openId: string; tenantKey?: string } | undefined {
+    const openValidation = validateFeishuOpenId(params.openId);
+    if (!openValidation.ok) {
+      logFeishuInvalidIdentifier({
+        field: "open_id",
+        logger: this.logger,
+        reason: openValidation.reason,
+        value: params.openId,
+      });
+      return undefined;
+    }
+    const chatValidation = validateFeishuChatId(params.chatId);
+    if (!chatValidation.ok) {
+      logFeishuInvalidIdentifier({
+        field: "chat_id",
+        logger: this.logger,
+        reason: chatValidation.reason,
+        value: params.chatId,
+      });
+      return undefined;
+    }
+    const messageValidation = validateFeishuMessageId(params.messageId);
+    if (!messageValidation.ok) {
+      logFeishuInvalidIdentifier({
+        field: "message_id",
+        logger: this.logger,
+        reason: messageValidation.reason,
+        value: params.messageId,
+      });
+      return undefined;
+    }
+    if (params.tenantKey !== undefined) {
+      const tenantValidation = validateFeishuTenantKey(params.tenantKey);
+      if (!tenantValidation.ok) {
+        logFeishuInvalidIdentifier({
+          field: "tenant_key",
+          logger: this.logger,
+          reason: tenantValidation.reason,
+          value: params.tenantKey,
+        });
+        return undefined;
+      }
+      return {
+        chatId: params.chatId as string,
+        messageId: params.messageId as string,
+        openId: params.openId as string,
+        tenantKey: params.tenantKey as string,
+      };
+    }
+    return {
+      chatId: params.chatId as string,
+      messageId: params.messageId as string,
+      openId: params.openId as string,
+    };
+  }
+
+  private resolveTarget(intent: MessagingSurfaceIntent): {
+    channelRef: MessagingChannelRef;
+    messageId?: string;
+    receiveId: string;
+    receiveIdType: "chat_id" | "open_id";
+    tenantKey?: string;
+  } | undefined {
+    const state = intent.targetSurface?.state ?? intent.audit?.channel
+      ? intent.targetSurface?.state
+      : undefined;
+    const opaque = state?.opaque;
+    const surface =
+      opaque && typeof opaque === "object" && !Array.isArray(opaque)
+        ? (opaque as Record<string, unknown>)
+        : {};
+    const auditConversation = intent.audit?.channel.conversation;
+    const receiveId =
+      typeof surface.receiveId === "string"
+        ? surface.receiveId
+        : typeof surface.chatId === "string"
+          ? surface.chatId
+          : auditConversation?.id;
+    if (!receiveId) return undefined;
+    const receiveIdType =
+      typeof surface.receiveIdType === "string" && surface.receiveIdType === "open_id"
+        ? "open_id"
+        : auditConversation?.kind === "dm"
+          ? "open_id"
+          : "chat_id";
+    const channelRef: MessagingChannelRef = intent.audit?.channel ?? {
+      channel: this.channel,
+      conversation: {
+        id: receiveId,
+        kind: receiveIdType === "open_id" ? "dm" : "channel",
+      },
+    };
+    return {
+      channelRef,
+      receiveId,
+      receiveIdType,
+      ...(typeof surface.messageId === "string"
+        ? { messageId: surface.messageId }
+        : typeof intent.targetSurface?.id === "string"
+          ? { messageId: intent.targetSurface.id }
+          : {}),
+      ...(typeof surface.tenantKey === "string" ? { tenantKey: surface.tenantKey } : {}),
+    };
+  }
+
+  private rateLimitScopeForTarget(target: {
+    channelRef: MessagingChannelRef;
+    receiveId: string;
+    receiveIdType: "chat_id" | "open_id";
+  }): MessagingDeliveryScope {
+    return {
+      platform: this.channel,
+      id: `feishu:${target.receiveIdType}:${target.receiveId}`,
+      kind: target.receiveIdType === "open_id" ? "dm" : "channel",
+      label: target.channelRef.conversation.title,
+    };
+  }
+
+  private emitRateLimitFromError(
+    error: unknown,
+    target: {
+      channelRef: MessagingChannelRef;
+      receiveId: string;
+      receiveIdType: "chat_id" | "open_id";
+    },
+    options?: { retryable?: boolean },
+  ): MessagingRateLimitInfo | undefined {
+    const retryAfterMs = retryAfterMsFromError(error);
+    if (retryAfterMs === undefined) return undefined;
+    const info: MessagingRateLimitInfo = {
+      scope: this.rateLimitScopeForTarget(target),
+      retryAfterMs,
+      message: error instanceof Error ? error.message : String(error),
+      observedAt: this.now(),
+      retryable: options?.retryable ?? false,
+    };
+    for (const listener of this.rateLimitListeners) {
+      listener(info);
+    }
+    return info;
+  }
+
+  private async listenForCallbacks(): Promise<void> {
+    if (!this.config.callbackBaseUrl) return;
+    const url = new URL(this.config.callbackBaseUrl);
+    const port = Number(url.port) || DEFAULT_CALLBACK_PORT;
+    const host = url.hostname || DEFAULT_CALLBACK_HOST;
+    await new Promise<void>((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(port, host, () => {
+        this.server.off("error", reject);
+        resolve();
+      });
+    });
+  }
+
+  private async handleWebhookRequest(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (request.method !== "POST") {
+      response.writeHead(405).end();
+      return;
+    }
+    try {
+      const body = await readRequestBody(request, FEISHU_WEBHOOK_BODY_LIMIT_BYTES);
+      const payload = JSON.parse(body.toString("utf8")) as FeishuEventEnvelope;
+      const result = await this.handleWebhookPayload(payload);
+      if (
+        result
+        && typeof result === "object"
+        && "status" in result
+        && typeof result.status === "number"
+      ) {
+        response.writeHead(result.status).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(result ?? { code: 0 }));
+    } catch (error) {
+      this.logger.warn?.("feishu webhook request failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      response.writeHead(400).end();
+    }
+  }
+
+  private isValidWebhookToken(token: unknown): boolean {
+    if (!this.config.verificationToken) return true;
+    return typeof token === "string" && safeEqual(token, this.config.verificationToken);
+  }
+}
+
+export function createFeishuAdapter(
+  config: FeishuMessagingConfig,
+  callbackHandleStore: MessagingCallbackHandleStore,
+  logger?: FeishuProviderLogger,
+): FeishuAdapter {
+  return new FeishuAdapter({ config, callbackHandleStore, logger });
+}
+
+export function createFeishuApi(config: FeishuMessagingConfig): FeishuApi {
+  return new DirectFeishuApi(config);
+}
+
+class DirectFeishuApi implements FeishuApi {
+  private readonly appId: string;
+  private readonly appSecret: string;
+  private readonly baseUrl: string;
+  private tenantAccessToken: { expiresAt: number; value: string } | undefined;
+
+  constructor(config: FeishuMessagingConfig) {
+    this.appId = config.appId;
+    this.appSecret = config.appSecret;
+    this.baseUrl = normalizeTenantUrl(config.tenantUrl);
+  }
+
+  async getBotInfo(): Promise<FeishuBotInfo> {
+    const data = await this.request<{ app?: { app_name?: string }; bot?: { open_id?: string }; tenant_key?: string }>(
+      "/open-apis/application/v6/applications/self",
+      { method: "GET" },
+    );
+    return {
+      appName: data.app?.app_name,
+      openId: data.bot?.open_id,
+      tenantKey: data.tenant_key,
+    };
+  }
+
+  async sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult> {
+    const body = {
+      receive_id: params.receiveId,
+      msg_type: params.card ? "interactive" : "text",
+      content: JSON.stringify(params.card ?? { text: params.text ?? "" }),
+    };
+    const data = await this.request<{
+      chat_id?: string;
+      message_id?: string;
+    }>(`/open-apis/im/v1/messages?receive_id_type=${params.receiveIdType}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return {
+      chatId: data.chat_id,
+      messageId: data.message_id,
+    };
+  }
+
+  async updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult> {
+    const data = await this.request<{ message_id?: string }>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          content: JSON.stringify(params.card),
+        }),
+      },
+    );
+    return { messageId: data.message_id ?? params.messageId };
+  }
+
+  async deleteMessage(params: { messageId: string }): Promise<void> {
+    await this.request<unknown>(
+      `/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async downloadFile(params: { fileKey: string; maxBytes: number }): Promise<Uint8Array> {
+    const token = await this.getTenantAccessToken();
+    const response = await fetch(
+      `${this.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(params.fileKey)}/resources/${encodeURIComponent(params.fileKey)}`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Feishu file download failed: ${response.status}`);
+    }
+    const length = Number(response.headers.get("content-length"));
+    if (Number.isFinite(length) && length > params.maxBytes) {
+      throw new Error("Feishu attachment exceeds download limit");
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of Readable.fromWeb(response.body as never)) {
+      const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk as ArrayBuffer);
+      total += bytes.byteLength;
+      if (total > params.maxBytes) {
+        throw new Error("Feishu attachment exceeds download limit");
+      }
+      chunks.push(bytes);
+    }
+    const data = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return data;
+  }
+
+  private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const token = await this.getTenantAccessToken();
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json; charset=utf-8",
+        ...(init.headers ?? {}),
+      },
+    });
+    const text = await response.text();
+    let parsed: { code?: number; data?: T; msg?: string } = {};
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      // Keep raw text below for error reporting.
+    }
+    if (!response.ok || (parsed.code !== undefined && parsed.code !== 0)) {
+      const error = new Error(parsed.msg || text || `Feishu request failed: ${response.status}`);
+      const retryAfter = response.headers.get("retry-after");
+      if (retryAfter) {
+        Object.assign(error, { retryAfter: Number(retryAfter) });
+      }
+      throw error;
+    }
+    return (parsed.data ?? ({} as T)) as T;
+  }
+
+  private async getTenantAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this.tenantAccessToken && this.tenantAccessToken.expiresAt > now + 60_000) {
+      return this.tenantAccessToken.value;
+    }
+    const response = await fetch(`${this.baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        app_id: this.appId,
+        app_secret: this.appSecret,
+      }),
+    });
+    const payload = await response.json() as {
+      code?: number;
+      expire?: number;
+      msg?: string;
+      tenant_access_token?: string;
+    };
+    if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
+      throw new Error(payload.msg || `Feishu tenant token request failed: ${response.status}`);
+    }
+    this.tenantAccessToken = {
+      value: payload.tenant_access_token,
+      expiresAt: now + Math.max(1, payload.expire ?? 3600) * 1000,
+    };
+    return this.tenantAccessToken.value;
+  }
+}
+
+export function parseFeishuCommandText(
+  text: string,
+): { command: string; args: string[] } | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) return undefined;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const first = tokens[0]?.slice(1);
+  if (!first) return undefined;
+  if (first === "cas_click" && tokens[1]) {
+    return { command: "cas_click", args: [tokens[1], ...tokens.slice(2)] };
+  }
+  return { command: first, args: tokens.slice(1) };
+}
+
+function extractFeishuText(content: string | undefined): string {
+  if (!content) return "";
+  try {
+    const parsed = JSON.parse(content) as { text?: unknown };
+    if (typeof parsed.text === "string") return parsed.text;
+  } catch {
+    return content;
+  }
+  return "";
+}
+
+function stripBotMentions(
+  text: string,
+  mentions: FeishuReceiveMessageEvent["message"] extends infer M
+    ? M extends { mentions?: infer T } ? T | undefined : never
+    : never,
+): string {
+  let stripped = text;
+  for (const mention of mentions ?? []) {
+    if (mention.key) stripped = stripped.replaceAll(mention.key, "");
+  }
+  return stripped.trim();
+}
+
+function callbackAllowedActorIds(
+  intent: MessagingSurfaceIntent,
+  fallbackActorId: string,
+): string[] {
+  return intent.allowedActorIds && intent.allowedActorIds.length > 0
+    ? intent.allowedActorIds
+    : intent.audit?.actor.platformUserId
+      ? [intent.audit.actor.platformUserId]
+      : fallbackActorId
+        ? [fallbackActorId]
+        : [];
+}
+
+function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function feishuCallbackRecordId(
+  handle: string,
+  params: { channelRef: MessagingChannelRef; intent: MessagingSurfaceIntent },
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify([handle, params.channelRef, params.intent.id]))
+    .digest("hex");
+}
+
+function contactIds(contacts: readonly { id: string }[] | undefined): string[] {
+  return contacts?.map((contact) => contact.id) ?? [];
+}
+
+function feishuContactsFromIds(
+  ids: readonly string[],
+  previous: readonly { id: string; displayName: string }[] | undefined,
+): Array<{ id: string; displayName: string }> {
+  return ids.map((id) => ({
+    id,
+    displayName: previous?.find((contact) => contact.id === id)?.displayName ?? "",
+  }));
+}
+
+function normalizeTenantUrl(url: string): string {
+  const parsed = new URL(url);
+  const canonical = parsed.toString();
+  return canonical.endsWith("/") ? canonical.slice(0, -1) : canonical;
+}
+
+function hostFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function retryAfterMsFromError(error: unknown): number | undefined {
+  const retryAfter = (error as { retryAfter?: unknown })?.retryAfter;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter)
+    ? retryAfter * 1000
+    : undefined;
+}
+
+function readRequestBody(
+  request: IncomingMessage,
+  limitBytes: number,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    request.on("data", (chunk: Buffer) => {
+      total += chunk.byteLength;
+      if (total > limitBytes) {
+        reject(new Error("Feishu webhook body exceeds limit"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}

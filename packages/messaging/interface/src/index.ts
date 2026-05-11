@@ -957,6 +957,7 @@ export type MessagingMarkdownDialect =
   | "plain"
   | "html"
   | "slack-mrkdwn"
+  | "feishu-md"
   | "discord-markdown"
   | "markdown";
 
