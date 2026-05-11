@@ -39,8 +39,11 @@ jobs:
 
       - name: License metadata
         run: |
-          pnpm install --frozen-lockfile --force
-          pnpm licenses:check
+          if ! pnpm licenses:check; then
+            echo "License check failed; forcing pnpm to relink dependencies before retrying."
+            pnpm install --frozen-lockfile --force
+            pnpm licenses:check
+          fi
 
       - name: Type check
         run: pnpm typecheck
