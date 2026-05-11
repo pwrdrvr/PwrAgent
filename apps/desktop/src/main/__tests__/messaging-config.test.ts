@@ -312,14 +312,13 @@ describe("desktop messaging config", () => {
   it("loads LINE from env in receive-only mode before a channel access token exists", () => {
     const config = loadDesktopMessagingConfig({
       [LINE_CHANNEL_SECRET_ENV]: "line-secret",
-      [LINE_CALLBACK_BASE_URL_ENV]: "http://127.0.0.1:47822/",
     });
 
     expect(config.line).toMatchObject({
       channel: "line",
       enabled: true,
       channelSecret: "line-secret",
-      callbackBaseUrl: "http://127.0.0.1:47822/",
+      callbackBaseUrl: "http://127.0.0.1:47822",
       authorizedActorIds: [],
       authorizedGroupIds: [],
       authorizedRoomIds: [],

@@ -114,6 +114,8 @@ export {
   TELEGRAM_STREAMING_RESPONSES_ENV,
 };
 
+export const LINE_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47822";
+
 export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
@@ -395,7 +397,8 @@ export function loadDesktopMessagingConfig(
   const lineChannelAccessToken = readEnv(env, LINE_CHANNEL_ACCESS_TOKEN_ENV);
   const lineChannelSecret = readEnv(env, LINE_CHANNEL_SECRET_ENV);
   const lineWebhookUrl = readEnv(env, LINE_WEBHOOK_URL_ENV);
-  const lineCallbackBaseUrl = readEnv(env, LINE_CALLBACK_BASE_URL_ENV);
+  const lineCallbackBaseUrl =
+    readEnv(env, LINE_CALLBACK_BASE_URL_ENV) ?? LINE_DEFAULT_CALLBACK_BASE_URL;
   const lineBotUserId = readEnv(env, LINE_BOT_USER_ID_ENV);
   const lineAuthorizedActorIds = parseContactList(env[LINE_AUTHORIZED_USER_IDS_ENV]);
   const lineAuthorizedGroupIds = parseContactList(env[LINE_AUTHORIZED_GROUPS_ENV]);
@@ -628,7 +631,7 @@ export async function loadDesktopMessagingConfigFromSettings(
   const lineCallbackBaseUrlRaw =
     envConfig.line?.callbackBaseUrl
     || snapshot.messaging.line.callbackBaseUrl.value
-    || undefined;
+    || LINE_DEFAULT_CALLBACK_BASE_URL;
   const lineCallbackBaseUrl = normalizeMattermostUrl(
     lineCallbackBaseUrlRaw,
     "callbackBaseUrl",

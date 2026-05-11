@@ -406,8 +406,9 @@ export class DesktopSettingsService {
             config.messaging?.line?.webhookUrl,
             LINE_WEBHOOK_URL_ENV,
           ),
-          callbackBaseUrl: this.resolveString(
+          callbackBaseUrl: this.resolveStringWithDefault(
             config.messaging?.line?.callbackBaseUrl,
+            "http://127.0.0.1:47822",
             LINE_CALLBACK_BASE_URL_ENV,
           ),
           botUserId: this.resolveString(

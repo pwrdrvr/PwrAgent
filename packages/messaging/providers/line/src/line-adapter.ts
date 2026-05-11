@@ -50,6 +50,7 @@ import {
 } from "./validate-ids.ts";
 
 const DEFAULT_CALLBACK_PORT = 47822;
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const LINE_SIGNED_VALUE_VERSION = 1;
 const LINE_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -230,17 +231,18 @@ export class LineAdapter implements LineProviderAdapter {
         });
       }
     }
-    const port = bindPortFromCallbackUrl(this.config.callbackBaseUrl);
+    const bindAddress = bindAddressFromCallbackUrl(this.config.callbackBaseUrl);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
-      this.server.listen(port, "127.0.0.1", () => {
+      this.server.listen(bindAddress.port, bindAddress.host, () => {
         this.server.off("error", reject);
         resolve();
       });
     });
     this.started = true;
     this.logger.info?.("line webhook listener started", {
-      port,
+      host: bindAddress.host,
+      port: bindAddress.port,
       callbackBaseUrl: this.config.callbackBaseUrl,
       botUserId: this.botUserId,
       authorizedActorCount: this.authorizedActorIds.length,
@@ -1049,19 +1051,23 @@ export function verifyLineSignature(
   return safeEqual(expected, signature);
 }
 
-function bindPortFromCallbackUrl(callbackBaseUrl: string): number {
+function bindAddressFromCallbackUrl(callbackBaseUrl: string): {
+  host: string;
+  port: number;
+} {
   try {
     const parsed = new URL(callbackBaseUrl);
-    if (parsed.port) {
-      const port = Number(parsed.port);
-      if (Number.isInteger(port) && port > 0 && port <= 65535) {
-        return port;
-      }
+    const host = parsed.hostname || DEFAULT_CALLBACK_HOST;
+    const port = parsed.port
+      ? Number(parsed.port)
+      : DEFAULT_CALLBACK_PORT;
+    if (Number.isInteger(port) && port > 0 && port <= 65535) {
+      return { host, port };
     }
   } catch {
     /* fall through */
   }
-  return DEFAULT_CALLBACK_PORT;
+  return { host: DEFAULT_CALLBACK_HOST, port: DEFAULT_CALLBACK_PORT };
 }
 
 function readAttachmentMessageId(

@@ -68,6 +68,29 @@ describe("LineAdapter", () => {
     expect(response.status).toBe(200);
   });
 
+  it("binds the webhook listener to the configured local host and port", async () => {
+    const port = await getFreePort();
+    const logger = { info: vi.fn() };
+    const adapter = new LineAdapter({
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({
+        callbackBaseUrl: `http://0.0.0.0:${port}/`,
+        channelAccessToken: undefined,
+      }),
+      logger,
+    });
+    adapters.push(adapter);
+    await adapter.start(async () => {});
+
+    expect(logger.info).toHaveBeenCalledWith(
+      "line webhook listener started",
+      expect.objectContaining({
+        host: "0.0.0.0",
+        port,
+      }),
+    );
+  });
+
   it("reports outbound delivery as failed until a channel access token is configured", async () => {
     const adapter = new LineAdapter({
       callbackHandleStore: createCallbackStore(),
