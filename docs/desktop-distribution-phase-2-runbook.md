@@ -1,6 +1,6 @@
 # Desktop Distribution Phase 2 Runbook
 
-> MIT-licensed desktop distribution planning. Copyright © 2026 PwrDrvr LLC.
+> MIT-licensed desktop distribution planning.
 >
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 

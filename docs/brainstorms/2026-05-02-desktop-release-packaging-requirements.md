@@ -28,10 +28,10 @@ packaging + signing + distribution pipeline, not an Electron fork.
   binary, every helper process, dock label, menu bar, About panel, window title, `.icns`
   icon, `Info.plist` `CFBundleName` / `CFBundleDisplayName` / `CFBundleExecutable`.
 - **R2.** Bundle identifier is `com.pwrdrvr.pwragent` (reverse-DNS, owned by PwrDrvr LLC).
-- **R3.** Copyright `Copyright © 2026 PwrDrvr LLC. All rights reserved.` appears in every
-  surface that carries a copyright string: `Info.plist` `NSHumanReadableCopyright`, the
-  About panel, `package.json` `author`, in-app About / Settings copyright row (if any),
-  the DMG license slide (if any), and the EULA.
+- **R3.** PwrDrvr LLC copyright metadata appears in every shipped surface that carries a
+  copyright string: `Info.plist` `NSHumanReadableCopyright`, the About panel,
+  `package.json` metadata, in-app About / Settings copyright row (if any), the DMG
+  license slide (if any), and the EULA.
 - **R4.** Binaries are code-signed with the **PwrDrvr LLC** "Developer ID Application"
   certificate. The signing identity must resolve to the LLC's Apple Developer Team ID, not
   to an individual.
@@ -79,8 +79,8 @@ packaging + signing + distribution pipeline, not an Electron fork.
   Authority chain belonging to **PwrDrvr LLC**.
 - `spctl -a -vv /Applications/PwrAgent.app` reports `accepted, source=Notarized Developer
   ID`.
-- Right-click → Get Info on the installed `.app` shows the `Copyright © 2026 PwrDrvr LLC`
-  string from `NSHumanReadableCopyright`.
+- Right-click → Get Info on the installed `.app` shows PwrDrvr LLC copyright metadata from
+  `NSHumanReadableCopyright`.
 - The PwrAgent → About menu (and any in-app About surface) shows the same copyright and the
   PwrAgent product name; no "Electron" string is visible in user-facing UI.
 - Activity Monitor shows process names like `PwrAgent`, `PwrAgent Helper (Renderer)`,
@@ -183,11 +183,10 @@ questions appropriately answered during planning)
   any runtime update-feed override capability, or is shipping a "bridge release" pointed
   at the new feed sufficient? (For solo-only Phase 1, fresh-install on Phase 2 is fine; the
   question matters more if external testers join during Phase 1.)
-- [Affects R3][Technical] Concrete inventory of every surface that needs the
-  `Copyright © 2026 PwrDrvr LLC` string updated: `Info.plist` `NSHumanReadableCopyright`,
-  `package.json` `author`/`description`, README, About panel / Settings → About row,
-  splash if present, EULA, and any source-file headers if the project decides to add them
-  (it currently does not).
+- [Affects R3][Technical] Concrete inventory of every shipped surface that carries
+  copyright metadata: `Info.plist` `NSHumanReadableCopyright`, package metadata, About
+  panel / Settings → About row, splash if present, EULA, and other generated release
+  metadata. Do not add copyright banners to README files, docs, or source-file headers.
 - [Affects R9][Technical] Bundling depth beyond defaults: confirm electron-vite's default
   Terser settings are acceptable, ASAR integrity is on, and `node_modules` is correctly
   pruned to production deps before packaging. Decide whether basic obfuscation (mangling

@@ -1,6 +1,6 @@
 # Desktop Release Runbook
 
-> MIT-licensed desktop release pipeline. Copyright © 2026 PwrDrvr LLC.
+> MIT-licensed desktop release pipeline.
 >
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
