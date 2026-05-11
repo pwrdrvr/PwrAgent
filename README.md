@@ -7,56 +7,49 @@ chat platforms you already use. Start a thread on your laptop, follow it
 from Telegram, approve a destructive command from Discord, hand the
 conversation back to the desktop when you're ready to read the diff.
 
-> **Status: beta.** macOS only today. PwrAgent is intentionally
-> non-destructive between releases: the config system migrates settings
-> forward without breaking older versions, only writes the keys it means
-> to change, and preserves keys it doesn't recognize so newer releases
-> can introduce settings without invalidating older ones. The contract
-> with users is a stable, steadily evolving project — not churn. See
-> [docs/config-file-evolution.md](docs/config-file-evolution.md) for the
-> read-fallback, lazy-conversion, and downgrade-compatibility rules.
+> **Status: beta — macOS only today.** Steady cadence, non-destructive
+> between releases.
 
 ![PwrAgent Recents view](docs/assets/screenshots/screenshot-recents-hero.png)
 <!-- screenshot: screenshot-recents-hero.png — Recents lens populated with several threads, at least one carrying a messenger badge. 1440×900, macOS, light theme. -->
 
-## What you can do
+## Why PwrAgent
 
-### Monitor bound threads from your messenger
+- **Built for Codex coders.** Full Codex threads on the go — start them
+  from your messenger or your desktop and pick up wherever.
+- **No-lock-in Codex integration.** Powered by the Codex App Server
+  protocol, so your thread list is the same one Codex sees and there's
+  no separate login. Try it for a day, use it for a month — switch back
+  to the official Codex client whenever.
+- **Safe upgrades and downgrades.** Config and state migrate forward
+  without breaking older installs. Run two versions side-by-side or
+  downgrade after an update without losing settings or threads. See
+  [docs/config-file-evolution.md](docs/config-file-evolution.md).
+- **Secrets encrypted at rest.** Bot tokens and API keys are encrypted
+  with Electron `safeStorage`, backed by macOS Keychain Access. PwrAgent
+  refuses to write secrets if the platform reports an unsafe backend.
+- **Messaging observability.** See which threads are being driven from
+  your messenger and whether your bot is connected, rate-limited, or
+  dropping callbacks — all from one card.
+- **Pair in minutes.** Paste a bot token, allowlist your platform user
+  ID, hit the in-app connection test. No cloud relay, no third-party
+  service in the middle.
+- **Find threads how you remember them.** Search and filter by branch
+  name, PR, emoji marker, or messaging binding — pick whichever you
+  actually recall.
+- **Markdown composer.** Write in the markdown you already use; the
+  composer renders bold, code blocks, links, and the rest.
 
-Every thread can be bound to a conversation on Telegram or Discord.
-Updates flow both ways: the desktop sees what you typed on your phone,
-the bot sees what the agent did on your laptop. No copy-paste, no
-context loss.
+## Take a look
 
-![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png)
+| | |
+|---|---|
+| ![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png) <br/>*Bound thread — desktop and messenger stay in sync* | ![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png) <br/>*Messenger status at a glance* |
+| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.png) <br/>*Paste-token pairing with in-app connection test* | ![Approval gate](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — destructive actions need approval* |
+
 <!-- screenshot: screenshot-bound-thread.png — Thread detail view with the linked messenger context visible. -->
-
-### See messenger status at a glance
-
-PwrAgent surfaces messenger connection state, allowlisted users, and
-recent activity in one card. If your bot drops a connection or a
-webhook stops delivering, you'll know.
-
-![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png)
 <!-- screenshot: screenshot-messenger-status.png — Settings or status surface showing Telegram/Discord/Mattermost connection state. -->
-
-### Pair the desktop with a chat bot
-
-Bring your own bot. Paste a token, allowlist your platform user ID, and
-PwrAgent does the rest — no cloud relay, no third-party service in the
-middle.
-
-![Pairing flow](docs/assets/screenshots/screenshot-pairing.png)
 <!-- screenshot: screenshot-pairing.png — Pairing / binding flow (or a clean settings card if there is no dedicated wizard). -->
-
-### Closed by default
-
-PwrAgent runs in default-access mode out of the box. Destructive actions
-prompt for approval, and the approval surface is mirrored on the bound
-messenger so you can say "yes" from the same place you saw the
-question.
-
-![Approval gate](docs/assets/screenshots/screenshot-closed-by-default.png)
 <!-- screenshot: screenshot-closed-by-default.png — Approval gate UI / closed state that conveys "the agent isn't acting on its own." -->
 
 ## Quick Start
@@ -86,9 +79,6 @@ or in `~/.config/grok-app-server/config.toml`. See
 ## Roadmap
 
 - macOS-first today. Linux and Windows are not yet supported.
-- Beta-stable. New features arrive on a steady cadence; the config and
-  state systems are designed to migrate forward without breaking older
-  installs.
 - The desktop release pipeline (signing, notarization, auto-update) is
   documented in
   [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).
@@ -99,13 +89,12 @@ or in `~/.config/grok-app-server/config.toml`. See
 
 PwrAgent grew out of
 [openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server),
-a PwrDrvr LLC project that brought Codex into Telegram and Discord.
+a project that aimed to be the best Codex integration-for-coding into Telegram and Discord.
 PwrAgent supersedes it: a desktop-first, thread-centric coding-agent
 shell with first-class messenger integration, and a generic messaging
 protocol that lets a single workflow layer drive Telegram, Discord,
 Mattermost, and Slack from the same code path. That protocol is now
-stable enough that the next step is bringing it back upstream into
-OpenClaw.
+stable across 5 messaging providers and is now a candidate submit to OpenClaw.
 
 ## Going deeper
 
