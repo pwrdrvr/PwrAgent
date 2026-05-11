@@ -636,6 +636,7 @@ function sanitizeBinding(
   return {
     ...rest,
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
+    monitorSurface: sanitizeSurfaceRef(binding.monitorSurface),
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),

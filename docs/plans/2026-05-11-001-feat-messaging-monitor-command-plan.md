@@ -1,7 +1,7 @@
 ---
 title: feat: Add messaging monitor command
 type: feat
-status: active
+status: completed
 date: 2026-05-11
 deepened: 2026-05-11
 ---
@@ -138,7 +138,7 @@ flowchart TB
     U4 --> U6["Unit 6: Restart, revoke, and delivery hardening"]
 ```
 
-- [ ] **Unit 1: Add Monitor to messaging command discovery**
+- [x] **Unit 1: Add Monitor to messaging command discovery**
 
 **Goal:** Make `monitor` a canonical messaging command that appears in the `/help` body and help action row as `Monitor`.
 
@@ -172,7 +172,7 @@ flowchart TB
 **Verification:**
 - Command catalog tests and controller help-surface tests prove Monitor is discoverable and routable without drifting from the catalog.
 
-- [ ] **Unit 2: Add provider-neutral monitor state to bindings**
+- [x] **Unit 2: Add provider-neutral monitor state to bindings**
 
 **Goal:** Persist whether a bound conversation is being monitored and remember the monitor surface used for in-place updates.
 
@@ -208,7 +208,7 @@ flowchart TB
 **Verification:**
 - Store tests prove monitor state persists with the binding and does not corrupt existing status or preference fields.
 
-- [ ] **Unit 3: Build a compact recent-thread monitor status surface**
+- [x] **Unit 3: Build a compact recent-thread monitor status surface**
 
 **Goal:** Render a generic status intent that summarizes recent threads and exposes a Stop Monitor action.
 
@@ -247,7 +247,7 @@ flowchart TB
 **Verification:**
 - Renderer tests prove the monitor card is compact, provider-neutral, and independent from the existing status card.
 
-- [ ] **Unit 4: Wire monitor command flow and timer lifecycle**
+- [x] **Unit 4: Wire monitor command flow and timer lifecycle**
 
 **Goal:** Let a bound conversation start, stop, and periodically refresh monitoring without leaking timers or duplicating loops.
 
@@ -288,7 +288,7 @@ flowchart TB
 **Verification:**
 - Controller tests with fake timers prove the one-minute loop, immediate first render, stop behavior, duplicate-loop prevention, and cleanup behavior.
 
-- [ ] **Unit 5: Register Monitor with provider command surfaces**
+- [x] **Unit 5: Register Monitor with provider command surfaces**
 
 **Goal:** Make native slash-command discovery match the generic help/catalog behavior where providers currently register commands.
 
@@ -331,7 +331,7 @@ flowchart TB
 **Verification:**
 - Provider tests prove platform discovery or parsing can produce the generic `monitor` command without breaking existing commands.
 
-- [ ] **Unit 6: Rehydrate and retire monitoring safely**
+- [x] **Unit 6: Rehydrate and retire monitoring safely**
 
 **Goal:** Make monitoring restart-aware and binding-lifecycle aware so enabled monitors do not silently stop, duplicate, or keep posting after detach.
 

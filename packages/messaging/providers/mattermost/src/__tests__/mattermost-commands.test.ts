@@ -118,13 +118,14 @@ describe("desiredMattermostCommands", () => {
       "pwragent_resume",
       "pwragent_status",
       "pwragent_detach",
+      "pwragent_monitor",
       "pwragent_help",
     ]);
   });
 
   it("uses bare triggers when prefix is empty", () => {
     const triggers = desiredMattermostCommands("").map((c) => c.trigger);
-    expect(triggers).toEqual(["resume", "status", "detach", "help"]);
+    expect(triggers).toEqual(["resume", "status", "detach", "monitor", "help"]);
   });
 
   it("supports custom prefixes", () => {
@@ -133,6 +134,7 @@ describe("desiredMattermostCommands", () => {
       "agent.resume",
       "agent.status",
       "agent.detach",
+      "agent.monitor",
       "agent.help",
     ]);
   });
@@ -178,6 +180,7 @@ describe("baseTriggerForPrefixed", () => {
   it("recovers the canonical base from a namespaced trigger", () => {
     expect(baseTriggerForPrefixed("/pwragent_resume", "pwragent_")).toBe("resume");
     expect(baseTriggerForPrefixed("/pwragent_status", "pwragent_")).toBe("status");
+    expect(baseTriggerForPrefixed("/pwragent_monitor", "pwragent_")).toBe("monitor");
   });
 
   it("handles bare triggers when prefix is empty", () => {

@@ -45,7 +45,7 @@ import {
  *
  * Keep this in sync with `MESSAGING_COMMAND_CATALOG` below.
  */
-export type MessagingCommandVerb = "resume" | "status" | "detach" | "help";
+export type MessagingCommandVerb = "resume" | "status" | "detach" | "monitor" | "help";
 
 export type MessagingCommandSpec = {
   verb: MessagingCommandVerb;
@@ -76,6 +76,10 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
   {
     verb: "detach",
     description: "detach this conversation from its thread",
+  },
+  {
+    verb: "monitor",
+    description: "monitor recent PwrAgent threads once per minute",
   },
   {
     verb: "help",

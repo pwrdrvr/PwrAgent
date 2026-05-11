@@ -48,6 +48,11 @@ import {
   matchMessagingCommandVerb,
   paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
+import {
+  buildMonitorStatusIntent,
+  MESSAGING_MONITOR_INTERVAL_MS,
+  MESSAGING_MONITOR_THREAD_LIMIT,
+} from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
@@ -319,6 +324,10 @@ export class MessagingController {
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
+  private readonly monitorTimersByBindingId = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -354,6 +363,20 @@ export class MessagingController {
         await this.deliverToolUpdateDelivery(delivery);
       },
     });
+  }
+
+  async startMonitoringForEnabledBindings(): Promise<void> {
+    const backends = await this.resolveMonitorBackendKinds();
+    for (const backend of backends) {
+      const bindings = this.filterBindingsForChannel(
+        await this.options.store.findActiveBindingsForBackend({ backend }),
+      );
+      for (const binding of bindings) {
+        if (binding.monitor?.enabled) {
+          this.scheduleMonitorTick(binding);
+        }
+      }
+    }
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
@@ -708,6 +731,10 @@ export class MessagingController {
     }
     if (verb === "detach") {
       await this.detachBinding(event);
+      return;
+    }
+    if (verb === "monitor") {
+      await this.handleMonitorCommand(event);
       return;
     }
     if (verb === "resume") {
@@ -1526,6 +1553,12 @@ export class MessagingController {
       return;
     }
 
+    const monitorAction = readMonitorAction(event);
+    if (monitorAction) {
+      await this.handleMonitorCallback(event, monitorAction);
+      return;
+    }
+
     const statusAction = readStatusAction(event);
     if (statusAction) {
       await this.handleStatusCallback(event, statusAction);
@@ -2238,6 +2271,10 @@ export class MessagingController {
 
   dispose(): void {
     this.turnAdmission.dispose();
+    for (const timer of this.monitorTimersByBindingId.values()) {
+      clearTimeout(timer);
+    }
+    this.monitorTimersByBindingId.clear();
     for (const pending of this.pendingNewThreadPrompts.values()) {
       if (pending.timer) {
         clearTimeout(pending.timer);
@@ -3334,6 +3371,144 @@ export class MessagingController {
     await this.recreateBindingStatus(binding, event);
   }
 
+  private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
+    const action = normalizeMonitorCommandAction(event.args?.[0]);
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliverMonitorUnbound(event);
+      return;
+    }
+
+    if (action === "stop") {
+      await this.stopMonitoringForBinding(binding, event);
+      return;
+    }
+
+    await this.enableAndRenderMonitor(binding, event);
+  }
+
+  private async handleMonitorCallback(
+    event: MessagingInboundCallbackEvent,
+    actionId: string,
+  ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliverMonitorUnbound(event);
+      return;
+    }
+
+    if (actionId === "monitor:stop") {
+      await this.stopMonitoringForBinding(binding, event);
+      return;
+    }
+
+    await this.enableAndRenderMonitor(binding, event);
+  }
+
+  private async deliverMonitorUnbound(event: MessagingInboundEvent): Promise<void> {
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("monitor-unbound"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "No thread bound",
+        body: "Use /resume to choose a PwrAgent thread before starting Monitor.",
+        actions: [
+          {
+            id: "command:resume",
+            label: "Resume",
+            style: "primary",
+            fallbackText: "/resume",
+          },
+        ],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async enableAndRenderMonitor(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<MessagingBindingRecord> {
+    const enabledBinding = await this.options.store.upsertBinding({
+      ...binding,
+      monitor: {
+        enabled: true,
+        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        lastRenderedAt: binding.monitor?.lastRenderedAt,
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    const rendered = await this.renderMonitorStatus(enabledBinding, event);
+    this.scheduleMonitorTick(rendered);
+    return rendered;
+  }
+
+  private async stopMonitoringForBinding(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<MessagingBindingRecord> {
+    this.clearMonitorTimer(binding.id);
+    const now = this.now();
+    if (binding.monitorSurface) {
+      try {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("monitor-stopped"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: now,
+            title: "Monitor stopped",
+            body: "Recent thread updates will no longer post to this conversation.",
+            actions: [],
+            delivery: {
+              mode: "update",
+              replaceMarkup: true,
+              fallback: "present_new",
+            },
+            targetSurface: binding.monitorSurface,
+          }),
+          binding,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging monitor stop update failed", {
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
+    } else if (event) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("monitor-stopped"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: now,
+          title: "Monitor stopped",
+          body: binding.monitor?.enabled
+            ? "Recent thread updates will no longer post to this conversation."
+            : "Monitor was not running for this conversation.",
+          actions: [],
+        }),
+        binding,
+        event,
+      );
+    }
+
+    return await this.options.store.upsertBinding({
+      ...binding,
+      monitor: {
+        enabled: false,
+        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        lastRenderedAt: binding.monitor?.lastRenderedAt,
+        updatedAt: now,
+      },
+      monitorSurface: undefined,
+      updatedAt: now,
+    });
+  }
+
   private async handleStatusCallback(
     event: MessagingInboundCallbackEvent,
     actionId: string,
@@ -4316,6 +4491,7 @@ export class MessagingController {
       );
     }
     await this.flushToolUpdatesForBinding(binding, { clear: true });
+    await this.stopMonitoringForBinding(binding, event);
     await this.retireBindingStatus(
       binding,
       event,
@@ -4509,6 +4685,146 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private async renderMonitorStatus(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    const snapshot =
+      navigation ??
+      (await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      }));
+    const now = this.now();
+    const activeTurns = await this.resolveMonitorActiveTurns(snapshot);
+    const intent = buildMonitorStatusIntent({
+      activeTurnsByThreadKey: activeTurns,
+      binding,
+      capabilityProfile: this.capabilityProfile,
+      createdAt: now,
+      id: this.newIntentId("monitor"),
+      navigation: snapshot,
+    });
+    const result = await this.deliver(intent, binding, event);
+    return await this.options.store.upsertBinding({
+      ...binding,
+      monitor: {
+        enabled: true,
+        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        lastRenderedAt: now,
+        updatedAt: now,
+      },
+      monitorSurface:
+        result.surface && result.outcome !== "failed"
+          ? result.surface
+          : binding.monitorSurface,
+      updatedAt: now,
+    });
+  }
+
+  private scheduleMonitorTick(binding: MessagingBindingRecord): void {
+    if (!binding.monitor?.enabled || this.monitorTimersByBindingId.has(binding.id)) {
+      return;
+    }
+
+    const intervalMs = binding.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
+    const timer = setTimeout(() => {
+      this.monitorTimersByBindingId.delete(binding.id);
+      void this.runMonitorTick(binding.id);
+    }, intervalMs);
+    this.monitorTimersByBindingId.set(binding.id, timer);
+  }
+
+  private clearMonitorTimer(bindingId: string): void {
+    const timer = this.monitorTimersByBindingId.get(bindingId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.monitorTimersByBindingId.delete(bindingId);
+  }
+
+  private async runMonitorTick(bindingId: string): Promise<void> {
+    const binding = await this.options.store.getBinding(bindingId);
+    if (!binding || binding.revokedAt || !binding.monitor?.enabled) {
+      this.clearMonitorTimer(bindingId);
+      return;
+    }
+
+    let rendered: MessagingBindingRecord | undefined;
+    try {
+      rendered = await this.renderMonitorStatus(binding);
+    } catch (error) {
+      this.logger.debug?.("messaging monitor tick failed", {
+        bindingId,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
+
+    const latest = rendered ?? await this.options.store.getBinding(bindingId);
+    if (latest && !latest.revokedAt && latest.monitor?.enabled) {
+      this.scheduleMonitorTick(latest);
+    }
+  }
+
+  private async resolveMonitorActiveTurns(
+    navigation: NavigationSnapshot,
+  ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
+    const activeTurns = new Map(this.activeTurnsByThreadKey);
+    if (!this.options.backend.readThreadStatus) {
+      return activeTurns;
+    }
+
+    const threads = navigation.threads.slice(0, MESSAGING_MONITOR_THREAD_LIMIT);
+    await Promise.all(
+      threads.map(async (thread) => {
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const existing = activeTurns.get(threadKey);
+        try {
+          const status = await this.options.backend.readThreadStatus?.({
+            backend: thread.source,
+            threadId: thread.id,
+          });
+          if (status === "active") {
+            activeTurns.set(threadKey, {
+              status: existing?.status === "waiting" ? "waiting" : "working",
+              turnId: existing?.turnId ?? `${threadKey}:monitor`,
+              updatedAt: this.now(),
+            });
+          } else if (
+            status === "idle" &&
+            existing &&
+            (existing.status === "working" || existing.status === "waiting")
+          ) {
+            activeTurns.set(threadKey, {
+              ...existing,
+              status: "completed",
+              updatedAt: this.now(),
+            });
+          }
+        } catch (error) {
+          this.logger.debug?.("messaging monitor thread status read failed", {
+            backend: thread.source,
+            error: error instanceof Error ? error.message : String(error),
+            threadId: thread.id,
+          });
+        }
+      }),
+    );
+    return activeTurns;
+  }
+
+  private async resolveMonitorBackendKinds(): Promise<AppServerBackendKind[]> {
+    const listed = await this.options.backend.listBackends?.({
+      includeUnavailable: true,
+    });
+    if (listed?.backends.length) {
+      return [...new Set(listed.backends.map((backend) => backend.kind))];
+    }
+    return ["codex", "grok"];
   }
 
   private async reconcileActiveTurnFromBackendStatus(
@@ -5326,6 +5642,24 @@ function readStatusAction(event: MessagingInboundCallbackEvent): string | undefi
   return actionId.startsWith("status:") || actionId.startsWith("handoff:")
     ? actionId
     : undefined;
+}
+
+function readMonitorAction(event: MessagingInboundCallbackEvent): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  return actionId.startsWith("monitor:") ? actionId : undefined;
+}
+
+function normalizeMonitorCommandAction(
+  action: string | undefined,
+): "start" | "stop" | "refresh" {
+  const normalized = action?.trim().toLowerCase();
+  if (normalized === "stop" || normalized === "off" || normalized === "disable") {
+    return "stop";
+  }
+  if (normalized === "refresh" || normalized === "now") {
+    return "refresh";
+  }
+  return "start";
 }
 
 /**

@@ -2,7 +2,7 @@
  * Mattermost slash-command registration & reconciler.
  *
  * Mirrors `discord-commands.ts` for the same surface (`/resume`,
- * `/status`, `/detach`). Mattermost commands are scoped per team —
+ * `/status`, `/detach`, `/monitor`). Mattermost commands are scoped per team —
  * the bot must be a team member, and registration creates a row in
  * the team's `commands` table. Each registered command gets a
  * server-issued `token` (returned in `addCommand`'s response and
@@ -77,7 +77,7 @@ type CanonicalCommandBase = {
 
 /**
  * Canonical command set as base verbs. Match Discord's surface
- * (`resume`, `status`, `detach`) so users on different platforms see
+ * (`resume`, `status`, `detach`, `monitor`) so users on different platforms see
  * the same primitives. Add new entries here; the reconciler picks
  * them up automatically once the per-prefix trigger is computed.
  */
@@ -100,6 +100,12 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     displayNameSuffix: "Detach",
     description: "Detach this conversation from its current PwrAgent thread.",
     autoCompleteDesc: "Detach this conversation from its current PwrAgent thread.",
+  },
+  {
+    base: "monitor",
+    displayNameSuffix: "Monitor",
+    description: "Monitor recent PwrAgent threads once per minute.",
+    autoCompleteDesc: "Monitor recent PwrAgent threads once per minute.",
   },
   {
     base: "help",

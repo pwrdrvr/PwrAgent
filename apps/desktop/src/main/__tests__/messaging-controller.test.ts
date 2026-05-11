@@ -1908,6 +1908,7 @@ describe("MessagingController", () => {
     expect(last?.body).toContain("`resume`");
     expect(last?.body).toContain("`status`");
     expect(last?.body).toContain("`detach`");
+    expect(last?.body).toContain("`monitor`");
     expect(last?.body).toContain("`help`");
     // Both invocation styles must be discoverable from the help text
     // — the whole reason we ship a catalog-derived body.
@@ -1924,7 +1925,7 @@ describe("MessagingController", () => {
       | { actions?: Array<{ id?: string; label?: string; style?: string }> }
       | undefined;
     expect(last?.actions).toBeDefined();
-    // One button per canonical verb (today: 4). Catalog fits a
+    // One button per canonical verb (today: 5). Catalog fits a
     // single page on every reasonable provider profile, so no nav
     // buttons are rendered.
     const ids = (last?.actions ?? []).map((a) => a.id);
@@ -1932,6 +1933,7 @@ describe("MessagingController", () => {
       "command:resume",
       "command:status",
       "command:detach",
+      "command:monitor",
       "command:help",
     ]);
     // Resume retains primary styling — matches the previous
@@ -1989,6 +1991,27 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clicking the Monitor button on the help surface dispatches the monitor command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:monitor",
+      }),
+    );
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "No thread bound",
+      actions: [
+        expect.objectContaining({
+          id: "command:resume",
+        }),
+      ],
+    });
+  });
+
   it("clicking the help-page Cancel button replaces the surface with a dismissal", async () => {
     const harness = await createHarness();
 
@@ -2030,6 +2053,146 @@ describe("MessagingController", () => {
         replaceMarkup: true,
       },
     });
+  });
+
+  it("explains that Monitor requires a bound conversation", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "No thread bound",
+      body: expect.stringContaining("before starting Monitor"),
+      actions: [
+        expect.objectContaining({
+          id: "command:resume",
+          label: "Resume",
+        }),
+      ],
+    });
+  });
+
+  it("starts Monitor for a bound conversation and stores the update surface", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.getNavigationSnapshot.mockClear();
+    harness.readThreadStatus.mockResolvedValue("active");
+    harness.delivered.splice(0);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/MONITOR"));
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.readThreadStatus).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "working",
+      text: expect.stringContaining("Monitor: Recent threads"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitor:stop",
+          fallbackText: "monitor stop",
+        }),
+      ]),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+    ).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1000,
+      },
+      monitorSurface: {
+        id: expect.stringContaining("surface:"),
+      },
+    });
+  });
+
+  it("does not create duplicate Monitor timers for repeated starts", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
+  it("stops Monitor without detaching the binding and cancels the next tick", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      harness.getNavigationSnapshot.mockClear();
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor stop"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor stopped",
+        delivery: {
+          mode: "update",
+        },
+      });
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      expect(binding).toMatchObject({
+        monitor: {
+          enabled: false,
+        },
+      });
+      expect(binding?.revokedAt).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
+  it("rehydrates enabled Monitor bindings on controller startup", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      );
+      if (!binding) {
+        throw new Error("binding missing");
+      }
+      await harness.store.upsertBinding({
+        ...binding,
+        monitor: {
+          enabled: true,
+          intervalMs: 1,
+          updatedAt: 1000,
+        },
+        updatedAt: 1000,
+      });
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.startMonitoringForEnabledBindings();
+
+      expect(harness.listBackends).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+      expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    } finally {
+      harness.controller.dispose();
+    }
   });
 
   it("updates the browse surface and removes actions when cancelling resume", async () => {
@@ -5988,4 +6151,10 @@ function buildCallbackEvent(params: {
     actionId: params.actionId,
     value: params.value,
   };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }

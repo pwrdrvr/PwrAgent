@@ -140,6 +140,41 @@ describe("adaptGrammyBot", () => {
 });
 
 describe("TelegramAdapter callback persistence", () => {
+  it("registers Monitor with Telegram bot commands", async () => {
+    const grammyBot = createGrammyBot();
+    const adapter = new TelegramAdapter({
+      api: adaptGrammyBot(grammyBot).api,
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+
+    await adapter.start(async () => {});
+
+    expect(grammyBot.api.setMyCommands).toHaveBeenCalledWith([
+      {
+        command: "resume",
+        description: "Resume or start a PwrAgent thread",
+      },
+      {
+        command: "status",
+        description: "Show the current PwrAgent binding",
+      },
+      {
+        command: "detach",
+        description: "Detach this chat from PwrAgent",
+      },
+      {
+        command: "monitor",
+        description: "Monitor recent PwrAgent threads",
+      },
+    ]);
+  });
+
   it("persists routed actor and binding metadata in callback handles", async () => {
     const store = fakeCallbackStore();
     const adapter = new TelegramAdapter({

@@ -472,6 +472,22 @@ describe("messaging surface contract", () => {
         toolUpdateMode: "show_all",
         updatedAt: 1000,
       },
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1500,
+        updatedAt: 1500,
+      },
+      monitorSurface: {
+        channel: "telegram",
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 124,
+          },
+        },
+      },
       statusSurface: {
         channel: "telegram",
         id: "message-1",
@@ -521,6 +537,8 @@ describe("messaging surface contract", () => {
     expect(callbackHandle.handle).not.toContain("thread-1");
     expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
+    expect(binding.monitor?.enabled).toBe(true);
+    expect(binding.monitorSurface?.id).toBe("monitor-message-1");
   });
 
   it("defines callback handles as long-lived sqlite routes", () => {

@@ -20,6 +20,7 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
       "resume",
       "status",
       "detach",
+      "monitor",
       "help",
     ]);
   });
@@ -47,11 +48,13 @@ describe("matchMessagingCommandVerb", () => {
   it("strips a leading slash before matching", () => {
     expect(matchMessagingCommandVerb("/resume")).toBe("resume");
     expect(matchMessagingCommandVerb("/status")).toBe("status");
+    expect(matchMessagingCommandVerb("/monitor")).toBe("monitor");
   });
 
   it("is case-insensitive", () => {
     expect(matchMessagingCommandVerb("RESUME")).toBe("resume");
     expect(matchMessagingCommandVerb("/Status")).toBe("status");
+    expect(matchMessagingCommandVerb("/MONITOR")).toBe("monitor");
     expect(matchMessagingCommandVerb("HELP")).toBe("help");
   });
 
@@ -88,11 +91,13 @@ describe("formatMessagingCommandHelpBody", () => {
     const resumeIdx = body.indexOf("`resume`");
     const statusIdx = body.indexOf("`status`");
     const detachIdx = body.indexOf("`detach`");
+    const monitorIdx = body.indexOf("`monitor`");
     const helpIdx = body.indexOf("`help`");
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
     expect(statusIdx).toBeGreaterThan(resumeIdx);
     expect(detachIdx).toBeGreaterThan(statusIdx);
-    expect(helpIdx).toBeGreaterThan(detachIdx);
+    expect(monitorIdx).toBeGreaterThan(detachIdx);
+    expect(helpIdx).toBeGreaterThan(monitorIdx);
   });
 
   it("appends the default invocation footer with both styles", () => {
@@ -194,6 +199,7 @@ describe("paginateHelpCatalog", () => {
       "resume",
       "status",
       "detach",
+      "monitor",
       "help",
     ]);
   });
@@ -262,6 +268,7 @@ describe("buildHelpActions", () => {
       "command:resume",
       "command:status",
       "command:detach",
+      "command:monitor",
       "command:help",
     ]);
   });

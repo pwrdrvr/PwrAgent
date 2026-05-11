@@ -513,9 +513,9 @@ describe("SlackAdapter", () => {
       body: {
         channel_id: "C012ABCDEF0",
         channel_name: "signals-chat",
-        command: "/pwragent_status",
+        command: "/pwragent_monitor",
         team_id: "T012ABCDEF0",
-        text: "now",
+        text: "refresh",
         user_id: "U012ABCDEF0",
         user_name: "alice",
       },
@@ -524,9 +524,9 @@ describe("SlackAdapter", () => {
     expect(events).toEqual([
       expect.objectContaining({
         kind: "command",
-        command: "status",
-        args: ["now"],
-        rawText: "/pwragent_status now",
+        command: "monitor",
+        args: ["refresh"],
+        rawText: "/pwragent_monitor refresh",
       }),
     ]);
   });

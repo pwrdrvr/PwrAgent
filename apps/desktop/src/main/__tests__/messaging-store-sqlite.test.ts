@@ -226,6 +226,68 @@ describe("SqliteMessagingStore", () => {
     ]);
   });
 
+  it("round-trips monitor state and monitor surface on bindings", async () => {
+    const store = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          lastRenderedAt: 2000,
+          updatedAt: 2000,
+        },
+        monitorSurface: {
+          channel: "telegram",
+          id: "monitor-message-1",
+          state: {
+            opaque: {
+              chatId: 123,
+              messageId: 456,
+              apiToken: "secret-token",
+            },
+          },
+        },
+        preferences: {
+          executionMode: "full-access",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          updatedAt: 1500,
+        },
+        statusSurface: {
+          channel: "telegram",
+          id: "status-message-1",
+        },
+      }),
+    );
+
+    await expect(store.getBinding("binding-1")).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 2000,
+      },
+      monitorSurface: {
+        channel: "telegram",
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 123,
+            messageId: 456,
+            apiToken: "[REDACTED]",
+          },
+        },
+      },
+      preferences: {
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      },
+      statusSurface: {
+        id: "status-message-1",
+      },
+    });
+  });
+
   it("can delete callback handles for a binding without revoking it", async () => {
     const store = await createStore();
     await store.upsertCallbackHandle(buildCallbackHandle());
