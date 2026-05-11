@@ -81,6 +81,7 @@ import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
+import { mergeLoginShellEnvIntoEnv } from "../shell-environment";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -88,6 +89,9 @@ type DesktopSettingsServiceOptions = {
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
   now?: () => number;
+  resolveCodexShellEnv?: (
+    env: NodeJS.ProcessEnv
+  ) => NodeJS.ProcessEnv | undefined;
 };
 
 type ConfigReadResult = {
@@ -495,9 +499,12 @@ export class DesktopSettingsService {
     const codexHome = resolveCodexHomeForProfile(configuredProfile, {
       env: this.env,
     });
-    if (!codexHome) return this.env;
+    const spawnEnv = mergeLoginShellEnvIntoEnv(this.env, {
+      resolveShellEnv: this.options.resolveCodexShellEnv,
+    });
+    if (!codexHome) return spawnEnv;
     return {
-      ...this.env,
+      ...spawnEnv,
       CODEX_HOME: codexHome,
     };
   }

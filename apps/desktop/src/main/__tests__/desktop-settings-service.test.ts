@@ -440,6 +440,22 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("adds login shell PATH entries to the Codex app-server spawn env", () => {
+    const service = new DesktopSettingsService({
+      env: { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({
+        NVM_DIR: "/Users/alice/.nvm",
+        PATH: "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
+      }),
+    });
+
+    expect(service.resolveCodexSpawnEnv().PATH).toBe(
+      "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
+    );
+    expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
+  });
+
   it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
