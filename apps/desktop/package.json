@@ -38,6 +38,7 @@
     "@pwragent/codex-app-server-protocol": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
+    "@pwragent/messaging-provider-feishu": "workspace:*",
     "@pwragent/messaging-provider-line": "workspace:*",
     "@pwragent/messaging-provider-mattermost": "workspace:*",
     "@pwragent/messaging-provider-slack": "workspace:*",

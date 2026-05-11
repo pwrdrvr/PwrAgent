@@ -23,6 +23,9 @@ type TesterOptions = {
   resolveMattermostBotToken?: () => string | undefined;
   resolveMattermostServerUrl?: () => string | undefined;
   resolveSlackBotToken?: () => string | undefined;
+  resolveFeishuAppId?: () => string | undefined;
+  resolveFeishuAppSecret?: () => string | undefined;
+  resolveFeishuTenantUrl?: () => string | undefined;
   resolveLineChannelAccessToken?: () => string | undefined;
   resolveGrokApiKey?: () => Promise<string | undefined>;
   resolveCodexCommand?: () => Promise<string | undefined>;
@@ -59,6 +62,10 @@ function buildTester(options: TesterOptions = {}) {
       options.resolveMattermostServerUrl
       ?? (() => "https://mm.example.com"),
     resolveSlackBotToken: options.resolveSlackBotToken ?? (() => "slack-token"),
+    resolveFeishuAppId: options.resolveFeishuAppId ?? (() => "cli_feishu"),
+    resolveFeishuAppSecret: options.resolveFeishuAppSecret ?? (() => "feishu-secret"),
+    resolveFeishuTenantUrl:
+      options.resolveFeishuTenantUrl ?? (() => "https://open.feishu.cn"),
     resolveLineChannelAccessToken:
       options.resolveLineChannelAccessToken ?? (() => "line-token"),
     resolveGrokApiKey: options.resolveGrokApiKey ?? (async () => "grok-key"),
@@ -215,6 +222,46 @@ describe("CredentialTester", () => {
         validateMessagingCredentials,
       });
       const result = await tester.test("mattermost");
+      expect(result.status).toBe("unset");
+      expect(validateMessagingCredentials).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("feishu", () => {
+    it("dispatches App ID, App Secret, and tenant URL through the runtime", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 41,
+        testedAt: Date.now(),
+        account: "PwrAgent",
+        detail: "tenant_1",
+      }));
+      const { tester } = buildTester({ validateMessagingCredentials });
+      const result = await tester.test("feishu");
+      expect(validateMessagingCredentials).toHaveBeenCalledWith({
+        channel: "feishu",
+        credential: {
+          appId: "cli_feishu",
+          appSecret: "feishu-secret",
+          tenantUrl: "https://open.feishu.cn",
+        },
+      });
+      expect(result.status).toBe("ok");
+      expect(result.account).toBe("PwrAgent");
+      expect(result.detail).toBe("tenant_1");
+    });
+
+    it("returns unset when an app credential is missing", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 1,
+        testedAt: Date.now(),
+      }));
+      const { tester } = buildTester({
+        resolveFeishuAppSecret: () => undefined,
+        validateMessagingCredentials,
+      });
+      const result = await tester.test("feishu");
       expect(result.status).toBe("unset");
       expect(validateMessagingCredentials).not.toHaveBeenCalled();
     });

@@ -6,7 +6,7 @@ import type { DesktopMessagingAdapter } from "./messaging-runtime";
 
 export type DesktopMessagingProviderId = Extract<
   MessagingChannelKind,
-  "telegram" | "discord" | "mattermost" | "slack" | "line"
+  "telegram" | "discord" | "mattermost" | "slack" | "feishu" | "line"
 >;
 
 export type DesktopMessagingProviderModule = {
@@ -76,6 +76,7 @@ export function configuredMessagingProviderIds(
       ? (["mattermost"] as const)
       : []),
     ...(config.slack && config.slack.enabled !== false ? (["slack"] as const) : []),
+    ...(config.feishu && config.feishu.enabled !== false ? (["feishu"] as const) : []),
     ...(config.line && config.line.enabled !== false ? (["line"] as const) : []),
   ];
 }
@@ -142,6 +143,18 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
         createAdapter({ config, logger, store }) {
           return config.slack
             ? module.createSlackAdapter(config.slack, store, logger)
+            : undefined;
+        },
+      };
+    },
+  },
+  feishu: {
+    async load() {
+      const module = await import("@pwragent/messaging-provider-feishu");
+      return {
+        createAdapter({ config, logger, store }) {
+          return config.feishu
+            ? module.createFeishuAdapter(config.feishu, store, logger)
             : undefined;
         },
       };

@@ -38,6 +38,9 @@ importers:
       '@pwragent/messaging-provider-discord':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/discord
+      '@pwragent/messaging-provider-feishu':
+        specifier: workspace:*
+        version: link:../../packages/messaging/providers/feishu
       '@pwragent/messaging-provider-line':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/line

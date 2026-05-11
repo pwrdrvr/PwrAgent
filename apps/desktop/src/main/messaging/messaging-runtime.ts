@@ -209,6 +209,10 @@ export type CredentialValidationRequest =
       credential: { botToken: string; serverUrl: string };
     }
   | { channel: "slack"; credential: { botToken: string } }
+  | {
+      channel: "feishu";
+      credential: { appId: string; appSecret: string; tenantUrl: string };
+    }
   | { channel: "line"; credential: { channelAccessToken: string } };
 
 export class DesktopMessagingRuntime {
@@ -764,6 +768,12 @@ export class DesktopMessagingRuntime {
       case "slack": {
         const slackProvider = await import("@pwragent/messaging-provider-slack");
         return await slackProvider.validateCredentials(request.credential);
+      }
+      case "feishu": {
+        const feishuProvider = await import(
+          "@pwragent/messaging-provider-feishu"
+        );
+        return await feishuProvider.validateCredentials(request.credential);
       }
       case "line": {
         const lineProvider = await import("@pwragent/messaging-provider-line");

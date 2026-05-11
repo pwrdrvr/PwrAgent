@@ -42,6 +42,7 @@ export type DesktopAuthorizedContact = {
 export type DesktopMessagingContactLookupPlatform =
   | "telegram"
   | "discord"
+  | "feishu"
   | "mattermost"
   | "slack"
   | "line";
@@ -51,6 +52,8 @@ export type DesktopMessagingContactLookupKind =
   | "supergroup"
   | "guild"
   | "workspace"
+  | "chat"
+  | "tenant"
   | "group"
   | "room";
 
@@ -85,6 +88,10 @@ export type DesktopSettingsSecretName =
   | "slackBotToken"
   | "slackAppToken"
   | "slackSigningSecret"
+  | "feishuAppId"
+  | "feishuAppSecret"
+  | "feishuEncryptKey"
+  | "feishuVerificationToken"
   | "lineChannelAccessToken"
   | "lineChannelSecret";
 
@@ -310,6 +317,22 @@ export type DesktopSettingsSnapshot = {
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       authorizedWorkspaces: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
+    feishu: {
+      enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
+      appId: DesktopSettingsSecretState;
+      appSecret: DesktopSettingsSecretState;
+      encryptKey: DesktopSettingsSecretState;
+      verificationToken: DesktopSettingsSecretState;
+      tenantRegion: DesktopSettingsValue<"feishu" | "lark">;
+      tenantUrl: DesktopSettingsValue<string>;
+      callbackBaseUrl: DesktopSettingsValue<string>;
+      slashCommandPrefix: DesktopSettingsValue<string>;
+      registerSlashCommands: DesktopSettingsValue<boolean>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedChats: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedTenants: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+    };
     line: {
       enabled: DesktopSettingsValue<boolean>;
       streamingResponses: DesktopSettingsValue<boolean>;
@@ -391,6 +414,18 @@ export type DesktopSettingsConfigPatch = {
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedWorkspaces?: DesktopAuthorizedContact[];
+    };
+    feishu?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      tenantRegion?: "feishu" | "lark";
+      tenantUrl?: string;
+      callbackBaseUrl?: string;
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedChats?: DesktopAuthorizedContact[];
+      authorizedTenants?: DesktopAuthorizedContact[];
     };
     line?: {
       enabled?: boolean;
@@ -524,6 +559,7 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "codex",
   "mattermost",
   "slack",
+  "feishu",
   "line",
 ] as const;
 

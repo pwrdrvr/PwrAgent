@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared";
 import {
   DiscordIcon,
+  FeishuIcon,
   LineIcon,
   MattermostIcon,
   SlackIcon,
@@ -40,6 +41,7 @@ const PLATFORM_ICONS: Partial<
   discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
   slack: ({ size }) => <SlackIcon size={size} />,
+  feishu: ({ size }) => <FeishuIcon size={size} />,
   line: ({ size }) => <LineIcon size={size} />,
 };
 
@@ -281,6 +283,7 @@ function userIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Peer ID";
   if (platform === "discord") return "User ID";
   if (platform === "slack") return "User ID";
+  if (platform === "feishu") return "Open ID";
   if (platform === "mattermost") return "User ID";
   return "Actor ID";
 }
@@ -291,6 +294,7 @@ function parentIdLabel(
 ): string {
   if (platform === "telegram") return "Supergroup ID";
   if (platform === "discord") return "Guild ID";
+  if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost" && conversationKind === "thread") return "Root ID";
   return "Parent ID";
 }
@@ -299,6 +303,7 @@ function bucketIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Supergroup ID";
   if (platform === "discord") return "Guild ID";
   if (platform === "slack") return "Workspace ID";
+  if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost") return "Team ID";
   return "Bucket ID";
 }
@@ -312,6 +317,7 @@ function conversationIdLabel(
   }
   if (platform === "discord" && conversationKind !== "dm") return "Channel ID";
   if (platform === "slack" && conversationKind !== "dm") return "Channel ID";
+  if (platform === "feishu" && conversationKind !== "dm") return "Chat ID";
   if (platform === "mattermost" && conversationKind !== "dm") return "Channel ID";
   return "Conversation ID";
 }

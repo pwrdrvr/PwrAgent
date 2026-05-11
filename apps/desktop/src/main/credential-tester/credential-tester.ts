@@ -40,6 +40,9 @@ export interface CredentialTesterDependencies {
   resolveDiscordBotToken: () => string | undefined;
   resolveMattermostBotToken: () => string | undefined;
   resolveSlackBotToken: () => string | undefined;
+  resolveFeishuAppId: () => string | undefined;
+  resolveFeishuAppSecret: () => string | undefined;
+  resolveFeishuTenantUrl: () => string | undefined;
   resolveLineChannelAccessToken: () => string | undefined;
   /** Returns the configured Mattermost server URL (settings/env merged).
    *  Used together with the bot token to target the `users/me` probe. */
@@ -130,6 +133,9 @@ export class CredentialTester {
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
       resolveMattermostBotToken: dependencies.resolveMattermostBotToken,
       resolveSlackBotToken: dependencies.resolveSlackBotToken,
+      resolveFeishuAppId: dependencies.resolveFeishuAppId,
+      resolveFeishuAppSecret: dependencies.resolveFeishuAppSecret,
+      resolveFeishuTenantUrl: dependencies.resolveFeishuTenantUrl,
       resolveLineChannelAccessToken: dependencies.resolveLineChannelAccessToken,
       resolveMattermostServerUrl: dependencies.resolveMattermostServerUrl,
       resolveGrokApiKey: dependencies.resolveGrokApiKey,
@@ -197,6 +203,8 @@ export class CredentialTester {
         return await this.testMattermost(startedAt);
       case "slack":
         return await this.testSlack(startedAt);
+      case "feishu":
+        return await this.testFeishu(startedAt);
       case "line":
         return await this.testLine(startedAt);
       default: {
@@ -261,6 +269,22 @@ export class CredentialTester {
       credential: { botToken },
     });
     return liftMessagingResult("slack", result);
+  }
+
+  private async testFeishu(
+    startedAt: number,
+  ): Promise<SettingsCredentialTestResult> {
+    const appId = this.deps.resolveFeishuAppId();
+    const appSecret = this.deps.resolveFeishuAppSecret();
+    const tenantUrl = this.deps.resolveFeishuTenantUrl();
+    if (!appId || !appSecret || !tenantUrl) {
+      return unset("feishu", startedAt);
+    }
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "feishu",
+      credential: { appId, appSecret, tenantUrl },
+    });
+    return liftMessagingResult("feishu", result);
   }
 
   private async testLine(
@@ -413,7 +437,7 @@ export class CredentialTester {
  * differ only in the `kind` field; everything else is preserved.
  */
 function liftMessagingResult(
-  kind: "telegram" | "discord" | "mattermost" | "slack" | "line",
+  kind: "telegram" | "discord" | "mattermost" | "slack" | "feishu" | "line",
   result: MessagingCredentialValidationResult,
 ): SettingsCredentialTestResult {
   return {

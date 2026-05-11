@@ -42,6 +42,7 @@ describe("messaging provider loader", () => {
 
     expect(registry.telegram.load).not.toHaveBeenCalled();
     expect(registry.discord.load).not.toHaveBeenCalled();
+    expect(registry.feishu.load).not.toHaveBeenCalled();
     expect(registry.line.load).not.toHaveBeenCalled();
   });
 
@@ -154,6 +155,12 @@ function createRegistry(
           config.slack ? createAdapter("slack") : undefined,
       })),
     },
+    feishu: {
+      load: vi.fn(async () => ({
+        createAdapter: ({ config }: { config: DesktopMessagingConfig }) =>
+          config.feishu ? createAdapter("feishu") : undefined,
+      })),
+    },
     line: {
       load: vi.fn(async () => ({
         createAdapter: ({ config }: { config: DesktopMessagingConfig }) =>
@@ -165,7 +172,7 @@ function createRegistry(
 }
 
 function createAdapter(
-  channel: "telegram" | "discord" | "mattermost" | "slack" | "line",
+  channel: "telegram" | "discord" | "mattermost" | "slack" | "feishu" | "line",
 ): DesktopMessagingAdapter {
   return {
     authorizedActorIds: [`${channel}-user`],

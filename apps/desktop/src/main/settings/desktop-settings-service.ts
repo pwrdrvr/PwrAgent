@@ -32,6 +32,20 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  FEISHU_APP_ID_ENV,
+  FEISHU_APP_SECRET_ENV,
+  FEISHU_AUTHORIZED_CHATS_ENV,
+  FEISHU_AUTHORIZED_TENANTS_ENV,
+  FEISHU_AUTHORIZED_USER_IDS_ENV,
+  FEISHU_CALLBACK_BASE_URL_ENV,
+  FEISHU_ENABLED_ENV,
+  FEISHU_ENCRYPT_KEY_ENV,
+  FEISHU_REGISTER_SLASH_COMMANDS_ENV,
+  FEISHU_SLASH_COMMAND_PREFIX_ENV,
+  FEISHU_STREAMING_RESPONSES_ENV,
+  FEISHU_TENANT_REGION_ENV,
+  FEISHU_TENANT_URL_ENV,
+  FEISHU_VERIFICATION_TOKEN_ENV,
   GH_COMMAND_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
@@ -170,6 +184,26 @@ export class DesktopSettingsService {
     const slackSigningSecret = await this.readSecretState(
       "slackSigningSecret",
       SLACK_SIGNING_SECRET_ENV,
+      secretStorage.available,
+    );
+    const feishuAppId = await this.readSecretState(
+      "feishuAppId",
+      FEISHU_APP_ID_ENV,
+      secretStorage.available,
+    );
+    const feishuAppSecret = await this.readSecretState(
+      "feishuAppSecret",
+      FEISHU_APP_SECRET_ENV,
+      secretStorage.available,
+    );
+    const feishuEncryptKey = await this.readSecretState(
+      "feishuEncryptKey",
+      FEISHU_ENCRYPT_KEY_ENV,
+      secretStorage.available,
+    );
+    const feishuVerificationToken = await this.readSecretState(
+      "feishuVerificationToken",
+      FEISHU_VERIFICATION_TOKEN_ENV,
       secretStorage.available,
     );
     const lineChannelAccessToken = await this.readSecretState(
@@ -395,6 +429,57 @@ export class DesktopSettingsService {
             SLACK_AUTHORIZED_WORKSPACES_ENV,
           ),
         },
+        feishu: {
+          enabled: this.resolveBoolean(
+            config.messaging?.feishu?.enabled,
+            false,
+            FEISHU_ENABLED_ENV,
+          ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.feishu?.streamingResponses,
+            false,
+            FEISHU_STREAMING_RESPONSES_ENV,
+          ),
+          appId: feishuAppId,
+          appSecret: feishuAppSecret,
+          encryptKey: feishuEncryptKey,
+          verificationToken: feishuVerificationToken,
+          tenantRegion: this.resolveFeishuTenantRegion(
+            config.messaging?.feishu?.tenantRegion,
+          ),
+          tenantUrl: this.resolveStringWithDefault(
+            config.messaging?.feishu?.tenantUrl,
+            "https://open.feishu.cn",
+            FEISHU_TENANT_URL_ENV,
+          ),
+          callbackBaseUrl: this.resolveStringWithDefault(
+            config.messaging?.feishu?.callbackBaseUrl,
+            "http://127.0.0.1:47823",
+            FEISHU_CALLBACK_BASE_URL_ENV,
+          ),
+          slashCommandPrefix: this.resolveStringWithDefault(
+            config.messaging?.feishu?.slashCommandPrefix,
+            "pwragent_",
+            FEISHU_SLASH_COMMAND_PREFIX_ENV,
+          ),
+          registerSlashCommands: this.resolveBoolean(
+            config.messaging?.feishu?.registerSlashCommands,
+            false,
+            FEISHU_REGISTER_SLASH_COMMANDS_ENV,
+          ),
+          authorizedUserIds: this.resolveList(
+            config.messaging?.feishu?.authorizedUserIds,
+            FEISHU_AUTHORIZED_USER_IDS_ENV,
+          ),
+          authorizedChats: this.resolveList(
+            config.messaging?.feishu?.authorizedChats,
+            FEISHU_AUTHORIZED_CHATS_ENV,
+          ),
+          authorizedTenants: this.resolveList(
+            config.messaging?.feishu?.authorizedTenants,
+            FEISHU_AUTHORIZED_TENANTS_ENV,
+          ),
+        },
         line: {
           enabled: this.resolveBoolean(
             config.messaging?.line?.enabled,
@@ -539,6 +624,33 @@ export class DesktopSettingsService {
 
   resolveSlackSigningSecretSync(): string | undefined {
     return this.resolveSecretSync("slackSigningSecret", SLACK_SIGNING_SECRET_ENV);
+  }
+
+  resolveFeishuAppIdSync(): string | undefined {
+    return this.resolveSecretSync("feishuAppId", FEISHU_APP_ID_ENV);
+  }
+
+  resolveFeishuAppSecretSync(): string | undefined {
+    return this.resolveSecretSync("feishuAppSecret", FEISHU_APP_SECRET_ENV);
+  }
+
+  resolveFeishuEncryptKeySync(): string | undefined {
+    return this.resolveSecretSync("feishuEncryptKey", FEISHU_ENCRYPT_KEY_ENV);
+  }
+
+  resolveFeishuVerificationTokenSync(): string | undefined {
+    return this.resolveSecretSync(
+      "feishuVerificationToken",
+      FEISHU_VERIFICATION_TOKEN_ENV,
+    );
+  }
+
+  resolveFeishuTenantUrlSync(): string | undefined {
+    return (
+      readEnvString(this.env, FEISHU_TENANT_URL_ENV)
+      ?? this.readConfig().config.messaging?.feishu?.tenantUrl
+      ?? "https://open.feishu.cn"
+    );
   }
 
   resolveLineChannelAccessTokenSync(): string | undefined {
@@ -793,6 +905,27 @@ export class DesktopSettingsService {
       source: configValue === undefined ? "default" : "config",
       ...(envValue !== undefined
         ? { error: `Invalid Slack inbound mode for ${SLACK_INBOUND_MODE_ENV}` }
+        : {}),
+    };
+  }
+
+  private resolveFeishuTenantRegion(
+    configValue: "feishu" | "lark" | undefined,
+  ): DesktopSettingsValue<"feishu" | "lark"> {
+    const envValue = readEnvString(this.env, FEISHU_TENANT_REGION_ENV);
+    if (envValue === "feishu" || envValue === "lark") {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? "feishu",
+      source: configValue === undefined ? "default" : "config",
+      ...(envValue !== undefined
+        ? { error: `Invalid Feishu tenant region for ${FEISHU_TENANT_REGION_ENV}` }
         : {}),
     };
   }

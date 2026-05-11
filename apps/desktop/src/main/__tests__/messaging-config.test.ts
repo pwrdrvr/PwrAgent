@@ -60,6 +60,7 @@ describe("desktop messaging config", () => {
       "attachmentPolicy",
       "discord",
       "enabled",
+      "feishu",
       "inputDebounceMs",
       "line",
       "mattermost",
@@ -112,6 +113,23 @@ describe("desktop messaging config", () => {
       "slashCommandPrefix",
       "streamingResponses",
       "workspaceUrl",
+    ]);
+    expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.feishu).sort()).toEqual([
+      "appId",
+      "appSecret",
+      "authorizedActorIds",
+      "authorizedChatIds",
+      "authorizedTenantKeys",
+      "callbackBaseUrl",
+      "channel",
+      "enabled",
+      "encryptKey",
+      "registerSlashCommands",
+      "slashCommandPrefix",
+      "streamingResponses",
+      "tenantRegion",
+      "tenantUrl",
+      "verificationToken",
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.line).sort()).toEqual([
       "authorizedActorIds",
