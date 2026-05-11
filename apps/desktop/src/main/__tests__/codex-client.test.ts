@@ -2379,6 +2379,57 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("merges review-shaped assistant findings into summary-only exited review events", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const reviewSummary =
+      "The queued-review behavior introduces draft/attachment loss in realistic active-turn workflows.";
+    const reviewText = `${reviewSummary}\n\nFull review comments:\n\n- [P2] Preserve the live draft after starting a queued review — /Users/huntharo/.codex/worktrees/mp1febj4/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx:1673-1677\n  When this path is reached from sendQueuedTurn, the user may already have started composing another reply while the review waited in the queue.`;
+    MockTransport.readThreadResultByThreadId.set("thread-summary-review", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "exitedReviewMode",
+                id: "exited-review",
+                review: reviewSummary,
+              },
+              {
+                type: "agentMessage",
+                id: "review-answer",
+                text: reviewText,
+                phase: null,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-summary-review",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "exited-review",
+        review: reviewText,
+      }),
+    ]);
+    expect(replay.messages).toEqual([]);
+
+    await client.close();
+  });
+
   it("suppresses review prompts without legacy image metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {

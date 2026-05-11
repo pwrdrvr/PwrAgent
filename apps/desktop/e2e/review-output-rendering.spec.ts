@@ -57,6 +57,9 @@ test("renders captured Codex review findings once in the review card", async () 
       "Preserve async pasted images for launchpad scopes"
     );
     await expect(reviewCard).toContainText("features/composer/Composer.tsx");
+    await expect(reviewCard).not.toContainText(
+      "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moja6ucz"
+    );
     await expect(reviewCard).toContainText("Lines 971-979");
 
     await expect(
