@@ -60,6 +60,7 @@ import {
   type QueueThreadExecutionModeResponse,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
+  type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
   type SteerTurnRequest,
@@ -88,6 +89,7 @@ import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
+import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserverFromEnv,
@@ -104,6 +106,7 @@ import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
 } from "./backend-model-catalog";
+import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 
 type InitializeResult = {
   serverInfo?: {
@@ -820,6 +823,31 @@ type ThreadListCacheState = {
 
 let threadListCacheSequence = 0;
 
+type MessagingArchiveCleanupStore = Pick<
+  MessagingStoreLike,
+  | "deletePendingIntentsForThread"
+  | "findActiveBindingsForBackend"
+  | "findActiveBindingsForThread"
+  | "revokeBinding"
+>;
+
+type MessagingArchiveCleaner = {
+  requestBindingRevokeAllForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin: "thread-archive";
+  }): Promise<{
+    notifiedCount: number;
+    revokedCount: number;
+  }>;
+};
+
+type MessagingArchiveCleanupResult = {
+  notifiedCount?: number;
+  pendingIntentCount: number;
+  revokedCount: number;
+};
+
 function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
   return (
     launchpad.prompt.trim().length === 0 &&
@@ -1036,11 +1064,20 @@ export class DesktopBackendRegistry {
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
+  private readonly messagingStore?: MessagingArchiveCleanupStore | null;
+  private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
+  private readonly archivedMessagingCleanupInFlight = new Map<
+    string,
+    Promise<MessagingArchiveCleanupResult>
+  >();
+  private readonly archivedMessagingCleanupCompleted = new Set<string>();
+  private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
@@ -1083,6 +1120,8 @@ export class DesktopBackendRegistry {
     gitDirectoryService?: GitDirectoryService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
+    messagingStore?: MessagingArchiveCleanupStore | null;
+    messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     createScratchProjectDirectory?: () => Promise<string>;
     threadTitleGenerationService?: ThreadTitleService | null;
   }) {
@@ -1164,6 +1203,8 @@ export class DesktopBackendRegistry {
       });
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
+    this.messagingStore = options?.messagingStore;
+    this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
@@ -1208,6 +1249,12 @@ export class DesktopBackendRegistry {
     return () => {
       this.eventListeners.delete(listener);
     };
+  }
+
+  setMessagingArchiveCleaner(
+    cleaner: MessagingArchiveCleaner | null | undefined,
+  ): void {
+    this.messagingArchiveCleaner = cleaner;
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -1283,14 +1330,21 @@ export class DesktopBackendRegistry {
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "codex") {
-      return await this.listCodexThreads({
+      const threads = await this.listCodexThreads({
         archived: params.archived,
         filter: params.filter,
       }, diagnostics);
+      this.scheduleThreadListArchiveStateCleanup({
+        backend: "codex",
+        filter: params.filter,
+        archived: params.archived,
+        threads,
+      });
+      return threads;
     }
 
     if (params.backend === "grok") {
-      return this.withPendingStartedThreads(
+      const threads = this.withPendingStartedThreads(
         "grok",
         await this.grokClient.listThreads({
           archived: params.archived,
@@ -1298,6 +1352,13 @@ export class DesktopBackendRegistry {
         }, diagnostics),
         params,
       );
+      this.scheduleThreadListArchiveStateCleanup({
+        backend: "grok",
+        filter: params.filter,
+        archived: params.archived,
+        threads,
+      });
+      return threads;
     }
 
     const threadLists = await Promise.all([
@@ -1361,6 +1422,11 @@ export class DesktopBackendRegistry {
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
+    await this.cleanupMessagingForArchivedThread({
+      backend,
+      threadId: result.threadId,
+      origin: "thread-archive",
+    });
     const cleanup = thread
       ? await this.archiveThreadWorktrees({
           backend,
@@ -1401,6 +1467,10 @@ export class DesktopBackendRegistry {
           )
         : await this.restoreWithClient(this.grokClient, request.threadId);
     this.invalidateThreadListCache(backend);
+    this.clearArchivedMessagingCleanupCache({
+      backend,
+      threadId: result.threadId,
+    });
 
     return {
       backend,
@@ -3091,6 +3161,19 @@ export class DesktopBackendRegistry {
         if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
           this.invalidateThreadListCache(backend);
         }
+        if (notification.method === "thread/archived") {
+          await this.cleanupMessagingForArchivedThread({
+            backend,
+            threadId: notification.params.threadId,
+            origin: "thread-archive",
+          });
+        }
+        if (notification.method === "thread/unarchived") {
+          this.clearArchivedMessagingCleanupCache({
+            backend,
+            threadId: notification.params.threadId,
+          });
+        }
         await this.emit({ backend, notification });
       }),
     );
@@ -3151,6 +3234,330 @@ export class DesktopBackendRegistry {
       method === "turn/completed" ||
       method === "turn/failed"
     );
+  }
+
+  private scheduleThreadListArchiveStateCleanup(params: {
+    archived?: boolean;
+    backend: AppServerBackendKind;
+    filter?: string;
+    threads: AppServerThreadSummary[];
+  }): void {
+    void this.handleThreadListArchiveState(params).catch((error) => {
+      backendRegistryLog.warn("thread list archive state cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async handleThreadListArchiveState(params: {
+    archived?: boolean;
+    backend: AppServerBackendKind;
+    filter?: string;
+    threads: AppServerThreadSummary[];
+  }): Promise<void> {
+    if (params.archived === true) {
+      await Promise.all(
+        params.threads.map((thread) =>
+          this.cleanupMessagingForArchivedThread({
+            backend: params.backend,
+            threadId: thread.id,
+            origin: "state-refresh",
+          }),
+        ),
+      );
+      return;
+    }
+
+    if (params.filter?.trim()) {
+      return;
+    }
+
+    const nextActiveThreadIds = new Set(params.threads.map((thread) => thread.id));
+    const previousActiveThreadIds = this.activeThreadIdsByBackend.get(params.backend);
+    this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
+    await this.cleanupArchivedBindingsMissingFromActiveList({
+      backend: params.backend,
+      activeThreadIds: nextActiveThreadIds,
+    });
+    if (!previousActiveThreadIds) {
+      return;
+    }
+
+    const missingThreadIds = [...previousActiveThreadIds].filter(
+      (threadId) => !nextActiveThreadIds.has(threadId),
+    );
+    if (missingThreadIds.length === 0) {
+      return;
+    }
+
+    try {
+      const archivedThreads = await this.getClient(params.backend).listThreads({
+        archived: true,
+      }, {
+        callerReason: "archive-transition-cleanup",
+        ownerId: this.threadListCacheOwnerId,
+      });
+      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      await Promise.all(
+        missingThreadIds
+          .filter((threadId) => archivedThreadIds.has(threadId))
+          .map((threadId) =>
+            this.cleanupMessagingForArchivedThread({
+              backend: params.backend,
+              threadId,
+              origin: "state-refresh",
+            }),
+          ),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("archived thread transition cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadIds: missingThreadIds,
+      });
+    }
+  }
+
+  private async cleanupArchivedBindingsMissingFromActiveList(params: {
+    activeThreadIds: Set<string>;
+    backend: AppServerBackendKind;
+  }): Promise<void> {
+    const store = this.resolveMessagingArchiveCleanupStore();
+    if (!store) return;
+
+    let bindings;
+    try {
+      bindings = await store.findActiveBindingsForBackend({
+        backend: params.backend,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("archived binding lookup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const missingBoundThreadIds = [
+      ...new Set(
+        bindings
+          .map((binding) => binding.threadId)
+          .filter((threadId) => !params.activeThreadIds.has(threadId)),
+      ),
+    ];
+    if (missingBoundThreadIds.length === 0) return;
+
+    try {
+      const archivedThreads = await this.getClient(params.backend).listThreads({
+        archived: true,
+      }, {
+        callerReason: "archive-bound-binding-cleanup",
+        ownerId: this.threadListCacheOwnerId,
+      });
+      const archivedThreadIds = new Set(archivedThreads.map((thread) => thread.id));
+      await Promise.all(
+        missingBoundThreadIds
+          .filter((threadId) => archivedThreadIds.has(threadId))
+          .map((threadId) =>
+            this.cleanupMessagingForArchivedThread({
+              backend: params.backend,
+              threadId,
+              origin: "state-refresh",
+            }),
+          ),
+      );
+    } catch (error) {
+      backendRegistryLog.warn("archived bound binding cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadIds: missingBoundThreadIds,
+      });
+    }
+  }
+
+  private resolveMessagingArchiveCleanupStore(): MessagingArchiveCleanupStore | undefined {
+    if (this.messagingStore === null) {
+      return undefined;
+    }
+    if (this.messagingStore) {
+      return this.messagingStore;
+    }
+
+    try {
+      return getDesktopMessagingStore();
+    } catch (error) {
+      backendRegistryLog.debug("messaging store unavailable for archive cleanup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  private async cleanupMessagingForArchivedThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin: "state-refresh" | "thread-archive";
+  }): Promise<MessagingArchiveCleanupResult> {
+    const key = this.archivedMessagingCleanupKey(params);
+    const existing = this.archivedMessagingCleanupInFlight.get(key);
+    if (existing) {
+      return await existing;
+    }
+    if (this.archivedMessagingCleanupCompleted.has(key)) {
+      return { pendingIntentCount: 0, revokedCount: 0 };
+    }
+
+    const generation = this.archivedMessagingCleanupGeneration.get(key) ?? 0;
+    const cleanup = this.runMessagingCleanupForArchivedThread(params)
+      .then((result) => {
+        if (
+          (this.archivedMessagingCleanupGeneration.get(key) ?? 0) === generation &&
+          (result.pendingIntentCount > 0 || result.revokedCount > 0)
+        ) {
+          this.archivedMessagingCleanupCompleted.add(key);
+        }
+        return result;
+      })
+      .finally(() => {
+        this.archivedMessagingCleanupInFlight.delete(key);
+      });
+    this.archivedMessagingCleanupInFlight.set(key, cleanup);
+    return await cleanup;
+  }
+
+  private clearArchivedMessagingCleanupCache(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): void {
+    const key = this.archivedMessagingCleanupKey(params);
+    this.archivedMessagingCleanupCompleted.delete(key);
+    this.archivedMessagingCleanupGeneration.set(
+      key,
+      (this.archivedMessagingCleanupGeneration.get(key) ?? 0) + 1,
+    );
+  }
+
+  private archivedMessagingCleanupKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): string {
+    return `${params.backend}:${params.threadId}`;
+  }
+
+  private async runMessagingCleanupForArchivedThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin: "state-refresh" | "thread-archive";
+  }): Promise<MessagingArchiveCleanupResult> {
+    try {
+      const store = this.resolveMessagingArchiveCleanupStore();
+      const pendingIntentIds = store
+        ? await store.deletePendingIntentsForThread({
+            backend: params.backend,
+            threadId: params.threadId,
+          })
+        : [];
+
+      if (this.messagingArchiveCleaner) {
+        const revokeResult =
+          await this.messagingArchiveCleaner.requestBindingRevokeAllForThread({
+            backend: params.backend,
+            threadId: params.threadId,
+            origin: "thread-archive",
+          });
+
+        if (revokeResult.revokedCount > 0 || pendingIntentIds.length > 0) {
+          backendRegistryLog.info("archived thread messaging cleanup completed", {
+            backend: params.backend,
+            notifiedCount: revokeResult.notifiedCount,
+            origin: params.origin,
+            pendingIntentCount: pendingIntentIds.length,
+            revokedCount: revokeResult.revokedCount,
+            threadId: params.threadId,
+          });
+        }
+
+        return {
+          notifiedCount: revokeResult.notifiedCount,
+          pendingIntentCount: pendingIntentIds.length,
+          revokedCount: revokeResult.revokedCount,
+        };
+      }
+
+      if (!store) {
+        return { pendingIntentCount: 0, revokedCount: 0 };
+      }
+
+      const bindings = await store.findActiveBindingsForThread({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+
+      for (const binding of bindings) {
+        await store.revokeBinding({ bindingId: binding.id });
+        await this.recordMessagingBindingUnbound({
+          backend: params.backend,
+          binding,
+          threadId: params.threadId,
+        });
+      }
+
+      if (bindings.length > 0 || pendingIntentIds.length > 0) {
+        backendRegistryLog.info("archived thread messaging cleanup completed", {
+          backend: params.backend,
+          origin: params.origin,
+          pendingIntentCount: pendingIntentIds.length,
+          revokedCount: bindings.length,
+          threadId: params.threadId,
+        });
+      }
+
+      return {
+        pendingIntentCount: pendingIntentIds.length,
+        revokedCount: bindings.length,
+      };
+    } catch (error) {
+      backendRegistryLog.warn("archived thread messaging cleanup failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        origin: params.origin,
+        threadId: params.threadId,
+      });
+      return { pendingIntentCount: 0, revokedCount: 0 };
+    }
+  }
+
+  private async recordMessagingBindingUnbound(params: {
+    backend: AppServerBackendKind;
+    binding: Awaited<ReturnType<MessagingArchiveCleanupStore["findActiveBindingsForThread"]>>[number];
+    threadId: string;
+  }): Promise<void> {
+    const conversation = params.binding.channel.conversation;
+    const transition: ThreadMessagingBindingTransition = {
+      id: randomUUID(),
+      action: "unbound",
+      bindingId: params.binding.id,
+      platform: params.binding.channel.channel,
+      conversationKind: conversation.kind,
+      conversationTitle: conversation.title,
+      parentTitle: conversation.parentTitle,
+      ancestorTitle: conversation.ancestorTitle,
+      occurredAt: Date.now(),
+    };
+    try {
+      await this.overlayStore.appendMessagingBindingTransition({
+        backend: params.backend,
+        threadId: params.threadId,
+        transition,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("archived thread messaging audit failed", {
+        bindingId: params.binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+    }
   }
 
   private async listCodexThreads(params: {

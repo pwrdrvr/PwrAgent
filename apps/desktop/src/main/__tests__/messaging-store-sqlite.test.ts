@@ -140,7 +140,90 @@ describe("SqliteMessagingStore", () => {
     await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
       .toMatchObject({
         id: "other-callback",
-      });
+    });
+  });
+
+  it("deletes pending intents scoped to a thread", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({ id: "binding-1", threadId: "thread-1" }));
+    await store.upsertBinding(buildBinding({ id: "binding-2", threadId: "thread-2" }));
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "intent-binding",
+        bindingId: "binding-1",
+      }),
+    );
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "intent-request",
+        bindingId: undefined,
+        intent: {
+          id: "approval-thread-1",
+          kind: "single_select",
+          createdAt: 1000,
+          prompt: "Choose",
+          choices: [{ id: "choice-a", label: "Choice A" }],
+          requestContext: {
+            backend: "codex",
+            method: "approval/request",
+            threadId: "thread-1",
+            requestId: "request-1",
+          },
+        },
+      }),
+    );
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "intent-other-thread",
+        bindingId: "binding-2",
+      }),
+    );
+
+    await expect(
+      store.deletePendingIntentsForThread({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toEqual(["intent-binding", "intent-request"]);
+    await expect(store.getPendingIntent("intent-binding")).resolves.toBeUndefined();
+    await expect(store.getPendingIntent("intent-request")).resolves.toBeUndefined();
+    await expect(store.getPendingIntent("intent-other-thread", { now: 1500 })).resolves
+      .toBeDefined();
+  });
+
+  it("finds active bindings scoped to a backend", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({ id: "binding-codex" }));
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-grok",
+        backend: "grok",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-grok", kind: "dm" },
+        },
+        threadId: "thread-grok",
+      }),
+    );
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-legacy",
+        backend: undefined as unknown as "codex",
+        channel: {
+          channel: "telegram",
+          conversation: { id: "chat-legacy", kind: "dm" },
+        },
+        threadId: "thread-legacy",
+      }),
+    );
+    await store.revokeBinding({ bindingId: "binding-grok", revokedAt: 3000 });
+
+    await expect(
+      store.findActiveBindingsForBackend({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "binding-codex" }),
+      expect.objectContaining({ id: "binding-legacy" }),
+    ]);
   });
 
   it("can delete callback handles for a binding without revoking it", async () => {

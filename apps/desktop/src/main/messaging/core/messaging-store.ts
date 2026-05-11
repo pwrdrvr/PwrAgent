@@ -82,6 +82,20 @@ export class MessagingStore {
     );
   }
 
+  async findActiveBindingsForBackend(params: {
+    backend: MessagingBindingRecord["backend"];
+  }): Promise<MessagingBindingRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.bindings)
+        .filter(
+          (binding) =>
+            !binding.revokedAt &&
+            (!binding.backend || binding.backend === params.backend),
+        )
+        .map((binding) => structuredClone(binding)),
+    );
+  }
+
   async revokeBinding(params: {
     bindingId: string;
     revokedAt?: number;
@@ -183,6 +197,35 @@ export class MessagingStore {
     const channelKey = buildMessagingConversationKey(params.channel);
     return await this.withData((data) => {
       return deletePendingIntentsForChannelInData(data, channelKey);
+    });
+  }
+
+  async deletePendingIntentsForThread(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+  }): Promise<string[]> {
+    return await this.withData((data) => {
+      const bindingIds = new Set(
+        Object.values(data.bindings)
+          .filter((binding) => {
+            if (binding.threadId !== params.threadId) return false;
+            return !binding.backend || binding.backend === params.backend;
+          })
+          .map((binding) => binding.id),
+      );
+      const removed: string[] = [];
+      for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
+        const requestContext = intent.intent.requestContext;
+        if (
+          (requestContext?.backend === params.backend &&
+            requestContext.threadId === params.threadId) ||
+          (intent.bindingId && bindingIds.has(intent.bindingId))
+        ) {
+          delete data.pendingIntents[intentId];
+          removed.push(intentId);
+        }
+      }
+      return removed;
     });
   }
 

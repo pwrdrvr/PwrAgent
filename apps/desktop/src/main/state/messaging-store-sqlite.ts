@@ -96,6 +96,21 @@ export class SqliteMessagingStore {
       });
   }
 
+  async findActiveBindingsForBackend(params: {
+    backend: MessagingBindingRecord["backend"];
+  }): Promise<MessagingBindingRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM bindings WHERE status = 'active'")
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
+      .filter((binding) => {
+        if (binding.revokedAt) return false;
+        if (!binding.backend) return true;
+        return binding.backend === params.backend;
+      });
+  }
+
   async revokeBinding(params: {
     bindingId: string;
     revokedAt?: number;
@@ -248,6 +263,58 @@ export class SqliteMessagingStore {
       }
     }
     if (removed.length === 0) return [];
+    const deleteIntent = this.stateDb.raw.prepare(
+      "DELETE FROM pending_intents WHERE intent_id = ?",
+    );
+    const deleteIntents = this.stateDb.raw.transaction((ids: string[]) => {
+      for (const id of ids) {
+        deleteIntent.run(id);
+      }
+    });
+    deleteIntents(removed);
+    return removed;
+  }
+
+  async deletePendingIntentsForThread(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+  }): Promise<string[]> {
+    const bindingRows = this.stateDb.raw
+      .prepare("SELECT payload FROM bindings WHERE thread_id = ?")
+      .all(params.threadId) as { payload: string }[];
+    const bindingIds = new Set<string>();
+    for (const row of bindingRows) {
+      try {
+        const binding = JSON.parse(row.payload) as MessagingBindingRecord;
+        if (!binding.backend || binding.backend === params.backend) {
+          bindingIds.add(binding.id);
+        }
+      } catch {
+        // Malformed binding payloads should not block intent cleanup.
+      }
+    }
+
+    const rows = this.stateDb.raw
+      .prepare("SELECT intent_id, binding_id, payload FROM pending_intents")
+      .all() as { intent_id: string; binding_id: string; payload: string }[];
+    const removed: string[] = [];
+    for (const row of rows) {
+      try {
+        const intent = JSON.parse(row.payload) as MessagingPendingIntentRecord;
+        const requestContext = intent.intent.requestContext;
+        if (
+          (requestContext?.backend === params.backend &&
+            requestContext.threadId === params.threadId) ||
+          (row.binding_id && bindingIds.has(row.binding_id))
+        ) {
+          removed.push(row.intent_id);
+        }
+      } catch {
+        // Malformed payloads are left for expiry cleanup.
+      }
+    }
+    if (removed.length === 0) return [];
+
     const deleteIntent = this.stateDb.raw.prepare(
       "DELETE FROM pending_intents WHERE intent_id = ?",
     );
@@ -659,6 +726,7 @@ export type MessagingStoreLike = Pick<
   | "upsertBinding"
   | "getBinding"
   | "findActiveBindingForChannel"
+  | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
   | "revokeBinding"
   | "upsertPendingIntent"
@@ -667,6 +735,7 @@ export type MessagingStoreLike = Pick<
   | "findActivePendingIntentsForRequest"
   | "deletePendingIntent"
   | "deletePendingIntentsForChannel"
+  | "deletePendingIntentsForThread"
   | "cleanupExpiredPendingIntents"
   | "upsertBrowseSession"
   | "getBrowseSession"
