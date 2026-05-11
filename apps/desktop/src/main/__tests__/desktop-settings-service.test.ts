@@ -908,6 +908,37 @@ describe("DesktopSettingsService", () => {
     expect(reverted.experimental.diffCondensation.enabled.value).toBe(true);
   });
 
+  it("defaults Full Access risk warning dismissal to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.fullAccessRiskWarningDismissed).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        fullAccessRiskWarningDismissed: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.fullAccessRiskWarningDismissed).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "full_access_risk_warning_dismissed = true",
+    );
+  });
+
   it("preserves unknown sections written by other builds when saving a patch", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

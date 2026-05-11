@@ -210,6 +210,10 @@ function DesktopAppShell(props: {
           selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
           directories={navigation.directories}
+          fullAccessRiskWarningDismissed={
+            settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ??
+            false
+          }
           pickDirectoryError={navigation.pickDirectoryError}
           pickingDirectory={navigation.pickingDirectory}
           onSelectDirectoryFromPicker={(directory) => {
@@ -232,6 +236,16 @@ function DesktopAppShell(props: {
           onActiveTurnIdChange={session.setActiveTurnId}
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
+          onDismissFullAccessRiskWarning={async () => {
+            const saved = await settings.writeConfig({
+              experimental: {
+                fullAccessRiskWarningDismissed: true,
+              },
+            });
+            if (!saved) {
+              throw new Error("Could not save the Full Access warning preference.");
+            }
+          }}
           onOpenMessagingActivity={openMessagingActivityWindow}
           onHandoffThreadWorkspace={
             navigation.selectedThread

@@ -230,6 +230,10 @@ export class DesktopSettingsService {
         chatReplyComposer: this.resolveComposer(
           config.experimental?.chatReplyComposer,
         ),
+        fullAccessRiskWarningDismissed: this.resolveConfigBoolean(
+          config.experimental?.fullAccessRiskWarningDismissed,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
