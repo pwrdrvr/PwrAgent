@@ -457,6 +457,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onReorderThreadPins={props.onReorderThreadPins}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
