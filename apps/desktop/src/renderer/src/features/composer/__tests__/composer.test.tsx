@@ -240,6 +240,9 @@ describe("Composer", () => {
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
+          git: {
+            discovery: { candidates: [] },
+          },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -2404,6 +2407,9 @@ describe("Composer", () => {
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
+          git: {
+            discovery: { candidates: [] },
+          },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -2486,6 +2492,9 @@ describe("Composer", () => {
           preferredTerminalId: { value: "", source: "default" },
           gh: {
             path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
             discovery: { candidates: [] },
           },
         }}

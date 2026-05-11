@@ -78,6 +78,7 @@ import {
   resolveCodexHomeForProfile,
 } from "./codex-profiles";
 import { discoverDesktopApplications } from "./application-discovery";
+import { discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
 
@@ -174,6 +175,7 @@ export class DesktopSettingsService {
       configuredCommand: config.applications?.gh?.path,
       env: this.env,
     });
+    const gitDiscovery = await discoverGitCommands({ env: this.env });
     const applications = await discoverDesktopApplications({ env: this.env });
     const preferredEditorId = this.resolveConfigString(
       config.applications?.editor?.preferredId,
@@ -388,6 +390,9 @@ export class DesktopSettingsService {
         gh: {
           path: this.resolveString(config.applications?.gh?.path, GH_COMMAND_ENV),
           discovery: ghDiscovery,
+        },
+        git: {
+          discovery: gitDiscovery,
         },
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),

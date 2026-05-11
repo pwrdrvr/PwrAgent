@@ -298,6 +298,9 @@ describe("TranscriptList", () => {
             path: { value: "", source: "default" },
             discovery: { candidates: [] },
           },
+          git: {
+            discovery: { candidates: [] },
+          },
         }}
         desktopApi={{ openApplication }}
         entries={[

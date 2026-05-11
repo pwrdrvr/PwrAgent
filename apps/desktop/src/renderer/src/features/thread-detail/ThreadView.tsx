@@ -1488,7 +1488,12 @@ export function ThreadView(props: ThreadViewProps) {
             </div>
             <div>
               <dt>Current branch</dt>
-              <dd>{props.selectedDirectory.gitStatus?.currentBranch ?? "Not a Git repo"}</dd>
+              <dd>
+                {props.selectedDirectory.gitStatus?.currentBranch ??
+                  (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
+                    ? "Unavailable"
+                    : "Not a Git repo")}
+              </dd>
             </div>
             <div>
               <dt>Upstream</dt>

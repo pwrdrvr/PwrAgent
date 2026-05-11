@@ -1,8 +1,6 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type {
   AppServerThreadSummary,
   AppServerBackendKind,
@@ -15,14 +13,10 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
-
-const execFile = promisify(execFileCallback);
+import { runGitCommand } from "./git-executable";
 
 async function runGit(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFile("git", ["-C", cwd, ...args], {
-    env: process.env,
-  });
-  return stdout.trim();
+  return (await runGitCommand(cwd, args)).stdout;
 }
 
 function errorText(error: unknown): string {
@@ -360,20 +354,25 @@ export class GitDirectoryService {
   private async loadDirectoryStatus(
     cwd: string,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
+    const repoRoot = await readGitRoot(cwd);
+    if (!repoRoot) {
+      return undefined;
+    }
+
     const [currentBranch, branchesOutput, remoteHead, worktreeList] = await Promise.all([
-      runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-      runGit(cwd, [
+      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      runGit(repoRoot, [
         "for-each-ref",
         "refs/heads",
         "--sort=-committerdate",
         "--format=%(refname:short)",
       ]).catch(() => ""),
-      runGit(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+      runGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
         () => "",
       ),
-      runGit(cwd, ["worktree", "list", "--porcelain"]).catch(() => ""),
+      runGit(repoRoot, ["worktree", "list", "--porcelain"]).catch(() => ""),
     ]);
-    const upstreamBranch = await runGit(cwd, [
+    const upstreamBranch = await runGit(repoRoot, [
       "rev-parse",
       "--abbrev-ref",
       "--symbolic-full-name",

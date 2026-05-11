@@ -176,6 +176,30 @@ export type DesktopGhDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopGitCandidateSource =
+  | "env"
+  | "path"
+  | "homebrew"
+  | "xcode"
+  | "user";
+
+export type DesktopGitDiscoveryCandidate = {
+  command: string;
+  source: DesktopGitCandidateSource;
+  executable: boolean;
+  selected: boolean;
+  version?: string;
+  versionFailureReason?: string;
+  failureReason?: string;
+};
+
+export type DesktopGitDiscoverySnapshot = {
+  selectedCommand?: string;
+  selectedSource?: DesktopGitCandidateSource;
+  candidates: DesktopGitDiscoveryCandidate[];
+  error?: string;
+};
+
 export type DesktopApplicationKind = "editor" | "terminal";
 
 export type DesktopApplicationSource = "application" | "path";
@@ -199,6 +223,9 @@ export type DesktopApplicationsSnapshot = {
   gh: {
     path: DesktopSettingsValue<string>;
     discovery: DesktopGhDiscoverySnapshot;
+  };
+  git: {
+    discovery: DesktopGitDiscoverySnapshot;
   };
 };
 

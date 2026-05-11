@@ -156,6 +156,9 @@ describe("desktop settings contracts", () => {
           path: { value: "", source: "default" },
           discovery: { candidates: [] },
         },
+        git: {
+          discovery: { candidates: [] },
+        },
       },
       worktrees: {
         storage: { value: "user-home", source: "default" },
