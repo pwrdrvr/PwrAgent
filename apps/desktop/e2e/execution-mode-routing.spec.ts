@@ -53,6 +53,14 @@ test("applies the correct per-turn permission policy after execution mode toggle
     await app.window
       .getByRole("option", { name: "Full Access" })
       .click();
+    const fullAccessWarning = app.window.getByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    await expect(fullAccessWarning).toContainText("network access");
+    await expect(fullAccessWarning).toContainText("read/write access");
+    await fullAccessWarning
+      .getByRole("button", { name: "I Understand and Accept the Risks" })
+      .click();
     await expect(accessMode).toHaveAttribute("data-value", "full-access");
 
     await app.window

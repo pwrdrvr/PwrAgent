@@ -644,6 +644,14 @@ test("directory launchpad keeps full access as the sticky default after user cha
       window: app.window,
       option: "Full Access",
     });
+    const fullAccessWarning = app.window.getByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    await expect(fullAccessWarning).toContainText("network access");
+    await expect(fullAccessWarning).toContainText("read/write access");
+    await fullAccessWarning
+      .getByRole("button", { name: "I Understand and Accept the Risks" })
+      .click();
     await expect(accessMode).toHaveAttribute("data-value", "full-access");
 
     await app.window

@@ -129,6 +129,13 @@ test("stops the active turn after a queued access-mode change", async () => {
     await expect(accessMode).toHaveAttribute("data-value", "default");
     await accessMode.click();
     await app.window.getByRole("option", { name: "Full Access" }).click();
+    const fullAccessWarning = app.window.getByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    await expect(fullAccessWarning).toContainText("network access");
+    await fullAccessWarning
+      .getByRole("button", { name: "I Understand and Accept the Risks" })
+      .click();
 
     // Toggling access mode mid-turn queues the change at the resume
     // boundary instead of flipping immediately. The applied executionMode
