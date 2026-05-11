@@ -2471,7 +2471,7 @@ function extractThreadNameRecordFromValue(
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
   const threadId = extractThreadIdFromValue(value);
-  if (!threadId) {
+  if (!threadId || record.ephemeral === true || threadRecord?.ephemeral === true) {
     return undefined;
   }
 
@@ -3424,10 +3424,6 @@ export class CodexAppServerClient {
         });
       }
 
-      if (method === "thread/started") {
-        await this.recordThreadNameWithCodex(params);
-      }
-
       const normalized = normalizeServerNotification(
         method,
         params,
@@ -3436,6 +3432,10 @@ export class CodexAppServerClient {
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
         this.handleHelperThreadNotification(method, normalized);
         return;
+      }
+
+      if (method === "thread/started") {
+        await this.recordThreadNameWithCodex(params);
       }
 
       for (const listener of this.notificationListeners) {
