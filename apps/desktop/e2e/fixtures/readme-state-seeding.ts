@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
@@ -22,6 +23,36 @@ import Database from "better-sqlite3";
 
 export function stateDbPathForHomeRoot(homeRoot: string): string {
   return path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+}
+
+export function configTomlPathForHomeRoot(homeRoot: string): string {
+  return path.join(homeRoot, ".pwragent/profiles/default/config.toml");
+}
+
+/**
+ * Seed a `config.toml` that has the messaging master switch and the
+ * Telegram adapter both enabled. Used as a `preLaunchHook` so the
+ * Settings → Messaging surface boots into an "enabled" state and the
+ * Pairing field's Generate button is clickable. No real bot token is
+ * required — the pairing token generator is a local HMAC+sqlite write
+ * that does not touch the network (see
+ * `MessagingRuntime.generatePairingToken`).
+ */
+export function seedTelegramEnabledConfig(homeRoot: string): void {
+  const configPath = configTomlPathForHomeRoot(homeRoot);
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    [
+      "[messaging]",
+      "enabled = true",
+      "",
+      "[messaging.telegram]",
+      "enabled = true",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 }
 
 type SeedTelegramBindingParams = {
@@ -222,6 +253,102 @@ export function clearPairingEntries(stateDbPath: string): void {
   const db = new Database(stateDbPath);
   try {
     db.prepare("DELETE FROM messaging_pairing_tokens").run();
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Find the most recently generated pairing entry for a platform. Used
+ * by the pairing GIF capture to look up the entry id of the row the
+ * renderer just created via the Generate button, so that row can be
+ * mutated into the "observed" state for the next frame.
+ *
+ * Returns undefined when no entry exists.
+ */
+export function findLatestPairingEntryId(
+  stateDbPath: string,
+  platform: "telegram" | "discord" | "slack" | "mattermost",
+): string | undefined {
+  const db = new Database(stateDbPath);
+  try {
+    const row = db
+      .prepare(
+        `SELECT entry_id FROM messaging_pairing_tokens
+         WHERE platform = ?
+         ORDER BY generated_at DESC
+         LIMIT 1`,
+      )
+      .get(platform) as { entry_id: string } | undefined;
+    return row?.entry_id;
+  } finally {
+    db.close();
+  }
+}
+
+export type ObservedActor = {
+  id: string;
+  displayName?: string;
+  username?: string;
+  phoneNumber?: string;
+};
+
+export type ObservedChat = {
+  id: string;
+  kind: "dm" | "channel" | "thread" | "topic";
+  title?: string;
+  parentId?: string;
+  parentTitle?: string;
+  bucketId?: string;
+};
+
+/**
+ * Mark an existing pairing entry as observed (the state that fires
+ * after a user sends the pair code to the bot from chat). Mirrors
+ * `MessagingPairingStore.markObserved` — sets `status = 'observed'`,
+ * stamps `observed_at`, and writes `observedActor` / `observedChat`
+ * into the payload JSON. Throws when the entry id isn't found so the
+ * test fails fast.
+ */
+export function markPairingObserved(
+  stateDbPath: string,
+  entryId: string,
+  params: {
+    observedAt?: number;
+    observedActor: ObservedActor;
+    observedChat: ObservedChat;
+  },
+): void {
+  const observedAt = params.observedAt ?? Date.now();
+  const db = new Database(stateDbPath);
+  try {
+    const row = db
+      .prepare(
+        "SELECT payload FROM messaging_pairing_tokens WHERE entry_id = ?",
+      )
+      .get(entryId) as { payload: string } | undefined;
+    if (!row) {
+      throw new Error(
+        `markPairingObserved: no messaging_pairing_tokens row with entry_id=${entryId}`,
+      );
+    }
+    const existing = (() => {
+      try {
+        return JSON.parse(row.payload) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    })();
+    const payload = {
+      ...existing,
+      observedActor: params.observedActor,
+      observedChat: params.observedChat,
+    };
+    db.prepare(
+      `UPDATE messaging_pairing_tokens
+       SET status = 'observed', observed_at = ?, payload = ?
+       WHERE entry_id = ?`,
+    ).run(observedAt, JSON.stringify(payload), entryId);
   } finally {
     db.close();
   }

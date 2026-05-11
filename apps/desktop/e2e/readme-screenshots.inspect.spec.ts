@@ -1,12 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
+  findLatestPairingEntryId,
+  markPairingObserved,
   seedActivityEntries,
   seedTelegramBinding,
+  seedTelegramEnabledConfig,
   stateDbPathForHomeRoot,
   type SeedActivityEntry,
 } from "./fixtures/readme-state-seeding";
@@ -371,50 +375,250 @@ test("messenger-status — Settings → Messaging surface", async () => {
   }
 });
 
-test("pairing — Settings → Messaging pairing card", async () => {
-  test.setTimeout(120_000);
+/**
+ * Drive the renderer from the main shell into Settings → Messaging
+ * with the Telegram Pairing field scrolled into the center of the
+ * viewport. Used for every frame of the pairing GIF so each frame
+ * frames the same surface area.
+ */
+async function navigateToTelegramPairing(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+): Promise<void> {
+  await expect(
+    app.window.getByRole("button", { name: "Open settings" }),
+  ).toBeVisible();
+  await app.window.getByRole("button", { name: "Open settings" }).click();
+
+  const messagingNav = app.window
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Messaging" });
+  await messagingNav.click();
+  await expect(
+    app.window.getByRole("region", { name: "Messaging settings" }),
+  ).toBeVisible();
+
+  const pairingTarget = app.window
+    .getByRole("radiogroup", { name: /^Telegram pairing target$/i })
+    .first();
+  await pairingTarget.waitFor({ state: "visible" });
+  await pairingTarget.evaluate((node) => {
+    node.scrollIntoView({ behavior: "instant", block: "center" });
+  });
+  await expect(pairingTarget).toBeInViewport();
+}
+
+/**
+ * Stitch a sequence of PNG frames into a looping GIF using ffmpeg.
+ *
+ * Frame timing is set via `-framerate` on the input — `0.4` fps means
+ * each frame is shown for 1 / 0.4 = 2.5s before the next one. We
+ * generate the GIF in two passes:
+ *   1. `palettegen` — derive a 256-color palette from the input
+ *      frames (`stats_mode=full` weights every pixel equally so the
+ *      tangerine accent doesn't get washed out).
+ *   2. `paletteuse` — quantize the frames against that palette.
+ * Two-pass produces noticeably cleaner output than the default
+ * 256-color reduction on the dark UI (no posterized gradients), and
+ * the explicit pass split is more robust across ffmpeg versions than
+ * a single `-filter_complex` graph.
+ *
+ * `-loop 0` makes the GIF loop forever.
+ */
+function stitchGif(params: {
+  framePaths: string[];
+  outputPath: string;
+  framerate?: number;
+}): void {
+  const framerate = params.framerate ?? 0.4;
+
+  // ffmpeg's `-i frame_%d.png` requires sequentially-numbered frames
+  // in a single directory. Symlink the input frames into a tmp dir
+  // (cheaper than copying ~3 MB of PNG and avoids polluting
+  // docs/assets with intermediate frame files).
+  const stagingDir = mkdtempSync(path.join(tmpdir(), "pwragent-pairing-gif-"));
+  try {
+    for (let i = 0; i < params.framePaths.length; i++) {
+      symlinkSync(
+        params.framePaths[i],
+        path.join(stagingDir, `frame_${i + 1}.png`),
+      );
+    }
+    const framePattern = path.join(stagingDir, "frame_%d.png");
+    const palettePath = path.join(stagingDir, "palette.png");
+
+    // Pass 1: derive a 256-color palette weighted across all frames.
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-framerate",
+        String(framerate),
+        "-i",
+        framePattern,
+        "-vf",
+        "palettegen=stats_mode=full",
+        palettePath,
+      ],
+      { stdio: "inherit" },
+    );
+
+    // Pass 2: quantize the frames against that palette.
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-framerate",
+        String(framerate),
+        "-i",
+        framePattern,
+        "-i",
+        palettePath,
+        "-lavfi",
+        "paletteuse=dither=sierra2_4a",
+        "-loop",
+        "0",
+        params.outputPath,
+      ],
+      { stdio: "inherit" },
+    );
+  } finally {
+    rmSync(stagingDir, { recursive: true, force: true });
+  }
+}
+
+test("pairing — Generate → observe → approve sequence (animated GIF)", async () => {
+  test.setTimeout(180_000);
 
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
-      "fixtures/smoke/replay.fixture.json",
+      "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    // Pre-launch hook seeds a config.toml with `[messaging.telegram]
+    // enabled = true` so the renderer's "Telegram → Enabled" toggle
+    // reads as on and the Pairing field's Generate button isn't
+    // disabled. No bot token required — `generatePairingToken` is a
+    // local HMAC + sqlite write (see MessagingRuntime.generatePairingToken).
+    preLaunchHook: seedTelegramEnabledConfig,
   });
 
+  const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
+  // Frame paths land in docs/assets/screenshots/ alongside the final
+  // GIF — useful for archival and for re-stitching with different
+  // frame timings without rerunning the whole test.
+  const frame1Path = path.join(screenshotDir, "screenshot-pairing-frame-1.png");
+  const frame2Path = path.join(screenshotDir, "screenshot-pairing-frame-2.png");
+  const frame3Path = path.join(screenshotDir, "screenshot-pairing-frame-3.png");
+  const gifPath = path.join(screenshotDir, "screenshot-pairing.gif");
+  mkdirSync(screenshotDir, { recursive: true });
+
   try {
-    await expect(
-      app.window.getByRole("button", { name: "Open settings" }),
-    ).toBeVisible();
-    await app.window.getByRole("button", { name: "Open settings" }).click();
+    // ──────── FRAME 1: Generate clicked, pair code visible ────────
+    await navigateToTelegramPairing(app);
 
-    const messagingNav = app.window
-      .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Messaging" });
-    await messagingNav.click();
-    await expect(
-      app.window.getByRole("region", { name: "Messaging settings" }),
-    ).toBeVisible();
+    // The Telegram section's Generate button. Two `Generate` buttons
+    // exist in the panel (one per platform pairing field that's in
+    // view); scope to the Telegram section by anchoring on the
+    // Telegram pairing target radiogroup's parent.
+    const telegramGenerateButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: /^Generate$/ });
+    await telegramGenerateButton.click();
 
-    // Scroll the first per-platform "Pairing" field into view so the
-    // capture frames the pairing UI rather than the top-of-panel
-    // general settings (which is what `messenger-status` already
-    // captures). The MessagingSettings panel renders one
-    // `PairingTokenField` per platform, each as a radiogroup labeled
-    // "<Platform> pairing target". Telegram is the first one in the
-    // panel's render order; if that changes, we still pick the first
-    // pairing-target radiogroup present.
-    const pairingTarget = app.window
-      .getByRole("radiogroup", { name: /pairing target$/i })
+    // Wait for the pair code to render. The renderer renders the
+    // generated token inside a `<code>` element under the Pairing
+    // field's `.settings-pairing__message` row.
+    const pairCode = app.window
+      .locator(".settings-pairing__message code")
       .first();
-    await pairingTarget.waitFor({ state: "visible" });
-    await pairingTarget.evaluate((node) => {
-      node.scrollIntoView({ behavior: "instant", block: "center" });
-    });
-    await expect(pairingTarget).toBeInViewport();
+    await expect(pairCode).toBeVisible({ timeout: 10_000 });
 
     await bringToFront(app.electronApp);
-    captureNative("screenshot-pairing.png");
+    execFileSync(captureScript, ["Electron", frame1Path], { stdio: "inherit" });
+
+    // ──────── FRAME 2: observed entry, approval prompt visible ────────
+    // Look up the row the renderer just generated and mutate it to
+    // status="observed" with a populated observedActor. The renderer
+    // doesn't re-poll on direct sqlite mutation, so reload the window
+    // to remount PairingTokenField, which calls `refresh()` on mount.
+    const entryId = findLatestPairingEntryId(stateDbPath, "telegram");
+    if (!entryId) {
+      throw new Error(
+        "no telegram pairing entry found after Generate click — runtime may not have written to sqlite",
+      );
+    }
+    markPairingObserved(stateDbPath, entryId, {
+      observedActor: {
+        id: "8460800771",
+        username: "huntharo",
+        displayName: "Harold Hunt",
+      },
+      observedChat: {
+        id: "8460800771",
+        kind: "dm",
+        title: "Harold Hunt",
+      },
+    });
+
+    await app.window.reload();
+    await navigateToTelegramPairing(app);
+
+    // The approval prompt — observedEntries are filtered by
+    // status === "observed" in PairingTokenField. The Approve button
+    // appears next to the row.
+    const telegramApproveButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: "Approve" });
+    await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
+
+    await bringToFront(app.electronApp);
+    execFileSync(captureScript, ["Electron", frame2Path], { stdio: "inherit" });
+
+    // ──────── FRAME 3: approved — user lands in Authorized Users ────────
+    // Click Approve. This triggers `approveMessagingPairing` IPC,
+    // which patches config.toml to add the user to
+    // `[messaging.telegram] authorized_users`, marks the pairing
+    // entry consumed, and refreshes the settings snapshot. The
+    // approval prompt vanishes (status no longer "observed") and the
+    // user appears in the Authorized User IDs field below.
+    await telegramApproveButton.click();
+
+    // Wait for the Authorized User IDs row to display the user id
+    // input populated with our seeded user. The MessagingSettings
+    // renders a row per authorized user with the numeric peer id in
+    // a text input and the display name beside it.
+    await expect(
+      app.window.locator('input[value="8460800771"]').first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Re-scroll so the Pairing field stays at center (the Authorized
+    // User IDs field is just below it).
+    await app.window
+      .getByRole("radiogroup", { name: /^Telegram pairing target$/i })
+      .first()
+      .evaluate((node) => {
+        node.scrollIntoView({ behavior: "instant", block: "center" });
+      });
+
+    await bringToFront(app.electronApp);
+    execFileSync(captureScript, ["Electron", frame3Path], { stdio: "inherit" });
+
+    // ──────── Stitch into a looping GIF ────────
+    stitchGif({
+      framePaths: [frame1Path, frame2Path, frame3Path],
+      outputPath: gifPath,
+    });
   } finally {
     await app.close();
   }

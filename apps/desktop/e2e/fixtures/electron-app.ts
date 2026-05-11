@@ -45,8 +45,19 @@ export async function launchElectronApp(params: {
     width: number;
     height: number;
   };
+  /**
+   * Runs after the tmp `homeRoot` is created but before Electron
+   * launches. Use this to seed
+   * `<homeRoot>/.pwragent/profiles/default/config.toml` or any other
+   * on-disk state the app reads at startup. Everything underneath
+   * `<homeRoot>/` is cleaned up on `close()`.
+   */
+  preLaunchHook?: (homeRoot: string) => void | Promise<void>;
 }): Promise<LaunchResult> {
   const homeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
+  if (params.preLaunchHook) {
+    await params.preLaunchHook(homeRoot);
+  }
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
