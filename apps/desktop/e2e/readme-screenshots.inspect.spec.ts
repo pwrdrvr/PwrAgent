@@ -2,9 +2,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
 import { expect, test, type ElectronApplication } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  seedActivityEntries,
+  seedTelegramBinding,
+  stateDbPathForHomeRoot,
+  type SeedActivityEntry,
+} from "./fixtures/readme-state-seeding";
 
 // README screenshot capture spec.
 //
@@ -61,10 +66,17 @@ async function bringToFront(electronApp: ElectronApplication): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 500));
 }
 
-function captureNative(outputBasename: string): void {
+function captureNative(
+  outputBasename: string,
+  options?: { titleSubstring?: string },
+): void {
   mkdirSync(screenshotDir, { recursive: true });
   const outputPath = path.join(screenshotDir, outputBasename);
-  execFileSync(captureScript, ["Electron", outputPath], {
+  const args = ["Electron", outputPath];
+  if (options?.titleSubstring) {
+    args.push(`--title=${options.titleSubstring}`);
+  }
+  execFileSync(captureScript, args, {
     stdio: "inherit",
   });
 }
@@ -116,50 +128,203 @@ test("recents-hero — populated Recents lens", async () => {
   }
 });
 
-test("closed-by-default — approval gate", async () => {
+test("closed-by-default — Messaging Activity rejecting unauthorized inbound", async () => {
   test.setTimeout(120_000);
 
+  // Boot any fixture that gets the app to a stable shell — the
+  // Messaging Activity surface is renderer-routed and reads from
+  // sqlite (`messaging_activity_log`), not from protocol replay.
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
-      "fixtures/approval-pending/replay.fixture.json",
+      "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
   });
 
   try {
-    // Drive the UI to the pending-approval state. Beats are lifted from
-    // approval-pending.spec.ts so they stay in sync with the fixture.
-    await app.window
-      .getByRole("button", { name: /Approval pending replay/i })
-      .first()
-      .click();
+    // Wait for the main shell so we know the schema has been migrated.
     await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Approval pending replay",
+      app.window.getByRole("button", {
+        name: /Migrate auth from JWT to session cookies/i,
       }),
     ).toBeVisible();
-    await app.window
-      .getByLabel("Reply")
-      .fill("Read /etc/hosts and tell me the first three lines.");
-    await app.window.getByRole("button", { name: "Send" }).click();
-    await expect(
-      app.window.getByRole("button", { name: "Stop" }),
-    ).toBeVisible();
-    await app.advance({ stepId: "status-active-1" });
-    await app.advance({ stepId: "turn-started-1" });
-    await app.advance({ stepId: "request-approval-1" });
 
+    const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
+
+    // Seed a binding row first so the routed entries can reference it
+    // (binding_id is otherwise nullable but the chip looks more honest
+    // when the routed entry has somewhere to point).
+    const bindingId = seedTelegramBinding({
+      stateDbPath,
+      threadId: "thread-recents-hero-primary",
+      conversationTitle: "Hunt",
+    });
+
+    // Seed activity rows that mirror the user's reference screenshot:
+    // two routed Telegram inbound events (so the "Bound activity"
+    // section is populated), one rejected Slack inbound (so the
+    // "Attention" section shows the closed-by-default story), and one
+    // diagnostic event (Slow Mode dropped) for color.
+    const now = Date.now();
+    const minute = 60_000;
+    const hour = 60 * minute;
+    const entries: SeedActivityEntry[] = [
+      {
+        platform: "telegram",
+        kind: "inbound-routed",
+        threadId: "thread-recents-hero-primary",
+        bindingId,
+        conversationId: "953",
+        actorId: "8460800771",
+        actorDisplayName: "Harold Hunt",
+        summary: "Inbound from Harold Hunt",
+        createdAt: now - 19 * hour,
+        payload: {
+          conversationKind: "topic",
+          conversationParentId: "-1003841603622",
+          conversationBucketId: "-1003841603622",
+        },
+      },
+      {
+        platform: "telegram",
+        kind: "inbound-routed",
+        threadId: "thread-recents-hero-primary",
+        bindingId,
+        conversationId: "6690",
+        actorId: "8460800771",
+        actorDisplayName: "Harold Hunt",
+        summary: "Inbound from Harold Hunt",
+        createdAt: now - 20 * hour,
+        payload: {
+          conversationKind: "topic",
+          conversationParentId: "-1003841603622",
+          conversationBucketId: "-1003841603622",
+        },
+      },
+      {
+        platform: "slack",
+        kind: "inbound-rejected",
+        conversationId: "G01N9LZU287",
+        conversationTitle: "signals-chat",
+        actorId: "UA6R99D0A",
+        actorDisplayName: "Vitaliy Morarian",
+        summary: "Rejected inbound from Vitaliy Morarian",
+        createdAt: now - 4 * hour,
+        payload: { conversationKind: "channel" },
+      },
+      {
+        platform: "telegram",
+        kind: "diagnostic",
+        summary: "Slow Mode dropped routine_status: slow-mode",
+        createdAt: now - 4 * hour - 3 * minute,
+        payload: {},
+      },
+      {
+        platform: "telegram",
+        kind: "diagnostic",
+        summary: "Slow Mode dropped stream_partial: budget-exhausted",
+        createdAt: now - 4 * hour - 6 * minute,
+        payload: {},
+      },
+    ];
+    seedActivityEntries(stateDbPath, entries);
+
+    // Open the Messaging Activity window via the preload bridge. The
+    // bridge is exposed as `window.pwragent` (see preload/index.ts).
+    await app.window.evaluate(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (window as any).pwragent.openMessagingActivityWindow();
+    });
+
+    // The activity window loads the same renderer bundle with a
+    // `#messaging-activity` hash. Poll the electronApp's open windows
+    // until that one shows up (Playwright's "window" event fires on
+    // creation but `BrowserWindow` is created with `show: false` and
+    // shown later on `ready-to-show`, so wait for the page that's
+    // actually displaying the activity surface).
+    let activityWindow: import("@playwright/test").Page | undefined;
+    for (let i = 0; i < 30; i++) {
+      for (const candidate of app.electronApp.windows()) {
+        const url = candidate.url();
+        if (url.includes("messaging-activity")) {
+          activityWindow = candidate;
+          break;
+        }
+      }
+      if (activityWindow) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!activityWindow) {
+      throw new Error(
+        `messaging activity window did not open; current windows: ${app.electronApp
+          .windows()
+          .map((w) => w.url())
+          .join(", ")}`,
+      );
+    }
+    await activityWindow.waitForLoadState("load");
+
+    // Diagnostic: confirm the activity window actually mounted its
+    // hash-routed surface (and not the full app shell).
+    const surfaceInfo = await activityWindow.evaluate(() => ({
+      hash: window.location.hash,
+      title: document.title,
+      hasActivityScreen: !!document.querySelector(".activity-screen"),
+      hasApp: !!document.querySelector(".app"),
+      bodyChildren: document.body.children.length,
+      rootHTML: document
+        .getElementById("root")
+        ?.innerHTML.slice(0, 200),
+    }));
+    test
+      .info()
+      .annotations.push({
+        type: "activity-window-surface",
+        description: JSON.stringify(surfaceInfo),
+      });
+    if (!surfaceInfo.hasActivityScreen) {
+      throw new Error(
+        `activity window did not mount the activity surface: ${JSON.stringify(surfaceInfo)}`,
+      );
+    }
+
+    // Bring the activity window to front so it's actually visible on
+    // screen. The BrowserWindow was created with `show: false` and is
+    // normally shown on `ready-to-show`, but during automated capture
+    // we want to be explicit so `toBeVisible` checks succeed and
+    // `screencapture -l` finds the window in the on-screen list.
+    await app.electronApp.evaluate(({ BrowserWindow }, titleSubstring) => {
+      const win = BrowserWindow.getAllWindows().find((w) =>
+        w.getTitle().includes(titleSubstring),
+      );
+      if (!win) return;
+      win.show();
+      win.focus();
+      win.moveTop();
+    }, "Messaging Activity");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // The Activity screen polls `listMessagingActivity` on mount, so
+    // the seeded rows land on the first frame. Two nested sections
+    // share `aria-label="Messaging activity"` (the outer
+    // MessagingActivityWindow shell and the inner MessagingActivityScreen)
+    // so `.first()` is required to pin to the outermost.
     await expect(
-      app.window.getByRole("group", { name: "Pending approval" }),
+      activityWindow
+        .getByRole("region", { name: "Messaging activity" })
+        .first(),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      activityWindow.getByText(/Inbound from Harold Hunt/).first(),
     ).toBeVisible();
     await expect(
-      app.window.getByRole("button", { name: "Approve" }),
+      activityWindow.getByText(/Rejected inbound from Vitaliy Morarian/),
     ).toBeVisible();
 
-    await bringToFront(app.electronApp);
-    captureNative("screenshot-closed-by-default.png");
+    captureNative("screenshot-closed-by-default.png", {
+      titleSubstring: "Messaging Activity",
+    });
   } finally {
     await app.close();
   }
@@ -255,68 +420,6 @@ test("pairing — Settings → Messaging pairing card", async () => {
   }
 });
 
-/**
- * Insert a messaging binding row directly into the tmp profile's
- * state.db so the thread sidebar renders a binding chip on the matching
- * thread row. We could expose `SqliteMessagingStore.upsertBinding` to
- * the harness, but it carries non-trivial sanitization rules and a
- * production-only `MessagingChannelKind` allowlist; for visual capture
- * we only need the columns the renderer reads, and a JSON payload that
- * round-trips through `JSON.parse(payload)` in
- * `findActiveBindingsForThread`.
- *
- * `channel_id` follows `buildChannelId()` in messaging-store-sqlite.ts:
- * `<kind>:<parentId-or-empty>:<id>`. For a Telegram DM the parentId is
- * empty.
- */
-function seedTelegramBinding(params: {
-  stateDbPath: string;
-  threadId: string;
-  conversationTitle: string;
-}): void {
-  const now = 1715431200000;
-  const bindingId = "binding-readme-bound-thread";
-  const conversation = {
-    id: "1234567890",
-    kind: "dm" as const,
-    title: params.conversationTitle,
-  };
-  const channel = {
-    channel: "telegram" as const,
-    conversation,
-  };
-  const channelIdKey = ["dm", "", conversation.id].join(":");
-  const payload = {
-    id: bindingId,
-    channel,
-    backend: "codex",
-    threadId: params.threadId,
-    authorizedActorIds: [conversation.id],
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const db = new Database(params.stateDbPath);
-  try {
-    db.prepare(
-      `INSERT OR REPLACE INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, revoked_at, payload)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      bindingId,
-      channel.channel,
-      channelIdKey,
-      params.threadId,
-      "active",
-      now,
-      now,
-      null,
-      JSON.stringify(payload),
-    );
-  } finally {
-    db.close();
-  }
-}
-
 test("bound-thread — thread row + detail with messenger chip", async () => {
   test.setTimeout(120_000);
 
@@ -338,12 +441,8 @@ test("bound-thread — thread row + detail with messenger chip", async () => {
     ).toBeVisible();
 
     // Seed the binding row.
-    const stateDbPath = path.join(
-      app.homeRoot,
-      ".pwragent/profiles/default/state/state.db",
-    );
     seedTelegramBinding({
-      stateDbPath,
+      stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
       threadId: "thread-recents-hero-primary",
       conversationTitle: "Hunt",
     });

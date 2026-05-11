@@ -14,12 +14,18 @@ import Foundation
 //
 // Usage:
 //   capture-window.swift <owner-name-substring> <output-path>
+//   capture-window.swift <owner-name-substring> <output-path> --title=<title-substring>
 //
 // The owner-name substring is matched against `kCGWindowOwnerName`
 // case-insensitively. For an Electron-based app this is typically
 // "Electron" during dev or the productName from electron-builder for
 // signed builds. We pick the first on-screen, normal-layer window that
 // matches.
+//
+// When `--title=<substring>` is provided, the window's title
+// (`kCGWindowName`) must also contain that substring (case-insensitive)
+// — useful when an app has multiple windows open (e.g. main app + a
+// settings/activity window) and you need to disambiguate.
 //
 // Implementation notes:
 //   * `CGWindowListCopyWindowInfo` still works on macOS 15+ — only the
@@ -46,13 +52,23 @@ let args = CommandLine.arguments
 
 guard args.count >= 3 else {
   FileHandle.standardError.write(
-    Data("usage: capture-window.swift <owner-name-substring> <output-path>\n".utf8)
+    Data(
+      "usage: capture-window.swift <owner-name-substring> <output-path> [--title=<title-substring>]\n"
+        .utf8
+    )
   )
   exit(2)
 }
 
 let ownerSubstring = args[1]
 let outputPath = args[2]
+
+var titleSubstring: String? = nil
+for raw in args.dropFirst(3) {
+  if raw.hasPrefix("--title=") {
+    titleSubstring = String(raw.dropFirst("--title=".count))
+  }
+}
 
 let infoList =
   CGWindowListCopyWindowInfo(
@@ -72,17 +88,33 @@ func windowMatches(_ info: [String: Any]) -> Bool {
     let width = bounds["Width"], width > 1,
     let height = bounds["Height"], height > 1
   else { return false }
+  // Optional title-substring filter to disambiguate when an app has
+  // multiple on-screen windows. `kCGWindowName` requires Screen
+  // Recording permission to be populated; without it the title comes
+  // back nil and the filter is treated as a no-match. The CLI surfaces
+  // this distinction in the error message so the caller can grant the
+  // permission and retry.
+  if let needle = titleSubstring {
+    guard let title = info[kCGWindowName as String] as? String,
+      title.localizedCaseInsensitiveContains(needle)
+    else { return false }
+  }
   return true
 }
 
 guard let target = infoList.first(where: windowMatches),
   let windowNumber = target[kCGWindowNumber as String] as? CGWindowID
 else {
-  let candidates = infoList.compactMap { $0[kCGWindowOwnerName as String] as? String }
-    .joined(separator: ", ")
+  let candidates = infoList.compactMap { info -> String? in
+    guard let owner = info[kCGWindowOwnerName as String] as? String else { return nil }
+    let title = info[kCGWindowName as String] as? String ?? ""
+    return title.isEmpty ? owner : "\(owner): \(title)"
+  }
+  .joined(separator: ", ")
+  let titleClause = titleSubstring.map { " with title containing '\($0)'" } ?? ""
   FileHandle.standardError.write(
     Data(
-      "no on-screen window for owner matching '\(ownerSubstring)' (on-screen owners: \(candidates))\n"
+      "no on-screen window for owner matching '\(ownerSubstring)'\(titleClause) (on-screen windows: \(candidates))\n"
         .utf8
     )
   )
@@ -131,4 +163,5 @@ guard FileManager.default.fileExists(atPath: outputPath) else {
   exit(5)
 }
 
-print("captured window \(windowNumber) (\(ownerSubstring)) -> \(outputPath)")
+let titleSuffix = titleSubstring.map { " title~\($0)" } ?? ""
+print("captured window \(windowNumber) (\(ownerSubstring)\(titleSuffix)) -> \(outputPath)")

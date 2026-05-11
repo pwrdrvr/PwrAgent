@@ -34,7 +34,9 @@
           "summary": "Cut over the web app to first-party session cookies and retire the JWT middleware.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            { "id": "dir-web-app", "label": "web-app", "path": "/Users/hunt/code/web-app", "kind": "local" }
+          ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715431200000
         },
@@ -45,7 +47,9 @@
           "summary": "Two specs intermittently time out on CI; reproduce locally and stabilize.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+          ],
           "inbox": { "inInbox": true, "reason": "new-thread" },
           "updatedAt": 1715424600000
         },
@@ -56,7 +60,9 @@
           "summary": "Implement exponential backoff for getUpdates on rate-limit errors.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+          ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715418000000
         },
@@ -67,7 +73,15 @@
           "summary": "Profile cold-start; renderer eats 1.2s before first paint.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            {
+              "id": "dir-pwragent-cpu-worktree",
+              "label": "startup-cpu (worktree)",
+              "path": "/Users/hunt/code/pwragent",
+              "kind": "worktree",
+              "worktreePath": "/Users/hunt/code/pwragent/.worktrees/startup-cpu"
+            }
+          ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715411400000
         },
@@ -78,7 +92,9 @@
           "summary": "Collapse the queued / pending / applying transitions into one reducer.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+          ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715404800000
         },
@@ -89,7 +105,9 @@
           "summary": "Surface release notes inside the app on update.",
           "source": "codex",
           "executionMode": "default",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            { "id": "dir-pwragent", "label": "pwragent", "path": "/Users/hunt/code/pwragent", "kind": "local" }
+          ],
           "inbox": { "inInbox": false, "reason": "none" },
           "updatedAt": 1715398200000
         }
