@@ -2130,6 +2130,54 @@ describe("MessagingController", () => {
     }
   });
 
+  it("keeps Monitor scheduled when the initial render fails", async () => {
+    vi.useFakeTimers();
+    const logger = {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const harness = await createHarness({ logger });
+    try {
+      await bindThread(harness);
+      harness.getNavigationSnapshot.mockRejectedValueOnce(
+        new Error("navigation unavailable"),
+      );
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        "messaging monitor initial render failed",
+        expect.objectContaining({
+          bindingId: expect.stringContaining("binding:"),
+          error: "navigation unavailable",
+          threadId: "thread-1",
+        }),
+      );
+      expect(harness.delivered).toEqual([]);
+      await expect(
+        harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+      ).resolves.toMatchObject({
+        monitor: {
+          enabled: true,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.waitFor(() => {
+        expect(harness.delivered.at(-1)).toMatchObject({
+          kind: "status",
+          text: expect.stringContaining("Monitor: Recent threads"),
+        });
+      });
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
   it("stops Monitor without detaching the binding and cancels the next tick", async () => {
     vi.useFakeTimers();
     const harness = await createHarness();

@@ -3441,9 +3441,19 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
-    const rendered = await this.renderMonitorStatus(enabledBinding, event);
-    this.scheduleMonitorTick(rendered);
-    return rendered;
+    try {
+      const rendered = await this.renderMonitorStatus(enabledBinding, event);
+      this.scheduleMonitorTick(rendered);
+      return rendered;
+    } catch (error) {
+      this.logger.debug?.("messaging monitor initial render failed", {
+        bindingId: enabledBinding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: enabledBinding.threadId,
+      });
+      this.scheduleMonitorTick(enabledBinding);
+      return enabledBinding;
+    }
   }
 
   private async stopMonitoringForBinding(
