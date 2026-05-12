@@ -532,6 +532,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   }
 
   async handleWebhookPayload(payload: FeishuEventEnvelope): Promise<unknown> {
+    this.logReceivedEvent("webhook", payload);
     if (payload.type === "url_verification" && typeof payload.challenge === "string") {
       if (!this.isValidWebhookToken(payload.token)) {
         return { status: 401 };
@@ -802,7 +803,20 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const tenantKey = payload.header?.tenant_key ?? event?.tenant_key;
     const messageId = event?.context?.open_message_id;
     const handle = event?.action?.value?.handle;
-    if (typeof handle !== "string") return FEISHU_CARD_ACTION_UNAVAILABLE;
+    const cardActionLogContext = {
+      actionTag: event?.action?.tag,
+      actorId: openId,
+      chatId: event?.context?.open_chat_id,
+      eventId: payload.header?.event_id,
+      eventType: payload.header?.event_type ?? "card.action.trigger",
+      hasHandle: typeof handle === "string",
+      messageId,
+      tenantKey,
+    };
+    this.logger.info?.("feishu card callback received", cardActionLogContext);
+    if (typeof handle !== "string") {
+      return this.cardActionUnavailable("missing-handle", cardActionLogContext);
+    }
     const openIdValidation = validateFeishuOpenId(openId);
     if (!openIdValidation.ok) {
       logFeishuInvalidIdentifier({
@@ -811,7 +825,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: openIdValidation.reason,
         value: openId,
       });
-      return FEISHU_CARD_ACTION_UNAVAILABLE;
+      return this.cardActionUnavailable("invalid-open-id", cardActionLogContext);
     }
     if (messageId !== undefined) {
       const messageValidation = validateFeishuMessageId(messageId);
@@ -822,11 +836,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           reason: messageValidation.reason,
           value: messageId,
         });
-        return FEISHU_CARD_ACTION_UNAVAILABLE;
+        return this.cardActionUnavailable("invalid-message-id", cardActionLogContext);
       }
     }
     const signed = this.parseSignedCallbackValue(handle);
-    if (!signed) return FEISHU_CARD_ACTION_UNAVAILABLE;
+    if (!signed) {
+      return this.cardActionUnavailable("invalid-signed-handle", cardActionLogContext);
+    }
     const handleValidation = validateFeishuCallbackHandle(signed.handle);
     if (!handleValidation.ok) {
       logFeishuInvalidIdentifier({
@@ -835,7 +851,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: handleValidation.reason,
         value: signed.handle,
       });
-      return FEISHU_CARD_ACTION_UNAVAILABLE;
+      return this.cardActionUnavailable("invalid-callback-handle", cardActionLogContext);
     }
 
     const actorId = openId as string;
@@ -847,7 +863,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         chatId: event?.context?.open_chat_id,
         tenantKey,
       });
-    if (!channelRef) return FEISHU_CARD_ACTION_UNAVAILABLE;
+    if (!channelRef) {
+      return this.cardActionUnavailable("missing-channel", cardActionLogContext);
+    }
     const record = await this.callbackHandleStore.resolveCallbackHandle({
       actorId,
       channel: channelRef,
@@ -857,10 +875,18 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     if (!record) {
       this.logger.warn?.("feishu callback handle rejected", {
         handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
+        ...cardActionLogContext,
       });
-      return FEISHU_CARD_ACTION_UNAVAILABLE;
+      return this.cardActionUnavailable("handle-not-found", cardActionLogContext);
     }
 
+    this.logger.info?.("feishu card callback accepted", {
+      ...cardActionLogContext,
+      actionId: record.actionId,
+      bindingId: record.bindingId,
+      conversationId: record.channel.conversation.id,
+      conversationKind: record.channel.conversation.kind,
+    });
     this.dispatchInboundCallback({
       id: payload.header?.event_id ?? `${signed.handle}:${this.now()}`,
       kind: "callback",
@@ -881,7 +907,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private dispatchInboundCallback(event: MessagingInboundCallbackEvent): void {
     const listener = this.listener;
-    if (!listener) return;
+    if (!listener) {
+      this.logger.warn?.("feishu callback dispatch skipped", {
+        actionId: event.actionId,
+        eventId: event.id,
+        reason: "adapter-listener-missing",
+      });
+      return;
+    }
     void Promise.resolve()
       .then(() => listener(event))
       .catch((error) => {
@@ -953,6 +986,24 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     for (const listener of this.diagnosticListeners) {
       await listener(event);
     }
+  }
+
+  private cardActionUnavailable(
+    reason: string,
+    context: Record<string, unknown>,
+  ): FeishuCardActionResponse {
+    this.logger.warn?.("feishu card callback unavailable", {
+      ...context,
+      reason,
+    });
+    return FEISHU_CARD_ACTION_UNAVAILABLE;
+  }
+
+  private logReceivedEvent(transport: "persistent" | "webhook", data: unknown): void {
+    this.logger.info?.("feishu event received", {
+      ...feishuEventMetadata(data),
+      transport,
+    });
   }
 
   private buildCallbackValueBuilder(params: {
@@ -1283,7 +1334,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private async startPersistentConnection(): Promise<void> {
     const lark = await import("@larksuiteoapi/node-sdk");
-    const eventDispatcher = new lark.EventDispatcher({
+    const sdkEventDispatcher = new lark.EventDispatcher({
       ...(this.config.encryptKey ? { encryptKey: this.config.encryptKey } : {}),
       logger: larkLoggerFromProviderLogger(this.logger),
       loggerLevel: lark.LoggerLevel.info,
@@ -1308,6 +1359,12 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
       },
     });
+    const eventDispatcher: FeishuEventDispatcher = {
+      invoke: async (data, params) => {
+        this.logReceivedEvent("persistent", data);
+        return await sdkEventDispatcher.invoke(data, params);
+      },
+    };
     const wsClient = await this.wsClientFactory({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
@@ -1680,6 +1737,73 @@ function feishuEnvelopePartsFromPersistentEvent(data: unknown): {
 function isFeishuCardActionEnvelope(payload: FeishuEventEnvelope): boolean {
   const event = payload.event as FeishuCardActionEvent | undefined;
   return Boolean(event?.action || event?.operator || event?.context);
+}
+
+function feishuEventMetadata(data: unknown): Record<string, unknown> {
+  const record = objectRecord(data);
+  const header = objectRecord(record.header);
+  const event = objectRecord(record.event);
+  const body = Object.keys(event).length > 0 ? event : record;
+  const message = objectRecord(body.message);
+  const sender = objectRecord(body.sender);
+  const senderId = objectRecord(sender.sender_id);
+  const action = objectRecord(body.action);
+  const actionValue = objectRecord(action.value);
+  const context = objectRecord(body.context);
+  const operator = objectRecord(body.operator);
+  const operatorId = objectRecord(body.operator_id);
+  const metadata: Record<string, unknown> = {
+    eventKeys: Object.keys(event),
+    headerKeys: Object.keys(header),
+    topLevelKeys: Object.keys(record),
+  };
+  setMetadataField(
+    metadata,
+    "eventId",
+    stringField(header.event_id) ?? stringField(record.event_id),
+  );
+  setMetadataField(
+    metadata,
+    "eventType",
+    stringField(header.event_type) ?? stringField(record.event_type)
+      ?? stringField(record.type) ?? stringField(objectRecord(record.event).type),
+  );
+  setMetadataField(
+    metadata,
+    "tenantKey",
+    stringField(header.tenant_key) ?? stringField(body.tenant_key)
+      ?? stringField(sender.tenant_key) ?? stringField(operator.tenant_key),
+  );
+  setMetadataField(
+    metadata,
+    "actorId",
+    stringField(senderId.open_id) ?? stringField(operator.open_id)
+      ?? stringField(operatorId.open_id),
+  );
+  setMetadataField(
+    metadata,
+    "chatId",
+    stringField(message.chat_id) ?? stringField(context.open_chat_id)
+      ?? stringField(body.chat_id),
+  );
+  setMetadataField(metadata, "chatType", stringField(message.chat_type));
+  setMetadataField(metadata, "messageId", stringField(message.message_id));
+  setMetadataField(metadata, "messageType", stringField(message.message_type));
+  setMetadataField(metadata, "actionTag", stringField(action.tag));
+  if (Object.keys(actionValue).length > 0) {
+    metadata.actionValueKeys = Object.keys(actionValue);
+  }
+  metadata.hasCallbackHandle = typeof actionValue.handle === "string";
+  metadata.hasMessageContent = typeof message.content === "string";
+  return metadata;
+}
+
+function setMetadataField(
+  metadata: Record<string, unknown>,
+  key: string,
+  value: string | undefined,
+): void {
+  if (value !== undefined) metadata[key] = value;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

@@ -254,6 +254,58 @@ describe("FeishuAdapter", () => {
     ]);
   });
 
+  it("logs every persistent event before SDK dispatch", async () => {
+    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+      | undefined;
+    const logs: Array<{ data?: Record<string, unknown>; message: string }> = [];
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      logger: {
+        info: (message, data) => {
+          logs.push({ message, ...(data ? { data } : {}) });
+        },
+      },
+      wsClientFactory: () => ({
+        close: () => undefined,
+        start: async (params) => {
+          dispatcher = params.eventDispatcher;
+        },
+      }),
+    });
+    await adapter.start(async () => undefined);
+
+    await dispatcher?.invoke({
+      schema: "2.0",
+      header: {
+        event_id: "evt_unknown",
+        event_type: "custom.event",
+        tenant_key: "tenant_1",
+      },
+      event: {
+        chat_id: "oc_chat",
+        operator_id: { open_id: "ou_user" },
+      },
+    }, { needCheck: false });
+    await adapter.stop();
+
+    expect(logs).toEqual(expect.arrayContaining([
+      {
+        message: "feishu event received",
+        data: expect.objectContaining({
+          actorId: "ou_user",
+          chatId: "oc_chat",
+          eventId: "evt_unknown",
+          eventType: "custom.event",
+          tenantKey: "tenant_1",
+          transport: "persistent",
+        }),
+      },
+    ]));
+  });
+
   it("normalizes persistent message events when the SDK forwards the full envelope", async () => {
     let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
       | undefined;
