@@ -440,6 +440,41 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("treats a bare leading bot mention as the help command", async () => {
+    const harness = await createControllerHarness();
+    const events: MessagingInboundEvent[] = [];
+    await harness.adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        text: "@PwrAgentBot",
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "command",
+      command: "help",
+      args: [],
+      rawText: "/help",
+    });
+  });
+
   it("signals typing activity without rendering a visible Telegram message", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -1509,6 +1544,10 @@ describe("TelegramAdapter", () => {
         {
           command: "resume",
           description: "Resume or start a PwrAgent thread",
+        },
+        {
+          command: "new",
+          description: "Start a new PwrAgent thread",
         },
         {
           command: "status",

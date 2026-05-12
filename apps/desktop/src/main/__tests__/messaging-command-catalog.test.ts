@@ -18,6 +18,7 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
     // this order; if you reorder, the help text reorders too.
     expect(MESSAGING_COMMAND_CATALOG.map((spec) => spec.verb)).toEqual([
       "resume",
+      "new",
       "status",
       "detach",
       "monitor",
@@ -47,6 +48,7 @@ describe("matchMessagingCommandVerb", () => {
 
   it("strips a leading slash before matching", () => {
     expect(matchMessagingCommandVerb("/resume")).toBe("resume");
+    expect(matchMessagingCommandVerb("/new")).toBe("new");
     expect(matchMessagingCommandVerb("/status")).toBe("status");
     expect(matchMessagingCommandVerb("/monitor")).toBe("monitor");
   });
@@ -89,12 +91,14 @@ describe("formatMessagingCommandHelpBody", () => {
     // Order check: resume must come before status, status before
     // detach, etc. — catalog order is the contract.
     const resumeIdx = body.indexOf("`resume`");
+    const newIdx = body.indexOf("`new`");
     const statusIdx = body.indexOf("`status`");
     const detachIdx = body.indexOf("`detach`");
     const monitorIdx = body.indexOf("`monitor`");
     const helpIdx = body.indexOf("`help`");
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
-    expect(statusIdx).toBeGreaterThan(resumeIdx);
+    expect(newIdx).toBeGreaterThan(resumeIdx);
+    expect(statusIdx).toBeGreaterThan(newIdx);
     expect(detachIdx).toBeGreaterThan(statusIdx);
     expect(monitorIdx).toBeGreaterThan(detachIdx);
     expect(helpIdx).toBeGreaterThan(monitorIdx);
@@ -122,6 +126,7 @@ describe("formatMessagingCommandHelpBody", () => {
     const body = formatMessagingCommandHelpBody({ catalog: subset });
     expect(body).toContain("`resume`");
     expect(body).toContain("`help`");
+    expect(body).not.toContain("`new`");
     expect(body).not.toContain("`status`");
     expect(body).not.toContain("`detach`");
   });
@@ -197,6 +202,7 @@ describe("paginateHelpCatalog", () => {
     expect(page.pageIndex).toBe(0);
     expect(page.commands.map((c) => c.verb)).toEqual([
       "resume",
+      "new",
       "status",
       "detach",
       "monitor",
@@ -266,6 +272,7 @@ describe("buildHelpActions", () => {
     const ids = actions.map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:new",
       "command:status",
       "command:detach",
       "command:monitor",
@@ -280,6 +287,8 @@ describe("buildHelpActions", () => {
     const actions = buildHelpActions({ page });
     const resume = actions.find((a) => a.id === "command:resume");
     expect(resume?.style).toBe("primary");
+    const newThread = actions.find((a) => a.id === "command:new");
+    expect(newThread?.style).toBeUndefined();
     const status = actions.find((a) => a.id === "command:status");
     expect(status?.style).toBeUndefined();
   });

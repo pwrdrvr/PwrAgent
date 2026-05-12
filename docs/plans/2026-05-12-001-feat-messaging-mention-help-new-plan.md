@@ -1,7 +1,7 @@
 ---
 title: "feat: Add messaging mention help and new-thread shortcut"
 type: feat
-status: active
+status: completed
 date: 2026-05-12
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 deepened: 2026-05-12
@@ -82,7 +82,7 @@ The existing command catalog and help surface already solve the discoverability 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add the New command shortcut to the catalog and controller**
+- [x] **Unit 1: Add the New command shortcut to the catalog and controller**
 
 **Goal:** Make New a supported command/help action that opens the existing new-thread browser mode.
 
@@ -119,7 +119,7 @@ The existing command catalog and help surface already solve the discoverability 
 **Verification:**
 - The help menu exposes New as a button and as a text command, and both routes land in the existing new-thread project picker.
 
-- [ ] **Unit 2: Normalize bare leading bot mentions to help across providers**
+- [x] **Unit 2: Normalize bare leading bot mentions to help across providers**
 
 **Goal:** Make a bare leading mention such as `@PwrAgent`, `<@bot_id>`, or a Slack `app_mention` with no remaining text dispatch as help instead of plain unbound text or no-op.
 
@@ -161,7 +161,7 @@ The existing command catalog and help surface already solve the discoverability 
 **Verification:**
 - Authorized bare mentions now reach the same controller path as `/help`; unauthorized bare mentions remain blocked before workflow data is exposed.
 
-- [ ] **Unit 3: Update provider command registration and messaging docs**
+- [x] **Unit 3: Update provider command registration and messaging docs**
 
 **Goal:** Keep user-visible command surfaces and docs in sync with the new `new` shortcut and bare-mention behavior.
 

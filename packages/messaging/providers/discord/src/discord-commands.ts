@@ -74,6 +74,21 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
   },
   {
     contexts: COMMAND_CONTEXTS,
+    description: "Start a new PwrAgent thread from a project.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "new",
+    options: [
+      {
+        description: "Optional new-thread flags, such as --fast or --model.",
+        name: "args",
+        required: false,
+        type: ApplicationCommandOptionType.String,
+      },
+    ],
+    type: ApplicationCommandType.ChatInput,
+  },
+  {
+    contexts: COMMAND_CONTEXTS,
     description: "Show the current PwrAgent thread binding and controls.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "status",

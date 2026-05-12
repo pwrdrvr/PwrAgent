@@ -445,6 +445,43 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("routes bare leading app mentions as the help command", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "<@U0BOTUSERID>",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        args: [],
+        rawText: "/help",
+      }),
+    ]);
+  });
+
   it("deduplicates app_mention and message events for the same Slack post", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -527,6 +564,46 @@ describe("SlackAdapter", () => {
         command: "monitor",
         args: ["refresh"],
         rawText: "/pwragent_monitor refresh",
+      }),
+    ]);
+  });
+
+  it("normalizes an operator-configured Slack new slash command", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        slashCommandPrefix: "pwragent_",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slash_commands", {
+      ack: async () => undefined,
+      body: {
+        channel_id: "C012ABCDEF0",
+        channel_name: "signals-chat",
+        command: "/pwragent_new",
+        team_id: "T012ABCDEF0",
+        text: "--fast",
+        user_id: "U012ABCDEF0",
+        user_name: "alice",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "new",
+        args: ["--fast"],
+        rawText: "/pwragent_new --fast",
       }),
     ]);
   });

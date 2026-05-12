@@ -1974,6 +1974,7 @@ describe("MessagingController", () => {
     const ids = (last?.actions ?? []).map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:new",
       "command:status",
       "command:detach",
       "command:monitor",
@@ -1983,6 +1984,8 @@ describe("MessagingController", () => {
     // single-button shape for users who tap rather than read.
     const resume = last?.actions?.find((a) => a.id === "command:resume");
     expect(resume?.style).toBe("primary");
+    const newThread = last?.actions?.find((a) => a.id === "command:new");
+    expect(newThread?.style).toBeUndefined();
   });
 
   it("help surface omits nav buttons when the catalog fits in one page", async () => {
@@ -2013,6 +2016,33 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
+    });
+  });
+
+  it("routes /new to the new-thread project picker", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("new PwrAgent thread"),
+      prompt: expect.stringContaining("Choose a project"),
+    });
+  });
+
+  it("clicking the New button on the help surface dispatches the new command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("new PwrAgent thread"),
     });
   });
 

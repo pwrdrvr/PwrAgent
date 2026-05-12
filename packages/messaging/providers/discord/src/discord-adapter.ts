@@ -766,7 +766,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage
-          || Boolean(mentionRemainder)
+          || mentionRemainder !== undefined
           || Boolean(message.content?.startsWith("/")),
       })
     ) {
@@ -810,7 +810,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         // through to the standard attachment / slash / text paths
         // below — the original `message.content` is dispatched as
         // media or plain text rather than a half-recognized command.
-        const synthRaw = `/${mentionRemainder}`;
+        const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
         const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
         if (mentionCommandMatch) {
           await listener({
@@ -2193,7 +2193,9 @@ function defensiveAllowedMentions(): DiscordAllowedMentions {
  * Returns `undefined` when:
  *   - `botUserId` is unset (config didn't expose it)
  *   - the message doesn't begin with the mention token
- *   - the mention is the entire message (no command verb following)
+ *
+ * Returns an empty string when the mention is the entire message.
+ * Callers treat that as the default help command.
  */
 export function stripDiscordBotMention(
   text: string,
@@ -2220,9 +2222,6 @@ export function stripDiscordBotMention(
     return undefined;
   }
   const remainder = trimmedStart.slice(mention.length).trim();
-  if (remainder.length === 0) {
-    return undefined;
-  }
   return remainder;
 }
 

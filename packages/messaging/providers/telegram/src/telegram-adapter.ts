@@ -572,6 +572,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           description: "Resume or start a PwrAgent thread",
         },
         {
+          command: "new",
+          description: "Start a new PwrAgent thread",
+        },
+        {
           command: "status",
           description: "Show the current PwrAgent binding",
         },
@@ -1149,7 +1153,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage
-          || Boolean(mentionRemainder)
+          || mentionRemainder !== undefined
           || Boolean(message.text?.startsWith("/")),
       })
     ) {
@@ -1161,7 +1165,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // deliberately fall through to the attachment / slash / text
       // paths below so the user's original message is dispatched as
       // media or plain text rather than a half-recognized command.
-      const synthRaw = `/${mentionRemainder}`;
+      const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
       const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
       if (mentionCommandMatch) {
         this.options.logger?.debug(
@@ -2533,7 +2537,9 @@ function telegramCallbackRecordId(
  *   - the message doesn't begin with the mention
  *   - a longer username token follows `@<botUsername>` (so
  *     `@pwragent2` doesn't match `@pwragent`)
- *   - the mention is the entire message (no command verb following)
+ *
+ * Returns an empty string when the mention is the entire message.
+ * Callers treat that as the default help command.
  */
 export function stripTelegramBotMention(
   text: string,
@@ -2559,9 +2565,6 @@ export function stripTelegramBotMention(
     return undefined;
   }
   const remainder = trimmedStart.slice(mention.length).trim();
-  if (remainder.length === 0) {
-    return undefined;
-  }
   return remainder;
 }
 

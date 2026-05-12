@@ -45,7 +45,13 @@ import {
  *
  * Keep this in sync with `MESSAGING_COMMAND_CATALOG` below.
  */
-export type MessagingCommandVerb = "resume" | "status" | "detach" | "monitor" | "help";
+export type MessagingCommandVerb =
+  | "resume"
+  | "new"
+  | "status"
+  | "detach"
+  | "monitor"
+  | "help";
 
 export type MessagingCommandSpec = {
   verb: MessagingCommandVerb;
@@ -68,6 +74,10 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
   {
     verb: "resume",
     description: "choose a thread to control from this conversation",
+  },
+  {
+    verb: "new",
+    description: "start a new thread from a project",
   },
   {
     verb: "status",

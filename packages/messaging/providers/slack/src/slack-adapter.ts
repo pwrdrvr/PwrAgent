@@ -615,11 +615,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
+    const isMention = strippedText !== rawText;
     const text = strippedText.trim();
     const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
-    const command = strippedText === rawText
-      ? parseCommand(text)
-      : parseBareCommand(text);
+    const command = isMention
+      ? parseBareCommand(text || "help")
+      : parseCommand(text);
     const kind = command ? "command" : event.files?.length ? "media" : "text";
 
     if (!this.authorizeInbound({
@@ -656,7 +657,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         routingState,
         command: command.command,
         args: command.args,
-        rawText: strippedText === rawText ? text : `/${text}`,
+        rawText: isMention ? `/${text || "help"}` : text,
       });
       return;
     }

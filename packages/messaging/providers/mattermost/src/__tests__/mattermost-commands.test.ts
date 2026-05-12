@@ -116,6 +116,7 @@ describe("desiredMattermostCommands", () => {
     const triggers = desiredMattermostCommands().map((c) => c.trigger);
     expect(triggers).toEqual([
       "pwragent_resume",
+      "pwragent_new",
       "pwragent_status",
       "pwragent_detach",
       "pwragent_monitor",
@@ -125,13 +126,14 @@ describe("desiredMattermostCommands", () => {
 
   it("uses bare triggers when prefix is empty", () => {
     const triggers = desiredMattermostCommands("").map((c) => c.trigger);
-    expect(triggers).toEqual(["resume", "status", "detach", "monitor", "help"]);
+    expect(triggers).toEqual(["resume", "new", "status", "detach", "monitor", "help"]);
   });
 
   it("supports custom prefixes", () => {
     const triggers = desiredMattermostCommands("agent.").map((c) => c.trigger);
     expect(triggers).toEqual([
       "agent.resume",
+      "agent.new",
       "agent.status",
       "agent.detach",
       "agent.monitor",

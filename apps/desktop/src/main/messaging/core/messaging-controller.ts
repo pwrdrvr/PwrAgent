@@ -790,6 +790,15 @@ export class MessagingController {
       await this.presentResumeBrowser(event);
       return;
     }
+    if (verb === "new") {
+      await this.presentResumeBrowser({
+        ...event,
+        command: "resume",
+        args: ["--new", ...event.args],
+        rawText: ["/resume", "--new", ...event.args].join(" "),
+      });
+      return;
+    }
     // `verb === "help"` and any unrecognized command both fall
     // through to the help surface. For unknown commands this serves
     // as a "did you mean?" prompt with the canonical list.
