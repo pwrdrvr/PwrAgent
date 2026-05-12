@@ -7050,15 +7050,26 @@ textarea,
   justify-content: center;
   padding: 24px;
   background: rgb(0 0 0 / 62%);
+  isolation: isolate;
 }
 
 .full-access-warning-dialog {
-  width: min(560px, 100%);
+  position: relative;
+  overflow: hidden;
+  width: min(560px, calc(100vw - 48px));
   padding: 16px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+.full-access-warning-dialog::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+  content: "";
 }
 
 .full-access-warning-dialog__header {

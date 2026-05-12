@@ -2754,6 +2754,8 @@ describe("Composer", () => {
     chooseDropdownOption("Access mode", "Full Access");
 
     const dialog = screen.getByRole("dialog", { name: "Enable Full Access?" });
+    expect(dialog.closest(".composer")).toBeNull();
+    expect(dialog.closest(".full-access-warning-modal")).not.toBeNull();
     expect(dialog).toHaveTextContent("network access");
     expect(dialog).toHaveTextContent("read/write access to almost all files");
     expect(dialog).toHaveTextContent("supply chain attack");
