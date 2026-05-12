@@ -143,7 +143,7 @@ CREATE INDEX idx_messaging_pairing_status
 `;
 
 const SCHEMA_V4 = `
-CREATE TABLE monitor_subscriptions (
+CREATE TABLE IF NOT EXISTS monitor_subscriptions (
   subscription_id  TEXT PRIMARY KEY,
   channel_kind     TEXT NOT NULL,
   channel_id       TEXT NOT NULL,
@@ -153,7 +153,7 @@ CREATE TABLE monitor_subscriptions (
   revoked_at       INTEGER,
   payload          TEXT NOT NULL
 );
-CREATE INDEX idx_monitor_subscriptions_channel
+CREATE INDEX IF NOT EXISTS idx_monitor_subscriptions_channel
   ON monitor_subscriptions(channel_kind, channel_id);
 `;
 
@@ -221,6 +221,7 @@ export class StateDb {
         db.pragma("user_version = 4");
       })();
     }
+    ensureCurrentSchema(db);
 
     return new StateDb(db);
   }
@@ -330,4 +331,13 @@ export class StateDb {
   deleteSecret(key: string): void {
     this.db.prepare("DELETE FROM secrets WHERE key = ?").run(key);
   }
+}
+
+function ensureCurrentSchema(db: BetterSqlite3.Database): void {
+  db.transaction(() => {
+    db.exec(SCHEMA_V4);
+    if ((db.pragma("user_version", { simple: true }) as number) < 4) {
+      db.pragma("user_version = 4");
+    }
+  })();
 }
