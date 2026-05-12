@@ -8157,6 +8157,51 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not let text-mode status cards shadow approval replies", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      interactionModeDefault: "text",
+      now: () => now++,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+
+    expect(harness.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+        body: expect.stringContaining("Reply with:"),
+        decisions: [],
+      });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Reply with:"),
+      actions: [],
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: {
+        decision: "accept_for_session",
+      },
+    });
+  });
+
   it("resumes typing after submitting an approval response for the waiting turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);

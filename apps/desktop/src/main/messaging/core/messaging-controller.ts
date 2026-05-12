@@ -9747,7 +9747,11 @@ export class MessagingController {
     const actionCount = actionsForIntent(routedIntent).filter(
       (action) => !action.disabled,
     ).length;
-    if (interactionMode === "text" && actionCount > 0 && (binding || event)) {
+    if (
+      interactionMode === "text"
+      && actionCount > 0
+      && await this.shouldStoreTextModePendingIntent(routedIntent, binding, event)
+    ) {
       await this.storePendingIntent(routedIntent, binding, event);
     }
     const deliverableIntent =
@@ -10012,6 +10016,38 @@ export class MessagingController {
       return await configured();
     }
     return configured ?? "buttons";
+  }
+
+  private async shouldStoreTextModePendingIntent(
+    intent: MessagingSurfaceIntent,
+    binding?: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<boolean> {
+    if (!binding && !event) {
+      return false;
+    }
+    if (intent.kind !== "status") {
+      return true;
+    }
+
+    const channel = binding?.channel ?? event?.channel;
+    if (!channel) {
+      return false;
+    }
+    const actorIds = binding?.authorizedActorIds ?? (
+      event ? [event.actor.platformUserId] : []
+    );
+    for (const actorId of actorIds) {
+      const active = await this.options.store.findActivePendingIntentForChannel({
+        actorId,
+        channel,
+        now: this.now(),
+      });
+      if (active && active.intent.kind !== "status") {
+        return false;
+      }
+    }
+    return true;
   }
 
   private filterBindingsForChannel(
