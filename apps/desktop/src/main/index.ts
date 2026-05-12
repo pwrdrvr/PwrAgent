@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, shell } from "electron";
+import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
@@ -60,6 +61,21 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 
+function installDevelopmentDockIcon(): void {
+  if (!isMac || !isDevelopment) {
+    return;
+  }
+
+  const iconPath = join(app.getAppPath(), "build/icon.png");
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) {
+    mainLog.warn("failed to load development dock icon", { iconPath });
+    return;
+  }
+
+  app.dock?.setIcon(icon);
+}
+
 function installApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(isMac ? [{ role: "appMenu" as const }] : []),
@@ -108,6 +124,7 @@ export function bootstrapApp(): void {
   app.whenReady().then(async () => {
     const startupCpuProfiler = new StartupCpuProfiler();
     await startupCpuProfiler.start();
+    installDevelopmentDockIcon();
     initializeAppState();
     installApplicationMenu();
     registerAppServerIpcHandlers();
