@@ -39,6 +39,7 @@ export type FeishuButtonElement = {
 
 export type FeishuInteractiveCard = {
   config?: {
+    update_multi?: boolean;
     wide_screen_mode?: boolean;
   };
   elements: FeishuCardElement[];
@@ -148,7 +149,7 @@ export function buildFeishuCardForIntent(params: {
   elements.push(...(params.actionElements ?? []));
 
   return {
-    config: { wide_screen_mode: true },
+    config: { update_multi: true, wide_screen_mode: true },
     elements,
     header: headerForIntent(params.intent),
   };
@@ -206,9 +207,10 @@ export function clampFeishuMessage(text: string): string {
 }
 
 export function clampFeishuCardText(text: string): string {
+  const suffix = "...";
   return text.length <= FEISHU_CARD_TEXT_LIMIT
     ? text
-    : `${text.slice(0, FEISHU_CARD_TEXT_LIMIT - 1)}...`;
+    : `${text.slice(0, FEISHU_CARD_TEXT_LIMIT - suffix.length)}${suffix}`;
 }
 
 export function markdownToFeishuMarkdown(markdown: string): string {

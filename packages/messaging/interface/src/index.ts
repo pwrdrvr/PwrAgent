@@ -1019,10 +1019,21 @@ export type MessagingOutboundAttachmentCapabilities = {
   supportsRemoteImageUrl: boolean;
 };
 
+export type MessagingConversationInputCapabilities = {
+  /**
+   * Shared conversations require an explicit bot mention before the platform
+   * delivers messages to the adapter.
+   */
+  sharedConversationRequiresMention?: boolean;
+  sharedConversationMentionInstruction?: string;
+  sharedConversationStatusLine?: string;
+};
+
 export type MessagingCapabilityProfile = {
   /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
   actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
+  conversationInput?: MessagingConversationInputCapabilities;
   /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
   /**

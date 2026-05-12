@@ -19,6 +19,7 @@ import type {
   SubmitServerRequestRequest,
 } from "@pwragent/shared";
 import type {
+  MessagingCapabilityProfile,
   MessagingSurfaceAction,
   MessagingChannelKind,
   MessagingDeliveryScope,
@@ -920,21 +921,30 @@ describe("MessagingController", () => {
     });
   });
 
-  it("tells Feishu group bindings to @mention the bot", async () => {
-    const harness = await createHarness();
-    const feishuGroupChannel = {
-      channel: "feishu" as const,
+  it("uses the provider conversation-input profile for shared-chat mention instructions", async () => {
+    const mentionRequiredProfile: MessagingCapabilityProfile = {
+      ...PERMISSIVE_CAPABILITY_PROFILE,
+      conversationInput: {
+        sharedConversationRequiresMention: true,
+        sharedConversationMentionInstruction:
+          "In this shared chat, @mention this bot for messages to reach the bound thread.",
+        sharedConversationStatusLine:
+          "Input: @mention this bot for messages to reach this bound thread.",
+      },
+    };
+    const harness = await createHarness({ capabilityProfile: mentionRequiredProfile });
+    const sharedChannel = {
+      channel: "mattermost" as const,
       conversation: {
-        id: "oc_chat",
+        id: "channel-1",
         kind: "channel" as const,
-        parentId: "tenant_1",
       },
     };
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "bind:codex:thread-1",
-        channel: feishuGroupChannel,
+        channel: sharedChannel,
         value: {
           backend: "codex",
           threadId: "thread-1",
@@ -5460,6 +5470,7 @@ async function createHarness(options?: {
   navigation?: NavigationSnapshot;
   now?: () => number;
   channel?: MessagingChannelKind;
+  capabilityProfile?: MessagingCapabilityProfile;
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   materializeDirectoryLaunchpad?: NonNullable<
@@ -5502,7 +5513,7 @@ async function createHarness(options?: {
   const store = await createStore();
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
-    capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+    capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
       : {}),

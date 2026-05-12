@@ -977,7 +977,7 @@ export function MessagingSettings(props: {
           <SecretField
             disabled={props.saving || !feishu.encryptKey.writable}
             label="Encryption Key"
-            sub="Stored in the system keychain. Reserved for encrypted callback payloads."
+            sub="Recommended. Stored in the system keychain. Used to decrypt encrypted persistent and webhook event payloads."
             secret="feishuEncryptKey"
             state={feishu.encryptKey}
             onClearSecret={props.onClearSecret}

@@ -39,6 +39,10 @@ This is the supported default. The desktop app opens an outbound SDK WebSocket,
 so users do not need to expose a localhost listener through Cloudflare Tunnel,
 ngrok, or another public reverse proxy that can be scanned by internet traffic.
 
+Enable Encryption Strategy and store the generated Encryption Key in PwrAgent.
+Encryption is recommended for persistent connection and webhook modes; PwrAgent
+decrypts encrypted event envelopes before it validates and dispatches them.
+
 After changing bot profile, scopes, events, or callbacks, create and publish an
 app version. Lark indicates that profile and permission changes take effect
 after publish.
@@ -137,8 +141,9 @@ If webhook mode is selected:
 2. Expose a public URL that forwards to the local listener.
 3. The local default listener is `http://127.0.0.1:47823`.
 4. Store the Verification Token in Keychain.
-5. Store the Encryption Key only if encrypted callback payloads are enabled in
-   the platform console.
+5. Enable encrypted callbacks in the platform console and store the Encryption
+   Key in Keychain. Encryption is recommended for persistent connection and
+   webhook modes; PwrAgent decrypts encrypted event envelopes before dispatch.
 
 Do not enable the local webhook listener unless Webhook is selected for Event
 subscription.

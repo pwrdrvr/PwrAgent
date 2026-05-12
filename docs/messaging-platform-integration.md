@@ -395,10 +395,11 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
    subscriptions in the Open Platform console to point at your public tunnel,
    forwarding to PwrAgent's local callback listener
    (`http://127.0.0.1:47823` by default).
-8. Store the Verification Token in Keychain if webhook mode is enabled. Plain
-   webhook events are rejected if their token does not match. The Encryption Key
-   field is reserved for encrypted callback payloads and should match the
-   platform console when you enable encrypted events.
+8. Enable encrypted callbacks in the platform console and store the Encryption
+   Key in Keychain. Encryption is recommended for persistent connection and
+   webhook modes; PwrAgent decrypts encrypted event envelopes before dispatch.
+   Store the Verification Token in Keychain if webhook mode is enabled. Plain
+   webhook events are rejected if their token does not match.
 9. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
    (`oc_...`) or tenant keys for shared conversations; empty shared-surface
    allowlists deny shared chat access.

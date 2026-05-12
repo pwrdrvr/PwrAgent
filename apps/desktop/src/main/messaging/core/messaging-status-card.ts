@@ -114,7 +114,7 @@ export function buildBindingStatusIntent(params: {
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
       `Branch: ${branch ?? unavailable()}`,
       params.threadState.missing ? "Thread state: unavailable" : undefined,
-      mentionRequiredLine(params.binding),
+      mentionRequiredLine(params.binding, params.capabilityProfile),
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
@@ -144,11 +144,18 @@ export function buildBindingStatusIntent(params: {
   };
 }
 
-function mentionRequiredLine(binding: MessagingBindingRecord): string | undefined {
-  return binding.channel.channel === "feishu" &&
-    binding.channel.conversation.kind !== "dm"
-    ? "Input: @mention this bot for messages to reach this bound thread."
-    : undefined;
+function mentionRequiredLine(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile | undefined,
+): string | undefined {
+  if (
+    binding.channel.conversation.kind === "dm" ||
+    !capabilityProfile?.conversationInput?.sharedConversationRequiresMention
+  ) {
+    return undefined;
+  }
+  return capabilityProfile.conversationInput.sharedConversationStatusLine
+    ?? capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
 function buildStatusActions(params: {

@@ -284,6 +284,9 @@ describe("messaging status ipc", () => {
     expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(1, {
       messaging: {
         feishu: {
+          authorizedChats: [
+            { id: "oc_071623e2edfe83f4783761cf7fab1601", displayName: "Development" },
+          ],
           authorizedUserIds: [
             { id: "ou_fa23371f44e1e45ef8eb1848c3797042", displayName: "Harold" },
           ],

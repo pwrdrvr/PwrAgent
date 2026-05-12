@@ -1,4 +1,10 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type {
@@ -259,6 +265,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       supportsInlineCode: true,
       supportsLinks: true,
       supportsMessageEdit: true,
+    },
+    conversationInput: {
+      sharedConversationRequiresMention: true,
+      sharedConversationMentionInstruction:
+        "In this Feishu / Lark group, @mention this bot for messages to reach the bound thread.",
+      sharedConversationStatusLine:
+        "Input: @mention this bot for messages to reach this bound thread.",
     },
     inboundAttachments: {
       maxAttachmentCount: 4,
@@ -1322,7 +1335,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private async listenForCallbacks(): Promise<void> {
     if (!this.config.callbackBaseUrl) return;
     const url = new URL(this.config.callbackBaseUrl);
-    const port = Number(url.port) || DEFAULT_CALLBACK_PORT;
+    const port = url.port ? Number(url.port) : DEFAULT_CALLBACK_PORT;
     const host = url.hostname || DEFAULT_CALLBACK_HOST;
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
@@ -1386,7 +1399,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
     try {
       const body = await readRequestBody(request, FEISHU_WEBHOOK_BODY_LIMIT_BYTES);
-      const payload = JSON.parse(body.toString("utf8")) as FeishuEventEnvelope;
+      const payload = parseFeishuWebhookPayload(body, this.config.encryptKey);
       const result = await this.handleWebhookPayload(payload);
       if (
         result
@@ -1842,6 +1855,50 @@ function setMetadataField(
   value: string | undefined,
 ): void {
   if (value !== undefined) metadata[key] = value;
+}
+
+function parseFeishuWebhookPayload(
+  body: Buffer,
+  encryptKey: string | undefined,
+): FeishuEventEnvelope {
+  const parsed = JSON.parse(body.toString("utf8")) as unknown;
+  const envelope = objectRecord(parsed);
+  const encryptedPayload = stringField(envelope.encrypt);
+  if (!encryptedPayload) {
+    return parsed as FeishuEventEnvelope;
+  }
+  if (!encryptKey) {
+    throw new Error("Feishu encrypted webhook payload requires an encryption key.");
+  }
+
+  const decrypted = JSON.parse(
+    decryptFeishuEncryptedPayload(encryptedPayload, encryptKey),
+  ) as unknown;
+  const decryptedEnvelope = objectRecord(decrypted);
+  const passthrough = { ...envelope };
+  delete passthrough.encrypt;
+  return {
+    ...decryptedEnvelope,
+    ...passthrough,
+  } as FeishuEventEnvelope;
+}
+
+function decryptFeishuEncryptedPayload(
+  encryptedPayload: string,
+  encryptKey: string,
+): string {
+  const keyHash = createHash("sha256");
+  keyHash.update(encryptKey);
+  const key = keyHash.digest();
+  const encryptedBuffer = Buffer.from(encryptedPayload, "base64");
+  const decipher = createDecipheriv("aes-256-cbc", key, encryptedBuffer.subarray(0, 16));
+  let decrypted = decipher.update(
+    encryptedBuffer.subarray(16).toString("hex"),
+    "hex",
+    "utf8",
+  );
+  decrypted += decipher.final("utf8");
+  return decrypted;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

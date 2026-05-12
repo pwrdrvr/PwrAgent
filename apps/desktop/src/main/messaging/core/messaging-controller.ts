@@ -1547,8 +1547,8 @@ export class MessagingController {
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Thread bound",
-          body: boundThreadConfirmationBody(binding),
-          fallbackText: boundThreadFallbackText(binding),
+          body: boundThreadConfirmationBody(binding, this.capabilityProfile),
+          fallbackText: boundThreadFallbackText(binding, this.capabilityProfile),
         }),
         binding,
       );
@@ -2720,8 +2720,14 @@ export class MessagingController {
               }
             : undefined,
           title: "Thread bound",
-          body: boundThreadConfirmationBody(updatedBinding),
-          fallbackText: boundThreadFallbackText(updatedBinding),
+          body: boundThreadConfirmationBody(
+            updatedBinding,
+            this.capabilityProfile,
+          ),
+          fallbackText: boundThreadFallbackText(
+            updatedBinding,
+            this.capabilityProfile,
+          ),
           targetSurface: session.surface,
         }),
         undefined,
@@ -5702,22 +5708,35 @@ function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversa
   }
 }
 
-function boundThreadConfirmationBody(binding: MessagingBindingRecord): string {
+function boundThreadConfirmationBody(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string {
   return [
     "Messages in this conversation will route to the selected thread.",
-    feishuMentionRequiredNote(binding),
+    sharedConversationMentionInstruction(binding, capabilityProfile),
   ].filter((line): line is string => Boolean(line)).join("\n\n");
 }
 
-function boundThreadFallbackText(binding: MessagingBindingRecord): string {
-  return feishuMentionRequiredNote(binding) ?? "Send a message to continue the thread.";
+function boundThreadFallbackText(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string {
+  return sharedConversationMentionInstruction(binding, capabilityProfile)
+    ?? "Send a message to continue the thread.";
 }
 
-function feishuMentionRequiredNote(binding: MessagingBindingRecord): string | undefined {
-  return binding.channel.channel === "feishu" &&
-    binding.channel.conversation.kind !== "dm"
-    ? "In this Feishu / Lark group, @mention this bot for messages to reach the bound thread."
-    : undefined;
+function sharedConversationMentionInstruction(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string | undefined {
+  if (
+    binding.channel.conversation.kind === "dm" ||
+    !capabilityProfile.conversationInput?.sharedConversationRequiresMention
+  ) {
+    return undefined;
+  }
+  return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {

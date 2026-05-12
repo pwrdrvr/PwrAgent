@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { MessagingCapabilityProfile, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import {
   buildFeishuActionElements,
+  buildFeishuCardForIntent,
+  clampFeishuCardText,
+  FEISHU_CARD_TEXT_LIMIT,
   markdownToFeishuMarkdown,
   textForFeishuIntent,
   truncateFeishuPlainText,
@@ -88,5 +91,26 @@ describe("Feishu formatting", () => {
       text: "Working",
     };
     expect(textForFeishuIntent(intent)).toBe("Working");
+  });
+
+  it("marks interactive cards as multi-update safe", () => {
+    const intent: MessagingSurfaceIntent = {
+      id: "i1",
+      kind: "message",
+      createdAt: 1,
+      parts: [{ type: "text", text: "Hello" }],
+    };
+
+    expect(buildFeishuCardForIntent({ intent, text: "Hello" }).config).toEqual({
+      update_multi: true,
+      wide_screen_mode: true,
+    });
+  });
+
+  it("clips card text to the advertised limit including the suffix", () => {
+    const clipped = clampFeishuCardText("x".repeat(FEISHU_CARD_TEXT_LIMIT + 1));
+
+    expect(clipped).toHaveLength(FEISHU_CARD_TEXT_LIMIT);
+    expect(clipped.endsWith("...")).toBe(true);
   });
 });

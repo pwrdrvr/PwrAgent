@@ -1,3 +1,5 @@
+import { createCipheriv, createHash } from "node:crypto";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuApi,
@@ -51,6 +53,19 @@ function conversationKey(channel: MessagingChannelRef): string {
     channel.conversation.parentId ?? "",
     channel.conversation.id,
   ].join(":");
+}
+
+function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
+  const keyHash = createHash("sha256");
+  keyHash.update(encryptKey);
+  const key = keyHash.digest();
+  const iv = Buffer.alloc(16, 1);
+  const cipher = createCipheriv("aes-256-cbc", key, iv);
+  return Buffer.concat([
+    iv,
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]).toString("base64");
 }
 
 function fakeApi(spies: {
@@ -284,6 +299,70 @@ describe("FeishuAdapter", () => {
         actor: { platformUserId: "ou_user" },
       }),
     ]);
+  });
+
+  it("decrypts encrypted webhook event envelopes", async () => {
+    const encryptKey = "encrypt-key";
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        callbackBaseUrl: "http://127.0.0.1:0",
+        encryptKey,
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    try {
+      const address = (adapter as unknown as {
+        server: { address(): AddressInfo | string | null };
+      }).server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected Feishu test webhook server to listen on TCP");
+      }
+      const payload = {
+        header: {
+          event_id: "evt_encrypted",
+          event_type: "im.message.receive_v1",
+          tenant_key: "tenant_1",
+          token: "verify-token",
+        },
+        event: {
+          sender: {
+            sender_id: { open_id: "ou_user" },
+            tenant_key: "tenant_1",
+          },
+          message: {
+            chat_id: "oc_chat",
+            chat_type: "p2p",
+            content: JSON.stringify({ text: "encrypted hello" }),
+            message_id: "om_encrypted",
+            message_type: "text",
+          },
+        },
+      };
+
+      const response = await fetch(`http://127.0.0.1:${address.port}`, {
+        method: "POST",
+        body: JSON.stringify({ encrypt: encryptFeishuPayload(payload, encryptKey) }),
+        headers: { "content-type": "application/json" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(events).toEqual([
+        expect.objectContaining({
+          kind: "text",
+          text: "encrypted hello",
+          actor: { platformUserId: "ou_user" },
+        }),
+      ]);
+    } finally {
+      await adapter.stop();
+    }
   });
 
   it("uses Lark persistent connection events by default", async () => {
