@@ -118,6 +118,7 @@ class MockTransport implements JsonRpcTransport {
           searchTerm?: string;
           query?: string;
           filter?: string;
+          cursor?: string;
           sortKey?: string;
           sourceKinds?: string[];
         };
@@ -254,6 +255,42 @@ class MockTransport implements JsonRpcTransport {
                       cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                     },
                   ],
+            },
+          }),
+        );
+        return;
+      }
+
+      if (searchTerm === "paginated-archive") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data:
+                params.params?.archived && params.params?.cursor === "archive-page-2"
+                  ? [
+                      {
+                        id: "thread-archived-page-2",
+                        name: "Archived page two",
+                        updatedAt: 1_776_300_000,
+                        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                      },
+                    ]
+                  : params.params?.archived
+                    ? [
+                        {
+                          id: "thread-archived-page-1",
+                          name: "Archived page one",
+                          updatedAt: 1_776_400_000,
+                          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                        },
+                      ]
+                    : [],
+              nextCursor:
+                params.params?.archived && params.params?.cursor !== "archive-page-2"
+                  ? "archive-page-2"
+                  : null,
             },
           }),
         );
@@ -1141,6 +1178,51 @@ describe("CodexAppServerClient", () => {
         }),
       ])
     );
+
+    await client.close();
+  });
+
+  it("follows thread/list pagination for archived codex threads", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const threads = await client.listThreads({
+      archived: true,
+      filter: "paginated-archive",
+    });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-archived-page-1",
+      "thread-archived-page-2",
+    ]);
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { cursor?: string } })
+      .filter((payload) => payload.method === "thread/list");
+
+    expect(threadListRequests).toEqual([
+      expect.objectContaining({
+        params: expect.objectContaining({
+          archived: true,
+          limit: 50,
+          searchTerm: "paginated-archive",
+        }),
+      }),
+      expect.objectContaining({
+        params: expect.objectContaining({
+          archived: true,
+          cursor: "archive-page-2",
+          limit: 50,
+          searchTerm: "paginated-archive",
+        }),
+      }),
+    ]);
 
     await client.close();
   });

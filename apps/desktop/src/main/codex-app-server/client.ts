@@ -124,6 +124,11 @@ type RawCodexThreadSummary = Omit<
   gitOriginUrl?: string;
 };
 
+type RawCodexThreadListPage = {
+  nextCursor?: string;
+  threads: RawCodexThreadSummary[];
+};
+
 type SkillCatalogEntry = {
   cwd?: string;
   skills: AppServerSkillSummary[];
@@ -2911,13 +2916,25 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   );
 }
 
+function extractThreadListPage(value: unknown): RawCodexThreadListPage {
+  const record = asRecord(value);
+  return {
+    nextCursor: record
+      ? pickString(record, ["nextCursor", "next_cursor", "after"])
+      : undefined,
+    threads: extractThreadsFromValue(value),
+  };
+}
+
 function buildThreadDiscoveryPayloads(
   filter?: string,
-  archived?: boolean
+  archived?: boolean,
+  cursor?: string
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
     archived,
+    cursor,
     limit: 50,
     sortKey: "updated_at",
     sourceKinds: ["cli", "vscode"],
@@ -2931,7 +2948,7 @@ function buildThreadDiscoveryPayloads(
     {
       ...baseParams,
     },
-    {}
+    cursor ? { cursor } : {}
   ];
 }
 
@@ -3428,6 +3445,41 @@ async function requestWithFallbacks(params: {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+async function requestThreadListPages(params: {
+  archived?: boolean;
+  client: JsonRpcConnection;
+  diagnostics?: JsonRpcObserverDiagnostics;
+  filter?: string;
+  requestTimeoutMs: number;
+}): Promise<RawCodexThreadSummary[]> {
+  const pages: RawCodexThreadSummary[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  do {
+    const result = await requestWithFallbacks({
+      client: params.client,
+      diagnostics: params.diagnostics,
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      payloads: buildThreadDiscoveryPayloads(params.filter, params.archived, cursor),
+      timeoutMs: params.requestTimeoutMs,
+    });
+    const page = extractThreadListPage(result);
+    pages.push(...page.threads);
+
+    const nextCursor = page.nextCursor?.trim();
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      cursor = undefined;
+      break;
+    }
+
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return mergeThreadSummaries(pages);
+}
+
 type HelperTurnResult =
   | {
       status: "ok";
@@ -3789,19 +3841,25 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     };
     if (params?.archived === true) {
-      const archivedResult = await requestWithFallbacks({
-        ...requestParams,
-        payloads: buildThreadDiscoveryPayloads(params?.filter, true),
+      const archivedThreads = await requestThreadListPages({
+        archived: true,
+        client: this.connection,
+        diagnostics,
+        filter: params?.filter,
+        requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(extractThreadsFromValue(archivedResult));
+      return await this.enrichThreads(archivedThreads);
     }
 
-    const activeResult = await requestWithFallbacks({
-      ...requestParams,
-      payloads: buildThreadDiscoveryPayloads(params?.filter, false),
+    const activeThreads = await requestThreadListPages({
+      archived: false,
+      client: this.connection,
+      diagnostics,
+      filter: params?.filter,
+      requestTimeoutMs: requestParams.timeoutMs,
     });
     const threads = mergeArchivedThreadMetadata({
-      activeThreads: extractThreadsFromValue(activeResult),
+      activeThreads,
       archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
     });
     this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
@@ -3848,7 +3906,8 @@ export class CodexAppServerClient {
       return await inFlight;
     }
 
-    const requestPromise = requestWithFallbacks({
+    const requestPromise = requestThreadListPages({
+      archived: true,
       client: this.connection,
       diagnostics: diagnostics
         ? {
@@ -3856,12 +3915,10 @@ export class CodexAppServerClient {
             callerReason: `${diagnostics.callerReason ?? "thread-list"}:archived-metadata`,
           }
         : undefined,
-      methods: ["thread/list"] as CodexClientRequestMethod[],
-      payloads: buildThreadDiscoveryPayloads(filter, true),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      filter,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     })
-      .then((result) => {
-        const threads = extractThreadsFromValue(result);
+      .then((threads) => {
         this.archivedThreadMetadataByFilter.set(cacheKey, threads);
         this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
         return threads;
