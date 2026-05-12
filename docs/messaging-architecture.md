@@ -34,8 +34,9 @@ graph TB
         Discord["discord<br/>uses discord.js"]
         Mattermost["mattermost<br/>uses @mattermost/client<br/>+ HTTP callback listener"]
         Slack["slack<br/>uses @slack/web-api<br/>+ @slack/socket-mode"]
+        Feishu["feishu<br/>Feishu/Lark Open Platform REST<br/>+ SDK persistent connection"]
         Line["line<br/>uses @line/bot-sdk<br/>+ signed webhook listener"]
-        Future["future:<br/>signal, feishu,<br/>matrix, …"]
+        Future["future:<br/>signal, matrix, …"]
     end
 
     subgraph Shared["packages/shared"]
@@ -48,6 +49,7 @@ graph TB
     Discord -->|implements adapter contract| Interface
     Mattermost -->|implements adapter contract| Interface
     Slack -->|implements adapter contract| Interface
+    Feishu -->|implements adapter contract| Interface
     Line -->|implements adapter contract| Interface
     Future -->|implements adapter contract| Interface
     Interface -->|imports app/nav types| Shared
@@ -155,6 +157,7 @@ Different platforms deliver button clicks back to the bot through different tran
 | Discord | Gateway component-interaction events via `discord.js` | The same gateway connection. |
 | **Mattermost** | **Out-of-band HTTP POST** to a URL the bot supplies as `integration.url` on each rendered button | **A small HTTP listener bound to `127.0.0.1:<port>`** inside the adapter package. Production deployments expose it through Cloudflare Tunnel or Tailscale Funnel; the listener never binds to a public interface. HMAC-signed `integration.context` defends against forged callbacks (the platform doesn't sign them). |
 | Slack | Socket Mode events via `@slack/socket-mode` | The outbound WebSocket carries message events, button clicks, and slash-command payloads. No public callback URL is needed for v1. |
+| Feishu / Lark | Persistent connection via `@larksuiteoapi/node-sdk` | The outbound SDK WebSocket carries message events and interactive-card callbacks by default. Webhook mode remains as a fallback for deployments that explicitly choose an HTTP callback URL. |
 | LINE | Signed webhooks via `X-Line-Signature` | LINE is webhook-only. The adapter verifies the HMAC-SHA256 signature over the raw body before parsing, then normalizes message/postback/follow/join events. Production deployments expose the localhost listener through the same tunnel pattern as Mattermost. |
 
 Inline-stream providers don't need a listener — clicks ride back over their existing connection. HTTP-callback providers need an authenticated, tunneled listener; PwrAgent's pattern uses HMAC over `(intentId, actionId, issuedAt)` with a persistent deployment secret when callbacks need to survive adapter restarts. See [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) for the recommended Cloudflare Tunnel + Zero Trust deployment posture and the Tailscale Funnel free-ish alternative.

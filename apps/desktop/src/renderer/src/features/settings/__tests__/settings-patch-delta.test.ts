@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import {
   buildDiscordPatchDelta,
+  buildFeishuPatchDelta,
   buildMattermostPatchDelta,
   buildTelegramPatchDelta,
 } from "../settings-patch-delta";
 
 type Telegram = DesktopSettingsSnapshot["messaging"]["telegram"];
 type Discord = DesktopSettingsSnapshot["messaging"]["discord"];
+type Feishu = DesktopSettingsSnapshot["messaging"]["feishu"];
 type Mattermost = DesktopSettingsSnapshot["messaging"]["mattermost"];
 
 function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
@@ -46,6 +48,27 @@ function mattermostSnapshot(overrides: Partial<Mattermost> = {}): Mattermost {
     authorizedUserIds: { value: [], source: "default" },
     authorizedTeams: { value: [], source: "default" },
     authorizedConversations: { value: [], source: "default" },
+    ...overrides,
+  };
+}
+
+function feishuSnapshot(overrides: Partial<Feishu> = {}): Feishu {
+  return {
+    enabled: { value: false, source: "default" },
+    streamingResponses: { value: false, source: "default" },
+    appId: { configured: false, source: "unset", writable: true },
+    appSecret: { configured: false, source: "unset", writable: true },
+    verificationToken: { configured: false, source: "unset", writable: true },
+    encryptKey: { configured: false, source: "unset", writable: true },
+    inboundMode: { value: "persistent", source: "default" },
+    tenantRegion: { value: "feishu", source: "default" },
+    tenantUrl: { value: "", source: "default" },
+    callbackBaseUrl: { value: "", source: "default" },
+    slashCommandPrefix: { value: "pwragent_", source: "default" },
+    registerSlashCommands: { value: false, source: "default" },
+    authorizedUserIds: { value: [], source: "default" },
+    authorizedChats: { value: [], source: "default" },
+    authorizedTenants: { value: [], source: "default" },
     ...overrides,
   };
 }
@@ -192,5 +215,62 @@ describe("buildMattermostPatchDelta", () => {
         { id: "channelabcdefghijklmn12345", displayName: "Town Square" },
       ],
     });
+  });
+});
+
+describe("buildFeishuPatchDelta", () => {
+  it("returns undefined when nothing changed", () => {
+    const snapshot = feishuSnapshot();
+    expect(buildFeishuPatchDelta(snapshot, snapshot)).toBeUndefined();
+  });
+
+  it("emits shared Feishu/Lark configuration and allowlist changes", () => {
+    const snapshot = feishuSnapshot();
+    const candidate: Feishu = {
+      ...snapshot,
+      inboundMode: { ...snapshot.inboundMode, value: "webhook" },
+      tenantRegion: { ...snapshot.tenantRegion, value: "lark" },
+      tenantUrl: { ...snapshot.tenantUrl, value: "https://open.larksuite.com" },
+      callbackBaseUrl: {
+        ...snapshot.callbackBaseUrl,
+        value: "https://example.com/feishu",
+      },
+      authorizedChats: {
+        ...snapshot.authorizedChats,
+        value: [{ id: "oc_chat", displayName: "Development" }],
+      },
+      authorizedTenants: {
+        ...snapshot.authorizedTenants,
+        value: [{ id: "tenant_1", displayName: "PwrDrvr LLC" }],
+      },
+    };
+
+    expect(buildFeishuPatchDelta(snapshot, candidate)).toEqual({
+      authorizedChats: [{ id: "oc_chat", displayName: "Development" }],
+      authorizedTenants: [{ id: "tenant_1", displayName: "PwrDrvr LLC" }],
+      callbackBaseUrl: "https://example.com/feishu",
+      inboundMode: "webhook",
+      tenantRegion: "lark",
+      tenantUrl: "https://open.larksuite.com",
+    });
+  });
+
+  it("does not leak env-sourced tenant URL when another field changes", () => {
+    const snapshot = feishuSnapshot({
+      tenantUrl: {
+        value: "https://open.larksuite.com",
+        source: "env",
+        overriddenByEnv: true,
+      },
+    });
+    const candidate: Feishu = {
+      ...snapshot,
+      enabled: { ...snapshot.enabled, value: true },
+    };
+
+    const delta = buildFeishuPatchDelta(snapshot, candidate);
+
+    expect(delta).toEqual({ enabled: true });
+    expect(delta).not.toHaveProperty("tenantUrl");
   });
 });

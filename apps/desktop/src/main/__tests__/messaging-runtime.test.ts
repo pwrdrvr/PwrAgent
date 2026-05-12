@@ -11,6 +11,7 @@ import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
+  MessagingAdapterDiagnosticListener,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingRateLimitInfo,
@@ -1345,6 +1346,89 @@ describe("DesktopMessagingRuntime", () => {
         reason: "unauthorized-conversation",
       }),
     );
+  });
+
+  it("records adapter diagnostics in Messaging Activity", async () => {
+    await prepareRuntimeStore();
+    let diagnosticListener: MessagingAdapterDiagnosticListener | undefined;
+    const adapter = createAdapter("feishu", {
+      onDiagnostic: (listener) => {
+        diagnosticListener = listener;
+        return () => {
+          diagnosticListener = undefined;
+        };
+      },
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {
+        feishu: {
+          channel: "feishu",
+          appId: "cli_test",
+          appSecret: "secret",
+          tenantUrl: "https://open.larksuite.com",
+          callbackBaseUrl: "http://127.0.0.1:47823",
+          authorizedActorIds: [],
+        },
+      },
+    });
+
+    await runtime.start();
+    await diagnosticListener?.({
+      id: "evt_entered",
+      platform: "feishu",
+      summary: "Feishu / Lark DM opened; waiting for message receive event.",
+      observedAt: 1234,
+      actor: { platformUserId: "ou_user" },
+      channel: {
+        channel: "feishu",
+        conversation: {
+          id: "ou_user",
+          kind: "dm",
+          parentId: "tenant_1",
+        },
+      },
+      payload: {
+        eventType: "im.chat.access_event.bot_p2p_chat_entered_v1",
+      },
+    });
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT platform, kind, actor_id, conversation_id, summary, payload
+         FROM messaging_activity_log
+         WHERE kind = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("diagnostic") as
+        | {
+            actor_id: string;
+            conversation_id: string;
+            kind: string;
+            payload: string;
+            platform: string;
+            summary: string;
+          }
+        | undefined;
+
+    expect(row).toMatchObject({
+      actor_id: "ou_user",
+      conversation_id: "ou_user",
+      kind: "diagnostic",
+      platform: "feishu",
+      summary: "Feishu / Lark DM opened; waiting for message receive event.",
+    });
+    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+      eventId: "evt_entered",
+      eventType: "im.chat.access_event.bot_p2p_chat_entered_v1",
+    });
   });
 
   it("logs Telegram topic pairing activity with supergroup parent metadata", async () => {

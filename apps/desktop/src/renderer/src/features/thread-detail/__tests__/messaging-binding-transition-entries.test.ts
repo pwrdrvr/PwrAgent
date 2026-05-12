@@ -59,6 +59,21 @@ describe("messaging-binding-transition-entries", () => {
     );
   });
 
+  it("uses the Feishu / Lark label for Feishu transitions", () => {
+    const [entry] = buildMessagingBindingTransitionActivityEntries([
+      {
+        ...bound,
+        id: "bind-feishu",
+        platform: "feishu",
+        conversationKind: "dm",
+        conversationTitle: "Lark DM",
+        parentTitle: undefined,
+      },
+    ]);
+
+    expect(entry.summary).toBe("Channel bound: Feishu / Lark - Lark DM");
+  });
+
   it("returns the original entries array when transitions is empty", () => {
     const original: AppServerThreadEntry[] = [];
     expect(injectMessagingBindingTransitions(original, undefined)).toBe(original);

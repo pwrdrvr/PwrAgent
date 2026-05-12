@@ -1,4 +1,5 @@
 import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { FeishuMessagingConfig } from "@pwragent/messaging-provider-feishu";
 import type { LineMessagingConfig } from "@pwragent/messaging-provider-line";
 import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
 import type { SlackMessagingConfig } from "@pwragent/messaging-provider-slack";
@@ -18,6 +19,21 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  FEISHU_APP_ID_ENV,
+  FEISHU_APP_SECRET_ENV,
+  FEISHU_AUTHORIZED_CHATS_ENV,
+  FEISHU_AUTHORIZED_TENANTS_ENV,
+  FEISHU_AUTHORIZED_USER_IDS_ENV,
+  FEISHU_CALLBACK_BASE_URL_ENV,
+  FEISHU_ENABLED_ENV,
+  FEISHU_ENCRYPT_KEY_ENV,
+  FEISHU_INBOUND_MODE_ENV,
+  FEISHU_REGISTER_SLASH_COMMANDS_ENV,
+  FEISHU_SLASH_COMMAND_PREFIX_ENV,
+  FEISHU_STREAMING_RESPONSES_ENV,
+  FEISHU_TENANT_REGION_ENV,
+  FEISHU_TENANT_URL_ENV,
+  FEISHU_VERIFICATION_TOKEN_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
   LINE_AUTHORIZED_USER_IDS_ENV,
@@ -71,6 +87,20 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  FEISHU_APP_ID_ENV,
+  FEISHU_APP_SECRET_ENV,
+  FEISHU_AUTHORIZED_CHATS_ENV,
+  FEISHU_AUTHORIZED_TENANTS_ENV,
+  FEISHU_AUTHORIZED_USER_IDS_ENV,
+  FEISHU_CALLBACK_BASE_URL_ENV,
+  FEISHU_ENABLED_ENV,
+  FEISHU_ENCRYPT_KEY_ENV,
+  FEISHU_REGISTER_SLASH_COMMANDS_ENV,
+  FEISHU_SLASH_COMMAND_PREFIX_ENV,
+  FEISHU_STREAMING_RESPONSES_ENV,
+  FEISHU_TENANT_REGION_ENV,
+  FEISHU_TENANT_URL_ENV,
+  FEISHU_VERIFICATION_TOKEN_ENV,
   LINE_AUTHORIZED_GROUPS_ENV,
   LINE_AUTHORIZED_ROOMS_ENV,
   LINE_AUTHORIZED_USER_IDS_ENV,
@@ -115,11 +145,15 @@ export {
 };
 
 export const LINE_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47822";
+export const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
+export const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
+export const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
 
 export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
   enabled?: boolean;
+  feishu?: FeishuMessagingConfig;
   inputDebounceMs?: number;
   line?: LineMessagingConfig;
   mattermost?: MattermostMessagingConfig;
@@ -138,6 +172,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   attachmentPolicy: "connection",
   discord: "connection",
   enabled: "connection",
+  feishu: "connection",
   inputDebounceMs: "connection",
   line: "connection",
   mattermost: "connection",
@@ -196,6 +231,24 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     streamingResponses: "rendering",
     workspaceUrl: "connection",
   },
+  feishu: {
+    appId: "connection",
+    appSecret: "connection",
+    authorizedActorIds: "authorization",
+    authorizedChatIds: "authorization",
+    authorizedTenantKeys: "authorization",
+    callbackBaseUrl: "connection",
+    channel: "irrelevant",
+    enabled: "connection",
+    encryptKey: "connection",
+    inboundMode: "connection",
+    registerSlashCommands: "connection",
+    slashCommandPrefix: "connection",
+    streamingResponses: "rendering",
+    tenantRegion: "connection",
+    tenantUrl: "connection",
+    verificationToken: "connection",
+  },
   line: {
     authorizedActorIds: "authorization",
     authorizedGroupIds: "authorization",
@@ -218,6 +271,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     DesktopMessagingConfigFieldImpact
   >;
   slack: Record<keyof SlackMessagingConfig, DesktopMessagingConfigFieldImpact>;
+  feishu: Record<keyof FeishuMessagingConfig, DesktopMessagingConfigFieldImpact>;
   line: Record<keyof LineMessagingConfig, DesktopMessagingConfigFieldImpact>;
 };
 
@@ -251,6 +305,10 @@ export type DesktopMessagingSettingsSource = Pick<
   | "resolveSlackAppTokenSync"
   | "resolveSlackBotTokenSync"
   | "resolveSlackSigningSecretSync"
+  | "resolveFeishuAppIdSync"
+  | "resolveFeishuAppSecretSync"
+  | "resolveFeishuEncryptKeySync"
+  | "resolveFeishuVerificationTokenSync"
   | "resolveLineChannelAccessTokenSync"
   | "resolveLineChannelSecretSync"
 >;
@@ -394,6 +452,29 @@ export function loadDesktopMessagingConfig(
     env,
     SLACK_REGISTER_SLASH_COMMANDS_ENV,
   ).value;
+  const feishuAppId = readEnv(env, FEISHU_APP_ID_ENV);
+  const feishuAppSecret = readEnv(env, FEISHU_APP_SECRET_ENV);
+  const feishuInboundMode = readFeishuInboundMode(env[FEISHU_INBOUND_MODE_ENV]);
+  const feishuTenantRegion = readFeishuTenantRegion(env[FEISHU_TENANT_REGION_ENV]);
+  const feishuTenantUrl =
+    readEnv(env, FEISHU_TENANT_URL_ENV)
+    ?? tenantUrlForFeishuRegion(feishuTenantRegion);
+  const feishuCallbackBaseUrl =
+    readEnv(env, FEISHU_CALLBACK_BASE_URL_ENV) ?? FEISHU_DEFAULT_CALLBACK_BASE_URL;
+  const feishuEncryptKey = readEnv(env, FEISHU_ENCRYPT_KEY_ENV);
+  const feishuVerificationToken = readEnv(env, FEISHU_VERIFICATION_TOKEN_ENV);
+  const feishuAuthorizedActorIds = parseContactList(
+    env[FEISHU_AUTHORIZED_USER_IDS_ENV],
+  );
+  const feishuAuthorizedChatIds = parseContactList(env[FEISHU_AUTHORIZED_CHATS_ENV]);
+  const feishuAuthorizedTenantKeys = parseContactList(
+    env[FEISHU_AUTHORIZED_TENANTS_ENV],
+  );
+  const feishuSlashCommandPrefix = readEnv(env, FEISHU_SLASH_COMMAND_PREFIX_ENV);
+  const feishuRegisterSlashCommandsEnv = readEnvBoolean(
+    env,
+    FEISHU_REGISTER_SLASH_COMMANDS_ENV,
+  ).value;
   const lineChannelAccessToken = readEnv(env, LINE_CHANNEL_ACCESS_TOKEN_ENV);
   const lineChannelSecret = readEnv(env, LINE_CHANNEL_SECRET_ENV);
   const lineWebhookUrl = readEnv(env, LINE_WEBHOOK_URL_ENV);
@@ -496,6 +577,38 @@ export function loadDesktopMessagingConfig(
           },
         }
       : {}),
+    ...(feishuAppId
+      && feishuAppSecret
+      ? {
+          feishu: {
+            channel: "feishu" as const,
+            enabled: true,
+            appId: feishuAppId,
+            appSecret: feishuAppSecret,
+            inboundMode: feishuInboundMode,
+            tenantRegion: feishuTenantRegion,
+            tenantUrl: feishuTenantUrl,
+            callbackBaseUrl: feishuCallbackBaseUrl,
+            ...(feishuEncryptKey ? { encryptKey: feishuEncryptKey } : {}),
+            ...(feishuVerificationToken
+              ? { verificationToken: feishuVerificationToken }
+              : {}),
+            ...(feishuSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: feishuSlashCommandPrefix }
+              : {}),
+            ...(feishuRegisterSlashCommandsEnv !== undefined
+              ? { registerSlashCommands: feishuRegisterSlashCommandsEnv }
+              : {}),
+            streamingResponses: readEnvBoolean(
+              env,
+              FEISHU_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
+            authorizedActorIds: feishuAuthorizedActorIds,
+            authorizedChatIds: feishuAuthorizedChatIds,
+            authorizedTenantKeys: feishuAuthorizedTenantKeys,
+          },
+        }
+      : {}),
     ...(lineChannelSecret
       && lineCallbackBaseUrl
       ? {
@@ -545,6 +658,15 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack?.appToken ?? settings.resolveSlackAppTokenSync();
   const slackSigningSecret =
     envConfig.slack?.signingSecret ?? settings.resolveSlackSigningSecretSync();
+  const feishuAppId =
+    envConfig.feishu?.appId ?? settings.resolveFeishuAppIdSync();
+  const feishuAppSecret =
+    envConfig.feishu?.appSecret ?? settings.resolveFeishuAppSecretSync();
+  const feishuEncryptKey =
+    envConfig.feishu?.encryptKey ?? settings.resolveFeishuEncryptKeySync();
+  const feishuVerificationToken =
+    envConfig.feishu?.verificationToken
+    ?? settings.resolveFeishuVerificationTokenSync();
   const lineChannelAccessToken =
     envConfig.line?.channelAccessToken
     ?? settings.resolveLineChannelAccessTokenSync();
@@ -577,6 +699,15 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackAuthorizedTeamIds =
     envConfig.slack?.authorizedTeamIds
     ?? snapshot.messaging.slack.authorizedWorkspaces.value;
+  const feishuAuthorizedActorIds =
+    envConfig.feishu?.authorizedActorIds
+    ?? snapshot.messaging.feishu.authorizedUserIds.value;
+  const feishuAuthorizedChatIds =
+    envConfig.feishu?.authorizedChatIds
+    ?? snapshot.messaging.feishu.authorizedChats.value;
+  const feishuAuthorizedTenantKeys =
+    envConfig.feishu?.authorizedTenantKeys
+    ?? snapshot.messaging.feishu.authorizedTenants.value;
   const lineAuthorizedActorIds =
     envConfig.line?.authorizedActorIds
     ?? snapshot.messaging.line.authorizedUserIds.value;
@@ -624,6 +755,34 @@ export async function loadDesktopMessagingConfigFromSettings(
   const slackRegisterSlashCommands =
     envConfig.slack?.registerSlashCommands
     ?? snapshot.messaging.slack.registerSlashCommands.value;
+  const feishuTenantRegion =
+    envConfig.feishu?.tenantRegion ?? snapshot.messaging.feishu.tenantRegion.value;
+  const feishuInboundMode =
+    envConfig.feishu?.inboundMode ?? snapshot.messaging.feishu.inboundMode.value;
+  const feishuTenantUrlRaw =
+    envConfig.feishu?.tenantUrl
+    || snapshot.messaging.feishu.tenantUrl.value
+    || tenantUrlForFeishuRegion(feishuTenantRegion);
+  const feishuTenantUrl = normalizeMattermostUrl(
+    feishuTenantUrlRaw,
+    "serverUrl",
+    log,
+  );
+  const feishuCallbackBaseUrlRaw =
+    envConfig.feishu?.callbackBaseUrl
+    || snapshot.messaging.feishu.callbackBaseUrl.value
+    || FEISHU_DEFAULT_CALLBACK_BASE_URL;
+  const feishuCallbackBaseUrl = normalizeMattermostUrl(
+    feishuCallbackBaseUrlRaw,
+    "callbackBaseUrl",
+    log,
+  );
+  const feishuSlashCommandPrefix =
+    envConfig.feishu?.slashCommandPrefix
+    ?? snapshot.messaging.feishu.slashCommandPrefix.value;
+  const feishuRegisterSlashCommands =
+    envConfig.feishu?.registerSlashCommands
+    ?? snapshot.messaging.feishu.registerSlashCommands.value;
   const lineWebhookUrl =
     envConfig.line?.webhookUrl
     || snapshot.messaging.line.webhookUrl.value
@@ -673,6 +832,12 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.slack,
     env,
     SLACK_ENABLED_ENV,
+  );
+  const feishuEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.feishu.enabled.value,
+    envConfig.feishu,
+    env,
+    FEISHU_ENABLED_ENV,
   );
   const lineEnabled = shouldEnableSettingsChannel(
     snapshot.messaging.line.enabled.value,
@@ -790,6 +955,44 @@ export async function loadDesktopMessagingConfigFromSettings(
         }
       : {};
 
+  const feishuConfig =
+    messagingEnabled
+    && buildChannelConfig({
+      log,
+      channel: "feishu",
+      enabled: feishuEnabled,
+      hasToken: Boolean(feishuAppId) && Boolean(feishuAppSecret),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: feishuAuthorizedActorIds.length,
+    })
+    && feishuTenantUrl
+    && feishuCallbackBaseUrl
+      ? {
+          feishu: {
+            channel: "feishu" as const,
+            enabled: true,
+            appId: feishuAppId!,
+            appSecret: feishuAppSecret!,
+            inboundMode: feishuInboundMode,
+            tenantRegion: feishuTenantRegion,
+            tenantUrl: feishuTenantUrl,
+            callbackBaseUrl: feishuCallbackBaseUrl,
+            ...(feishuEncryptKey ? { encryptKey: feishuEncryptKey } : {}),
+            ...(feishuVerificationToken
+              ? { verificationToken: feishuVerificationToken }
+              : {}),
+            ...(feishuSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: feishuSlashCommandPrefix }
+              : {}),
+            registerSlashCommands: feishuRegisterSlashCommands,
+            streamingResponses: snapshot.messaging.feishu.streamingResponses.value,
+            authorizedActorIds: feishuAuthorizedActorIds,
+            authorizedChatIds: feishuAuthorizedChatIds,
+            authorizedTenantKeys: feishuAuthorizedTenantKeys,
+          },
+        }
+      : {};
+
   const lineConfig =
     messagingEnabled
     && buildChannelConfig({
@@ -829,6 +1032,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     ...discordConfig,
     ...mattermostConfig,
     ...slackConfig,
+    ...feishuConfig,
     ...lineConfig,
   };
 }
@@ -951,6 +1155,28 @@ export function redactDesktopMessagingConfig(
           authorizedWorkspaceCount: config.slack.authorizedTeamIds?.length ?? 0,
         }
       : undefined,
+    feishu: config.feishu
+      ? {
+          channel: config.feishu.channel,
+          enabled: config.feishu.enabled !== false,
+          appId: "[REDACTED]",
+          appSecret: "[REDACTED]",
+          encryptKey: config.feishu.encryptKey ? "[REDACTED]" : undefined,
+          verificationToken: config.feishu.verificationToken
+            ? "[REDACTED]"
+            : undefined,
+          inboundMode: config.feishu.inboundMode ?? "persistent",
+          tenantRegion: config.feishu.tenantRegion ?? "feishu",
+          tenantUrl: config.feishu.tenantUrl,
+          callbackBaseUrl: config.feishu.callbackBaseUrl,
+          slashCommandPrefix: config.feishu.slashCommandPrefix ?? "[default]",
+          registerSlashCommands: config.feishu.registerSlashCommands ?? false,
+          streamingResponses: config.feishu.streamingResponses ?? false,
+          authorizedActorCount: config.feishu.authorizedActorIds.length,
+          authorizedChatCount: config.feishu.authorizedChatIds?.length ?? 0,
+          authorizedTenantCount: config.feishu.authorizedTenantKeys?.length ?? 0,
+        }
+      : undefined,
     line: config.line
       ? {
           channel: config.line.channel,
@@ -1006,6 +1232,12 @@ function authorizationUpdateForChannelConfig(
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
         authorizedWorkspaceIds: contactIds(config.slack?.authorizedTeamIds),
       };
+    case "feishu":
+      return {
+        authorizedActorIds: contactIds(config.feishu?.authorizedActorIds),
+        authorizedConversationIds: contactIds(config.feishu?.authorizedChatIds),
+        authorizedWorkspaceIds: contactIds(config.feishu?.authorizedTenantKeys),
+      };
     case "line":
       return {
         authorizedActorIds: contactIds(config.line?.authorizedActorIds),
@@ -1034,6 +1266,8 @@ function renderingPreferencesForChannelConfig(
       return { streamingResponses: config.mattermost?.streamingResponses };
     case "slack":
       return { streamingResponses: config.slack?.streamingResponses };
+    case "feishu":
+      return { streamingResponses: config.feishu?.streamingResponses };
     case "line":
       return { streamingResponses: config.line?.streamingResponses };
     default: {
@@ -1075,6 +1309,20 @@ function readEnv(
 function readSlackInboundMode(value: string | undefined): "socket" | "events" | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized === "socket" || normalized === "events" ? normalized : undefined;
+}
+
+function readFeishuTenantRegion(value: string | undefined): "feishu" | "lark" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "lark" ? "lark" : "feishu";
+}
+
+function readFeishuInboundMode(value: string | undefined): "persistent" | "webhook" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "webhook" ? "webhook" : "persistent";
+}
+
+function tenantUrlForFeishuRegion(region: "feishu" | "lark"): string {
+  return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
 }
 
 function normalizeSlackRuntimeInboundMode(

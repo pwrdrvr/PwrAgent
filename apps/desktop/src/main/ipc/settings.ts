@@ -73,7 +73,11 @@ function messagingSecretTouchesRuntime(
     || secret === "mattermostHmacSecret"
     || secret === "slackBotToken"
     || secret === "slackAppToken"
-    || secret === "slackSigningSecret";
+    || secret === "slackSigningSecret"
+    || secret === "feishuAppId"
+    || secret === "feishuAppSecret"
+    || secret === "feishuEncryptKey"
+    || secret === "feishuVerificationToken";
 }
 
 async function applyLatestMessagingRuntimeConfig(
@@ -183,6 +187,26 @@ async function resolveMessagingContact(
         ),
       );
     }
+    case "feishu": {
+      if (
+        request.kind !== "user"
+        && request.kind !== "chat"
+        && request.kind !== "tenant"
+      ) {
+        return unsupportedLookup(request);
+      }
+      const appId = service.resolveFeishuAppIdSync();
+      const appSecret = service.resolveFeishuAppSecretSync();
+      const tenantUrl = service.resolveFeishuTenantUrlSync();
+      if (!appId || !appSecret || !tenantUrl) return { status: "unset", id };
+      const provider = await import("@pwragent/messaging-provider-feishu");
+      return sanitizeMessagingContactLookupResponse(
+        await provider.resolveContact(
+          { appId, appSecret, tenantUrl },
+          { id, kind: request.kind },
+        ),
+      );
+    }
     case "line": {
       return unsupportedLookup(request);
     }
@@ -246,6 +270,12 @@ function getCredentialTester(
         resolveService().resolveMattermostServerUrlSync(),
       resolveSlackBotToken: () =>
         resolveService().resolveSlackBotTokenSync(),
+      resolveFeishuAppId: () =>
+        resolveService().resolveFeishuAppIdSync(),
+      resolveFeishuAppSecret: () =>
+        resolveService().resolveFeishuAppSecretSync(),
+      resolveFeishuTenantUrl: () =>
+        resolveService().resolveFeishuTenantUrlSync(),
       resolveLineChannelAccessToken: () =>
         resolveService().resolveLineChannelAccessTokenSync(),
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
@@ -268,6 +298,7 @@ function startupCredentialResult(
     && kind !== "discord"
     && kind !== "mattermost"
     && kind !== "slack"
+    && kind !== "feishu"
   ) {
     return undefined;
   }

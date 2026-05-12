@@ -745,6 +745,20 @@ export type MessagingInboundRejectedListener = (
   event: MessagingRejectedInboundEvent,
 ) => Promise<void> | void;
 
+export type MessagingAdapterDiagnosticEvent = {
+  id: string;
+  platform: MessagingChannelKind;
+  summary: string;
+  observedAt: number;
+  actor?: MessagingActorIdentity;
+  channel?: MessagingChannelRef;
+  payload?: Record<string, MessagingJsonValue>;
+};
+
+export type MessagingAdapterDiagnosticListener = (
+  event: MessagingAdapterDiagnosticEvent,
+) => Promise<void> | void;
+
 export type MessagingInboundTextEvent = MessagingInboundBaseEvent & {
   kind: "text";
   text: string;
@@ -981,6 +995,7 @@ export type MessagingMarkdownDialect =
   | "plain"
   | "html"
   | "slack-mrkdwn"
+  | "feishu-md"
   | "discord-markdown"
   | "markdown";
 
@@ -1028,10 +1043,21 @@ export type MessagingOutboundAttachmentCapabilities = {
   supportsRemoteImageUrl: boolean;
 };
 
+export type MessagingConversationInputCapabilities = {
+  /**
+   * Shared conversations require an explicit bot mention before the platform
+   * delivers messages to the adapter.
+   */
+  sharedConversationRequiresMention?: boolean;
+  sharedConversationMentionInstruction?: string;
+  sharedConversationStatusLine?: string;
+};
+
 export type MessagingCapabilityProfile = {
   /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
   actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
+  conversationInput?: MessagingConversationInputCapabilities;
   /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
   /**

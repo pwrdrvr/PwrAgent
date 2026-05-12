@@ -230,6 +230,79 @@ describe("messaging status ipc", () => {
       },
     });
   });
+
+  it("approves Feishu user and group pairing into the Feishu allowlists", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const approve = async (entry: Record<string, unknown>) => {
+      runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+      pairingStoreMock.markStatus.mockReturnValue({ ...entry, status: "consumed" });
+      registerMessagingStatusIpcHandlers();
+      await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.({}, { entryId: entry.id });
+    };
+
+    settingsServiceMock.readSettings.mockResolvedValue(feishuSettingsSnapshot());
+
+    await approve({
+      id: "pairing-feishu-user",
+      platform: "feishu",
+      instanceId: "default",
+      scope: "user_in_group",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: {
+        id: "ou_fa23371f44e1e45ef8eb1848c3797042",
+        displayName: "Harold",
+      },
+      observedChat: {
+        id: "oc_071623e2edfe83f4783761cf7fab1601",
+        kind: "channel",
+        title: "Development",
+        parentId: "19671ef596db072d",
+      },
+    });
+    await approve({
+      id: "pairing-feishu-group",
+      platform: "feishu",
+      instanceId: "default",
+      scope: "bucket",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "ou_fa23371f44e1e45ef8eb1848c3797042" },
+      observedChat: {
+        id: "oc_071623e2edfe83f4783761cf7fab1601",
+        kind: "channel",
+        title: "Development",
+        parentId: "19671ef596db072d",
+      },
+    });
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(1, {
+      messaging: {
+        feishu: {
+          authorizedChats: [
+            { id: "oc_071623e2edfe83f4783761cf7fab1601", displayName: "Development" },
+          ],
+          authorizedUserIds: [
+            { id: "ou_fa23371f44e1e45ef8eb1848c3797042", displayName: "Harold" },
+          ],
+        },
+      },
+    });
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenNthCalledWith(2, {
+      messaging: {
+        feishu: {
+          authorizedChats: [
+            { id: "oc_071623e2edfe83f4783761cf7fab1601", displayName: "Development" },
+          ],
+        },
+      },
+    });
+  });
 });
 
 function lineSettingsSnapshot() {
@@ -239,6 +312,18 @@ function lineSettingsSnapshot() {
         authorizedUserIds: { value: [], source: "default" },
         authorizedGroups: { value: [], source: "default" },
         authorizedRooms: { value: [], source: "default" },
+      },
+    },
+  };
+}
+
+function feishuSettingsSnapshot() {
+  return {
+    messaging: {
+      feishu: {
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedChats: { value: [], source: "default" },
+        authorizedTenants: { value: [], source: "default" },
       },
     },
   };

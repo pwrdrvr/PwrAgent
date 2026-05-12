@@ -90,6 +90,19 @@ export type DesktopSettingsConfig = {
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedWorkspaces?: AuthorizedContactConfig[];
     };
+    feishu?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      inboundMode?: "persistent" | "webhook";
+      tenantRegion?: "feishu" | "lark";
+      tenantUrl?: string;
+      callbackBaseUrl?: string;
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedChats?: AuthorizedContactConfig[];
+      authorizedTenants?: AuthorizedContactConfig[];
+    };
     line?: {
       enabled?: boolean;
       streamingResponses?: boolean;
@@ -462,6 +475,60 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
+  const feishu = patch.messaging?.feishu;
+  if (feishu?.enabled !== undefined) {
+    set(["messaging", "feishu", "enabled"], feishu.enabled);
+  }
+  if (feishu?.streamingResponses !== undefined) {
+    set(["messaging", "feishu", "streaming_responses"], feishu.streamingResponses);
+  }
+  if (feishu?.inboundMode !== undefined) {
+    set(["messaging", "feishu", "inbound_mode"], feishu.inboundMode);
+  }
+  if (feishu?.tenantRegion !== undefined) {
+    set(["messaging", "feishu", "tenant_region"], feishu.tenantRegion);
+  }
+  if (feishu?.tenantUrl !== undefined) {
+    set(["messaging", "feishu", "tenant_url"], feishu.tenantUrl);
+  }
+  if (feishu?.callbackBaseUrl !== undefined) {
+    set(["messaging", "feishu", "callback_base_url"], feishu.callbackBaseUrl);
+  }
+  if (feishu?.slashCommandPrefix !== undefined) {
+    set(["messaging", "feishu", "slash_command_prefix"], feishu.slashCommandPrefix);
+  }
+  if (feishu?.registerSlashCommands !== undefined) {
+    set(
+      ["messaging", "feishu", "register_slash_commands"],
+      feishu.registerSlashCommands,
+    );
+  }
+  if (feishu?.authorizedUserIds !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "feishu"],
+      "authorized_user_ids",
+      "authorized_users",
+      feishu.authorizedUserIds,
+      ["authorized_user_ids_list"],
+    );
+  }
+  if (feishu?.authorizedChats !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "feishu"],
+      "authorized_chats",
+      "authorized_chats",
+      feishu.authorizedChats,
+    );
+  }
+  if (feishu?.authorizedTenants !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "feishu"],
+      "authorized_tenants",
+      "authorized_tenants",
+      feishu.authorizedTenants,
+    );
+  }
+
   const line = patch.messaging?.line;
   if (line?.enabled !== undefined) {
     set(["messaging", "line", "enabled"], line.enabled);
@@ -546,6 +613,7 @@ function normalizeDesktopConfig(
   const discord = tables["messaging.discord"];
   const mattermost = tables["messaging.mattermost"];
   const slack = tables["messaging.slack"];
+  const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
@@ -642,6 +710,29 @@ function normalizeDesktopConfig(
           slack?.authorized_workspaces,
         ),
       },
+      feishu: {
+        enabled: readBoolean(feishu?.enabled),
+        streamingResponses: readBoolean(feishu?.streaming_responses),
+        inboundMode: readFeishuInboundMode(feishu?.inbound_mode),
+        tenantRegion: readFeishuTenantRegion(feishu?.tenant_region),
+        tenantUrl: readString(feishu?.tenant_url),
+        callbackBaseUrl: readString(feishu?.callback_base_url),
+        slashCommandPrefix: readString(feishu?.slash_command_prefix),
+        registerSlashCommands: readBoolean(feishu?.register_slash_commands),
+        authorizedUserIds: readAuthorizedContacts(
+          feishu?.authorized_users,
+          feishu?.authorized_user_ids_list,
+          feishu?.authorized_user_ids,
+        ),
+        authorizedChats: readAuthorizedContacts(
+          feishu?.authorized_chats,
+          feishu?.authorized_chats_list,
+        ),
+        authorizedTenants: readAuthorizedContacts(
+          feishu?.authorized_tenants,
+          feishu?.authorized_tenants_list,
+        ),
+      },
       line: {
         enabled: readBoolean(line?.enabled),
         streamingResponses: readBoolean(line?.streaming_responses),
@@ -698,6 +789,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const discord = config.messaging?.discord;
   const mattermost = config.messaging?.mattermost;
   const slack = config.messaging?.slack;
+  const feishu = config.messaging?.feishu;
   const line = config.messaging?.line;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const enabled = config.messaging?.enabled;
@@ -711,6 +803,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (discord && hasDefinedValue(discord))
     || (mattermost && hasDefinedValue(mattermost))
     || (slack && hasDefinedValue(slack))
+    || (feishu && hasDefinedValue(feishu))
     || (line && hasDefinedValue(line))
   ) {
     pruned.messaging = {};
@@ -737,6 +830,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (slack && hasDefinedValue(slack)) {
       pruned.messaging.slack = slack;
+    }
+    if (feishu && hasDefinedValue(feishu)) {
+      pruned.messaging.feishu = feishu;
     }
     if (line && hasDefinedValue(line)) {
       pruned.messaging.line = line;
@@ -821,6 +917,18 @@ function readSlackInboundMode(
   value: TomlScalar | undefined,
 ): "socket" | "events" | undefined {
   return value === "socket" || value === "events" ? value : undefined;
+}
+
+function readFeishuInboundMode(
+  value: TomlScalar | undefined,
+): "persistent" | "webhook" | undefined {
+  return value === "persistent" || value === "webhook" ? value : undefined;
+}
+
+function readFeishuTenantRegion(
+  value: TomlScalar | undefined,
+): "feishu" | "lark" | undefined {
+  return value === "feishu" || value === "lark" ? value : undefined;
 }
 
 function readBoolean(value: TomlScalar | undefined): boolean | undefined {

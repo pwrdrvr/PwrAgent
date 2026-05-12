@@ -5,7 +5,6 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type DragEvent,
-  type ReactElement,
 } from "react";
 import type {
   MessagingThreadBindingSummary,
@@ -13,30 +12,16 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { SmileyIcon } from "../../icons";
 import {
-  DiscordIcon,
-  LineIcon,
-  MattermostIcon,
-  SlackIcon,
-  SmileyIcon,
-  TelegramIcon,
-  type IconProps,
-} from "../../icons";
+  formatMessagingPlatformName,
+  MESSAGING_PLATFORM_ICONS,
+} from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
-
-const PLATFORM_ICONS: Partial<
-  Record<MessagingThreadBindingSummary["platform"], (props: IconProps) => ReactElement>
-> = {
-  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
-  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
-  mattermost: ({ size }) => <MattermostIcon size={size} />,
-  slack: ({ size }) => <SlackIcon size={size} />,
-  line: ({ size }) => <LineIcon size={size} />,
-};
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 
@@ -388,9 +373,8 @@ function BindingChip(props: {
   const tooltipController = useViewportTooltip({
     className: "viewport-tooltip",
   });
-  const Icon = PLATFORM_ICONS[binding.platform];
-  const platformLabel =
-    binding.platform.charAt(0).toUpperCase() + binding.platform.slice(1);
+  const Icon = MESSAGING_PLATFORM_ICONS[binding.platform];
+  const platformLabel = formatMessagingPlatformName(binding.platform);
   const label = formatBindingLabel(binding);
   const tooltip = formatBindingTooltip(binding);
   // aria-label needs to be a single line (screen readers), so flatten
@@ -579,7 +563,7 @@ function formatBindingLabel(binding: MessagingThreadBindingSummary): string {
  */
 function formatBindingTooltip(binding: MessagingThreadBindingSummary): string {
   const lines: string[] = [];
-  lines.push(formatPlatformName(binding.platform));
+  lines.push(formatMessagingPlatformName(binding.platform));
   lines.push(`Type: ${formatConversationType(binding)}`);
 
   const title = binding.conversationTitle?.trim();
@@ -621,11 +605,6 @@ function formatBindingTooltip(binding: MessagingThreadBindingSummary): string {
       break;
   }
   return lines.join("\n");
-}
-
-function formatPlatformName(platform: string): string {
-  if (!platform) return "Messaging";
-  return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
 function formatConversationType(binding: MessagingThreadBindingSummary): string {

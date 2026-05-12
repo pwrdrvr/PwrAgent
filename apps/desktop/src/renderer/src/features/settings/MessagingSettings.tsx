@@ -8,6 +8,9 @@ import {
 } from "react";
 import {
   validateDiscordSnowflake,
+  validateFeishuChatId,
+  validateFeishuOpenId,
+  validateFeishuTenantKey,
   validateLineGroupId,
   validateLineRoomId,
   validateLineUserId,
@@ -29,7 +32,7 @@ import {
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -73,6 +76,9 @@ export function MessagingSettings(props: {
   onSaveSlack: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["slack"]>,
   ) => Promise<void>;
+  onSaveFeishu: (
+    patch: NonNullable<DesktopSettingsSnapshot["messaging"]["feishu"]>,
+  ) => Promise<void>;
   onSaveLine: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["line"]>,
   ) => Promise<void>;
@@ -81,6 +87,7 @@ export function MessagingSettings(props: {
   const discord = props.snapshot.messaging.discord;
   const mattermost = props.snapshot.messaging.mattermost;
   const slack = props.snapshot.messaging.slack;
+  const feishu = props.snapshot.messaging.feishu;
   const line = props.snapshot.messaging.line;
   const messagingEnabled = props.snapshot.messaging.enabled;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
@@ -836,6 +843,257 @@ export function MessagingSettings(props: {
 
       <SettingsSection
         eyebrow="Messaging"
+        title="Feishu / Lark"
+        chip={chipLabelForBotToken(feishu.appSecret)}
+        chipKind={chipKindForBotToken(feishu.appSecret)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={feishu.enabled.value}
+            disabled={platformControlsDisabled}
+            label="Enabled"
+            sub="Turn the Feishu / Lark adapter on or off independently of the global messaging switch."
+            source={sourceBadge(feishu.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                enabled: { ...feishu.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !feishu.appId.writable}
+            label="App ID"
+            sub="Stored in the system keychain. Required before going online in Lark Developer to verify and enable persistent events and callbacks."
+            secret="feishuAppId"
+            state={feishu.appId}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SecretField
+            disabled={props.saving || !feishu.appSecret.writable}
+            label="App Secret"
+            sub="Stored in the system keychain. Required before going online in Lark Developer to verify and enable persistent events and callbacks."
+            secret="feishuAppSecret"
+            state={feishu.appSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates App ID and App Secret with the tenant token and app self-info APIs."
+            control={
+              <SettingsTestBlock
+                kind="feishu"
+                desktopApi={props.desktopApi}
+                icon={<FeishuIcon size={14} />}
+                defaultName="Your Feishu app"
+                defaultSub="application self"
+              />
+            }
+          />
+          <PairingTokenField
+            desktopApi={props.desktopApi}
+            disabled={platformControlsDisabled || !feishu.enabled.value}
+            onSettingsChanged={props.onPairingSettingsChanged}
+            platform="feishu"
+            supportsBucket
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Event subscription"
+            sub="Persistent connection is the default. After App ID and App Secret are configured, go online in Lark Developer to verify and enable Event Configuration and Callback Configuration."
+            options={FEISHU_INBOUND_MODE_OPTIONS}
+            source={sourceBadge(feishu.inboundMode)}
+            value={feishu.inboundMode.value}
+            onChange={(inboundMode) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                inboundMode: { ...feishu.inboundMode, value: inboundMode },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Tenant region"
+            sub="Feishu is China only. Lark is for the rest of the world."
+            options={FEISHU_TENANT_REGION_OPTIONS}
+            source={sourceBadge(feishu.tenantRegion)}
+            value={feishu.tenantRegion.value}
+            onChange={(tenantRegion) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                tenantRegion: { ...feishu.tenantRegion, value: tenantRegion },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Tenant URL"
+            sub="Optional Open Platform endpoint override."
+            help={
+              <>
+                Leave blank to use <code>https://open.feishu.cn</code> for
+                Feishu or <code>https://open.larksuite.com</code> for Lark.
+              </>
+            }
+            source={optionalStringSourceBadge(feishu.tenantUrl)}
+            value={feishu.tenantUrl.value}
+            onSave={(tenantUrl) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                tenantUrl: { ...feishu.tenantUrl, value: tenantUrl },
+              });
+            }}
+          />
+          {feishu.inboundMode.value === "webhook" ? (
+            <TextField
+              disabled={props.saving}
+              label="Local Webhook Listener"
+              sub="Only used when Webhook is selected for Event subscription."
+              help={<>Default: <code>http://127.0.0.1:47823</code></>}
+              source={optionalStringSourceBadge(feishu.callbackBaseUrl)}
+              value={feishu.callbackBaseUrl.value}
+              onSave={(callbackBaseUrl) => {
+                void props.onSaveFeishu({
+                  ...feishu,
+                  callbackBaseUrl: {
+                    ...feishu.callbackBaseUrl,
+                    value: callbackBaseUrl,
+                  },
+                });
+              }}
+            />
+          ) : null}
+          <SecretField
+            disabled={props.saving || !feishu.verificationToken.writable}
+            label="Verification Token"
+            sub="Stored in the system keychain. Used to verify event callbacks."
+            secret="feishuVerificationToken"
+            state={feishu.verificationToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <SecretField
+            disabled={props.saving || !feishu.encryptKey.writable}
+            label="Encryption Key"
+            sub="Recommended. Stored in the system keychain. Used to decrypt encrypted persistent and webhook event payloads."
+            secret="feishuEncryptKey"
+            state={feishu.encryptKey}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={feishu.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses (Advanced)"
+            sub="Sends partial assistant text as Feishu / Lark card edits."
+            help={STREAMING_RESPONSES_WARNING}
+            source={sourceBadge(feishu.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                streamingResponses: {
+                  ...feishu.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <ToggleField
+            checked={feishu.registerSlashCommands.value}
+            disabled={props.saving}
+            label="Register slash commands"
+            sub="Reserved for Feishu / Lark shortcut command setup. Mentions and DMs work without this."
+            source={sourceBadge(feishu.registerSlashCommands)}
+            onChange={(registerSlashCommands) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                registerSlashCommands: {
+                  ...feishu.registerSlashCommands,
+                  value: registerSlashCommands,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving || !feishu.registerSlashCommands.value}
+            label="Slash command prefix"
+            sub="Prefix prepended to canonical commands (default pwragent_)."
+            source={optionalStringSourceBadge(feishu.slashCommandPrefix)}
+            value={feishu.slashCommandPrefix.value}
+            onSave={(slashCommandPrefix) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                slashCommandPrefix: {
+                  ...feishu.slashCommandPrefix,
+                  value: slashCommandPrefix,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "feishu", "user")}
+            label="Authorized Open IDs"
+            sub="Feishu / Lark open_id values that can DM or mention the bot."
+            help="Open IDs usually start with ou_. Rejected messages show the open_id in Messaging Activity."
+            source={optionalListSourceBadge(feishu.authorizedUserIds)}
+            validateEntry={validateFeishuOpenIdEntry}
+            value={feishu.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                authorizedUserIds: {
+                  ...feishu.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "feishu", "chat")}
+            label="Authorized Chats"
+            sub="Feishu / Lark chat IDs allowed for shared chat access."
+            help="Chat IDs usually start with oc_. Empty shared-chat allowlists deny access."
+            source={optionalListSourceBadge(feishu.authorizedChats)}
+            validateEntry={validateFeishuChatIdEntry}
+            value={feishu.authorizedChats.value}
+            onSave={(authorizedChats) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                authorizedChats: {
+                  ...feishu.authorizedChats,
+                  value: authorizedChats,
+                },
+              });
+            }}
+          />
+          <AuthorizedListField
+            disabled={props.saving}
+            lookup={contactLookup(props.desktopApi, "feishu", "tenant")}
+            label="Authorized Tenants"
+            sub="Optional tenant keys allowed for shared chat access."
+            help="Tenant keys are shown in Messaging Activity when Feishu / Lark includes them."
+            source={optionalListSourceBadge(feishu.authorizedTenants)}
+            validateEntry={validateFeishuTenantKeyEntry}
+            value={feishu.authorizedTenants.value}
+            onSave={(authorizedTenants) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                authorizedTenants: {
+                  ...feishu.authorizedTenants,
+                  value: authorizedTenants,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
         title="LINE"
         chip={chipLabelForBotToken(line.channelAccessToken)}
         chipKind={chipKindForBotToken(line.channelAccessToken)}
@@ -1034,6 +1292,22 @@ const SLACK_INBOUND_MODE_OPTIONS: Array<{
   value: "socket" | "events";
 }> = [
   { label: "Socket Mode", value: "socket" },
+];
+
+const FEISHU_TENANT_REGION_OPTIONS: Array<{
+  label: string;
+  value: "feishu" | "lark";
+}> = [
+  { label: "Feishu", value: "feishu" },
+  { label: "Lark", value: "lark" },
+];
+
+const FEISHU_INBOUND_MODE_OPTIONS: Array<{
+  label: string;
+  value: "persistent" | "webhook";
+}> = [
+  { label: "Persistent", value: "persistent" },
+  { label: "Webhook", value: "webhook" },
 ];
 
 const STREAMING_RESPONSES_WARNING =
@@ -1937,6 +2211,27 @@ function validateSlackWorkspaceIdEntry(value: string): string | undefined {
   return validationMessage(validateSlackTeamId(value), "Slack workspace ID", {
     format: "Use a Slack workspace/team ID starting with T, e.g. T012ABCDEF0.",
     length: "Slack workspace IDs must be 64 characters or fewer.",
+  });
+}
+
+function validateFeishuOpenIdEntry(value: string): string | undefined {
+  return validationMessage(validateFeishuOpenId(value), "Feishu / Lark open ID", {
+    format: "Use a Feishu / Lark open_id starting with ou_.",
+    length: "Feishu / Lark open IDs must be 128 characters or fewer.",
+  });
+}
+
+function validateFeishuChatIdEntry(value: string): string | undefined {
+  return validationMessage(validateFeishuChatId(value), "Feishu / Lark chat ID", {
+    format: "Use a Feishu / Lark chat_id starting with oc_.",
+    length: "Feishu / Lark chat IDs must be 128 characters or fewer.",
+  });
+}
+
+function validateFeishuTenantKeyEntry(value: string): string | undefined {
+  return validationMessage(validateFeishuTenantKey(value), "Feishu / Lark tenant key", {
+    format: "Use the tenant key shown in Messaging Activity.",
+    length: "Feishu / Lark tenant keys must be 64 characters or fewer.",
   });
 }
 

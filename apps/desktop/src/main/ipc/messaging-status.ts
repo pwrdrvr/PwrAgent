@@ -162,6 +162,56 @@ function buildPairingApprovalPatch(
         patch: { messaging: { slack: { authorizedUserIds: merged.contacts } } },
       };
     }
+    case "feishu": {
+      const mergeFeishuContact = (
+        current: DesktopAuthorizedContact[],
+        feishuContact: DesktopAuthorizedContact,
+      ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
+        if (current.some((existing) => existing.id === feishuContact.id)) {
+          return { added: false, contacts: current };
+        }
+        return { added: true, contacts: [...current, feishuContact] };
+      };
+      if (entry.scope === "bucket") {
+        const feishuChatContact = {
+          id: entry.observedChat.id,
+          displayName: entry.observedChat.title ?? "",
+        };
+        const merged = mergeFeishuContact(
+          snapshot.messaging.feishu.authorizedChats.value,
+          feishuChatContact,
+        );
+        return {
+          added: merged.added,
+          patch: { messaging: { feishu: { authorizedChats: merged.contacts } } },
+        };
+      }
+      const merged = merge(snapshot.messaging.feishu.authorizedUserIds.value);
+      if (entry.scope === "user_in_group" && entry.observedChat.kind !== "dm") {
+        const mergedChat = mergeFeishuContact(
+          snapshot.messaging.feishu.authorizedChats.value,
+          {
+            id: entry.observedChat.id,
+            displayName: entry.observedChat.title ?? "",
+          },
+        );
+        return {
+          added: merged.added || mergedChat.added,
+          patch: {
+            messaging: {
+              feishu: {
+                authorizedChats: mergedChat.contacts,
+                authorizedUserIds: merged.contacts,
+              },
+            },
+          },
+        };
+      }
+      return {
+        added: merged.added,
+        patch: { messaging: { feishu: { authorizedUserIds: merged.contacts } } },
+      };
+    }
     case "line": {
       if (entry.scope === "bucket") {
         if (contact.id.startsWith("C")) {

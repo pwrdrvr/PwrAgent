@@ -1,10 +1,17 @@
-# Messaging Platform Integration
+# Messaging Platform Integration Operator Guide
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram, Discord, Mattermost, or Slack user can choose a thread, bind
-the current conversation, and send free-form text into that thread. The
+allowlisted Telegram, Discord, Mattermost, Slack, Feishu/Lark, or LINE user can
+choose a thread, bind the current conversation, and send free-form text into that thread. The
 workflow logic is shared; the providers only own transport, formatting,
 callback handles, and platform limits.
+
+This document is the operator/admin setup guide. It intentionally includes
+per-provider configuration, permissions, callback URLs, and smoke-test notes.
+The contributor guide for implementing a new adapter is
+[`docs/messaging-adding-a-provider.md`](messaging-adding-a-provider.md). Provider
+packages may also keep rough setup notes next to the adapter when a platform's
+console behavior is still being validated.
 
 ## Commands
 
@@ -50,8 +57,8 @@ Interactive actions can carry generic layout hints. Shared workflow code may
 request an automatic column count, explicit rows/columns, row breaks before or
 after an action, or a full-width action. Providers translate those hints into
 the closest native layout they support: Telegram inline keyboards can honor
-explicit row groupings, and Discord components use action rows with provider
-limits.
+explicit row groupings, Discord components use action rows with provider
+limits, and Feishu/Lark renders actions as interactive-card button modules.
 
 ## Workspace Handoff
 
@@ -265,6 +272,23 @@ Discord:
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
 - `PWRAGNT_MESSAGING_DISCORD_STREAMING_RESPONSES`
 
+Feishu / Lark:
+
+- `PWRAGENT_MESSAGING_FEISHU_APP_ID`
+- `PWRAGENT_MESSAGING_FEISHU_APP_SECRET`
+- `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE` (`persistent` or `webhook`, defaults to `persistent`)
+- `PWRAGENT_MESSAGING_FEISHU_TENANT_REGION` (`feishu` or `lark`)
+- `PWRAGENT_MESSAGING_FEISHU_TENANT_URL`
+- `PWRAGENT_MESSAGING_FEISHU_CALLBACK_BASE_URL`
+- `PWRAGENT_MESSAGING_FEISHU_VERIFICATION_TOKEN`
+- `PWRAGENT_MESSAGING_FEISHU_ENCRYPT_KEY`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_USER_IDS`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_CHATS`
+- `PWRAGENT_MESSAGING_FEISHU_AUTHORIZED_TENANTS`
+- `PWRAGENT_MESSAGING_FEISHU_SLASH_COMMAND_PREFIX`
+- `PWRAGENT_MESSAGING_FEISHU_REGISTER_SLASH_COMMANDS`
+- `PWRAGENT_MESSAGING_FEISHU_STREAMING_RESPONSES`
+
 LINE:
 
 - `PWRAGENT_MESSAGING_LINE_CHANNEL_ACCESS_TOKEN`
@@ -295,10 +319,107 @@ local migration fallbacks.
 
 The TOML equivalents are `streaming_responses = true` under a provider section,
 for example `[messaging.telegram]`, `[messaging.discord]`,
-`[messaging.mattermost]`, `[messaging.slack]`, or `[messaging.line]`. Providers default to `false`;
-the Settings > Messaging toggles and environment overrides expose the same
-booleans. Binding-level `Stream: On` can opt a single binding into
-streaming without changing the provider default.
+`[messaging.mattermost]`, `[messaging.slack]`, `[messaging.feishu]`, or
+`[messaging.line]`. Providers default to `false`; the Settings > Messaging
+toggles and environment overrides expose the same booleans. Binding-level
+`Stream: On` can opt a single binding into streaming without changing the
+provider default.
+
+Feishu / Lark also accepts `inbound_mode = "persistent"` or
+`inbound_mode = "webhook"` under `[messaging.feishu]`. Persistent connection is
+the default.
+
+## Feishu / Lark setup
+
+Feishu and Lark share the same Open Platform protocol. PwrAgent uses `feishu`
+as the code identifier and exposes the region choice in Settings: `Feishu`
+defaults to `https://open.feishu.cn`, while `Lark` defaults to
+`https://open.larksuite.com`.
+
+1. Create a Feishu / Lark custom app in the Open Platform console and enable
+   the Bot capability.
+2. In PwrAgent Settings > Messaging > Feishu / Lark, store the App ID and App
+   Secret in Keychain. The connection test mints a tenant access token and
+   calls the low-permission bot info endpoint (`/open-apis/bot/v3/info`).
+3. In the Open Platform **Event Configuration** tab, use **Receive events
+   through persistent connection**. This is PwrAgent's default and recommended
+   mode: the desktop app opens an outbound SDK WebSocket to Lark, so operators
+   do not need to expose a localhost listener through Cloudflare Tunnel, ngrok,
+   or a public reverse proxy that can then be fuzzed by internet scanners.
+4. In **Event Configuration**, subscribe the events PwrAgent consumes:
+   - Required: `im.message.receive_v1` so PwrAgent receives direct messages and
+     group mentions.
+   - Optional/noisy: `im.chat.access_event.bot_p2p_chat_entered_v1`. Lark emits
+     it when a user opens or enters a bot DM; PwrAgent ignores it because it is
+     not a user command, but registering it avoids noisy "no handler" SDK logs
+     if the event is enabled.
+   - Not currently consumed: `im.chat.member.bot.added_v1`,
+     `im.chat.member.bot.deleted_v1`, `im.message.message_read_v1`,
+     `im.message.reaction.created_v1`, `im.message.reaction.deleted_v1`, and
+     `im.message.updated_v1`. They can be useful later for diagnostics,
+     membership tracking, read receipts, reactions, or edited-message handling,
+     but they are not required for the current adapter.
+5. In the Open Platform **Callback Configuration** tab, also use **Receive
+   callbacks through persistent connection** and add `card.action.trigger`.
+   This callback is what Lark sends when a user clicks an interactive-card
+   button such as `Resume`. If message events work but clicking a card button
+   shows Lark client error `200340` and PwrAgent logs no
+   `eventType=card.action.trigger` event, this callback configuration is not
+   reaching PwrAgent yet.
+6. Grant and publish the app version with the messaging permissions used by
+   those events and bot replies. Useful Lark/Feishu console scopes for the
+   current adapter are:
+   - Required for group mentions: `im:message.group_at_msg:readonly` ("Receive
+     users' mentions"). `im:message.group_at_msg.include_bot:readonly` is
+     broader and only needed if you want events for mentions sent by other bots
+     too.
+   - Required: `im:message:send_as_bot` ("Send messages as an app") so PwrAgent
+     can reply and post status cards.
+   - Recommended: `im:message:readonly` ("Read direct messages and group chat
+     messages") because the message receive event, related Lark console wiring,
+     and image/file resource downloads reference it.
+   - Recommended: `im:message:update` ("Update message") so PwrAgent can refresh
+     or dismiss status cards instead of posting duplicates.
+   - Recommended for shared chats: `im:chat:readonly` ("Obtain group
+     information") so group membership events and chat metadata are available
+     when you allowlist group conversations.
+   - Broad shortcut: `im:message` ("Read and send direct messages and group chat
+     messages") covers multiple message read/send capabilities. It is fine for
+     a private internal app, but the narrower scopes above are easier to reason
+     about when Lark asks for approval.
+   New bot profile changes, event subscriptions, and permission scopes do not
+   take effect for a workspace until you create and publish a version of the
+   internal app.
+7. Use webhook mode only as a fallback. If you set
+   `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE=webhook`, configure event
+   subscriptions in the Open Platform console to point at your public tunnel,
+   forwarding to PwrAgent's local callback listener
+   (`http://127.0.0.1:47823` by default).
+8. Enable encrypted callbacks in the platform console and store the Encryption
+   Key in Keychain. Encryption is recommended for persistent connection and
+   webhook modes; PwrAgent decrypts encrypted event envelopes before dispatch.
+   Store the Verification Token in Keychain if webhook mode is enabled. Plain
+   webhook events are rejected if their token does not match.
+9. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
+   (`oc_...`) or tenant keys for shared conversations; empty shared-surface
+   allowlists deny shared chat access.
+
+In Feishu / Lark group chats, PwrAgent's supported path is mention-triggered:
+type `@` and select the bot when sending a bound-thread message. Direct
+messages do not need the mention. Some tenants expose broader group-message
+read permissions, but those permissions are not the default operator path and
+may require extra workspace approval.
+
+Inbound Feishu / Lark image and file messages are forwarded to the shared
+PwrAgent attachment processor after actor and chat authorization. Audio and
+video messages are currently surfaced as unsupported attachments.
+
+Feishu / Lark interactive cards carry only signed opaque callback handles in
+button values. The persisted handle record owns the action id, binding id,
+allowed actors, and routing state so buttons survive app restarts and fail
+closed after expiry. The adapter uses the official Node SDK for persistent
+inbound events, but keeps outbound sends on direct Open Platform REST calls so
+PwrAgent owns rate-limit retry behavior.
 
 ## LINE setup
 

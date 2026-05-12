@@ -1629,8 +1629,8 @@ export class MessagingController {
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Thread bound",
-          body: "Messages in this conversation will route to the selected thread.",
-          fallbackText: "Send a message to continue the thread.",
+          body: boundThreadConfirmationBody(binding, this.capabilityProfile),
+          fallbackText: boundThreadFallbackText(binding, this.capabilityProfile),
         }),
         binding,
       );
@@ -2810,8 +2810,14 @@ export class MessagingController {
               }
             : undefined,
           title: "Thread bound",
-          body: "Messages in this conversation will route to the selected thread.",
-          fallbackText: "Send a message to continue the thread.",
+          body: boundThreadConfirmationBody(
+            updatedBinding,
+            this.capabilityProfile,
+          ),
+          fallbackText: boundThreadFallbackText(
+            updatedBinding,
+            this.capabilityProfile,
+          ),
           targetSurface: session.surface,
         }),
         undefined,
@@ -5679,6 +5685,7 @@ export class MessagingController {
         }
       }
       const result = await this.options.adapter.deliver(routedIntent);
+      this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
@@ -5730,6 +5737,28 @@ export class MessagingController {
         });
       }
       return result;
+    }
+  }
+
+  private logDeliveryResult(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord | undefined,
+    result: MessagingDeliveryResult,
+  ): void {
+    const logContext = {
+      bindingId: binding?.id ?? intent.bindingId,
+      channel: result.channel,
+      errorMessage: result.errorMessage,
+      intentId: intent.id,
+      intentKind: intent.kind,
+      outcome: result.outcome,
+      surfaceId: result.surface?.id,
+      threadId: binding?.threadId,
+    };
+    if (result.outcome === "failed") {
+      this.logger.warn?.("messaging delivery failed", logContext);
+    } else {
+      this.logger.info?.("messaging delivery completed", logContext);
     }
   }
 
@@ -6620,6 +6649,37 @@ function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversa
     case "dm":
       return "conversation";
   }
+}
+
+function boundThreadConfirmationBody(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string {
+  return [
+    "Messages in this conversation will route to the selected thread.",
+    sharedConversationMentionInstruction(binding, capabilityProfile),
+  ].filter((line): line is string => Boolean(line)).join("\n\n");
+}
+
+function boundThreadFallbackText(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string {
+  return sharedConversationMentionInstruction(binding, capabilityProfile)
+    ?? "Send a message to continue the thread.";
+}
+
+function sharedConversationMentionInstruction(
+  binding: MessagingBindingRecord,
+  capabilityProfile: MessagingCapabilityProfile,
+): string | undefined {
+  if (
+    binding.channel.conversation.kind === "dm" ||
+    !capabilityProfile.conversationInput?.sharedConversationRequiresMention
+  ) {
+    return undefined;
+  }
+  return capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {

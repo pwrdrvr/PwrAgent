@@ -196,6 +196,68 @@ export function buildSlackPatchDelta(
   return Object.keys(patch).length === 0 ? undefined : patch;
 }
 
+export function buildFeishuPatchDelta(
+  snapshot: DesktopSettingsSnapshot["messaging"]["feishu"],
+  candidate: DesktopSettingsSnapshot["messaging"]["feishu"],
+): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["feishu"]> | undefined {
+  const patch: NonNullable<
+    NonNullable<DesktopSettingsConfigPatch["messaging"]>["feishu"]
+  > = {};
+
+  if (snapshot.enabled.value !== candidate.enabled.value) {
+    patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+    patch.streamingResponses = candidate.streamingResponses.value;
+  }
+  if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
+    patch.inboundMode = candidate.inboundMode.value;
+  }
+  if (snapshot.tenantRegion.value !== candidate.tenantRegion.value) {
+    patch.tenantRegion = candidate.tenantRegion.value;
+  }
+  if (snapshot.tenantUrl.value !== candidate.tenantUrl.value) {
+    patch.tenantUrl = candidate.tenantUrl.value;
+  }
+  if (snapshot.callbackBaseUrl.value !== candidate.callbackBaseUrl.value) {
+    patch.callbackBaseUrl = candidate.callbackBaseUrl.value;
+  }
+  if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
+    patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
+  }
+  if (
+    snapshot.registerSlashCommands.value !== candidate.registerSlashCommands.value
+  ) {
+    patch.registerSlashCommands = candidate.registerSlashCommands.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedUserIds.value,
+      candidate.authorizedUserIds.value,
+    )
+  ) {
+    patch.authorizedUserIds = candidate.authorizedUserIds.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedChats.value,
+      candidate.authorizedChats.value,
+    )
+  ) {
+    patch.authorizedChats = candidate.authorizedChats.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedTenants.value,
+      candidate.authorizedTenants.value,
+    )
+  ) {
+    patch.authorizedTenants = candidate.authorizedTenants.value;
+  }
+
+  return Object.keys(patch).length === 0 ? undefined : patch;
+}
+
 export function buildLinePatchDelta(
   snapshot: DesktopSettingsSnapshot["messaging"]["line"],
   candidate: DesktopSettingsSnapshot["messaging"]["line"],

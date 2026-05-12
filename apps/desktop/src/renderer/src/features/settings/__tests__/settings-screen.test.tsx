@@ -105,6 +105,23 @@ function createSnapshot(
         authorizedUserIds: { value: [], source: "default" },
         authorizedWorkspaces: { value: [], source: "default" },
       },
+      feishu: {
+        enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
+        appId: { configured: false, source: "unset", writable: true },
+        appSecret: { configured: false, source: "unset", writable: true },
+        encryptKey: { configured: false, source: "unset", writable: true },
+        verificationToken: { configured: false, source: "unset", writable: true },
+        inboundMode: { value: "persistent", source: "default" },
+        tenantRegion: { value: "feishu", source: "default" },
+        tenantUrl: { value: "", source: "default" },
+        callbackBaseUrl: { value: "", source: "default" },
+        slashCommandPrefix: { value: "pwragent_", source: "default" },
+        registerSlashCommands: { value: false, source: "default" },
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedChats: { value: [], source: "default" },
+        authorizedTenants: { value: [], source: "default" },
+      },
       line: {
         enabled: { value: false, source: "default" },
         streamingResponses: { value: false, source: "default" },
@@ -325,8 +342,8 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
+    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(6);
+    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(6);
     fireEvent.click(
       screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
     );
@@ -645,12 +662,56 @@ describe("SettingsScreen", () => {
       "placeholder",
       "https://line-webhook.example.com/",
     );
-    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
+    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAccessibleName(
+      "Local Webhook Listener",
+    );
+    expect(screen.getByPlaceholderText("http://127.0.0.1:47822")).toHaveAttribute(
       "placeholder",
       "http://127.0.0.1:47822",
     );
     expect(screen.getByText(/forwards LINE webhooks/)).toBeInTheDocument();
     expect(screen.queryByText("https://line-callback.example.com/")).not.toBeInTheDocument();
+  });
+
+  it("treats Feishu tenant and webhook URLs as optional overrides", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getAllByText(/Required before going online/)).toHaveLength(2);
+    expect(screen.getByText(/go online in Lark Developer/)).toBeInTheDocument();
+    expect(screen.getByText(/Feishu is China only/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Tenant URL")).toHaveValue("");
+    expect(screen.getByText(/Leave blank to use/)).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Local Webhook Listener")).toHaveLength(1);
+    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
+      "placeholder",
+      "http://127.0.0.1:47822",
+    );
+  });
+
+  it("shows the Feishu local webhook listener only for webhook mode", () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.feishu.inboundMode = { value: "webhook", source: "config" };
+
+    render(
+      <SettingsScreen
+        settings={createSettingsState(snapshot)}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const feishuLocalWebhook = screen
+      .getAllByLabelText("Local Webhook Listener")
+      .find((input) => !input.hasAttribute("placeholder"));
+    expect(feishuLocalWebhook).toHaveValue("");
+    expect(screen.getByText(/Default:/)).toHaveTextContent("http://127.0.0.1:47823");
+    expect(screen.getByText(/Only used when Webhook is selected/)).toBeInTheDocument();
   });
 
   it("looks up blank messaging display names from the settings screen", async () => {

@@ -1,18 +1,11 @@
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   MessagingActivityEntry,
   MessagingActivityKind,
 } from "@pwragent/shared";
-import {
-  DiscordIcon,
-  LineIcon,
-  MattermostIcon,
-  SlackIcon,
-  TelegramIcon,
-  type IconProps,
-} from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { MESSAGING_PLATFORM_ICONS } from "../../lib/messaging-platform-branding";
 
 const REFRESH_INTERVAL_MS = 5_000;
 const KIND_LABEL: Record<MessagingActivityKind, string> = {
@@ -33,16 +26,6 @@ const KIND_TONE: Record<MessagingActivityKind, "ok" | "warning" | "error" | "mut
   binding: "ok",
   diagnostic: "warning",
 };
-const PLATFORM_ICONS: Partial<
-  Record<MessagingActivityEntry["platform"], (props: IconProps) => ReactElement>
-> = {
-  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
-  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
-  mattermost: ({ size }) => <MattermostIcon size={size} />,
-  slack: ({ size }) => <SlackIcon size={size} />,
-  line: ({ size }) => <LineIcon size={size} />,
-};
-
 /**
  * Read-only view of the recent messaging activity log: routed inbound,
  * rejected inbound (unauthorized senders), ignored inbound (post-revoke),
@@ -173,7 +156,7 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const tone = KIND_TONE[entry.kind];
   const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
   const copyFields = copyFieldsForEntry(entry);
-  const Icon = PLATFORM_ICONS[entry.platform];
+  const Icon = MESSAGING_PLATFORM_ICONS[entry.platform];
   return (
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
@@ -281,6 +264,7 @@ function userIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Peer ID";
   if (platform === "discord") return "User ID";
   if (platform === "slack") return "User ID";
+  if (platform === "feishu") return "Open ID";
   if (platform === "mattermost") return "User ID";
   return "Actor ID";
 }
@@ -291,6 +275,7 @@ function parentIdLabel(
 ): string {
   if (platform === "telegram") return "Supergroup ID";
   if (platform === "discord") return "Guild ID";
+  if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost" && conversationKind === "thread") return "Root ID";
   return "Parent ID";
 }
@@ -299,6 +284,7 @@ function bucketIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Supergroup ID";
   if (platform === "discord") return "Guild ID";
   if (platform === "slack") return "Workspace ID";
+  if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost") return "Team ID";
   return "Bucket ID";
 }
@@ -312,6 +298,7 @@ function conversationIdLabel(
   }
   if (platform === "discord" && conversationKind !== "dm") return "Channel ID";
   if (platform === "slack" && conversationKind !== "dm") return "Channel ID";
+  if (platform === "feishu" && conversationKind !== "dm") return "Chat ID";
   if (platform === "mattermost" && conversationKind !== "dm") return "Channel ID";
   return "Conversation ID";
 }

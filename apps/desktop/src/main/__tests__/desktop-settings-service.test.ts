@@ -843,6 +843,46 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults Feishu tenant URL from the selected tenant region", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.feishu]",
+        'tenant_region = "lark"',
+        'tenant_url = "https://open.larksuite.com"',
+        'callback_base_url = "http://127.0.0.1:47823"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.messaging.feishu.tenantRegion).toEqual({
+      value: "lark",
+      source: "config",
+    });
+    expect(snapshot.messaging.feishu.inboundMode).toEqual({
+      value: "persistent",
+      source: "default",
+    });
+    expect(snapshot.messaging.feishu.tenantUrl).toEqual({
+      value: "",
+      source: "default",
+    });
+    expect(snapshot.messaging.feishu.callbackBaseUrl).toEqual({
+      value: "",
+      source: "default",
+    });
+    expect(service.resolveFeishuTenantUrlSync()).toBe("https://open.larksuite.com");
+  });
+
   it("reports unavailable secret storage and blocks secret writes", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

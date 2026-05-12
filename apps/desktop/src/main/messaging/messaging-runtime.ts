@@ -28,8 +28,10 @@ import type {
 import type {
   MessagingBindingRecord,
   MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterDiagnosticEvent,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
+  MessagingChannelRef,
   MessagingChannelKind,
   MessagingClientRateLimitStrategy,
   MessagingCredentialValidationResult,
@@ -86,6 +88,7 @@ export type DesktopMessagingAdapter = {
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   onReconnect?(listener: (info: MessagingReconnectInfo) => void): () => void;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onDiagnostic?(listener: (event: MessagingAdapterDiagnosticEvent) => void): () => void;
   updateAuthorization?(update: MessagingAdapterAuthorizationUpdate): Promise<void>;
   updateRenderingPreferences?(
     update: MessagingAdapterRenderingPreferencesUpdate,
@@ -119,6 +122,7 @@ type RunningMessagingAdapter = {
   config: DesktopMessagingConfig;
   controller: MessagingController;
   fingerprint: string;
+  unsubscribeDiagnostic?: () => void;
   unsubscribeInboundRejected?: () => void;
   unsubscribeRateLimit?: () => void;
   unsubscribeReconnect?: () => void;
@@ -209,6 +213,10 @@ export type CredentialValidationRequest =
       credential: { botToken: string; serverUrl: string };
     }
   | { channel: "slack"; credential: { botToken: string } }
+  | {
+      channel: "feishu";
+      credential: { appId: string; appSecret: string; tenantUrl: string };
+    }
   | { channel: "line"; credential: { channelAccessToken: string } };
 
 export class DesktopMessagingRuntime {
@@ -765,6 +773,12 @@ export class DesktopMessagingRuntime {
         const slackProvider = await import("@pwragent/messaging-provider-slack");
         return await slackProvider.validateCredentials(request.credential);
       }
+      case "feishu": {
+        const feishuProvider = await import(
+          "@pwragent/messaging-provider-feishu"
+        );
+        return await feishuProvider.validateCredentials(request.credential);
+      }
       case "line": {
         const lineProvider = await import("@pwragent/messaging-provider-line");
         return await lineProvider.validateCredentials(request.credential);
@@ -826,8 +840,32 @@ export class DesktopMessagingRuntime {
       onDeliveryBudgetEvent: (event) => this.handleDeliveryBudgetEvent(event),
     });
 
+    let unsubscribeDiagnostic: (() => void) | undefined;
     let unsubscribeInboundRejected: (() => void) | undefined;
     try {
+      unsubscribeDiagnostic = adapter.onDiagnostic?.((event) => {
+        this.emitPlatformActivity(adapter.channel);
+        messagingLog.info("messaging adapter diagnostic", {
+          actorDisplayName: event.actor?.displayName,
+          actorId: event.actor?.platformUserId,
+          channel: adapter.channel,
+          conversationId: event.channel?.conversation.id,
+          conversationKind: event.channel?.conversation.kind,
+          eventId: event.id,
+          summary: event.summary,
+        });
+        this.recordDiagnosticActivity({
+          platform: adapter.channel,
+          summary: event.summary,
+          createdAt: event.observedAt,
+          conversation: event.channel?.conversation,
+          actor: event.actor,
+          payload: {
+            eventId: event.id,
+            ...(event.payload ?? {}),
+          },
+        });
+      });
       unsubscribeInboundRejected = adapter.onInboundRejected?.((event) => {
         this.emitPlatformActivity(adapter.channel);
         this.recordActivityFromRejected(adapter.channel, event);
@@ -884,6 +922,11 @@ export class DesktopMessagingRuntime {
       });
     } catch (error) {
       try {
+        unsubscribeDiagnostic?.();
+      } catch {
+        // Best effort cleanup after startup failure.
+      }
+      try {
         unsubscribeInboundRejected?.();
       } catch {
         // Best effort cleanup after startup failure.
@@ -937,6 +980,7 @@ export class DesktopMessagingRuntime {
       config,
       controller,
       fingerprint: messagingAdapterConfigFingerprint(config, adapter.channel),
+      unsubscribeDiagnostic,
       unsubscribeInboundRejected,
       unsubscribeRateLimit,
       unsubscribeReconnect,
@@ -1020,6 +1064,13 @@ export class DesktopMessagingRuntime {
   }
 
   private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+    try {
+      running.unsubscribeDiagnostic?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter diagnostic unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     try {
       running.unsubscribeRateLimit?.();
     } catch (error) {
@@ -1682,6 +1733,8 @@ export class DesktopMessagingRuntime {
     backend?: AgentEvent["backend"];
     threadId?: string;
     bindingId?: string;
+    conversation?: MessagingChannelRef["conversation"];
+    actor?: { platformUserId: string; displayName?: string };
     summary: string;
     createdAt: number;
     payload: Record<string, unknown>;
@@ -1693,6 +1746,10 @@ export class DesktopMessagingRuntime {
         backend: params.backend,
         threadId: params.threadId,
         bindingId: params.bindingId,
+        conversationId: params.conversation?.id,
+        conversationTitle: params.conversation?.title,
+        actorId: params.actor?.platformUserId,
+        actorDisplayName: params.actor?.displayName,
         summary: params.summary,
         createdAt: params.createdAt,
         payload: params.payload,

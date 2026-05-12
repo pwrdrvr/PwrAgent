@@ -19,6 +19,8 @@ const DISCORD_MAX_FUTURE_MS = 24n * 60n * 60n * 1000n;
 const MATTERMOST_ID_LENGTH = 26;
 const SLACK_MAX_ID_LENGTH = 64;
 const LINE_ID_LENGTH = 33;
+const FEISHU_MAX_ID_LENGTH = 128;
+const FEISHU_MAX_TENANT_KEY_LENGTH = 64;
 
 export function validateTelegramChatId(value: unknown): IdentifierValidationResult {
   return validateTelegramIntegerId(value, { allowNegative: true });
@@ -124,6 +126,26 @@ export function validateLineRoomId(value: unknown): IdentifierValidationResult {
   return validateLinePrefixedHexId(value, "R");
 }
 
+export function validateFeishuOpenId(value: unknown): IdentifierValidationResult {
+  return validateFeishuPrefixedId(value, "ou_", FEISHU_MAX_ID_LENGTH);
+}
+
+export function validateFeishuChatId(value: unknown): IdentifierValidationResult {
+  return validateFeishuPrefixedId(value, "oc_", FEISHU_MAX_ID_LENGTH);
+}
+
+export function validateFeishuTenantKey(value: unknown): IdentifierValidationResult {
+  if (typeof value !== "string") return { ok: false, reason: "type" };
+  if (value.length === 0) return { ok: false, reason: "empty" };
+  if (value.length > FEISHU_MAX_TENANT_KEY_LENGTH) {
+    return { ok: false, reason: "length" };
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!isTokenChar(value.charCodeAt(index))) return { ok: false, reason: "format" };
+  }
+  return { ok: true };
+}
+
 function validateSlackId(
   value: unknown,
   prefixes: readonly string[],
@@ -145,6 +167,23 @@ function validateSlackId(
     if (!isAsciiDigit(code) && !isUppercaseAsciiLetter(code)) {
       return { ok: false, reason: "format" };
     }
+  }
+  return { ok: true };
+}
+
+function validateFeishuPrefixedId(
+  value: unknown,
+  prefix: string,
+  maxLength: number,
+): IdentifierValidationResult {
+  if (typeof value !== "string") return { ok: false, reason: "type" };
+  if (value.length === 0) return { ok: false, reason: "empty" };
+  if (value.length > maxLength) return { ok: false, reason: "length" };
+  if (!value.startsWith(prefix) || value.length === prefix.length) {
+    return { ok: false, reason: "format" };
+  }
+  for (let index = prefix.length; index < value.length; index += 1) {
+    if (!isTokenChar(value.charCodeAt(index))) return { ok: false, reason: "format" };
   }
   return { ok: true };
 }
@@ -241,5 +280,15 @@ function isLowercaseAlphaNumeric(code: number): boolean {
   return (
     (code >= 0x30 && code <= 0x39) ||
     (code >= 0x61 && code <= 0x7a)
+  );
+}
+
+function isTokenChar(code: number): boolean {
+  return (
+    (code >= 0x30 && code <= 0x39)
+    || (code >= 0x41 && code <= 0x5a)
+    || (code >= 0x61 && code <= 0x7a)
+    || code === 0x5f
+    || code === 0x2d
   );
 }

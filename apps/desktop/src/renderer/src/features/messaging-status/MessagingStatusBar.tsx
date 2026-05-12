@@ -1,4 +1,4 @@
-import { useId, type ReactElement } from "react";
+import { useId } from "react";
 import type {
   MessagingChannelKind,
   MessagingDegradationReason,
@@ -6,25 +6,11 @@ import type {
   MessagingPlatformStatus,
 } from "@pwragent/shared";
 import {
-  DiscordIcon,
-  LineIcon,
-  MattermostIcon,
-  SlackIcon,
-  TelegramIcon,
-  type IconProps,
-} from "../../icons";
+  formatMessagingPlatformName,
+  MESSAGING_PLATFORM_ICONS,
+} from "../../lib/messaging-platform-branding";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
-
-const ICONS: Partial<
-  Record<MessagingChannelKind, (props: IconProps) => ReactElement>
-> = {
-  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
-  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
-  mattermost: ({ size }) => <MattermostIcon size={size} />,
-  slack: ({ size }) => <SlackIcon size={size} />,
-  line: ({ size }) => <LineIcon size={size} />,
-};
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
@@ -87,9 +73,9 @@ function PlatformChip(props: {
 }) {
   const { status, active, onClick } = props;
   const tooltipId = useId();
-  const Icon = ICONS[status.platform];
+  const Icon = MESSAGING_PLATFORM_ICONS[status.platform];
   const labelLines = [
-    `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
+    `${formatMessagingPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
     status.account ? `Bot: ${status.account}` : undefined,
     status.detail ? `Account detail: ${status.detail}` : undefined,
     status.reason,
@@ -199,9 +185,4 @@ function formatRetry(retryAfterMs: number | undefined): string {
 
 function formatAttempt(attemptCount: number | undefined): string {
   return attemptCount === undefined ? "" : ` (attempt ${attemptCount})`;
-}
-
-function formatPlatformName(platform: MessagingChannelKind): string {
-  if (platform.length === 0) return platform;
-  return platform.charAt(0).toUpperCase() + platform.slice(1);
 }

@@ -28,14 +28,21 @@ export default defineConfig(({ command }) => {
             "@pwragent/agent-core",
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",
+            "@pwragent/messaging-provider-feishu",
             "@pwragent/messaging-provider-line",
             "@pwragent/messaging-provider-mattermost",
             "@pwragent/messaging-provider-slack",
-            "@pwragent/messaging-provider-telegram"
+            "@pwragent/messaging-provider-telegram",
+            "@larksuiteoapi/node-sdk",
+            "protobufjs",
+            "protobufjs/minimal"
           ]
         })
       ],
       build: {
+        commonjsOptions: {
+          transformMixedEsModules: true
+        },
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {

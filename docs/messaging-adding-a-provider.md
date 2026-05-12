@@ -728,6 +728,8 @@ Concrete code references in the tree, kept current as adapters evolve:
 | `packages/messaging/providers/mattermost/src/mattermost-formatting.ts` | Multi-attachment auto-flow rendering. Action ID alphanumeric sanitization. |
 | `packages/messaging/providers/slack/src/slack-adapter.ts` | Socket Mode provider with Block Kit rendering, Slack mrkdwn translation, opaque callback handles in button `value`, and stable Slack ID validation. |
 | `packages/messaging/providers/slack/src/slack-formatting.ts` | Slack Block Kit action rows, button text limits, `slack-mrkdwn` conversion, and action-id sanitization. |
+| `packages/messaging/providers/feishu/src/feishu-adapter.ts` | Feishu/Lark provider with App ID/App Secret tenant-token auth, direct Open Platform REST outbound calls, SDK persistent-connection inbound events by default, webhook fallback, interactive-card callbacks, signed opaque button values, and stable `ou_`/`oc_` ID validation. |
+| `packages/messaging/providers/feishu/src/feishu-formatting.ts` | Feishu/Lark interactive-card modules, `lark_md` boundary translation, action rows, and 20-character button labels. |
 | `packages/messaging/providers/line/src/line-adapter.ts` | Webhook-only provider with raw-body `X-Line-Signature` verification, Flex Message buttons, tight 20-character labels, 300-character postback data, and stable LINE ID validation. |
 | `packages/messaging/providers/line/src/line-formatting.ts` | Flex Message action bubbles and LINE's no-markdown/no-editing text model. |
 
@@ -803,3 +805,13 @@ Captured while hardening [issue #284](https://github.com/pwrdrvr/PwrAgent/issues
 - **Webhook source fields vary by event type.** LINE group/room `join` and `leave` events do not necessarily include `source.userId`, even though message and postback events need a stable user for authorization. Validate IDs after branching on the event shape, and use a synthetic bot actor for bot lifecycle events when the platform does not supply a user actor.
 - **Signed platform webhooks do not replace restart-safe callback handles.** LINE signs the whole request with `X-Line-Signature`, but button `postback.data` still needs a stable adapter HMAC and persisted callback-handle record so buttons rendered before an app restart keep working.
 - **Advertised attachment capabilities must match the renderer.** If the adapter can only send HTTPS remote image URLs, set `supportsRemoteImageUrl: true` and avoid claiming byte-backed image/file upload support until the upload path exists and is capped in tests.
+
+### Lessons from Feishu / Lark
+
+Captured while implementing [issue #262](https://github.com/pwrdrvr/PwrAgent/issues/262).
+
+- **Code identifiers should pick one brand.** The adapter uses `feishu` for the package and channel kind while the UI says "Feishu / Lark"; tenant region chooses `open.feishu.cn` vs `open.larksuite.com`.
+- **Persistent connection is the operator-friendly inbound default.** The official Node SDK's `WSClient` avoids a public callback tunnel, so desktop operators don't expose a localhost port to scanner traffic. Keep webhook mode as an explicit fallback.
+- **Direct REST can still be preferable for outbound calls when rate-limit ownership matters.** The Open Platform endpoints are straightforward for tenant-token minting, message create/update/delete, and app self-info. Avoiding SDK-managed outbound retries keeps `clientRateLimitStrategy: "direct"` honest.
+- **Card callbacks need routing breadcrumbs.** Feishu/Lark card action payloads can be sparse compared with delivery-time state. Persist the full generic callback-handle record and keep the card `value` to a signed opaque handle.
+- **Slash-command bodies can arrive as the full command text.** Normalize `/cas_click <token>` whether the platform supplies args or the complete command body; this mirrors the prior openclaw Feishu finding and prevents approval-click regressions.

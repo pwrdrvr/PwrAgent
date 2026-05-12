@@ -13,6 +13,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
   buildDiscordPatchDelta,
+  buildFeishuPatchDelta,
   buildLinePatchDelta,
   buildMattermostPatchDelta,
   buildSlackPatchDelta,
@@ -298,6 +299,16 @@ function SettingsSectionBody(props: {
           if (delta === undefined) return;
           await props.settings.writeConfig({
             messaging: { slack: delta },
+          });
+        }}
+        onSaveFeishu={async (feishu) => {
+          const delta = buildFeishuPatchDelta(
+            props.snapshot.messaging.feishu,
+            feishu,
+          );
+          if (delta === undefined) return;
+          await props.settings.writeConfig({
+            messaging: { feishu: delta },
           });
         }}
         onSaveLine={async (line) => {
