@@ -248,6 +248,7 @@ export type DesktopSettingsSnapshot = {
   secretStorage: DesktopSettingsSecretStorageState;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
+    fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
     /**
      * Diff condensation (a.k.a. "diff eliding") gates whether we send
      * focused-diff requests to xAI. When enabled, less-relevant diff
@@ -343,6 +344,7 @@ export type DesktopSettingsSnapshot = {
 
 export type DesktopSettingsConfigPatch = {
   experimental?: {
+    fullAccessRiskWarningDismissed?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */

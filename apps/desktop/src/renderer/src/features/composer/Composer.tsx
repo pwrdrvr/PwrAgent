@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerCollaborationModeRequest,
@@ -84,7 +84,9 @@ type ComposerProps = {
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
+  fullAccessRiskWarningDismissed?: boolean;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
+  onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
   onMaterializeLaunchpad?: (
@@ -978,6 +980,12 @@ export function Composer(props: ComposerProps) {
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+  const [fullAccessRiskDialogOpen, setFullAccessRiskDialogOpen] =
+    useState(false);
+  const [fullAccessRiskDontWarnAgain, setFullAccessRiskDontWarnAgain] =
+    useState(false);
+  const [fullAccessRiskSaving, setFullAccessRiskSaving] = useState(false);
+  const [fullAccessRiskError, setFullAccessRiskError] = useState<string>();
   const [autocompleteLayout, setAutocompleteLayout] = useState<{
     maxHeight: number;
     placement: "above" | "below";
@@ -2471,6 +2479,61 @@ export function Composer(props: ComposerProps) {
     }, 0);
   };
 
+  const applyExecutionModeSelection = (
+    executionMode: ThreadExecutionMode,
+  ): void => {
+    if (props.launchpad) {
+      if (props.launchpad.executionMode !== executionMode) {
+        handleLaunchpadPatch({ executionMode });
+      }
+      return;
+    }
+
+    if (
+      props.thread &&
+      props.thread.executionMode !== executionMode &&
+      !props.updatingExecutionMode
+    ) {
+      setSendError(undefined);
+      void props.onSetExecutionMode?.(executionMode);
+    }
+  };
+
+  const requestExecutionModeSelection = (
+    executionMode: ThreadExecutionMode,
+  ): void => {
+    const currentExecutionMode =
+      props.launchpad?.executionMode ?? props.thread?.executionMode ?? "default";
+    if (
+      currentExecutionMode === "default" &&
+      executionMode === "full-access" &&
+      !props.fullAccessRiskWarningDismissed
+    ) {
+      setFullAccessRiskDontWarnAgain(false);
+      setFullAccessRiskError(undefined);
+      setFullAccessRiskDialogOpen(true);
+      return;
+    }
+
+    applyExecutionModeSelection(executionMode);
+  };
+
+  const confirmFullAccessRisk = async (): Promise<void> => {
+    setFullAccessRiskSaving(true);
+    setFullAccessRiskError(undefined);
+    try {
+      if (fullAccessRiskDontWarnAgain) {
+        await props.onDismissFullAccessRiskWarning?.();
+      }
+      setFullAccessRiskDialogOpen(false);
+      applyExecutionModeSelection("full-access");
+    } catch (error) {
+      setFullAccessRiskError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFullAccessRiskSaving(false);
+    }
+  };
+
   const handleThreadModelSettingsPatch = (
     patch: Partial<
       Pick<
@@ -2875,16 +2938,94 @@ export function Composer(props: ComposerProps) {
     handlePlainComposerKeyDown(event);
   };
 
+  const fullAccessRiskDialog = fullAccessRiskDialogOpen
+    ? createPortal(
+        <div className="full-access-warning-modal">
+          <div
+            aria-labelledby="full-access-warning-title"
+            aria-modal="true"
+            className="full-access-warning-dialog"
+            role="dialog"
+          >
+            <div className="full-access-warning-dialog__header">
+              <h2 id="full-access-warning-title">Enable Full Access?</h2>
+              <button
+                aria-label="Cancel Full Access warning"
+                className="workspace-handoff-dialog__close"
+                disabled={fullAccessRiskSaving}
+                type="button"
+                onClick={() => {
+                  setFullAccessRiskDialogOpen(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p>
+              Full Access allows network access and read/write access to almost
+              all files on this machine.
+            </p>
+            <p>
+              That means data can be exfiltrated unintentionally, or by
+              malicious code the agent downloads and executes through a supply
+              chain attack on npm, PyPI, Rust crates, Go modules, or a similar
+              dependency source.
+            </p>
+            <label className="composer__checkbox full-access-warning-dialog__checkbox">
+              <input
+                checked={fullAccessRiskDontWarnAgain}
+                disabled={fullAccessRiskSaving}
+                type="checkbox"
+                onChange={(event) =>
+                  setFullAccessRiskDontWarnAgain(event.currentTarget.checked)
+                }
+              />
+              <span>Do not warn me again on this desktop.</span>
+            </label>
+            {fullAccessRiskError ? (
+              <p className="full-access-warning-dialog__error" role="alert">
+                {fullAccessRiskError}
+              </p>
+            ) : null}
+            <div className="full-access-warning-dialog__actions">
+              <button
+                className="button button--secondary"
+                disabled={fullAccessRiskSaving}
+                type="button"
+                onClick={() => {
+                  setFullAccessRiskDialogOpen(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={fullAccessRiskSaving}
+                type="button"
+                onClick={() => {
+                  void confirmFullAccessRisk();
+                }}
+              >
+                I Understand and Accept the Risks
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
   return (
-    <form
-      className="composer"
-      data-composer-implementation="tiptap-wysiwyg-markdown-chips"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submitTurn();
-      }}
-    >
-      {/* Issue #240: removed the visible "Reply" / "New thread" /
+    <>
+      <form
+        className="composer"
+        data-composer-implementation="tiptap-wysiwyg-markdown-chips"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitTurn();
+        }}
+      >
+        {/* Issue #240: removed the visible "Reply" / "New thread" /
           "Review" eyebrow that used to sit above the composer. The
           input itself carries the same name through its `aria-label`
           (the `label` prop on the inner ComposerRichInput /
@@ -3363,20 +3504,7 @@ export function Composer(props: ComposerProps) {
               }))}
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;
-                if (props.launchpad) {
-                  if (props.launchpad.executionMode !== executionMode) {
-                    handleLaunchpadPatch({ executionMode });
-                  }
-                  return;
-                }
-
-                if (
-                  props.thread &&
-                  props.thread.executionMode !== executionMode &&
-                  !props.updatingExecutionMode
-                ) {
-                  void props.onSetExecutionMode?.(executionMode);
-                }
+                requestExecutionModeSelection(executionMode);
               }}
             />
           ) : null}
@@ -3876,7 +4004,9 @@ export function Composer(props: ComposerProps) {
           </button>
         </div>
       </div>
-    </form>
+      </form>
+      {fullAccessRiskDialog}
+    </>
   );
 }
 

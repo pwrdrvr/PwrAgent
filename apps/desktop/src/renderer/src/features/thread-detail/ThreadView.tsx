@@ -604,6 +604,7 @@ type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  fullAccessRiskWarningDismissed?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
    * composer when no thread is selected yet. Rendering happens inside
@@ -627,6 +628,7 @@ type ThreadViewProps = {
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
+  onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader → MessagingStatusBar — opens the Activity screen. */
   onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
   onLoadOlder: () => Promise<void>;
@@ -1530,7 +1532,13 @@ export function ThreadView(props: ThreadViewProps) {
               disabled={!launchpadBackend?.available}
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
+              fullAccessRiskWarningDismissed={
+                props.fullAccessRiskWarningDismissed
+              }
               onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+              onDismissFullAccessRiskWarning={
+                props.onDismissFullAccessRiskWarning
+              }
               onMaterializeLaunchpad={handleMaterializeLaunchpad}
               onUpdateLaunchpad={props.onUpdateLaunchpad}
               onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
@@ -1626,7 +1634,13 @@ export function ThreadView(props: ThreadViewProps) {
             directory={props.selectedDirectory}
             disabled={props.composerDisabled}
             contextWindow={props.contextWindow}
+            fullAccessRiskWarningDismissed={
+              props.fullAccessRiskWarningDismissed
+            }
             onActiveTurnIdChange={props.onActiveTurnIdChange}
+            onDismissFullAccessRiskWarning={
+              props.onDismissFullAccessRiskWarning
+            }
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}

@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import { desktopSettingsPatchToEdits } from "../settings/desktop-config";
 import { parseTomlTables } from "../settings/toml-editor";
 
+describe("desktopSettingsPatchToEdits — experimental", () => {
+  it("writes the Full Access risk warning dismissal flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        fullAccessRiskWarningDismissed: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "full_access_risk_warning_dismissed"],
+        value: true,
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — Mattermost", () => {
   it("emits one set op per defined Mattermost field with the correct snake_case key", () => {
     const edits = desktopSettingsPatchToEdits({

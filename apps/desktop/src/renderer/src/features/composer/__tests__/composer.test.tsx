@@ -2635,6 +2635,7 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
+        fullAccessRiskWarningDismissed
         directory={{
           key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "directory",
@@ -2705,6 +2706,120 @@ describe("Composer", () => {
 
     chooseDropdownOption("Access mode", "Full Access");
 
+    await waitFor(() => {
+      expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
+  it("requires confirmation before switching a thread from Default Access to Full Access", async () => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
+    const onDismissFullAccessRiskWarning = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("codex"),
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        disabled={false}
+        onDismissFullAccessRiskWarning={onDismissFullAccessRiskWarning}
+        onSetExecutionMode={onSetExecutionMode}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Risky switch",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    chooseDropdownOption("Access mode", "Full Access");
+
+    const dialog = screen.getByRole("dialog", { name: "Enable Full Access?" });
+    expect(dialog.closest(".composer")).toBeNull();
+    expect(dialog.closest(".full-access-warning-modal")).not.toBeNull();
+    expect(dialog).toHaveTextContent("network access");
+    expect(dialog).toHaveTextContent("read/write access to almost all files");
+    expect(dialog).toHaveTextContent("supply chain attack");
+    expect(onSetExecutionMode).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(dialog).getByLabelText("Do not warn me again on this desktop."),
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "I Understand and Accept the Risks",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onDismissFullAccessRiskWarning).toHaveBeenCalledTimes(1);
+      expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
+  it("skips the Full Access warning after it has been dismissed", async () => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("codex"),
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        disabled={false}
+        fullAccessRiskWarningDismissed
+        onSetExecutionMode={onSetExecutionMode}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Risk accepted",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    chooseDropdownOption("Access mode", "Full Access");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Enable Full Access?" }),
+    ).not.toBeInTheDocument();
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
     });
