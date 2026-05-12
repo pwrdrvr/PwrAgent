@@ -621,6 +621,19 @@ function turnIdFromStartedNotification(
   return notification.params.turnId ?? notification.params.turn.id;
 }
 
+function turnIdFromTerminalNotification(
+  notification: {
+    params: {
+      turnId?: string;
+      turn?: {
+        id?: string;
+      };
+    };
+  },
+): string | undefined {
+  return notification.params.turnId ?? notification.params.turn?.id;
+}
+
 function logBackendLifecycleNotification(
   backend: AppServerBackendKind,
   notification: AppServerNotification,
@@ -4430,24 +4443,28 @@ export class DesktopBackendRegistry {
       const notification = event.notification as {
         params: {
           threadId: string;
-          turnId: string;
+          turnId?: string;
+          turn?: {
+            id?: string;
+          };
         };
       };
-      const activeTurnModeKey = buildActiveTurnModeKey(
-        notification.params.threadId,
-        notification.params.turnId,
-      );
-      const wasKnownActiveTurn =
-        !notification.params.turnId.startsWith("pending:") &&
-        this.activeCodexTurnModes.has(activeTurnModeKey);
-      this.activeCodexTurnModes.delete(
-        activeTurnModeKey,
-      );
-      if (wasKnownActiveTurn) {
-        await this.adoptThreadBranchChangeFromActiveTurn({
-          backend: event.backend,
-          threadId: notification.params.threadId,
-        });
+      const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        const activeTurnModeKey = buildActiveTurnModeKey(
+          notification.params.threadId,
+          turnId,
+        );
+        const wasKnownActiveTurn =
+          !turnId.startsWith("pending:") &&
+          this.activeCodexTurnModes.has(activeTurnModeKey);
+        this.activeCodexTurnModes.delete(activeTurnModeKey);
+        if (wasKnownActiveTurn) {
+          await this.adoptThreadBranchChangeFromActiveTurn({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+          });
+        }
       }
       // Turn-end is the resume boundary — flush any queued mode change
       // now. Fire-and-forget; failures are logged + retried inside

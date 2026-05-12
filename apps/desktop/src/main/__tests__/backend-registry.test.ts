@@ -4162,18 +4162,19 @@ describe("DesktopBackendRegistry", () => {
       });
       await git(repo, ["switch", "-c", "fix/queued-review-release"]);
 
-      await codexClient.emit({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-branch",
-          turnId: "turn-branch",
-          turn: {
-            id: "turn-branch",
-            status: "completed",
-            output: [],
+      await codexClient.emit(
+        {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-branch",
+            turn: {
+              id: "turn-branch",
+              status: "completed",
+              output: [],
+            },
           },
-        },
-      });
+        } as unknown as AppServerNotification,
+      );
 
       expect(overlayDuringTerminalEvent).toMatchObject({
         gitBranch: "fix/queued-review-release",
