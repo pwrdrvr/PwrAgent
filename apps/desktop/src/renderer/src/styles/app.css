@@ -1249,10 +1249,10 @@ textarea,
   color: var(--accent-bright);
 }
 
-/* Reaction + add-reaction chips share the .thread-row__chip primitive
+/* Reaction + add-reaction controls share the .thread-row__chip primitive
    below; only their content (emoji glyph) differs from a meta chip.
-   These rules layer the per-variant tweaks (slightly larger glyph
-   font-size, hover-only visibility for the add chip) on top. */
+   The add control is a hover-only row affordance, positioned outside the
+   wrapping chip flow so it does not reserve hidden layout space. */
 
 .thread-row__chip--reaction,
 .thread-row__chip--add-reaction {
@@ -1269,17 +1269,28 @@ textarea,
 .thread-row__chip--reaction:hover,
 .thread-row__chip--reaction:focus-visible,
 .thread-row__chip--add-reaction:hover,
-.thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
   outline: none;
 }
 
+.thread-row__chip--add-reaction:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .thread-row__chip--add-reaction {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: 1;
   /* Mute the add affordance until the user is interacting with the
      row; revealed on hover, focus, or while the picker is open. */
   opacity: 0;
+  pointer-events: none;
   /* SVG glyph uses --text-secondary so it reads as a soft gray —
      matches the design and avoids competing with the actual reaction
      chips next to it. The reaction chips above still use
@@ -1306,6 +1317,7 @@ textarea,
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .reaction-picker {
@@ -1527,11 +1539,10 @@ textarea,
   line-height: 1.45;
 }
 
-/* Single ordered chip flow per thread row. All chip types — meta
-   (agent/mode/dir/branch/drift), PR chips, messaging binding chips,
-   reactions, add-reaction — render as siblings in this one wrapping
-   flex container. flex-wrap handles overflow naturally; no per-type
-   container, no absolute positioning. */
+/* Single ordered content chip flow per thread row. Meta
+   (agent/mode/dir/branch/drift), PR chips, messaging binding chips, and
+   reactions render as siblings in this one wrapping flex container.
+   flex-wrap handles overflow naturally; no per-type containers. */
 .thread-row__chips {
   display: flex;
   flex-wrap: wrap;

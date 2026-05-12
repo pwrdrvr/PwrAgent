@@ -18,8 +18,10 @@ import { ThreadRow } from "../ThreadRow";
 //      instead of opening the binding menu.
 //
 // These tests freeze the contract that motivated the refactor:
-//   - Every chip is a sibling inside a single `.thread-row__chips`
-//     container — no per-type wrappers.
+//   - Content chips are siblings inside a single `.thread-row__chips`
+//     container — no per-type wrappers. The hover-only add-reaction
+//     trigger stays outside that flow so it cannot reserve hidden wrap
+//     space.
 //   - Interactive chips are `<span role="button">` (NOT `<button>`),
 //     and their click events do not propagate into the row's
 //     onSelectThread handler.
@@ -76,16 +78,28 @@ describe("ThreadRow chip flow", () => {
     return { ...utils, onSelectThread, onUnbindMessagingBinding, onSetReaction };
   }
 
-  it("renders every chip as a sibling inside a single .thread-row__chips container", () => {
+  it("renders content chips as siblings inside a single .thread-row__chips container", () => {
     const { container } = renderRow();
     const chipFlow = container.querySelectorAll(".thread-row__chips");
     expect(chipFlow.length).toBe(1);
-    // All known chip types should live inside that single container,
+    // Content chip types should live inside that single container,
     // not in any per-type wrapper.
     const flow = chipFlow[0]!;
     expect(flow.querySelector(".thread-row__chip--binding")).not.toBeNull();
     expect(flow.querySelector(".thread-row__chip--reaction")).not.toBeNull();
-    expect(flow.querySelector(".thread-row__chip--add-reaction")).not.toBeNull();
+    expect(flow.querySelector(".thread-row__chip--add-reaction")).toBeNull();
+  });
+
+  it("positions the add-reaction trigger outside the wrapping chip flow", () => {
+    const { container } = renderRow();
+    const row = container.querySelector(".thread-row");
+    const flow = container.querySelector(".thread-row__chips");
+    const addReaction = container.querySelector(".thread-row__chip--add-reaction");
+    expect(row).not.toBeNull();
+    expect(flow).not.toBeNull();
+    expect(addReaction).not.toBeNull();
+    expect(addReaction?.parentElement).toBe(row);
+    expect(flow?.contains(addReaction)).toBe(false);
   });
 
   it("uses span[role=button] for the binding chip (not nested <button>)", () => {
@@ -186,7 +200,7 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("now fix/current")).not.toBeInTheDocument();
   });
 
-  it("orders chips: meta → PR → bindings → reactions → add-reaction", () => {
+  it("orders chips: meta → PR → bindings → reactions", () => {
     const threadWithEverything: NavigationThreadSummary = {
       ...baseThread,
       messagingBindings: [telegramBinding],
@@ -212,12 +226,8 @@ describe("ThreadRow chip flow", () => {
     const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
     const bindingIdx = indexOf(".thread-row__chip--binding, .thread-row__chip-wrap");
     const reactionIdx = indexOf(".thread-row__chip--reaction");
-    const addReactionIdx = indexOf(".thread-row__chip--add-reaction");
     // Each chip type that's present comes after the previous one.
     if (prIdx >= 0 && bindingIdx >= 0) expect(prIdx).toBeLessThan(bindingIdx);
     if (bindingIdx >= 0 && reactionIdx >= 0) expect(bindingIdx).toBeLessThan(reactionIdx);
-    if (reactionIdx >= 0 && addReactionIdx >= 0) {
-      expect(reactionIdx).toBeLessThan(addReactionIdx);
-    }
   });
 });
