@@ -461,11 +461,12 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         intent.delivery?.mode === "update" && target.messageId
           ? await this.api.updateMessage({ card, messageId: target.messageId })
           : undefined;
+      const shouldSendCard = shouldSendFeishuCard(intent, rawText, actionElements.length);
       const result = updated ?? (await this.api.sendMessage({
-        card: actionElements.length > 0 || intent.kind !== "message" ? card : undefined,
+        card: shouldSendCard ? card : undefined,
         receiveId: target.receiveId,
         receiveIdType: target.receiveIdType,
-        text: actionElements.length > 0 || intent.kind !== "message"
+        text: shouldSendCard
           ? undefined
           : clampFeishuMessage(rawText || intent.fallbackText || "PwrAgent"),
       }));
@@ -1609,6 +1610,42 @@ function extractFeishuText(content: string | undefined): string {
     return content;
   }
   return "";
+}
+
+function shouldSendFeishuCard(
+  intent: MessagingSurfaceIntent,
+  text: string,
+  actionCount: number,
+): boolean {
+  if (actionCount > 0 || intent.kind !== "message") return true;
+  return intent.parts.some((part) =>
+    part.type === "text"
+    && part.markdown === "markdown"
+    && containsMarkdownTable(part.text || text)
+  );
+}
+
+function containsMarkdownTable(text: string): boolean {
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (
+      isMarkdownTableRow(lines[index] ?? "")
+      && isMarkdownTableSeparator(lines[index + 1] ?? "")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.split("|").length >= 4;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = line.trim().split("|").map((cell) => cell.trim()).filter(Boolean);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
 function stripBotMentions(

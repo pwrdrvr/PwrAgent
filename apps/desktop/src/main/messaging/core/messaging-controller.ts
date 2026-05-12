@@ -4999,6 +4999,7 @@ export class MessagingController {
         }
       }
       const result = await this.options.adapter.deliver(routedIntent);
+      this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
         this.deliveryBudget.recordRateLimit(result.rateLimit);
@@ -5050,6 +5051,28 @@ export class MessagingController {
         });
       }
       return result;
+    }
+  }
+
+  private logDeliveryResult(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord | undefined,
+    result: MessagingDeliveryResult,
+  ): void {
+    const logContext = {
+      bindingId: binding?.id ?? intent.bindingId,
+      channel: result.channel,
+      errorMessage: result.errorMessage,
+      intentId: intent.id,
+      intentKind: intent.kind,
+      outcome: result.outcome,
+      surfaceId: result.surface?.id,
+      threadId: binding?.threadId,
+    };
+    if (result.outcome === "failed") {
+      this.logger.warn?.("messaging delivery failed", logContext);
+    } else {
+      this.logger.info?.("messaging delivery completed", logContext);
     }
   }
 

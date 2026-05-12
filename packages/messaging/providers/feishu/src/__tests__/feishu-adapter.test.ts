@@ -141,6 +141,60 @@ describe("FeishuAdapter", () => {
     });
   });
 
+  it("sends markdown table messages as Lark markdown cards", async () => {
+    const spies: { sent: Array<{ card?: { elements?: unknown[] }; text?: string }> } = {
+      sent: [],
+    };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+    const table = [
+      "| Cool thing | Where |",
+      "|---|---|",
+      "| Volcanoes | Hawai'i Island |",
+    ].join("\n");
+
+    await expect(adapter.deliver({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: table, markdown: "markdown" }],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "oc_chat", kind: "channel" },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({
+      channel: "feishu",
+      outcome: "presented",
+    });
+
+    expect(spies.sent[0]).toMatchObject({
+      receiveId: "oc_chat",
+      receiveIdType: "chat_id",
+      text: undefined,
+      card: {
+        elements: [
+          expect.objectContaining({
+            tag: "div",
+            text: {
+              tag: "lark_md",
+              content: table,
+            },
+          }),
+        ],
+      },
+    });
+  });
+
   it("persists browse session ids on picker callback handles", async () => {
     const store = fakeStore();
     const spies: { sent: unknown[] } = { sent: [] };
