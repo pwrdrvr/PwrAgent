@@ -1472,7 +1472,11 @@ export class DesktopBackendRegistry {
           backend,
           thread,
         })
-      : this.buildArchiveCleanupMetadataSkippedResult(cleanupMetadataError);
+      : this.buildArchiveCleanupMetadataSkippedResult({
+          backend,
+          threadId: result.threadId,
+          error: cleanupMetadataError,
+        });
 
     return {
       backend,
@@ -1482,15 +1486,28 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private buildArchiveCleanupMetadataSkippedResult(
-    error?: string,
-  ): ArchiveThreadCleanupResult[] {
+  private buildArchiveCleanupMetadataSkippedResult(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    error?: string;
+  }): ArchiveThreadCleanupResult[] {
+    backendRegistryLog.warn(
+      "archive thread worktree cleanup skipped: metadata unavailable",
+      {
+        backend: params.backend,
+        threadId: params.threadId,
+        skippedReason: params.error
+          ? `Unable to load thread metadata for archive cleanup: ${params.error}`
+          : "Unable to load thread metadata for archive cleanup.",
+      },
+    );
+
     return [
       {
         removedWorktree: false,
         deletedBranch: false,
-        skippedReason: error
-          ? `Unable to load thread metadata for archive cleanup: ${error}`
+        skippedReason: params.error
+          ? `Unable to load thread metadata for archive cleanup: ${params.error}`
           : "Unable to load thread metadata for archive cleanup.",
       },
     ];
