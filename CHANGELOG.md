@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.3 - 2026-05-12
+
+- Rebuilt the beta.2 release contents after fixing the ASAR verification rule that incorrectly rejected LINE's runtime PNG brand icon.
+- Added a Full Access confirmation dialog that explains filesystem, network, exfiltration, and supply-chain risks before switching a thread or launchpad out of Default Access.
+- Added LINE as a first-class messaging provider with webhook signature verification, outbound rendering, attachment handling, credential testing, settings UI, status icons, and setup docs.
+- Improved desktop review workflows by queueing `/review` starts during active turns, preventing helper-thread title sync, and making review result cards wrap long file paths with clearer severity badges.
+- Improved transcript markdown rendering with dedicated table bubbles, content-aware table column profiling, horizontal overflow handling, and better layouts for review/findings tables.
+- Fixed several desktop stability issues, including navigation refresh loops, queued-turn release timing, accepted branch-drift state, Codex app-server PATH hydration, Git discovery failures, and stale messaging state for archived threads.
+- Added in-app changelog access from Settings and the Help menu, with `CHANGELOG.md` shipped in the Electron bundle.
+- Added native macOS screenshot capture tooling for README-quality desktop screenshots from replay fixtures.
+- Polished messaging visuals and behavior with Slack activity icons, context-rail-safe status indicators, clearer git discovery failure surfaces, and safer Telegram/archived-thread state cleanup.
+
 ## v1.0.0-beta.2 - 2026-05-12
 
 - Added a Full Access confirmation dialog that explains filesystem, network, exfiltration, and supply-chain risks before switching a thread or launchpad out of Default Access.

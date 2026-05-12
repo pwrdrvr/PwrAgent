@@ -38,7 +38,10 @@ const forbidden = [
   ["Env example", /\/\.env(\.|$)/],
   ["Workspace src/ leak", /\/node_modules\/@pwragent\/[^/]+\/src\//],
   ["Workspace AGENTS.md", /\/node_modules\/@pwragent\/[^/]+\/AGENTS\.md$/],
-  ["Screenshot", /\.(png|jpg|jpeg|gif|tiff|psd|sketch|fig)$/i],
+  [
+    "Screenshot/design image",
+    /(^|\/)[^/]*(screenshot|screenie|capture|mockup|wireframe|prototype|design)[^/]*\.(png|jpg|jpeg|gif|tiff|psd|sketch|fig)$/i,
+  ],
   ["Playwright config", /playwright\.config\./],
   ["Project plan/brainstorm", /\/(plans|brainstorms|design)\//],
 ];
