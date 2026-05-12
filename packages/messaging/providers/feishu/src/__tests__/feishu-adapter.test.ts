@@ -70,6 +70,7 @@ function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
 
 function fakeApi(spies: {
   deleted?: string[];
+  downloaded?: unknown[];
   sent?: unknown[];
   updated?: unknown[];
 }): FeishuApi {
@@ -77,7 +78,10 @@ function fakeApi(spies: {
     deleteMessage: async ({ messageId }) => {
       spies.deleted?.push(messageId);
     },
-    downloadFile: async () => new Uint8Array([1, 2, 3]),
+    downloadFile: async (params) => {
+      spies.downloaded?.push(params);
+      return new Uint8Array([1, 2, 3]);
+    },
     getBotInfo: async () => ({
       appName: "PwrAgent",
       openId: "ou_bot",
@@ -299,6 +303,136 @@ describe("FeishuAdapter", () => {
         actor: { platformUserId: "ou_user" },
       }),
     ]);
+  });
+
+  it("normalizes authorized image messages into downloadable media events", async () => {
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_image",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ image_key: "img_v3_123" }),
+          message_id: "om_image",
+          message_type: "image",
+        },
+      },
+    });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "media",
+        disposition: "available",
+        attachments: [
+          expect.objectContaining({
+            disposition: "available",
+            id: "feishu:image:img_v3_123",
+            kind: "image",
+            state: {
+              opaque: {
+                fileKey: "img_v3_123",
+                messageId: "om_image",
+                provider: "feishu",
+                resourceType: "image",
+              },
+            },
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("downloads Feishu image resources with message id and resource type", async () => {
+    const spies: { downloaded: unknown[] } = { downloaded: [] };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+    });
+
+    await expect(adapter.downloadAttachment({
+      attachment: {
+        id: "feishu:image:img_v3_123",
+        kind: "image",
+        name: "lark-image",
+        disposition: "available",
+        state: {
+          opaque: {
+            fileKey: "img_v3_123",
+            messageId: "om_image",
+            resourceType: "image",
+          },
+        },
+      },
+      maxBytes: 10,
+    })).resolves.toMatchObject({
+      fileName: "lark-image",
+      sizeBytes: 3,
+    });
+
+    expect(spies.downloaded).toEqual([
+      {
+        fileKey: "img_v3_123",
+        maxBytes: 10,
+        messageId: "om_image",
+        resourceType: "image",
+      },
+    ]);
+  });
+
+  it("calls the Feishu message resource endpoint with type when downloading", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          expire: 3600,
+          tenant_access_token: "tenant-token",
+        }), { status: 200 });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-length": "3" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createFeishuApi(baseConfig);
+
+    await expect(api.downloadFile({
+      fileKey: "img_v3_123",
+      maxBytes: 10,
+      messageId: "om_message",
+      resourceType: "image",
+    })).resolves.toEqual(new Uint8Array([1, 2, 3]));
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://open.feishu.cn/open-apis/im/v1/messages/om_message/resources/img_v3_123?type=image",
+      {
+        headers: { authorization: "Bearer tenant-token" },
+      },
+    );
   });
 
   it("decrypts encrypted webhook event envelopes", async () => {

@@ -376,8 +376,8 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
    - Required: `im:message:send_as_bot` ("Send messages as an app") so PwrAgent
      can reply and post status cards.
    - Recommended: `im:message:readonly` ("Read direct messages and group chat
-     messages") because the message receive event and related Lark console
-     wiring reference it.
+     messages") because the message receive event, related Lark console wiring,
+     and image/file resource downloads reference it.
    - Recommended: `im:message:update` ("Update message") so PwrAgent can refresh
      or dismiss status cards instead of posting duplicates.
    - Recommended for shared chats: `im:chat:readonly` ("Obtain group
@@ -409,6 +409,10 @@ type `@` and select the bot when sending a bound-thread message. Direct
 messages do not need the mention. Some tenants expose broader group-message
 read permissions, but those permissions are not the default operator path and
 may require extra workspace approval.
+
+Inbound Feishu / Lark image and file messages are forwarded to the shared
+PwrAgent attachment processor after actor and chat authorization. Audio and
+video messages are currently surfaced as unsupported attachments.
 
 Feishu / Lark interactive cards carry only signed opaque callback handles in
 button values. The persisted handle record owns the action id, binding id,

@@ -14,6 +14,7 @@ import type {
   MessagingAdapterDiagnosticListener,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingAdapterState,
+  MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
   MessagingCallbackHandleStore,
@@ -86,9 +87,16 @@ export type FeishuSendMessageResult = {
   messageId?: string;
 };
 
+type FeishuMessageResourceType = "file" | "image";
+
 export type FeishuApi = {
   deleteMessage(params: { messageId: string }): Promise<void>;
-  downloadFile(params: { fileKey: string; maxBytes: number }): Promise<Uint8Array>;
+  downloadFile(params: {
+    fileKey: string;
+    maxBytes: number;
+    messageId: string;
+    resourceType: FeishuMessageResourceType;
+  }): Promise<Uint8Array>;
   getBotInfo(): Promise<FeishuBotInfo>;
   sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult>;
   updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult>;
@@ -530,12 +538,21 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       opaque && typeof opaque === "object" && !Array.isArray(opaque)
         ? (opaque as Record<string, unknown>).fileKey
         : undefined;
+    const messageId =
+      opaque && typeof opaque === "object" && !Array.isArray(opaque)
+        ? (opaque as Record<string, unknown>).messageId
+        : undefined;
     if (typeof fileKey !== "string") {
       throw new Error("Feishu attachment is missing file key");
+    }
+    if (typeof messageId !== "string") {
+      throw new Error("Feishu attachment is missing message id");
     }
     const data = await this.api.downloadFile({
       fileKey,
       maxBytes: request.maxBytes,
+      messageId,
+      resourceType: readAttachmentResourceType(request.attachment),
     });
     return {
       data,
@@ -706,8 +723,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       } satisfies FeishuRoutingOpaqueState,
     };
 
-    const text = extractFeishuText(message.content);
+    const content = parseFeishuMessageContent(message.content);
+    const text = extractFeishuText(content);
     const messageText = stripBotMentions(text, message.mentions);
+    const attachments = feishuAttachmentsFromMessage({
+      content,
+      message,
+      messageId: ids.messageId,
+    });
     const eventBase = {
       id: payload.header?.event_id ?? ids.messageId,
       actor,
@@ -717,8 +740,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
     const command = parseFeishuCommandText(messageText);
     const pairingToken = extractMessagingPairingToken(messageText);
-    const inboundKind: MessagingInboundEvent["kind"] = command || pairingToken ? "command" : "text";
+    const inboundKind: MessagingInboundEvent["kind"] =
+      command || pairingToken ? "command" : attachments.length > 0 ? "media" : "text";
     this.logger.info?.("feishu inbound message received", {
+      attachmentCount: attachments.length,
       chatType: message.chat_type,
       hasPairingToken: Boolean(pairingToken),
       inboundKind,
@@ -751,6 +776,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
             args: [pairingToken],
             rawText: messageText,
           }
+        : attachments.length > 0
+          ? {
+              ...eventBase,
+              kind: "media",
+              attachments,
+              disposition: attachments.some((attachment) => attachment.disposition === "available")
+                ? "available"
+                : "unsupported",
+              ...(messageText ? { text: messageText } : {}),
+            }
         : {
             ...eventBase,
             kind: "text",
@@ -1508,10 +1543,15 @@ class DirectFeishuApi implements FeishuApi {
     );
   }
 
-  async downloadFile(params: { fileKey: string; maxBytes: number }): Promise<Uint8Array> {
+  async downloadFile(params: {
+    fileKey: string;
+    maxBytes: number;
+    messageId: string;
+    resourceType: FeishuMessageResourceType;
+  }): Promise<Uint8Array> {
     const token = await this.getTenantAccessToken();
     const response = await fetch(
-      `${this.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(params.fileKey)}/resources/${encodeURIComponent(params.fileKey)}`,
+      `${this.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}/resources/${encodeURIComponent(params.fileKey)}?type=${params.resourceType}`,
       {
         headers: { authorization: `Bearer ${token}` },
       },
@@ -1614,15 +1654,102 @@ export function parseFeishuCommandText(
   return { command: first, args: tokens.slice(1) };
 }
 
-function extractFeishuText(content: string | undefined): string {
-  if (!content) return "";
+function parseFeishuMessageContent(content: string | undefined): Record<string, unknown> {
+  if (!content) return {};
   try {
-    const parsed = JSON.parse(content) as { text?: unknown };
-    if (typeof parsed.text === "string") return parsed.text;
+    const parsed = JSON.parse(content) as unknown;
+    return objectRecord(parsed);
   } catch {
-    return content;
+    return { text: content };
   }
+}
+
+function extractFeishuText(content: Record<string, unknown>): string {
+  if (typeof content.text === "string") return content.text;
+  if (typeof content.title === "string") return content.title;
   return "";
+}
+
+function feishuAttachmentsFromMessage(params: {
+  content: Record<string, unknown>;
+  message: FeishuReceiveMessageEvent["message"];
+  messageId: string;
+}): MessagingAttachmentDescriptor[] {
+  const messageType = params.message?.message_type;
+  if (messageType === "image") {
+    const imageKey = stringField(params.content.image_key);
+    if (!imageKey) return [];
+    return [
+      {
+        id: `feishu:image:${imageKey}`,
+        kind: "image",
+        name: "lark-image",
+        disposition: "available",
+        state: {
+          opaque: {
+            fileKey: imageKey,
+            messageId: params.messageId,
+            provider: "feishu",
+            resourceType: "image",
+          },
+        },
+      },
+    ];
+  }
+  if (messageType === "file") {
+    const fileKey = stringField(params.content.file_key);
+    if (!fileKey) return [];
+    return [
+      {
+        id: `feishu:file:${fileKey}`,
+        kind: "file",
+        name: stringField(params.content.file_name) ?? "lark-file",
+        disposition: "available",
+        state: {
+          opaque: {
+            fileKey,
+            messageId: params.messageId,
+            provider: "feishu",
+            resourceType: "file",
+          },
+        },
+      },
+    ];
+  }
+  if (messageType === "audio" || messageType === "media" || messageType === "video") {
+    const fileKey = stringField(params.content.file_key);
+    return [
+      {
+        id: `feishu:${messageType}:${fileKey ?? params.messageId}`,
+        kind: messageType === "audio" ? "audio" : "video",
+        name: stringField(params.content.file_name) ?? `lark-${messageType}`,
+        disposition: "unsupported",
+        reason: `${messageType} attachments are not supported`,
+        state: {
+          opaque: {
+            ...(fileKey ? { fileKey } : {}),
+            messageId: params.messageId,
+            provider: "feishu",
+            resourceType: "file",
+          },
+        },
+      },
+    ];
+  }
+  return [];
+}
+
+function readAttachmentResourceType(
+  attachment: MessagingAttachmentDescriptor,
+): FeishuMessageResourceType {
+  const opaque = attachment.state?.opaque;
+  if (opaque && typeof opaque === "object" && !Array.isArray(opaque)) {
+    const resourceType = (opaque as Record<string, unknown>).resourceType;
+    if (resourceType === "image" || resourceType === "file") {
+      return resourceType;
+    }
+  }
+  return attachment.kind === "image" ? "image" : "file";
 }
 
 function shouldSendFeishuCard(

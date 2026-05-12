@@ -76,7 +76,7 @@ Useful current scopes:
 - `im:message.group_at_msg:readonly` - receive users' mentions in groups.
 - `im:message:send_as_bot` - send replies and status cards as the bot.
 - `im:message:readonly` - read direct and group chat messages for message
-  receive events.
+  receive events and download image/file resources from received messages.
 - `im:message:update` - update/dismiss status cards instead of posting
   duplicates.
 - `im:chat:readonly` - obtain group information for shared-chat use.
@@ -108,6 +108,10 @@ Pairing flow:
 
 Bound group chats still require mentioning the bot for PwrAgent to receive
 messages. Use `@PwrAgent ...` in a bound group. DMs do not require a mention.
+
+Image and file messages are passed through the shared attachment processor
+after authorization. Audio/video messages are recorded as unsupported
+attachments until a transcription or media-processing path exists.
 
 ## Troubleshooting
 
