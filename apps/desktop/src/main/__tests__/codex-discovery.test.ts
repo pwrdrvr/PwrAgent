@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const accessMock = vi.fn();
 const execFileMock = vi.fn();
+const readFileMock = vi.fn();
+const realpathMock = vi.fn();
 
 vi.mock("node:fs/promises", () => ({
   access: accessMock,
+  readFile: readFileMock,
+  realpath: realpathMock,
 }));
 
 vi.mock("node:child_process", () => ({
@@ -19,8 +23,153 @@ vi.mock("node:child_process", () => ({
 }));
 
 describe("Codex discovery", () => {
+  beforeEach(() => {
+    accessMock.mockReset();
+    execFileMock.mockReset();
+    readFileMock.mockReset();
+    realpathMock.mockReset();
+  });
+
+  it("rejects old Homebrew Caskroom Codex versions without spawning them", async () => {
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/opt/homebrew/bin/codex") return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockResolvedValue(
+      "/opt/homebrew/Caskroom/codex/0.94.0/codex-aarch64-apple-darwin",
+    );
+    execFileMock.mockImplementation(() => {
+      throw new Error("old Codex should not be executed");
+    });
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({
+      env: { PATH: "/opt/homebrew/bin" },
+      platform: "darwin",
+    });
+
+    expect(snapshot.selectedCommand).toBeUndefined();
+    expect(snapshot.candidates.find((candidate) => candidate.source === "path")).toMatchObject({
+      command: "/opt/homebrew/bin/codex",
+      executable: false,
+      failureReason: "codex_too_old",
+      version: "0.94.0",
+    });
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to spawning codex when the only resolved candidate is too old", async () => {
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/opt/homebrew/bin/codex") return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockResolvedValue(
+      "/opt/homebrew/Caskroom/codex/0.94.0/codex-aarch64-apple-darwin",
+    );
+    execFileMock.mockImplementation(() => {
+      throw new Error("old Codex should not be executed");
+    });
+    const { resolveCodexCommand } = await import("../settings/codex-discovery");
+
+    await expect(
+      resolveCodexCommand({
+        command: "codex",
+        env: { PATH: "/opt/homebrew/bin" },
+        platform: "darwin",
+      }),
+    ).rejects.toThrow("older than the minimum supported version 0.125.0");
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Homebrew Caskroom versions without a --version probe when they are new enough", async () => {
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/opt/homebrew/bin/codex") return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockResolvedValue(
+      "/opt/homebrew/Caskroom/codex/0.130.0/codex-aarch64-apple-darwin",
+    );
+    execFileMock.mockImplementation(() => {
+      throw new Error("Codex version should come from the Caskroom path");
+    });
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({
+      env: { PATH: "/opt/homebrew/bin" },
+      platform: "darwin",
+    });
+
+    expect(snapshot.selectedCommand).toBe("/opt/homebrew/bin/codex");
+    expect(snapshot.candidates.find((candidate) => candidate.source === "path")).toMatchObject({
+      executable: true,
+      selected: true,
+      version: "0.130.0",
+    });
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Codex.app bundle versions before invoking the helper binary", async () => {
+    const appCommand = "/Applications/Codex.app/Contents/Resources/codex";
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === appCommand) return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    readFileMock.mockResolvedValue(`
+      <plist>
+        <dict>
+          <key>CFBundleShortVersionString</key>
+          <string>0.126.0</string>
+        </dict>
+      </plist>
+    `);
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: NodeJS.ErrnoException) => void,
+      ) => {
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        callback(error);
+      },
+    );
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({
+      env: {},
+      platform: "darwin",
+    });
+
+    expect(snapshot.selectedCommand).toBe(appCommand);
+    expect(
+      snapshot.candidates.find((candidate) => candidate.source === "application"),
+    ).toMatchObject({
+      executable: true,
+      selected: true,
+      version: "0.126.0",
+    });
+    expect(execFileMock).not.toHaveBeenCalledWith(
+      appCommand,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("selects env overrides above configured and auto-discovered commands", async () => {
     accessMock.mockResolvedValue(undefined);
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    readFileMock.mockRejectedValue(new Error("missing"));
     execFileMock.mockImplementation(
       (
         command: string,
@@ -56,6 +205,8 @@ describe("Codex discovery", () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";
     accessMock.mockRejectedValue(missingError);
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    readFileMock.mockRejectedValue(missingError);
     execFileMock.mockImplementation(
       (
         _command: string,
@@ -83,6 +234,8 @@ describe("Codex discovery", () => {
 
   it("treats a successful version probe as executable when access fails", async () => {
     accessMock.mockRejectedValue(new Error("access denied"));
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    readFileMock.mockRejectedValue(new Error("missing"));
     execFileMock.mockImplementation(
       (
         _command: string,
@@ -107,6 +260,8 @@ describe("Codex discovery", () => {
 
   it("reads Codex versions from stderr when needed", async () => {
     accessMock.mockResolvedValue(undefined);
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    readFileMock.mockRejectedValue(new Error("missing"));
     execFileMock.mockImplementation(
       (
         _command: string,

@@ -1,5 +1,8 @@
+import { execFile as execFileCallback } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { promisify } from "node:util";
 import type {
   DesktopCodexCandidateSource,
   DesktopCodexDiscoveryCandidate,
@@ -11,6 +14,9 @@ import {
   pathIsExecutable,
   type ResolvedCommandCandidate,
 } from "./command-discovery";
+
+const execFile = promisify(execFileCallback);
+export const MINIMUM_CODEX_CLI_VERSION = "0.125.0";
 
 export type ResolvedCodexCommandCandidate = {
   command: string;
@@ -115,6 +121,117 @@ function getCodexAppCandidatePaths(): string[] {
   ];
 }
 
+async function inspectCodexCandidateBeforeVersionProbe(params: {
+  command: string;
+  platform: NodeJS.Platform;
+}): Promise<{
+  version?: string;
+  failureReason?: string;
+  skipVersionProbe?: boolean;
+} | undefined> {
+  if (params.platform !== "darwin") {
+    return undefined;
+  }
+
+  const version = await readCodexVersionWithoutExecution(params.command);
+  if (!version) {
+    return undefined;
+  }
+
+  return {
+    version,
+    failureReason: compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0
+      ? "codex_too_old"
+      : undefined,
+    skipVersionProbe: true,
+  };
+}
+
+async function readCodexVersionWithoutExecution(command: string): Promise<string | undefined> {
+  const candidatePaths = [command];
+  try {
+    const resolved = await realpath(command);
+    if (resolved !== command) {
+      candidatePaths.push(resolved);
+    }
+  } catch {
+    // The caller already checked existence. If realpath fails, fall back to the
+    // original path and the normal version probe.
+  }
+
+  for (const candidatePath of candidatePaths) {
+    const homebrewVersion = readHomebrewCodexVersionFromPath(candidatePath);
+    if (homebrewVersion) {
+      return homebrewVersion;
+    }
+
+    const appVersion = await readCodexAppBundleVersion(candidatePath);
+    if (appVersion) {
+      return appVersion;
+    }
+  }
+
+  return undefined;
+}
+
+function readHomebrewCodexVersionFromPath(candidatePath: string): string | undefined {
+  const normalized = candidatePath.replace(/\\/g, "/");
+  const match = normalized.match(
+    /\/(?:Caskroom|Cellar)\/codex\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\/|$)/,
+  );
+  return match?.[1];
+}
+
+async function readCodexAppBundleVersion(candidatePath: string): Promise<string | undefined> {
+  const appPath = readContainingAppBundlePath(candidatePath);
+  if (!appPath) {
+    return undefined;
+  }
+
+  const plistPath = path.join(appPath, "Contents", "Info.plist");
+  const plutilVersion =
+    await readPlistString(plistPath, "CFBundleShortVersionString")
+    ?? await readPlistString(plistPath, "CFBundleVersion");
+  if (plutilVersion) {
+    return parseCodexVersionOutput(plutilVersion);
+  }
+
+  try {
+    const plist = await readFile(plistPath, "utf8");
+    const match = plist.match(
+      /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/,
+    ) ?? plist.match(/<key>CFBundleVersion<\/key>\s*<string>([^<]+)<\/string>/);
+    return parseCodexVersionOutput(match?.[1] ?? "");
+  } catch {
+    return undefined;
+  }
+}
+
+async function readPlistString(
+  plistPath: string,
+  key: "CFBundleShortVersionString" | "CFBundleVersion",
+): Promise<string | undefined> {
+  try {
+    const result = await execFile(
+      "/usr/bin/plutil",
+      ["-extract", key, "raw", "-o", "-", plistPath],
+      { timeout: 2_000 },
+    );
+    return result.stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readContainingAppBundlePath(candidatePath: string): string | undefined {
+  const normalized = candidatePath.replace(/\\/g, "/");
+  const appSuffixIndex = normalized.indexOf(".app/");
+  if (appSuffixIndex === -1) {
+    return undefined;
+  }
+  return normalized.slice(0, appSuffixIndex + ".app".length);
+}
+
 export async function discoverCodexCommands(params?: {
   configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
@@ -140,12 +257,15 @@ export async function discoverCodexCommands(params?: {
     ],
     parseVersion: parseCodexVersionOutput,
     compareVersions: compareCodexCliVersions,
+    preflightCandidate: ({ command, platform }) =>
+      inspectCodexCandidateBeforeVersionProbe({ command, platform }),
   }) as Promise<DesktopCodexDiscoverySnapshot>;
 }
 
 export async function resolveCodexCommand(params: {
   command: string;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): Promise<ResolvedCommandCandidate<DesktopCodexCandidateSource>> {
   const configuredCommand =
     params.command.trim() && params.command.trim() !== "codex"
@@ -154,17 +274,29 @@ export async function resolveCodexCommand(params: {
   const discovery = await discoverCodexCommands({
     configuredCommand,
     env: params.env,
+    platform: params.platform,
   });
   const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const rejectedOldCodex = discovery.candidates.find(
+    (candidate) => candidate.failureReason === "codex_too_old",
+  );
 
-  return selected
-    ? {
-        command: selected.command,
-        source: selected.source,
-        version: selected.version,
-      }
-    : {
-        command: params.command.trim() || "codex",
-        source: "path",
-      };
+  if (selected) {
+    return {
+      command: selected.command,
+      source: selected.source,
+      version: selected.version,
+    };
+  }
+
+  if (rejectedOldCodex) {
+    throw new Error(
+      `Codex CLI ${rejectedOldCodex.version ?? "unknown"} is older than the minimum supported version ${MINIMUM_CODEX_CLI_VERSION}: ${rejectedOldCodex.command}`,
+    );
+  }
+
+  return {
+    command: params.command.trim() || "codex",
+    source: "path",
+  };
 }

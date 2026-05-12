@@ -355,5 +355,6 @@ function describeCommandDiscoveryFailure(reason?: string): string | undefined {
   if (reason === "not_found") return "Missing";
   if (reason === "not_executable") return "Not executable";
   if (reason === "version_not_reported") return "Version unknown";
+  if (reason === "codex_too_old") return "Codex too old";
   return reason;
 }

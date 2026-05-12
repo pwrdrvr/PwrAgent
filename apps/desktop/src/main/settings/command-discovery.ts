@@ -36,7 +36,20 @@ export type DiscoverCommandOptions<Source extends string> = {
   versionArgs?: string[];
   parseVersion: (output: string) => string | undefined;
   compareVersions?: (left?: string, right?: string) => number;
+  preflightCandidate?: (params: {
+    command: string;
+    source: Source;
+    env: NodeJS.ProcessEnv;
+    platform: NodeJS.Platform;
+  }) => Promise<CommandDiscoveryPreflightResult | undefined>;
   includeFailedAutoCandidates?: boolean | "if-none-executable";
+};
+
+export type CommandDiscoveryPreflightResult = {
+  version?: string;
+  failureReason?: string;
+  versionFailureReason?: string;
+  skipVersionProbe?: boolean;
 };
 
 export type ResolvedCommandCandidate<Source extends string> = {
@@ -188,6 +201,12 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     platform?: NodeJS.Platform;
     versionArgs?: string[];
     parseVersion: (output: string) => string | undefined;
+    preflightCandidate?: (params: {
+      command: string;
+      source: Source;
+      env: NodeJS.ProcessEnv;
+      platform: NodeJS.Platform;
+    }) => Promise<CommandDiscoveryPreflightResult | undefined>;
   },
 ): Promise<CommandDiscoveryCandidate<Source> | undefined> {
   const trimmedCommand = candidate.command?.trim();
@@ -207,13 +226,42 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     resolvedCommand && existence !== "not_found"
       ? await pathIsExecutable(resolvedCommand)
       : false;
-  const versionResult = existence !== "not_found"
-    ? await readCommandVersion({
+  const preflightResult = existence !== "not_found"
+    ? await options.preflightCandidate?.({
         command: probeCommand,
+        source: candidate.source,
         env: options.env,
-        parseVersion: options.parseVersion,
-        versionArgs: options.versionArgs ?? ["--version"],
+        platform,
       })
+    : undefined;
+
+  if (preflightResult?.failureReason) {
+    return {
+      command: resolvedCommand || trimmedCommand,
+      source: candidate.source,
+      executable: false,
+      selected: false,
+      version: preflightResult.version,
+      versionFailureReason: preflightResult.versionFailureReason,
+      failureReason: preflightResult.failureReason,
+    };
+  }
+
+  const versionResult = existence !== "not_found"
+    ? preflightResult?.skipVersionProbe
+      ? {
+          ran: accessExecutable,
+          version: preflightResult.version,
+          failureReason: preflightResult.version
+            ? undefined
+            : (preflightResult.versionFailureReason ?? "version_not_reported"),
+        }
+      : await readCommandVersion({
+          command: probeCommand,
+          env: options.env,
+          parseVersion: options.parseVersion,
+          versionArgs: options.versionArgs ?? ["--version"],
+        })
     : { ran: false, failureReason: "not_found" };
   const executable = accessExecutable || versionResult.ran;
 
@@ -222,7 +270,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     source: candidate.source,
     executable,
     selected: false,
-    version: versionResult.version,
+    version: versionResult.version ?? preflightResult?.version,
     versionFailureReason: executable ? versionResult.failureReason : undefined,
     failureReason: executable
       ? undefined
@@ -259,7 +307,9 @@ export async function discoverCommands<Source extends string>(
       ? executableAutoCandidates.length === 0
       : options.includeFailedAutoCandidates === true;
   const visibleAutoCandidates = autoCandidates
-    .filter((candidate) => includeFailedAutoCandidates || candidate.executable)
+    .filter((candidate) =>
+      includeFailedAutoCandidates || candidate.executable || candidate.version,
+    )
     .sort((left, right) =>
       options.compareVersions
         ? options.compareVersions(right.version, left.version)
