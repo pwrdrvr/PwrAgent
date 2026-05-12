@@ -384,6 +384,30 @@ describe("SqliteMessagingStore", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("repairs a missing monitor subscription table on reopen", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
+    tempDirs.push(tempDir);
+    const dbPath = path.join(tempDir, "state.db");
+    const initialDb = StateDb.open(dbPath);
+    stateDbs.push(initialDb);
+
+    initialDb.raw.exec("DROP TABLE monitor_subscriptions");
+    initialDb.raw.pragma("user_version = 4");
+    initialDb.close();
+    stateDbs.pop();
+
+    const reopenedDb = StateDb.open(dbPath);
+    stateDbs.push(reopenedDb);
+    const store = new SqliteMessagingStore(reopenedDb);
+
+    await expect(
+      store.findActiveMonitorSubscriptionsForChannelKind({ channel: "telegram" }),
+    ).resolves.toEqual([]);
+    await expect(
+      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+    ).resolves.toBeUndefined();
+  });
+
   it("can delete callback handles for a binding without revoking it", async () => {
     const store = await createStore();
     await store.upsertCallbackHandle(buildCallbackHandle());
