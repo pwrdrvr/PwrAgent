@@ -334,15 +334,14 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
 2. In PwrAgent Settings > Messaging > Feishu / Lark, store the App ID and App
    Secret in Keychain. The connection test mints a tenant access token and
    calls the low-permission bot info endpoint (`/open-apis/bot/v3/info`).
-3. In the Open Platform event configuration, use **Receive events through
-   persistent connection**. This is PwrAgent's default and recommended mode: the
-   desktop app opens an outbound SDK WebSocket to Lark, so operators do not need
-   to expose a localhost listener through Cloudflare Tunnel, ngrok, or a public
-   reverse proxy that can then be fuzzed by internet scanners.
-4. Subscribe the events PwrAgent consumes:
+3. In the Open Platform **Event Configuration** tab, use **Receive events
+   through persistent connection**. This is PwrAgent's default and recommended
+   mode: the desktop app opens an outbound SDK WebSocket to Lark, so operators
+   do not need to expose a localhost listener through Cloudflare Tunnel, ngrok,
+   or a public reverse proxy that can then be fuzzed by internet scanners.
+4. In **Event Configuration**, subscribe the events PwrAgent consumes:
    - Required: `im.message.receive_v1` so PwrAgent receives direct messages and
      group mentions.
-   - Required: `card.action.trigger` so interactive-card buttons work.
    - Optional/noisy: `im.chat.access_event.bot_p2p_chat_entered_v1`. Lark emits
      it when a user opens or enters a bot DM; PwrAgent ignores it because it is
      not a user command, but registering it avoids noisy "no handler" SDK logs
@@ -353,7 +352,14 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
      `im.message.updated_v1`. They can be useful later for diagnostics,
      membership tracking, read receipts, reactions, or edited-message handling,
      but they are not required for the current adapter.
-5. Grant and publish the app version with the messaging permissions used by
+5. In the Open Platform **Callback Configuration** tab, also use **Receive
+   callbacks through persistent connection** and add `card.action.trigger`.
+   This callback is what Lark sends when a user clicks an interactive-card
+   button such as `Resume`. If message events work but clicking a card button
+   shows Lark client error `200340` and PwrAgent logs no
+   `eventType=card.action.trigger` event, this callback configuration is not
+   reaching PwrAgent yet.
+6. Grant and publish the app version with the messaging permissions used by
    those events and bot replies. Useful Lark/Feishu console scopes for the
    current adapter are:
    - Required for group mentions: `im:message.group_at_msg:readonly` ("Receive
@@ -377,16 +383,16 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
    New bot profile changes, event subscriptions, and permission scopes do not
    take effect for a workspace until you create and publish a version of the
    internal app.
-6. Use webhook mode only as a fallback. If you set
+7. Use webhook mode only as a fallback. If you set
    `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE=webhook`, configure event
    subscriptions in the Open Platform console to point at your public tunnel,
    forwarding to PwrAgent's local callback listener
    (`http://127.0.0.1:47823` by default).
-7. Store the Verification Token in Keychain if webhook mode is enabled. Plain
+8. Store the Verification Token in Keychain if webhook mode is enabled. Plain
    webhook events are rejected if their token does not match. The Encryption Key
    field is reserved for encrypted callback payloads and should match the
    platform console when you enable encrypted events.
-8. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
+9. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
    (`oc_...`) or tenant keys for shared conversations; empty shared-surface
    allowlists deny shared chat access.
 

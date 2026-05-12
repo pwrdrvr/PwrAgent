@@ -902,7 +902,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Event subscription"
-            sub="Persistent connection is the default. It keeps callbacks on an outbound WebSocket so you do not expose a local port through a public tunnel."
+            sub="Persistent connection is the default. Configure both Lark Event Configuration for message events and Callback Configuration for card actions."
             options={FEISHU_INBOUND_MODE_OPTIONS}
             source={sourceBadge(feishu.inboundMode)}
             value={feishu.inboundMode.value}
