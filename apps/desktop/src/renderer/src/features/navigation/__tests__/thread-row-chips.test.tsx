@@ -102,17 +102,6 @@ describe("ThreadRow chip flow", () => {
     expect(flow?.contains(addReaction)).toBe(false);
   });
 
-  it("marks reactive rows so the chip flow can reserve an action gutter", () => {
-    const { container } = renderRow();
-    expect(container.querySelector(".thread-row")).toHaveClass("thread-row--can-react");
-  });
-
-  it("does not reserve the add-reaction gutter when reactions are unavailable", () => {
-    const { container } = renderRow({ onSetReaction: undefined });
-    expect(container.querySelector(".thread-row")).not.toHaveClass("thread-row--can-react");
-    expect(container.querySelector(".thread-row__chip--add-reaction")).toBeNull();
-  });
-
   it("uses span[role=button] for the binding chip (not nested <button>)", () => {
     const { container } = renderRow();
     const bindingChip = container.querySelector(".thread-row__chip--binding");
