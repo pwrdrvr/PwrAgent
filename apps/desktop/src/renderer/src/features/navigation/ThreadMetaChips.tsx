@@ -102,9 +102,10 @@ export function ThreadMetaChips({
 
       {branchChip ? (
         <CopyableThreadChip
-          aria-label={
-            thread.gitBranch ? "Copy branch name" : "Copy current branch name"
-          }
+          aria-label={formatBranchCopyLabel({
+            branch: branchChip,
+            kind: thread.gitBranch ? "expected" : "current",
+          })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
           value={branchChip}
         >
@@ -117,7 +118,10 @@ export function ThreadMetaChips({
 
       {branchDrifted && thread.observedGitBranch ? (
         <CopyableThreadChip
-          aria-label="Copy current branch name"
+          aria-label={formatBranchCopyLabel({
+            branch: thread.observedGitBranch,
+            kind: "current",
+          })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--muted thread-row__chip--mono"
           value={thread.observedGitBranch}
         >
@@ -129,6 +133,14 @@ export function ThreadMetaChips({
       ) : null}
     </>
   );
+}
+
+function formatBranchCopyLabel(params: {
+  branch: string;
+  kind: "current" | "expected";
+}): string {
+  const branchKind = params.kind === "current" ? "current branch" : "branch";
+  return `Copy ${branchKind} ${params.branch}`;
 }
 
 function CopyableThreadChip(props: {

@@ -145,6 +145,7 @@ export function ThreadRow(props: ThreadRowProps) {
       }}
     >
       <button
+        aria-label={props.thread.title}
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""

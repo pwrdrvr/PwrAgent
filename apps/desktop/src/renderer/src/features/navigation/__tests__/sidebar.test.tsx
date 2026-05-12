@@ -1301,7 +1301,9 @@ describe("Sidebar", () => {
     fireEvent.mouseLeave(directoryChip);
 
     fireEvent.click(directoryChip);
-    const branchChip = screen.getByRole("button", { name: "Copy branch name" });
+    const branchChip = screen.getByRole("button", {
+      name: "Copy branch codex/thread-centric-ui",
+    });
     fireEvent.mouseEnter(branchChip);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "codex/thread-centric-ui\nClick to copy to clipboard"
