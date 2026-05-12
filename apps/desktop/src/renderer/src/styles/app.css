@@ -1194,9 +1194,9 @@ textarea,
 
 .thread-row.thread-row--drag-image {
   position: fixed;
-  top: -10000px;
-  left: -10000px;
-  z-index: -1;
+  top: 0;
+  left: 0;
+  z-index: 10000;
   border-color: var(--border-strong);
   background: var(--bg-panel-elevated);
   box-shadow:

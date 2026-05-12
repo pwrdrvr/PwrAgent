@@ -289,6 +289,11 @@ function setThreadRowDragImage(event: DragEvent<HTMLDivElement>): void {
   const rect = row.getBoundingClientRect();
   const clone = row.cloneNode(true) as HTMLElement;
   clone.classList.add("thread-row--drag-image");
+  clone.classList.remove("thread-row--compact");
+  clone.querySelector(".thread-row__actions")?.remove();
+  clone.querySelector(".thread-row__chip--add-reaction")?.remove();
+  clone.querySelector(".thread-row__overflow-button")?.remove();
+  clone.setAttribute("aria-hidden", "true");
   clone.style.width = `${rect.width}px`;
   clone.style.height = `${rect.height}px`;
   document.body.appendChild(clone);
