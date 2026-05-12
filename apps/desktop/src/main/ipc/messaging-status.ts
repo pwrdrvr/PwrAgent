@@ -162,6 +162,32 @@ function buildPairingApprovalPatch(
         patch: { messaging: { slack: { authorizedUserIds: merged.contacts } } },
       };
     }
+    case "feishu": {
+      if (entry.scope === "bucket") {
+        const feishuChatContact = {
+          id: entry.observedChat.id,
+          displayName: entry.observedChat.title ?? "",
+        };
+        const mergeFeishuChat = (
+          current: DesktopAuthorizedContact[],
+        ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
+          if (current.some((existing) => existing.id === feishuChatContact.id)) {
+            return { added: false, contacts: current };
+          }
+          return { added: true, contacts: [...current, feishuChatContact] };
+        };
+        const merged = mergeFeishuChat(snapshot.messaging.feishu.authorizedChats.value);
+        return {
+          added: merged.added,
+          patch: { messaging: { feishu: { authorizedChats: merged.contacts } } },
+        };
+      }
+      const merged = merge(snapshot.messaging.feishu.authorizedUserIds.value);
+      return {
+        added: merged.added,
+        patch: { messaging: { feishu: { authorizedUserIds: merged.contacts } } },
+      };
+    }
     case "line": {
       if (entry.scope === "bucket") {
         if (contact.id.startsWith("C")) {
