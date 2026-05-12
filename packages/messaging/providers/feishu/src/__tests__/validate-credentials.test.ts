@@ -34,6 +34,12 @@ describe("Feishu validateCredentials", () => {
       "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
       expect.objectContaining({ method: "POST" }),
     );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/application/v6/applications/self?lang=en_us",
+      expect.objectContaining({
+        headers: { authorization: "Bearer tenant-token" },
+      }),
+    );
   });
 
   it("trims copied app credentials before sending the token probe", async () => {
@@ -68,6 +74,9 @@ describe("Feishu validateCredentials", () => {
       app_id: "cli_test",
       app_secret: "secret",
     }));
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      "https://open.larksuite.com/open-apis/application/v6/applications/self?lang=en_us",
+    );
   });
 
   it("returns OpenAPI status, code, and field violations when token validation fails", async () => {

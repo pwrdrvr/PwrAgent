@@ -66,7 +66,7 @@ export async function validateCredentials(
       }));
     }
 
-    const selfUrl = `${baseUrl}/open-apis/application/v6/applications/self`;
+    const selfUrl = `${baseUrl}/open-apis/application/v6/applications/self?lang=en_us`;
     const selfResponse = await fetchImpl(
       selfUrl,
       {

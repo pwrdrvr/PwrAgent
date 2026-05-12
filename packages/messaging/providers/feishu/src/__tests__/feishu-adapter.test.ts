@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { FeishuAdapter, parseFeishuCommandText, type FeishuApi } from "../feishu-adapter.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFeishuApi,
+  FeishuAdapter,
+  parseFeishuCommandText,
+  type FeishuApi,
+} from "../feishu-adapter.ts";
 import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
@@ -73,6 +78,10 @@ function fakeApi(spies: {
 }
 
 describe("FeishuAdapter", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("declares Feishu capabilities", () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,
@@ -355,6 +364,46 @@ describe("FeishuAdapter", () => {
         },
       }),
     ]);
+  });
+
+  it("requests bot self info with Lark's required language parameter", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          tenant_access_token: "tenant-token",
+        }));
+      }
+      if (url.endsWith("/open-apis/application/v6/applications/self?lang=en_us")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          data: {
+            app: { app_name: "PwrAgent" },
+            bot: { open_id: "ou_bot" },
+            tenant_key: "tenant_1",
+          },
+        }));
+      }
+      return new Response(JSON.stringify({ code: 99992402, msg: "unexpected URL" }), {
+        status: 400,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(createFeishuApi(baseConfig).getBotInfo()).resolves.toEqual({
+      appName: "PwrAgent",
+      openId: "ou_bot",
+      tenantKey: "tenant_1",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://open.feishu.cn/open-apis/application/v6/applications/self?lang=en_us",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer tenant-token",
+        }),
+      }),
+    );
   });
 
   it("parses Feishu approval click command bodies", () => {

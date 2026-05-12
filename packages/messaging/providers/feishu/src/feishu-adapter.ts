@@ -1219,7 +1219,7 @@ class DirectFeishuApi implements FeishuApi {
 
   async getBotInfo(): Promise<FeishuBotInfo> {
     const data = await this.request<{ app?: { app_name?: string }; bot?: { open_id?: string }; tenant_key?: string }>(
-      "/open-apis/application/v6/applications/self",
+      "/open-apis/application/v6/applications/self?lang=en_us",
       { method: "GET" },
     );
     return {
