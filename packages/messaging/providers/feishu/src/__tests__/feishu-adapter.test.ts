@@ -509,7 +509,7 @@ describe("FeishuAdapter", () => {
     await adapter.start(async (event) => {
       events.push(event);
     });
-    await adapter.handleWebhookPayload({
+    await expect(adapter.handleWebhookPayload({
       header: {
         event_id: "evt_card",
         event_type: "card.action.trigger",
@@ -527,6 +527,14 @@ describe("FeishuAdapter", () => {
           value: { handle },
         },
       },
+    })).resolves.toEqual({
+      body: {
+        toast: {
+          content: "PwrAgent received this action.",
+          type: "info",
+        },
+      },
+      status: 200,
     });
     await vi.waitFor(() => {
       expect(events).toHaveLength(1);
@@ -607,7 +615,15 @@ describe("FeishuAdapter", () => {
           value: { handle },
         },
       },
-    })).resolves.toEqual({ status: 200 });
+    })).resolves.toEqual({
+      body: {
+        toast: {
+          content: "PwrAgent received this action.",
+          type: "info",
+        },
+      },
+      status: 200,
+    });
     await vi.waitFor(() => {
       expect(events).toHaveLength(1);
     });

@@ -204,10 +204,31 @@ type FeishuCardActionEvent = {
   token?: string;
 };
 
+type FeishuCardActionResponse = {
+  toast: {
+    content: string;
+    type: "error" | "info" | "success" | "warning";
+  };
+};
+
 type FeishuSignedCallbackChannel = {
   i: string;
   k: "dm" | "channel";
   p?: string;
+};
+
+const FEISHU_CARD_ACTION_ACK: FeishuCardActionResponse = {
+  toast: {
+    content: "PwrAgent received this action.",
+    type: "info",
+  },
+};
+
+const FEISHU_CARD_ACTION_UNAVAILABLE: FeishuCardActionResponse = {
+  toast: {
+    content: "This PwrAgent action is no longer available.",
+    type: "warning",
+  },
 };
 
 export class FeishuAdapter implements FeishuProviderAdapter {
@@ -526,7 +547,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     if (eventType === "im.message.receive_v1") {
       await this.handleMessageEvent(payload);
     } else if (eventType === "card.action.trigger" || isFeishuCardActionEnvelope(payload)) {
-      await this.handleCardActionEvent(payload);
+      return {
+        body: await this.handleCardActionEvent(payload),
+        status: 200,
+      };
     } else if (eventType === "im.chat.access_event.bot_p2p_chat_entered_v1") {
       await this.handleBotP2pChatEnteredEvent(payload);
     } else if (eventType === "im.message.message_read_v1") {
@@ -770,13 +794,15 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     });
   }
 
-  private async handleCardActionEvent(payload: FeishuEventEnvelope): Promise<void> {
+  private async handleCardActionEvent(
+    payload: FeishuEventEnvelope,
+  ): Promise<FeishuCardActionResponse> {
     const event = payload.event as FeishuCardActionEvent | undefined;
     const openId = event?.operator?.open_id;
     const tenantKey = payload.header?.tenant_key ?? event?.tenant_key;
     const messageId = event?.context?.open_message_id;
     const handle = event?.action?.value?.handle;
-    if (typeof handle !== "string") return;
+    if (typeof handle !== "string") return FEISHU_CARD_ACTION_UNAVAILABLE;
     const openIdValidation = validateFeishuOpenId(openId);
     if (!openIdValidation.ok) {
       logFeishuInvalidIdentifier({
@@ -785,7 +811,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: openIdValidation.reason,
         value: openId,
       });
-      return;
+      return FEISHU_CARD_ACTION_UNAVAILABLE;
     }
     if (messageId !== undefined) {
       const messageValidation = validateFeishuMessageId(messageId);
@@ -796,11 +822,11 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           reason: messageValidation.reason,
           value: messageId,
         });
-        return;
+        return FEISHU_CARD_ACTION_UNAVAILABLE;
       }
     }
     const signed = this.parseSignedCallbackValue(handle);
-    if (!signed) return;
+    if (!signed) return FEISHU_CARD_ACTION_UNAVAILABLE;
     const handleValidation = validateFeishuCallbackHandle(signed.handle);
     if (!handleValidation.ok) {
       logFeishuInvalidIdentifier({
@@ -809,7 +835,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         reason: handleValidation.reason,
         value: signed.handle,
       });
-      return;
+      return FEISHU_CARD_ACTION_UNAVAILABLE;
     }
 
     const actorId = openId as string;
@@ -821,7 +847,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         chatId: event?.context?.open_chat_id,
         tenantKey,
       });
-    if (!channelRef) return;
+    if (!channelRef) return FEISHU_CARD_ACTION_UNAVAILABLE;
     const record = await this.callbackHandleStore.resolveCallbackHandle({
       actorId,
       channel: channelRef,
@@ -832,7 +858,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       this.logger.warn?.("feishu callback handle rejected", {
         handleHash: createHash("sha256").update(signed.handle).digest("hex").slice(0, 8),
       });
-      return;
+      return FEISHU_CARD_ACTION_UNAVAILABLE;
     }
 
     this.dispatchInboundCallback({
@@ -850,6 +876,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       receivedAt: this.now(),
       ...(record.surface?.state ? { routingState: record.surface.state } : {}),
     });
+    return FEISHU_CARD_ACTION_ACK;
   }
 
   private dispatchInboundCallback(event: MessagingInboundCallbackEvent): void {
@@ -1265,7 +1292,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         : {}),
     }).register({
       "card.action.trigger": async (data: unknown) => {
-        await this.handleCardActionEvent(feishuCardActionEnvelopeFromPersistentEvent(data));
+        return await this.handleCardActionEvent(
+          feishuCardActionEnvelopeFromPersistentEvent(data),
+        );
       },
       "im.chat.access_event.bot_p2p_chat_entered_v1": async (data: unknown) => {
         await this.handleBotP2pChatEnteredEvent(
@@ -1306,7 +1335,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         && "status" in result
         && typeof result.status === "number"
       ) {
-        response.writeHead(result.status).end();
+        const body = "body" in result ? result.body : undefined;
+        if (body !== undefined) {
+          response.writeHead(result.status, { "content-type": "application/json" });
+          response.end(JSON.stringify(body));
+        } else {
+          response.writeHead(result.status).end();
+        }
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
