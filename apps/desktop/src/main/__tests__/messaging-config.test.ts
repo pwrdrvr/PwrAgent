@@ -9,6 +9,7 @@ import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
+  DISCORD_INTERACTION_MODE_ENV,
   LINE_CALLBACK_BASE_URL_ENV,
   LINE_CHANNEL_ACCESS_TOKEN_ENV,
   LINE_CHANNEL_SECRET_ENV,
@@ -22,6 +23,7 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  MESSAGING_INTERACTION_MODE_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_BOT_TOKEN_ENV,
   SLACK_INBOUND_MODE_ENV,
@@ -63,6 +65,8 @@ describe("desktop messaging config", () => {
       "feishu",
       "fullAccessControls",
       "inputDebounceMs",
+      "interactionModeByChannel",
+      "interactionModeDefault",
       "line",
       "mattermost",
       "slack",
@@ -213,6 +217,8 @@ describe("desktop messaging config", () => {
 
   it("enables configured channels when credentials are present before actor discovery", () => {
     const config = loadDesktopMessagingConfig({
+      [MESSAGING_INTERACTION_MODE_ENV]: "text",
+      [DISCORD_INTERACTION_MODE_ENV]: "buttons",
       [TELEGRAM_BOT_TOKEN_ENV]: " tg-token ",
       [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "user-1, user-2, user-1",
       [DISCORD_BOT_TOKEN_ENV]: "discord-token",
@@ -233,6 +239,14 @@ describe("desktop messaging config", () => {
         authorizedUsers: {},
       },
       inputDebounceMs: 500,
+      interactionModeDefault: "text",
+      interactionModeByChannel: {
+        discord: "buttons",
+        line: "text",
+        mattermost: "text",
+        slack: "text",
+        telegram: "text",
+      },
       toolUpdateDefaultMode: "show_some",
       telegram: {
         channel: "telegram",
@@ -450,6 +464,14 @@ describe("desktop messaging config", () => {
     expect(config).toEqual({
       enabled: true,
       inputDebounceMs: 500,
+      interactionModeDefault: "buttons",
+      interactionModeByChannel: {
+        discord: "buttons",
+        line: "buttons",
+        mattermost: "buttons",
+        slack: "buttons",
+        telegram: "buttons",
+      },
       toolUpdateDefaultMode: "show_some",
       attachmentPolicy: {
         imageProfile: "medium",
@@ -777,6 +799,14 @@ describe("desktop messaging config", () => {
 
     expect(sessionConfig).toMatchObject({
       enabled: true,
+      interactionModeDefault: "buttons",
+      interactionModeByChannel: {
+        discord: "buttons",
+        line: "buttons",
+        mattermost: "buttons",
+        slack: "buttons",
+        telegram: "buttons",
+      },
       telegram: {
         channel: "telegram",
         botToken: "settings-telegram-token",
@@ -856,6 +886,9 @@ describe("desktop messaging config", () => {
         allowThreadResume: true,
         warningPolicy: "dismissable",
       },
+      attachmentPolicy: undefined,
+      interactionModeDefault: "buttons",
+      interactionModeByChannel: undefined,
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -873,6 +906,9 @@ describe("desktop messaging config", () => {
         streamingResponses: false,
         authorizedActorCount: 1,
       },
+      mattermost: undefined,
+      slack: undefined,
+      line: undefined,
     });
   });
 });

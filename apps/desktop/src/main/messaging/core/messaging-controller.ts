@@ -26,6 +26,7 @@ import type {
   LinkedDirectorySummary,
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
+  MessagingInteractionMode,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -61,6 +62,7 @@ import type {
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
+  MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
   MessagingThreadTopicLinkRecord,
@@ -422,6 +424,10 @@ type FullAccessWarningResolution = {
 
 type FullAccessRiskPresentationMode = "surface" | "message";
 
+type MessagingInteractionModeResolver =
+  | MessagingInteractionMode
+  | (() => MessagingInteractionMode | Promise<MessagingInteractionMode>);
+
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
   backend?: AppServerBackendKind;
@@ -491,6 +497,7 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
+  interactionModeDefault?: MessagingInteractionModeResolver;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   fullAccessControls?: MessagingFullAccessControlsResolver;
   deliveryBudget?: MessagingDeliveryBudget;
@@ -9736,8 +9743,17 @@ export class MessagingController {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
+    const interactionMode = await this.resolveInteractionMode();
+    const actionCount = actionsForIntent(routedIntent).filter(
+      (action) => !action.disabled,
+    ).length;
+    if (interactionMode === "text" && actionCount > 0 && (binding || event)) {
+      await this.storePendingIntent(routedIntent, binding, event);
+    }
+    const deliverableIntent =
+      interactionMode === "text" ? toTextModeIntent(routedIntent) : routedIntent;
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
-    let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
+    let scope = this.options.adapter.resolveDeliveryScope?.(deliverableIntent);
     const priority = messagingDeliveryPriority(routedIntent, {
       userInitiated: isUserInitiatedDeliveryEvent(event),
     });
@@ -9821,7 +9837,7 @@ export class MessagingController {
           };
         }
       }
-      const result = await this.options.adapter.deliver(routedIntent);
+      const result = await this.options.adapter.deliver(deliverableIntent);
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
@@ -9990,6 +10006,14 @@ export class MessagingController {
     await this.deliver(intent, binding);
   }
 
+  private async resolveInteractionMode(): Promise<MessagingInteractionMode> {
+    const configured = this.options.interactionModeDefault;
+    if (typeof configured === "function") {
+      return await configured();
+    }
+    return configured ?? "buttons";
+  }
+
   private filterBindingsForChannel(
     bindings: MessagingBindingRecord[],
   ): MessagingBindingRecord[] {
@@ -10067,6 +10091,100 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
+}
+
+function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceIntent {
+  const fallback = formatTextModeActionFallback(actionsForIntent(intent));
+  if (!fallback) {
+    return intent;
+  }
+
+  switch (intent.kind) {
+    case "status":
+      return {
+        ...intent,
+        text: appendTextModeFallback(intent.text, fallback),
+        actions: [],
+      };
+    case "thread_picker":
+      return {
+        ...intent,
+        fallbackText: undefined,
+        page: {
+          ...intent.page,
+          actions: [],
+        },
+        prompt: appendTextModeFallback(intent.prompt, fallback),
+      };
+    case "project_picker":
+      return {
+        ...intent,
+        fallbackText: undefined,
+        page: {
+          ...intent.page,
+          actions: [],
+        },
+        prompt: appendTextModeFallback(intent.prompt, fallback),
+      };
+    case "single_select":
+    case "multi_select":
+      return {
+        ...intent,
+        choices: [],
+        fallbackText: undefined,
+        prompt: appendTextModeFallback(intent.prompt, fallback),
+      };
+    case "questionnaire": {
+      const questions = intent.questions.map((question, index) =>
+        index === intent.currentIndex
+          ? {
+              ...question,
+              options: [],
+              question: appendTextModeFallback(question.question, fallback),
+            }
+          : question,
+      );
+      return {
+        ...intent,
+        questions,
+      };
+    }
+    case "approval":
+      return {
+        ...intent,
+        body: appendTextModeFallback(intent.body, fallback),
+        decisions: [],
+      };
+    case "confirmation":
+      return {
+        ...intent,
+        actions: [],
+        body: appendTextModeFallback(intent.body, fallback),
+      };
+    default:
+      return intent;
+  }
+}
+
+function formatTextModeActionFallback(
+  actions: readonly MessagingSurfaceAction[],
+): string | undefined {
+  const labels = new Set<string>();
+  for (const action of actions) {
+    if (action.disabled) continue;
+    const label = (action.fallbackText ?? action.label).trim();
+    if (label) {
+      labels.add(label);
+    }
+  }
+  if (labels.size === 0) {
+    return undefined;
+  }
+  return `Reply with: ${Array.from(labels).join(", ")}.`;
+}
+
+function appendTextModeFallback(text: string, fallback: string): string {
+  return text.includes(fallback) ? text : [text, fallback].filter(Boolean).join("\n\n");
 }
 
 /**

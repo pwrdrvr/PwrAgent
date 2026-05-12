@@ -9,8 +9,9 @@ import type {
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
-  MessagingToolUpdateMode,
   MessagingChannelKind,
+  MessagingInteractionMode,
+  MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import type {
   MessagingAdapterAuthorizationUpdate,
@@ -25,6 +26,7 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_INTERACTION_MODE_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
   FEISHU_APP_ID_ENV,
   FEISHU_APP_SECRET_ENV,
@@ -49,6 +51,7 @@ import {
   LINE_CHANNEL_ACCESS_TOKEN_ENV,
   LINE_CHANNEL_SECRET_ENV,
   LINE_ENABLED_ENV,
+  LINE_INTERACTION_MODE_ENV,
   LINE_STREAMING_RESPONSES_ENV,
   LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
@@ -58,6 +61,7 @@ import {
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
   MATTERMOST_ENABLED_ENV,
+  MATTERMOST_INTERACTION_MODE_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
@@ -66,12 +70,14 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  MESSAGING_INTERACTION_MODE_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_AUTHORIZED_USER_IDS_ENV,
   SLACK_AUTHORIZED_WORKSPACES_ENV,
   SLACK_BOT_TOKEN_ENV,
   SLACK_ENABLED_ENV,
   SLACK_INBOUND_MODE_ENV,
+  SLACK_INTERACTION_MODE_ENV,
   SLACK_REGISTER_SLASH_COMMANDS_ENV,
   SLACK_SIGNING_SECRET_ENV,
   SLACK_SLASH_COMMAND_PREFIX_ENV,
@@ -81,10 +87,12 @@ import {
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_INTERACTION_MODE_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
   readEnvBoolean,
   readEnvInteger,
   readEnvMessagingImageProfile,
+  readEnvMessagingInteractionMode,
 } from "../settings/desktop-settings-env";
 
 export {
@@ -93,6 +101,7 @@ export {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_INTERACTION_MODE_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
   FEISHU_APP_ID_ENV,
   FEISHU_APP_SECRET_ENV,
@@ -116,6 +125,7 @@ export {
   LINE_CHANNEL_ACCESS_TOKEN_ENV,
   LINE_CHANNEL_SECRET_ENV,
   LINE_ENABLED_ENV,
+  LINE_INTERACTION_MODE_ENV,
   LINE_STREAMING_RESPONSES_ENV,
   LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
@@ -125,6 +135,7 @@ export {
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
   MATTERMOST_ENABLED_ENV,
+  MATTERMOST_INTERACTION_MODE_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
@@ -133,12 +144,14 @@ export {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  MESSAGING_INTERACTION_MODE_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_AUTHORIZED_USER_IDS_ENV,
   SLACK_AUTHORIZED_WORKSPACES_ENV,
   SLACK_BOT_TOKEN_ENV,
   SLACK_ENABLED_ENV,
   SLACK_INBOUND_MODE_ENV,
+  SLACK_INTERACTION_MODE_ENV,
   SLACK_REGISTER_SLASH_COMMANDS_ENV,
   SLACK_SIGNING_SECRET_ENV,
   SLACK_SLASH_COMMAND_PREFIX_ENV,
@@ -148,6 +161,7 @@ export {
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_INTERACTION_MODE_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
 };
 
@@ -163,6 +177,8 @@ export type DesktopMessagingConfig = {
   feishu?: FeishuMessagingConfig;
   fullAccessControls?: DesktopMessagingFullAccessControls;
   inputDebounceMs?: number;
+  interactionModeByChannel?: Partial<Record<MessagingChannelKind, MessagingInteractionMode>>;
+  interactionModeDefault?: MessagingInteractionMode;
   line?: LineMessagingConfig;
   mattermost?: MattermostMessagingConfig;
   slack?: SlackMessagingConfig;
@@ -198,6 +214,8 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   feishu: "connection",
   fullAccessControls: "irrelevant",
   inputDebounceMs: "connection",
+  interactionModeByChannel: "irrelevant",
+  interactionModeDefault: "irrelevant",
   line: "connection",
   mattermost: "connection",
   slack: "connection",
@@ -523,6 +541,13 @@ export function loadDesktopMessagingConfig(
   const lineAuthorizedGroupIds = parseContactList(env[LINE_AUTHORIZED_GROUPS_ENV]);
   const lineAuthorizedRoomIds = parseContactList(env[LINE_AUTHORIZED_ROOMS_ENV]);
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
+  const interactionModeDefault =
+    readEnvMessagingInteractionMode(env, MESSAGING_INTERACTION_MODE_ENV).value
+    ?? "buttons";
+  const interactionModeByChannel = readInteractionModeByChannelFromEnv(
+    env,
+    interactionModeDefault,
+  );
 
   return {
     enabled: true,
@@ -533,6 +558,8 @@ export function loadDesktopMessagingConfig(
       authorizedUsers: {},
     },
     inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
+    interactionModeDefault,
+    interactionModeByChannel,
     toolUpdateDefaultMode: "show_some",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
     ...(telegramBotToken
@@ -1088,6 +1115,14 @@ export async function loadDesktopMessagingConfigFromSettings(
         await canPersistMessagingFullAccessWarningDismissal(settings, channel, actorId),
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
+    interactionModeDefault: snapshot.messaging.interactionMode.value,
+    interactionModeByChannel: {
+      discord: snapshot.messaging.discord.interactionMode.value,
+      line: snapshot.messaging.line.interactionMode.value,
+      mattermost: snapshot.messaging.mattermost.interactionMode.value,
+      slack: snapshot.messaging.slack.interactionMode.value,
+      telegram: snapshot.messaging.telegram.interactionMode.value,
+    },
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
     ...telegramConfig,
@@ -1176,6 +1211,8 @@ export function redactDesktopMessagingConfig(
           warningPolicy: config.fullAccessControls.warningPolicy,
         }
       : undefined,
+    interactionModeDefault: config.interactionModeDefault ?? "buttons",
+    interactionModeByChannel: config.interactionModeByChannel,
     toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
     inputDebounceMs: config.inputDebounceMs ?? 500,
     discord: config.discord
@@ -1370,6 +1407,29 @@ function contactsForFullAccessWarningChannel(
 function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {
   const value = readEnvInteger(env, MESSAGING_INPUT_DEBOUNCE_MS_ENV).value;
   return value === undefined ? undefined : Math.min(value, 5_000);
+}
+
+function readInteractionModeByChannelFromEnv(
+  env: NodeJS.ProcessEnv,
+  defaultMode: MessagingInteractionMode,
+): Partial<Record<MessagingChannelKind, MessagingInteractionMode>> {
+  return {
+    discord:
+      readEnvMessagingInteractionMode(env, DISCORD_INTERACTION_MODE_ENV).value
+      ?? defaultMode,
+    line:
+      readEnvMessagingInteractionMode(env, LINE_INTERACTION_MODE_ENV).value
+      ?? defaultMode,
+    mattermost:
+      readEnvMessagingInteractionMode(env, MATTERMOST_INTERACTION_MODE_ENV).value
+      ?? defaultMode,
+    slack:
+      readEnvMessagingInteractionMode(env, SLACK_INTERACTION_MODE_ENV).value
+      ?? defaultMode,
+    telegram:
+      readEnvMessagingInteractionMode(env, TELEGRAM_INTERACTION_MODE_ENV).value
+      ?? defaultMode,
+  };
 }
 
 function authorizationUpdateForChannelConfig(
