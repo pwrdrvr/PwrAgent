@@ -110,8 +110,8 @@ function createSnapshot(
         verificationToken: { configured: false, source: "unset", writable: true },
         inboundMode: { value: "persistent", source: "default" },
         tenantRegion: { value: "feishu", source: "default" },
-        tenantUrl: { value: "https://open.feishu.cn", source: "default" },
-        callbackBaseUrl: { value: "http://127.0.0.1:47823", source: "default" },
+        tenantUrl: { value: "", source: "default" },
+        callbackBaseUrl: { value: "", source: "default" },
         slashCommandPrefix: { value: "pwragent_", source: "default" },
         registerSlashCommands: { value: false, source: "default" },
         authorizedUserIds: { value: [], source: "default" },
@@ -667,6 +667,47 @@ describe("SettingsScreen", () => {
     );
     expect(screen.getByText(/forwards LINE webhooks/)).toBeInTheDocument();
     expect(screen.queryByText("https://line-callback.example.com/")).not.toBeInTheDocument();
+  });
+
+  it("treats Feishu tenant and webhook URLs as optional overrides", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getAllByText(/Required before going online/)).toHaveLength(2);
+    expect(screen.getByText(/go online in Lark Developer/)).toBeInTheDocument();
+    expect(screen.getByText(/Feishu is China only/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Tenant URL")).toHaveValue("");
+    expect(screen.getByText(/Leave blank to use/)).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Local Webhook Listener")).toHaveLength(1);
+    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
+      "placeholder",
+      "http://127.0.0.1:47822",
+    );
+  });
+
+  it("shows the Feishu local webhook listener only for webhook mode", () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.feishu.inboundMode = { value: "webhook", source: "config" };
+
+    render(
+      <SettingsScreen
+        settings={createSettingsState(snapshot)}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const feishuLocalWebhook = screen
+      .getAllByLabelText("Local Webhook Listener")
+      .find((input) => !input.hasAttribute("placeholder"));
+    expect(feishuLocalWebhook).toHaveValue("");
+    expect(screen.getByText(/Default:/)).toHaveTextContent("http://127.0.0.1:47823");
+    expect(screen.getByText(/Only used when Webhook is selected/)).toBeInTheDocument();
   });
 
   it("looks up blank messaging display names from the settings screen", async () => {

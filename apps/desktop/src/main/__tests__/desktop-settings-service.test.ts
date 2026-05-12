@@ -851,6 +851,8 @@ describe("DesktopSettingsService", () => {
       [
         "[messaging.feishu]",
         'tenant_region = "lark"',
+        'tenant_url = "https://open.larksuite.com"',
+        'callback_base_url = "http://127.0.0.1:47823"',
       ].join("\n"),
       "utf8",
     );
@@ -871,7 +873,11 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(snapshot.messaging.feishu.tenantUrl).toEqual({
-      value: "https://open.larksuite.com",
+      value: "",
+      source: "default",
+    });
+    expect(snapshot.messaging.feishu.callbackBaseUrl).toEqual({
+      value: "",
       source: "default",
     });
     expect(service.resolveFeishuTenantUrlSync()).toBe("https://open.larksuite.com");

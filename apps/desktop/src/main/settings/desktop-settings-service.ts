@@ -128,6 +128,7 @@ const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
 const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
 const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
+const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
 const settingsLog = getMainLogger("pwragent:settings");
 
 function clampInteger(value: number, maxValue: number): number {
@@ -458,9 +459,8 @@ export class DesktopSettingsService {
             config.messaging?.feishu?.tenantUrl,
             feishuTenantRegion.value,
           ),
-          callbackBaseUrl: this.resolveStringWithDefault(
+          callbackBaseUrl: this.resolveFeishuCallbackBaseUrl(
             config.messaging?.feishu?.callbackBaseUrl,
-            "http://127.0.0.1:47823",
             FEISHU_CALLBACK_BASE_URL_ENV,
           ),
           slashCommandPrefix: this.resolveStringWithDefault(
@@ -653,12 +653,16 @@ export class DesktopSettingsService {
 
   resolveFeishuTenantUrlSync(): string | undefined {
     const config = this.readConfig().config.messaging?.feishu;
+    const tenantRegion = this.resolveFeishuTenantRegion(config?.tenantRegion).value;
+    const configTenantUrl =
+      config?.tenantUrl === FEISHU_DEFAULT_TENANT_URL ||
+        config?.tenantUrl === LARK_DEFAULT_TENANT_URL
+        ? undefined
+        : config?.tenantUrl;
     return (
       readEnvString(this.env, FEISHU_TENANT_URL_ENV)
-      ?? config?.tenantUrl
-      ?? feishuTenantUrlForRegion(
-        this.resolveFeishuTenantRegion(config?.tenantRegion).value,
-      )
+      ?? configTenantUrl
+      ?? feishuTenantUrlForRegion(tenantRegion)
     );
   }
 
@@ -972,9 +976,44 @@ export class DesktopSettingsService {
         overriddenByEnv: configValue !== undefined,
       };
     }
+    if (
+      configValue === FEISHU_DEFAULT_TENANT_URL ||
+      configValue === LARK_DEFAULT_TENANT_URL ||
+      configValue === feishuTenantUrlForRegion(tenantRegion)
+    ) {
+      return {
+        value: "",
+        source: "default",
+      };
+    }
 
     return {
-      value: configValue ?? feishuTenantUrlForRegion(tenantRegion),
+      value: configValue ?? "",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveFeishuCallbackBaseUrl(
+    configValue: string | undefined,
+    envKey: string,
+  ): DesktopSettingsValue<string> {
+    const envValue = readEnvString(this.env, envKey);
+    if (envValue !== undefined) {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+    if (configValue === FEISHU_DEFAULT_CALLBACK_BASE_URL) {
+      return {
+        value: "",
+        source: "default",
+      };
+    }
+
+    return {
+      value: configValue ?? "",
       source: configValue === undefined ? "default" : "config",
     };
   }

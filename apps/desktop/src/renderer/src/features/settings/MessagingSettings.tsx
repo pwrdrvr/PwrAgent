@@ -864,7 +864,7 @@ export function MessagingSettings(props: {
           <SecretField
             disabled={props.saving || !feishu.appId.writable}
             label="App ID"
-            sub="Stored in the system keychain. Feishu / Lark app credential."
+            sub="Stored in the system keychain. Required before going online in Lark Developer to verify and enable persistent events and callbacks."
             secret="feishuAppId"
             state={feishu.appId}
             onClearSecret={props.onClearSecret}
@@ -873,7 +873,7 @@ export function MessagingSettings(props: {
           <SecretField
             disabled={props.saving || !feishu.appSecret.writable}
             label="App Secret"
-            sub="Stored in the system keychain. Used to mint tenant access tokens."
+            sub="Stored in the system keychain. Required before going online in Lark Developer to verify and enable persistent events and callbacks."
             secret="feishuAppSecret"
             state={feishu.appSecret}
             onClearSecret={props.onClearSecret}
@@ -902,7 +902,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Event subscription"
-            sub="Persistent connection is the default. Configure both Lark Event Configuration for message events and Callback Configuration for card actions."
+            sub="Persistent connection is the default. After App ID and App Secret are configured, go online in Lark Developer to verify and enable Event Configuration and Callback Configuration."
             options={FEISHU_INBOUND_MODE_OPTIONS}
             source={sourceBadge(feishu.inboundMode)}
             value={feishu.inboundMode.value}
@@ -916,7 +916,7 @@ export function MessagingSettings(props: {
           <SegmentedField
             disabled={props.saving}
             label="Tenant region"
-            sub="Feishu uses the China endpoint; Lark uses the global endpoint."
+            sub="Feishu is China only. Lark is for the rest of the world."
             options={FEISHU_TENANT_REGION_OPTIONS}
             source={sourceBadge(feishu.tenantRegion)}
             value={feishu.tenantRegion.value}
@@ -924,24 +924,17 @@ export function MessagingSettings(props: {
               void props.onSaveFeishu({
                 ...feishu,
                 tenantRegion: { ...feishu.tenantRegion, value: tenantRegion },
-                tenantUrl: {
-                  ...feishu.tenantUrl,
-                  value:
-                    tenantRegion === "lark"
-                      ? "https://open.larksuite.com"
-                      : "https://open.feishu.cn",
-                },
               });
             }}
           />
           <TextField
             disabled={props.saving}
             label="Tenant URL"
-            sub="Open Platform endpoint used for this workspace."
+            sub="Optional Open Platform endpoint override."
             help={
               <>
-                <code>https://open.feishu.cn</code> or{" "}
-                <code>https://open.larksuite.com</code>
+                Leave blank to use <code>https://open.feishu.cn</code> for
+                Feishu or <code>https://open.larksuite.com</code> for Lark.
               </>
             }
             source={optionalStringSourceBadge(feishu.tenantUrl)}
@@ -953,23 +946,25 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          <TextField
-            disabled={props.saving || feishu.inboundMode.value !== "webhook"}
-            label="Local Webhook Listener"
-            sub="Webhook fallback only. Persistent connection avoids public tunnels and the scanner traffic they attract."
-            help={<code>http://127.0.0.1:47823</code>}
-            source={optionalStringSourceBadge(feishu.callbackBaseUrl)}
-            value={feishu.callbackBaseUrl.value}
-            onSave={(callbackBaseUrl) => {
-              void props.onSaveFeishu({
-                ...feishu,
-                callbackBaseUrl: {
-                  ...feishu.callbackBaseUrl,
-                  value: callbackBaseUrl,
-                },
-              });
-            }}
-          />
+          {feishu.inboundMode.value === "webhook" ? (
+            <TextField
+              disabled={props.saving}
+              label="Local Webhook Listener"
+              sub="Only used when Webhook is selected for Event subscription."
+              help={<>Default: <code>http://127.0.0.1:47823</code></>}
+              source={optionalStringSourceBadge(feishu.callbackBaseUrl)}
+              value={feishu.callbackBaseUrl.value}
+              onSave={(callbackBaseUrl) => {
+                void props.onSaveFeishu({
+                  ...feishu,
+                  callbackBaseUrl: {
+                    ...feishu.callbackBaseUrl,
+                    value: callbackBaseUrl,
+                  },
+                });
+              }}
+            />
+          ) : null}
           <SecretField
             disabled={props.saving || !feishu.verificationToken.writable}
             label="Verification Token"
