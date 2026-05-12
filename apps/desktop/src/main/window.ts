@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, clipboard, Menu, shell } from "electron";
 import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
@@ -76,6 +76,27 @@ export function applyWindowSecurityHardening(window: BrowserWindow): void {
     }
     event.preventDefault();
     log.warn("blocked renderer navigation", { targetUrl });
+  });
+
+  window.webContents.on("context-menu", (_event, params) => {
+    if (!params.linkURL) {
+      return;
+    }
+
+    const menu = Menu.buildFromTemplate([
+      {
+        label: "Copy Link",
+        click: () => {
+          clipboard.writeText(params.linkURL);
+        },
+      },
+    ]);
+
+    menu.popup({
+      window,
+      x: params.x,
+      y: params.y,
+    });
   });
 }
 

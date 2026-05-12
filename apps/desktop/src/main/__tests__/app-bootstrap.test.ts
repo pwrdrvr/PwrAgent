@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 
 const browserWindowState: {
   options?: BrowserWindowConstructorOptions;
@@ -27,6 +27,12 @@ const rendererMonitorStopMock = vi.fn();
 const mainMonitorStartMock = vi.fn();
 const mainMonitorStopMock = vi.fn();
 const shellOpenExternalMock = vi.fn();
+const clipboardWriteTextMock = vi.fn();
+const menuPopupMock = vi.fn();
+const buildFromTemplateMock = vi.fn((template: MenuItemConstructorOptions[]) => ({
+  popup: menuPopupMock,
+  template,
+}));
 const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(this: unknown) {
   return {
     start: rendererMonitorStartMock,
@@ -39,6 +45,15 @@ const MainProcessHeapMonitorMock = vi.fn(function MainProcessHeapMonitor(this: u
     stop: mainMonitorStopMock,
   };
 });
+const electronLogHooksMock: unknown[] = [];
+const electronLogScopeMock = Object.assign(
+  vi.fn(() => ({
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  })),
+  { labelPadding: true },
+);
 
 function emitWindowEvent(event: string, ...args: unknown[]) {
   for (const handler of windowEventHandlers.get(event) ?? []) {
@@ -133,9 +148,23 @@ vi.mock("electron", () => ({
     getAppPath: vi.fn(() => "/repo/apps/desktop"),
     getVersion: vi.fn(() => "0.1.0")
   },
+  clipboard: {
+    writeText: clipboardWriteTextMock
+  },
+  Menu: {
+    buildFromTemplate: buildFromTemplateMock
+  },
   shell: {
     openExternal: shellOpenExternalMock
   }
+}));
+
+vi.mock("electron-log/main.js", () => ({
+  default: {
+    hooks: electronLogHooksMock,
+    initialize: vi.fn(),
+    scope: electronLogScopeMock,
+  },
 }));
 
 vi.mock("../diagnostics/heap-monitor-config", () => ({
@@ -166,6 +195,9 @@ describe("createMainWindow", () => {
     mainMonitorStartMock.mockReset();
     mainMonitorStopMock.mockReset();
     shellOpenExternalMock.mockReset();
+    clipboardWriteTextMock.mockReset();
+    menuPopupMock.mockReset();
+    buildFromTemplateMock.mockClear();
     RendererHeapMonitorMock.mockClear();
     MainProcessHeapMonitorMock.mockClear();
     windowEventHandlers.clear();
@@ -278,6 +310,42 @@ describe("createMainWindow", () => {
     });
 
     expect(shellOpenExternalMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a native copy action when a renderer link is right-clicked", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    emitWebContentsEvent(
+      "context-menu",
+      {},
+      {
+        linkURL: "file:///Users/huntharo/project/AGENTS.md:12",
+        x: 40,
+        y: 64,
+      }
+    );
+
+    expect(buildFromTemplateMock).toHaveBeenCalledWith([
+      expect.objectContaining({
+        label: "Copy Link",
+        click: expect.any(Function),
+      }),
+    ]);
+    expect(menuPopupMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        x: 40,
+        y: 64,
+      })
+    );
+
+    const copyMenuItem = buildFromTemplateMock.mock.calls[0]?.[0]?.[0];
+    const click = copyMenuItem?.click as (() => void) | undefined;
+    click?.();
+
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith(
+      "file:///Users/huntharo/project/AGENTS.md:12"
+    );
   });
 
   it("falls back to the built renderer index in packaged mode", async () => {
