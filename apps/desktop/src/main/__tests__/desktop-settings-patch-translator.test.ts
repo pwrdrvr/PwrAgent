@@ -143,6 +143,7 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
       messaging: {
         mattermost: {
           enabled: true,
+          interactionMode: "text",
           streamingResponses: false,
           serverUrl: "https://chat.example.com",
           callbackBaseUrl: "https://callbacks.example.com",
@@ -167,6 +168,11 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
         op: "set",
         path: ["messaging", "mattermost", "enabled"],
         value: true,
+      },
+      {
+        op: "set",
+        path: ["messaging", "mattermost", "interaction_mode"],
+        value: "text",
       },
       {
         op: "set",

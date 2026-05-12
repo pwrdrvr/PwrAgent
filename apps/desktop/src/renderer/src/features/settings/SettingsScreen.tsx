@@ -90,6 +90,7 @@ export function SettingsScreen(props: {
   settings: DesktopSettingsState;
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
+  initialSectionRequestId?: number;
   onClose?: () => void;
   /** Fired when a platform chip in the title-bar strip is clicked.
    *  The App-level handler closes the Settings overlay and opens the
@@ -103,7 +104,7 @@ export function SettingsScreen(props: {
   // a future deep-link), follow it.
   useEffect(() => {
     if (props.initialSection) setSection(props.initialSection);
-  }, [props.initialSection]);
+  }, [props.initialSection, props.initialSectionRequestId]);
   const snapshot = props.settings.snapshot;
   const activeSectionLabel =
     SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
@@ -318,6 +319,13 @@ function SettingsSectionBody(props: {
         onPairingSettingsChanged={props.settings.refresh}
         onClearSecret={props.settings.clearSecret}
         onReplaceSecret={props.settings.replaceSecret}
+        onInteractionModeChange={async (interactionMode) => {
+          await props.settings.writeConfig({
+            messaging: {
+              interactionMode,
+            },
+          });
+        }}
         onToolUpdateModeChange={async (toolUpdateMode) => {
           await props.settings.writeConfig({
             messaging: {

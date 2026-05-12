@@ -1,6 +1,7 @@
 import type {
   DesktopMessagingImageProfile,
   DesktopWorktreeStorageLocation,
+  MessagingInteractionMode,
 } from "@pwragent/shared";
 import { isDesktopWorktreeStorageLocation } from "@pwragent/shared";
 
@@ -117,6 +118,18 @@ export const MESSAGING_ATTACHMENT_MAX_COUNT_ENV =
   "PWRAGENT_MESSAGING_ATTACHMENT_MAX_COUNT";
 export const MESSAGING_INPUT_DEBOUNCE_MS_ENV =
   "PWRAGENT_MESSAGING_INPUT_DEBOUNCE_MS";
+export const MESSAGING_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_INTERACTION_MODE";
+export const TELEGRAM_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_TELEGRAM_INTERACTION_MODE";
+export const DISCORD_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_DISCORD_INTERACTION_MODE";
+export const MATTERMOST_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_MATTERMOST_INTERACTION_MODE";
+export const SLACK_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_SLACK_INTERACTION_MODE";
+export const LINE_INTERACTION_MODE_ENV =
+  "PWRAGENT_MESSAGING_LINE_INTERACTION_MODE";
 export const CODEX_COMMAND_ENV = "PWRAGENT_CODEX_COMMAND";
 export const GH_COMMAND_ENV = "PWRAGENT_GH_COMMAND";
 export const WORKTREE_STORAGE_ENV = "PWRAGENT_WORKTREE_STORAGE";
@@ -214,6 +227,20 @@ export function readEnvWorktreeStorage(
     };
   }
   return { value };
+}
+
+export function readEnvMessagingInteractionMode(
+  env: NodeJS.ProcessEnv,
+  key: string,
+): ParsedEnvValue<MessagingInteractionMode> {
+  const value = readEnvString(env, key);
+  if (!value) {
+    return {};
+  }
+  if (value === "buttons" || value === "text") {
+    return { value };
+  }
+  return { error: `Invalid messaging interaction mode for ${key}` };
 }
 
 function isDesktopMessagingImageProfile(

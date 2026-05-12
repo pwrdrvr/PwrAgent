@@ -38,6 +38,7 @@ describe("DesktopSettingsService", () => {
         "allow_full_access_escalation = false",
         'full_access_warning = "always"',
         "input_debounce_ms = 750",
+        'interaction_mode = "text"',
         'tool_update_mode = "show_more"',
         "",
         "[image_uploads]",
@@ -51,6 +52,7 @@ describe("DesktopSettingsService", () => {
         "",
         "[messaging.telegram]",
         "enabled = true",
+        'interaction_mode = "buttons"',
         "streaming_responses = true",
         'authorized_user_ids = ["111111111", "222222222"]',
         "authorized_supergroups = []",
@@ -98,6 +100,10 @@ describe("DesktopSettingsService", () => {
       value: "show_more",
       source: "config",
     });
+    expect(snapshot.messaging.interactionMode).toEqual({
+      value: "text",
+      source: "config",
+    });
     expect(snapshot.messaging.inputDebounceMs).toEqual({
       value: 750,
       source: "config",
@@ -130,6 +136,10 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(snapshot.messaging.telegram.interactionMode).toEqual({
+      value: "buttons",
+      source: "config",
+    });
     expect(snapshot.messaging.telegram.streamingResponses).toEqual({
       value: true,
       source: "config",
@@ -145,6 +155,10 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.discord.streamingResponses).toEqual({
       value: true,
       source: "config",
+    });
+    expect(snapshot.messaging.discord.interactionMode).toEqual({
+      value: "text",
+      source: "default",
     });
     expect(snapshot.messaging.discord.authorizedGuilds.value).toEqual([
       { id: "guild-one", displayName: "" },
@@ -880,6 +894,8 @@ describe("DesktopSettingsService", () => {
       env: {
         PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
         PWRAGENT_MESSAGING_INPUT_DEBOUNCE_MS: "250",
+        PWRAGENT_MESSAGING_INTERACTION_MODE: "text",
+        PWRAGENT_MESSAGING_TELEGRAM_INTERACTION_MODE: "buttons",
         PWRAGENT_MESSAGING_TELEGRAM_ENABLED: "true",
         PWRAGENT_MESSAGING_TELEGRAM_STREAMING_RESPONSES: "true",
         PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
@@ -903,6 +919,16 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.inputDebounceMs).toMatchObject({
       value: 250,
+      source: "env",
+      overriddenByEnv: false,
+    });
+    expect(snapshot.messaging.interactionMode).toMatchObject({
+      value: "text",
+      source: "env",
+      overriddenByEnv: false,
+    });
+    expect(snapshot.messaging.telegram.interactionMode).toMatchObject({
+      value: "buttons",
       source: "env",
       overriddenByEnv: false,
     });
@@ -951,9 +977,11 @@ describe("DesktopSettingsService", () => {
     await service.writeConfigPatch({
       messaging: {
         inputDebounceMs: 1250,
+        interactionMode: "text",
         toolUpdateMode: "show_less",
         telegram: {
           enabled: true,
+          interactionMode: "text",
           streamingResponses: true,
           authorizedUserIds: [{ id: "111111111", displayName: "Harold" }],
           authorizedSupergroups: [],
@@ -981,6 +1009,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("[messaging.telegram]");
     expect(contents).toContain("[messaging]");
     expect(contents).toContain("input_debounce_ms = 1250");
+    expect(contents).toContain('interaction_mode = "text"');
     expect(contents).toContain('tool_update_mode = "show_less"');
     expect(contents).toContain("streaming_responses = true");
     expect(contents).not.toContain("authorized_user_ids =");
@@ -1097,6 +1126,7 @@ describe("DesktopSettingsService", () => {
       messaging: {
         mattermost: {
           enabled: true,
+          interactionMode: "text",
           streamingResponses: true,
           serverUrl: "https://chat.example.com",
           callbackBaseUrl: "https://tunnel.example.com/mm",
@@ -1121,6 +1151,7 @@ describe("DesktopSettingsService", () => {
 
     const contents = fs.readFileSync(configPath, "utf8");
     expect(contents).toContain("[messaging.mattermost]");
+    expect(contents).toContain('interaction_mode = "text"');
     expect(contents).toContain('server_url = "https://chat.example.com"');
     expect(contents).toContain("register_slash_commands = true");
     expect(contents).not.toContain("callback_port");
@@ -1140,6 +1171,10 @@ describe("DesktopSettingsService", () => {
     const snapshot = await service.readSettings();
     expect(snapshot.messaging.mattermost.enabled).toMatchObject({
       value: true,
+      source: "config",
+    });
+    expect(snapshot.messaging.mattermost.interactionMode).toMatchObject({
+      value: "text",
       source: "config",
     });
     expect(snapshot.messaging.mattermost.streamingResponses).toMatchObject({

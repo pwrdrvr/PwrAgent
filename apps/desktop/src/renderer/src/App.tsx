@@ -118,6 +118,8 @@ function DesktopAppShell(props: {
   const [threadViewReady, setThreadViewReady] = useState(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
+  const [settingsInitialSectionRequestId, setSettingsInitialSectionRequestId] =
+    useState(0);
   const desktopApi = props.desktopApi;
   // Spawning / focusing the Messaging Activity window is fire-and-forget
   // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
@@ -125,6 +127,13 @@ function DesktopAppShell(props: {
   // OS window with its own lifecycle.
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
+  }, [desktopApi]);
+  useEffect(() => {
+    return desktopApi?.onOpenSettingsRequest?.((request) => {
+      setSettingsInitialSection(request.section);
+      setSettingsInitialSectionRequestId((id) => id + 1);
+      setMainView("settings");
+    });
   }, [desktopApi]);
   const settings = props.settings;
   const profiles = usePwrAgentProfiles(desktopApi);
@@ -418,6 +427,7 @@ function DesktopAppShell(props: {
             appearanceController={props.appearanceController}
             desktopApi={desktopApi}
             initialSection={settingsInitialSection}
+            initialSectionRequestId={settingsInitialSectionRequestId}
             profiles={profiles}
             settings={settings}
             onClose={() => setMainView("thread")}

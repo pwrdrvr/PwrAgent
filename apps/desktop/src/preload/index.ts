@@ -118,6 +118,7 @@ import type {
   CreateDesktopCodexAuthProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
+  DesktopSettingsOpenRequest,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -248,6 +249,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_OPEN_REQUEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -391,6 +393,18 @@ const desktopApi = Object.freeze({
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_READ_CHANNEL, request),
+  onOpenSettingsRequest: (
+    callback: (request: DesktopSettingsOpenRequest) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: DesktopSettingsOpenRequest,
+    ) => callback(payload);
+    ipcRenderer.on(SETTINGS_OPEN_REQUEST_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(SETTINGS_OPEN_REQUEST_CHANNEL, listener);
+    };
+  },
   writeSettingsConfig: async (
     request: WriteDesktopSettingsConfigRequest,
   ): Promise<DesktopSettingsWriteResponse> =>

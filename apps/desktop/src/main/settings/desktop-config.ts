@@ -13,6 +13,7 @@ import type {
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
+  MessagingInteractionMode,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
@@ -85,6 +86,7 @@ export type DesktopSettingsConfig = {
     allowFullAccessThreadResume?: boolean;
     fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
+    interactionMode?: MessagingInteractionMode;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
@@ -93,12 +95,14 @@ export type DesktopSettingsConfig = {
     };
     telegram?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
       authorizedSupergroups?: AuthorizedContactConfig[];
     };
     discord?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: AuthorizedContactConfig[];
@@ -106,6 +110,7 @@ export type DesktopSettingsConfig = {
     };
     mattermost?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       serverUrl?: string;
       callbackBaseUrl?: string;
@@ -117,6 +122,7 @@ export type DesktopSettingsConfig = {
     };
     slack?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
@@ -140,6 +146,7 @@ export type DesktopSettingsConfig = {
     };
     line?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       webhookUrl?: string;
       callbackBaseUrl?: string;
@@ -421,6 +428,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.messaging?.fullAccessWarning !== undefined) {
     set(["messaging", "full_access_warning"], patch.messaging.fullAccessWarning);
   }
+  if (patch.messaging?.interactionMode !== undefined) {
+    set(["messaging", "interaction_mode"], patch.messaging.interactionMode);
+  }
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
   }
@@ -447,6 +457,9 @@ export function desktopSettingsPatchToEdits(
   if (telegram?.enabled !== undefined) {
     set(["messaging", "telegram", "enabled"], telegram.enabled);
   }
+  if (telegram?.interactionMode !== undefined) {
+    set(["messaging", "telegram", "interaction_mode"], telegram.interactionMode);
+  }
   if (telegram?.streamingResponses !== undefined) {
     set(["messaging", "telegram", "streaming_responses"], telegram.streamingResponses);
   }
@@ -471,6 +484,9 @@ export function desktopSettingsPatchToEdits(
   const discord = patch.messaging?.discord;
   if (discord?.enabled !== undefined) {
     set(["messaging", "discord", "enabled"], discord.enabled);
+  }
+  if (discord?.interactionMode !== undefined) {
+    set(["messaging", "discord", "interaction_mode"], discord.interactionMode);
   }
   if (discord?.streamingResponses !== undefined) {
     set(["messaging", "discord", "streaming_responses"], discord.streamingResponses);
@@ -499,6 +515,12 @@ export function desktopSettingsPatchToEdits(
   const mattermost = patch.messaging?.mattermost;
   if (mattermost?.enabled !== undefined) {
     set(["messaging", "mattermost", "enabled"], mattermost.enabled);
+  }
+  if (mattermost?.interactionMode !== undefined) {
+    set(
+      ["messaging", "mattermost", "interaction_mode"],
+      mattermost.interactionMode,
+    );
   }
   if (mattermost?.streamingResponses !== undefined) {
     set(
@@ -558,6 +580,9 @@ export function desktopSettingsPatchToEdits(
   const slack = patch.messaging?.slack;
   if (slack?.enabled !== undefined) {
     set(["messaging", "slack", "enabled"], slack.enabled);
+  }
+  if (slack?.interactionMode !== undefined) {
+    set(["messaging", "slack", "interaction_mode"], slack.interactionMode);
   }
   if (slack?.streamingResponses !== undefined) {
     set(["messaging", "slack", "streaming_responses"], slack.streamingResponses);
@@ -652,6 +677,9 @@ export function desktopSettingsPatchToEdits(
   const line = patch.messaging?.line;
   if (line?.enabled !== undefined) {
     set(["messaging", "line", "enabled"], line.enabled);
+  }
+  if (line?.interactionMode !== undefined) {
+    set(["messaging", "line", "interaction_mode"], line.interactionMode);
   }
   if (line?.streamingResponses !== undefined) {
     set(["messaging", "line", "streaming_responses"], line.streamingResponses);
@@ -790,6 +818,7 @@ function normalizeDesktopConfig(
         messaging?.full_access_warning,
       ),
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
+      interactionMode: readInteractionMode(messaging?.interaction_mode),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
@@ -798,6 +827,7 @@ function normalizeDesktopConfig(
       },
       telegram: {
         enabled: readBoolean(telegram?.enabled),
+        interactionMode: readInteractionMode(telegram?.interaction_mode),
         streamingResponses: readBoolean(telegram?.streaming_responses),
         authorizedUserIds: readAuthorizedContacts(
           telegram?.authorized_users,
@@ -811,6 +841,7 @@ function normalizeDesktopConfig(
       },
       discord: {
         enabled: readBoolean(discord?.enabled),
+        interactionMode: readInteractionMode(discord?.interaction_mode),
         streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readAuthorizedContacts(
@@ -825,6 +856,7 @@ function normalizeDesktopConfig(
       },
       mattermost: {
         enabled: readBoolean(mattermost?.enabled),
+        interactionMode: readInteractionMode(mattermost?.interaction_mode),
         streamingResponses: readBoolean(mattermost?.streaming_responses),
         serverUrl: readString(mattermost?.server_url),
         callbackBaseUrl: readString(mattermost?.callback_base_url),
@@ -850,6 +882,7 @@ function normalizeDesktopConfig(
       },
       slack: {
         enabled: readBoolean(slack?.enabled),
+        interactionMode: readInteractionMode(slack?.interaction_mode),
         streamingResponses: readBoolean(slack?.streaming_responses),
         workspaceUrl: readString(slack?.workspace_url),
         inboundMode: readSlackInboundMode(slack?.inbound_mode),
@@ -890,6 +923,7 @@ function normalizeDesktopConfig(
       },
       line: {
         enabled: readBoolean(line?.enabled),
+        interactionMode: readInteractionMode(line?.interaction_mode),
         streamingResponses: readBoolean(line?.streaming_responses),
         webhookUrl: readString(line?.webhook_url),
         callbackBaseUrl: readString(line?.callback_base_url),
@@ -983,6 +1017,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const allowFullAccessEscalation = config.messaging?.allowFullAccessEscalation;
   const allowFullAccessThreadResume = config.messaging?.allowFullAccessThreadResume;
   const fullAccessWarning = config.messaging?.fullAccessWarning;
+  const interactionMode = config.messaging?.interactionMode;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
     enabled !== undefined ||
@@ -990,6 +1025,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     allowFullAccessThreadResume !== undefined ||
     fullAccessWarning !== undefined ||
     inputDebounceMs !== undefined ||
+    interactionMode !== undefined ||
     toolUpdateMode !== undefined ||
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
@@ -1014,6 +1050,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (inputDebounceMs !== undefined) {
       pruned.messaging.inputDebounceMs = inputDebounceMs;
+    }
+    if (interactionMode !== undefined) {
+      pruned.messaging.interactionMode = interactionMode;
     }
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;
@@ -1111,6 +1150,14 @@ function readUpdateChannel(
     : undefined;
 }
 
+function readInteractionMode(
+  value: TomlScalar | undefined,
+): MessagingInteractionMode | undefined {
+  return typeof value === "string" && isMessagingInteractionMode(value)
+    ? value
+    : undefined;
+}
+
 function readAppearanceTheme(
   value: TomlScalar | undefined,
 ): DesktopAppearanceTheme | undefined {
@@ -1133,6 +1180,12 @@ function readOnboardingCompletedSource(
   return typeof value === "string" && isDesktopOnboardingCompletedSource(value)
     ? value
     : undefined;
+}
+
+function isMessagingInteractionMode(
+  value: string,
+): value is MessagingInteractionMode {
+  return value === "buttons" || value === "text";
 }
 
 function isMessagingToolUpdateMode(

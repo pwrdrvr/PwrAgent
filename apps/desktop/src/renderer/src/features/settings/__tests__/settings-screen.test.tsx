@@ -89,9 +89,11 @@ function createSnapshot(
       allowFullAccessThreadResume: { value: true, source: "default" },
       fullAccessWarning: { value: "dismissable", source: "default" },
       inputDebounceMs: { value: 500, source: "default" },
+      interactionMode: { value: "buttons", source: "default" },
       toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
         enabled: { value: false, source: "default" },
+        interactionMode: { value: "buttons", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         authorizedUserIds: { value: [], source: "default" },
@@ -99,6 +101,7 @@ function createSnapshot(
       },
       discord: {
         enabled: { value: false, source: "default" },
+        interactionMode: { value: "buttons", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         applicationId: { value: "", source: "default" },
@@ -107,6 +110,7 @@ function createSnapshot(
       },
       mattermost: {
         enabled: { value: false, source: "default" },
+        interactionMode: { value: "buttons", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         hmacSecret: { configured: false, source: "unset", writable: true },
@@ -120,6 +124,7 @@ function createSnapshot(
       },
       slack: {
         enabled: { value: false, source: "default" },
+        interactionMode: { value: "buttons", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         appToken: { configured: false, source: "unset", writable: true },
@@ -150,6 +155,7 @@ function createSnapshot(
       },
       line: {
         enabled: { value: false, source: "default" },
+        interactionMode: { value: "buttons", source: "default" },
         streamingResponses: { value: false, source: "default" },
         channelAccessToken: { configured: false, source: "unset", writable: true },
         channelSecret: { configured: false, source: "unset", writable: true },

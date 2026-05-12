@@ -73,6 +73,10 @@ describe("desktop settings contracts", () => {
           value: 500,
           source: "default",
         },
+        interactionMode: {
+          value: "buttons",
+          source: "default",
+        },
         toolUpdateMode: {
           value: "show_some",
           source: "default",
@@ -84,6 +88,7 @@ describe("desktop settings contracts", () => {
         },
         telegram: {
           enabled: { value: true, source: "config" },
+          interactionMode: { value: "buttons", source: "default" },
           streamingResponses: { value: true, source: "config" },
           botToken: {
             configured: true,
@@ -104,6 +109,7 @@ describe("desktop settings contracts", () => {
         },
         discord: {
           enabled: { value: false, source: "default" },
+          interactionMode: { value: "buttons", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: true,
@@ -117,6 +123,7 @@ describe("desktop settings contracts", () => {
         },
         mattermost: {
           enabled: { value: false, source: "default" },
+          interactionMode: { value: "buttons", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: false,
@@ -138,6 +145,7 @@ describe("desktop settings contracts", () => {
         },
         slack: {
           enabled: { value: false, source: "default" },
+          interactionMode: { value: "buttons", source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: false,
@@ -180,6 +188,7 @@ describe("desktop settings contracts", () => {
         },
         line: {
           enabled: { value: false, source: "default" },
+          interactionMode: { value: "buttons", source: "default" },
           streamingResponses: { value: false, source: "default" },
           channelAccessToken: {
             configured: false,
