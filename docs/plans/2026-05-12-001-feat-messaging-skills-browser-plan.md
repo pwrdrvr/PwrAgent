@@ -1,7 +1,7 @@
 ---
 title: feat: Add messaging Skills browser
 type: feat
-status: active
+status: completed
 date: 2026-05-12
 deepened: 2026-05-12
 ---
@@ -115,7 +115,7 @@ The browser and search prompt are transient surfaces. The selected skill is dura
 
 ## Implementation Units
 
-- [ ] **Unit 1: Expose skills to messaging workflow**
+- [x] **Unit 1: Expose skills to messaging workflow**
 
 **Goal:** Let the messaging controller list skills through the desktop backend bridge without provider-specific app-server access.
 
@@ -146,7 +146,7 @@ The browser and search prompt are transient surfaces. The selected skill is dura
 **Verification:**
 - Messaging workflow code can list skill metadata without importing provider SDKs or crossing dependency boundaries.
 
-- [ ] **Unit 2: Build the Skills browser and search flow**
+- [x] **Unit 2: Build the Skills browser and search flow**
 
 **Goal:** Add the status-card Skills action and a paged browser with navigation, Search, result pages, Back, and Cancel.
 
@@ -188,7 +188,7 @@ The browser and search prompt are transient surfaces. The selected skill is dura
 **Verification:**
 - Users can browse, page, search, and return without starting a turn or losing the bound status surface.
 
-- [ ] **Unit 3: Persist and display pending skill selection**
+- [x] **Unit 3: Persist and display pending skill selection**
 
 **Goal:** Selecting a skill stores one pending skill on the binding and posts a confirmation with help text and a Remove button.
 
@@ -233,7 +233,7 @@ The browser and search prompt are transient surfaces. The selected skill is dura
 **Verification:**
 - Pending skill state is visible, removable, and restart-safe.
 
-- [ ] **Unit 4: Prepend the staged skill to the next request**
+- [x] **Unit 4: Prepend the staged skill to the next request**
 
 **Goal:** Consume the pending skill once when the next user request is accepted into normal turn flow, including queued-turn flow.
 
@@ -269,7 +269,7 @@ The browser and search prompt are transient surfaces. The selected skill is dura
 **Verification:**
 - The selected skill is applied exactly once to the next real user request and never to status/browser control traffic.
 
-- [ ] **Unit 5: Cross-channel degradation and regression coverage**
+- [x] **Unit 5: Cross-channel degradation and regression coverage**
 
 **Goal:** Ensure the browser works through the generic messaging contract and degrades cleanly on platforms with tighter action limits or text-only behavior.
 

@@ -57,6 +57,7 @@ describe("buildBindingStatusIntent", () => {
       status: "idle",
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "status:model" }),
+        expect.objectContaining({ id: "status:skills" }),
         expect.objectContaining({ id: "status:detach" }),
       ]),
     });
@@ -76,6 +77,26 @@ describe("buildBindingStatusIntent", () => {
         fallbackText: "stream",
       }),
     );
+  });
+
+  it("renders a pending skill selection on the status card", () => {
+    const binding = {
+      ...buildBinding(),
+      pendingSkillSelection: {
+        name: "ce:plan",
+        path: "/skills/ce-plan/SKILL.md",
+        selectedAt: 1000,
+      },
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-pending-skill",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Pending skill: $ce:plan");
   });
 
   it("renders inherited streaming as on when the channel default is on", () => {

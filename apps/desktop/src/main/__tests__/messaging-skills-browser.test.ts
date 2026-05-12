@@ -1,0 +1,100 @@
+import { describe, expect, it } from "vitest";
+import type {
+  MessagingBindingRecord,
+  MessagingCapabilityProfile,
+} from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
+import {
+  buildSkillsBrowserIntent,
+  filterSkillEntries,
+} from "../messaging/core/messaging-skills-browser";
+
+const binding: MessagingBindingRecord = {
+  id: "binding-1",
+  channel: {
+    channel: "telegram",
+    conversation: {
+      id: "chat-1",
+      kind: "dm",
+    },
+  },
+  backend: "codex",
+  threadId: "thread-1",
+  authorizedActorIds: ["user-1"],
+  createdAt: 1000,
+  updatedAt: 1000,
+};
+
+const tightProfile: MessagingCapabilityProfile = {
+  ...PERMISSIVE_CAPABILITY_PROFILE,
+  actions: {
+    ...PERMISSIVE_CAPABILITY_PROFILE.actions!,
+    maxActions: 3,
+    maxActionsPerRow: 3,
+    maxLabelLength: 32,
+  },
+};
+
+describe("messaging skills browser", () => {
+  it("keeps a selectable skill under tight action budgets", () => {
+    const intent = buildSkillsBrowserIntent({
+      binding,
+      capabilityProfile: tightProfile,
+      createdAt: 1000,
+      entries: [
+        {
+          name: "ce:work",
+          description: "Execute implementation plans",
+          enabled: true,
+          path: "/skills/ce-work/SKILL.md",
+        },
+        {
+          name: "review-pr",
+          description: "Review pull requests",
+          enabled: true,
+          path: "/skills/review-pr/SKILL.md",
+        },
+      ],
+      id: "skills-browser-1",
+    });
+
+    expect(intent.choices.map((choice) => choice.id)).toEqual([
+      "skills:select",
+      "skills:search",
+      "status:refresh",
+    ]);
+    expect(intent.choices[0]).toMatchObject({
+      fallbackText: "1",
+      label: "1. $ce:work",
+    });
+  });
+
+  it("ranks name matches before description matches while preserving source order", () => {
+    const results = filterSkillEntries(
+      [
+        {
+          name: "alpha",
+          description: "Run work plans",
+          enabled: true,
+        },
+        {
+          name: "workbench",
+          description: "Utilities",
+          enabled: true,
+        },
+        {
+          name: "team-work",
+          description: "Collaboration",
+          enabled: true,
+        },
+      ],
+      "work",
+    );
+
+    expect(results.map((entry) => entry.name)).toEqual([
+      "workbench",
+      "team-work",
+      "alpha",
+    ]);
+  });
+});

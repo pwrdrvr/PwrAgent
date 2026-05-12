@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
   AppServerBackendKind,
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
   AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
@@ -107,6 +109,9 @@ export type MessagingBackendBridge = {
   steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
+  listSkills?(
+    request?: AppServerListSkillsRequest,
+  ): Promise<Pick<AppServerListSkillsResponse, "data">>;
   listBackends?(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   setThreadExecutionMode?(
     request: SetThreadExecutionModeRequest,

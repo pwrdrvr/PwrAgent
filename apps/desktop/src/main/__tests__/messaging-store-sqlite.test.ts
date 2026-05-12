@@ -116,6 +116,29 @@ afterEach(async () => {
 });
 
 describe("SqliteMessagingStore", () => {
+  it("persists pending skill selections on bindings", async () => {
+    const store = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        pendingSkillSelection: {
+          cwd: "/repo/pwragent",
+          description: "Create implementation plans",
+          name: "ce:plan",
+          path: "/skills/ce-plan/SKILL.md",
+          selectedActorId: "user-1",
+          selectedAt: 1000,
+        },
+      }),
+    );
+
+    await expect(store.getBinding("binding-1")).resolves.toMatchObject({
+      pendingSkillSelection: {
+        name: "ce:plan",
+        path: "/skills/ce-plan/SKILL.md",
+      },
+    });
+  });
+
   it("sweeps binding and channel state when a binding is revoked", async () => {
     const store = await createStore();
     await store.upsertBinding(buildBinding());

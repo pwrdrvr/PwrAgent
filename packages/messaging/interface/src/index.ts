@@ -880,6 +880,17 @@ export type MessagingThreadDisplaySummary = {
   worktreePath?: string;
 };
 
+export type MessagingPendingSkillSelection = {
+  cwd?: string;
+  description?: string;
+  enabled?: boolean;
+  name: string;
+  path?: string;
+  selectedActorId?: string;
+  selectedAt: number;
+  shortDescription?: string;
+};
+
 export type MessagingBindingRecord = {
   id: string;
   channel: MessagingChannelRef;
@@ -899,6 +910,7 @@ export type MessagingBindingRecord = {
   monitor?: MessagingMonitorState;
   monitorSurface?: MessagingSurfaceRef;
   pinnedStatusSurface?: MessagingSurfaceRef;
+  pendingSkillSelection?: MessagingPendingSkillSelection;
   preferences?: MessagingBindingPreferences;
   statusSurface?: MessagingSurfaceRef;
   threadDisplay?: MessagingThreadDisplaySummary;

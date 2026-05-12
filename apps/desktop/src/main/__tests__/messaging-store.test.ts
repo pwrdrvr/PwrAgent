@@ -190,6 +190,31 @@ describe("MessagingStore", () => {
     });
   });
 
+  it("persists pending skill selections on bindings", async () => {
+    const { filePath, store } = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        pendingSkillSelection: {
+          cwd: "/repo/pwragent",
+          description: "Create implementation plans",
+          name: "ce:plan",
+          path: "/skills/ce-plan/SKILL.md",
+          selectedActorId: "user-1",
+          selectedAt: 1000,
+        },
+      }),
+    );
+
+    const reloaded = new MessagingStore(filePath);
+
+    await expect(reloaded.getBinding("binding-1")).resolves.toMatchObject({
+      pendingSkillSelection: {
+        name: "ce:plan",
+        path: "/skills/ce-plan/SKILL.md",
+      },
+    });
+  });
+
   it("drops deprecated cached thread display and active turn data from bindings", async () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(

@@ -120,6 +120,20 @@ Effective streaming mode is resolved per binding first, then provider setting:
 Use the status card's `Stream: <mode>` action, or reply `stream` when actions
 are not available, to cycle a binding through `Default` -> `On` -> `Off`.
 
+## Skills Browser
+
+Bound conversations can stage a Codex skill from the status card. Choose
+`Skills` to open a paged browser, use `Search` to make the next free-text reply
+the skill query, then choose a skill from the results. PwrAgent posts a
+confirmation with the full `$skill` name and available metadata such as
+description, workspace, enabled status, and skill path.
+
+Selecting a skill does not start a turn. The selected skill is stored on the
+messaging binding and is prepended once to the next real user request, including
+requests that queue behind an active turn. Commands, browser navigation,
+callbacks, and skill-search replies do not consume it. Use `Remove` on the
+selection confirmation to clear the staged skill before sending the request.
+
 ## Tool Update Verbosity
 
 PwrAgent can send generated tool-use progress messages to bound conversations.
@@ -497,37 +511,40 @@ Telegram:
 4. Use Projects, select a project, then select a thread.
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
-7. For a bound Local thread with handoff branch metadata, choose Handoff from
+7. Choose Skills, search for a skill, select it, then send a short request.
+   Verify the turn starts with that skill prepended. Repeat once and use Remove
+   before sending to verify the staged skill clears.
+8. For a bound Local thread with handoff branch metadata, choose Handoff from
    `/status`, hand off to a new worktree, and verify the refreshed status shows
    the worktree path.
-8. For a bound worktree thread, choose Handoff from `/status`, hand off to
+9. For a bound worktree thread, choose Handoff from `/status`, hand off to
    Local, and verify the refreshed status no longer shows a worktree path.
-9. Repeat at least one handoff step by text fallback, such as replying `1` or
+10. Repeat at least one handoff step by text fallback, such as replying `1` or
    `confirm`.
-10. Try a stale or ineligible handoff prompt and verify the bot reports a
+11. Try a stale or ineligible handoff prompt and verify the bot reports a
    recoverable error without detaching the conversation.
-11. Send free-form text and verify a PwrAgent turn starts in the bound thread.
-12. Verify typing continues through an intermediate assistant update and stops at turn completion.
-13. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
-14. Enable Streaming Responses, trigger a long response, and verify Telegram creates then edits one in-progress response before the final answer appears once.
-15. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
-16. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
-17. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
-18. Trigger a Plan questionnaire and answer with both a button and text fallback.
-19. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
-20. Verify markdown, inline code, fenced code, long responses, and image output render.
-21. Restart PwrAgent and verify the same Telegram conversation still routes to the bound thread.
-22. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-23. Send a small `.txt` attachment and verify a turn starts with the extracted text.
-24. Send an image attachment and verify a turn starts with normalized image input.
-25. Send an oversized file or voice message and verify it is rejected without model upload.
-26. Verify assistant image and file parts render as Telegram photo/document attachments.
-27. Send a long or split code-block request as two quick messages and verify only one turn starts.
-28. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
-29. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
-30. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
-31. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
-32. Repeat without clicking either action and verify completion starts the queued input as the next turn.
+12. Send free-form text and verify a PwrAgent turn starts in the bound thread.
+13. Verify typing continues through an intermediate assistant update and stops at turn completion.
+14. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
+15. Enable Streaming Responses, trigger a long response, and verify Telegram creates then edits one in-progress response before the final answer appears once.
+16. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
+17. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
+18. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
+19. Trigger a Plan questionnaire and answer with both a button and text fallback.
+20. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
+21. Verify markdown, inline code, fenced code, long responses, and image output render.
+22. Restart PwrAgent and verify the same Telegram conversation still routes to the bound thread.
+23. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
+24. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+25. Send an image attachment and verify a turn starts with normalized image input.
+26. Send an oversized file or voice message and verify it is rejected without model upload.
+27. Verify assistant image and file parts render as Telegram photo/document attachments.
+28. Send a long or split code-block request as two quick messages and verify only one turn starts.
+29. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
+30. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
+31. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
+32. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
+33. Repeat without clicking either action and verify completion starts the queued input as the next turn.
 
 Discord:
 
@@ -841,19 +858,23 @@ should succeed before moving to the next:
 14. Click `Tools`, then `Permissions`. Each click cycles the value
     and the card updates inline. The desktop app's UI mirrors the
     change (cross-surface state bus).
+15. Click `Skills`, use `Search`, pick a skill, and verify the
+    confirmation offers `Remove`. Send a request and verify the skill
+    is prepended once; repeat with `Remove` and verify the next request
+    is not prefixed.
 
 **Detach:**
 
-15. Click `Detach` on the status card. The bot posts `Thread detached`
+16. Click `Detach` on the status card. The bot posts `Thread detached`
     and removes the status card's buttons. The desktop app's binding
     chip disappears for that thread.
-16. Send another message in the DM. The bot shows the command menu
+17. Send another message in the DM. The bot shows the command menu
     again; the offered `Resume` button still works to re-bind.
 
 **Cross-restart persistence (with env-var HMAC pinned):**
 
-17. Quit and relaunch PwrAgent.
-18. Click a button on a status card from a still-bound thread that
+18. Quit and relaunch PwrAgent.
+19. Click a button on a status card from a still-bound thread that
     was rendered before the restart. The click round-trips and the
     status updates. Without the env-var HMAC pinned, this step fails
     silently — the canary that says "you forgot to set the HMAC env
