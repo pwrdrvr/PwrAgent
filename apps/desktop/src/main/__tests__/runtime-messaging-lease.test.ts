@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
+import {
+  MESSAGING_LEASE_HEARTBEAT_MS,
+  RuntimeMessagingLeaseCoordinator,
+} from "../runtime-messaging-lease";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
@@ -12,10 +15,11 @@ let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
 
-function createRuntime(): DesktopMessagingRuntime {
+function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingRuntime {
   let enabled = false;
   return {
     applyConfig: vi.fn(async () => {
+      if (options.failApply) throw new Error("apply failed");
       enabled = true;
     }),
     isEnabled: vi.fn(() => enabled),
@@ -34,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -217,6 +222,101 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       status: "active",
     });
     second.shutdownSync();
+  });
+
+  it("stops runtime when the heartbeat loses the lease", async () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const firstRuntime = createRuntime();
+    const secondRuntime = createRuntime();
+    const config: DesktopMessagingConfig = {
+      enabled: true,
+      inputDebounceMs: 500,
+      toolUpdateDefaultMode: "show_some",
+      telegram: {
+        channel: "telegram" as const,
+        enabled: true,
+        botToken: "token",
+        streamingResponses: false,
+        authorizedActorIds: [],
+        authorizedSupergroupIds: [],
+      },
+    };
+    const first = new RuntimeMessagingLeaseCoordinator({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      now: () => now,
+      store,
+    });
+    const second = new RuntimeMessagingLeaseCoordinator({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      now: () => now,
+      store,
+    });
+
+    await first.applyResolvedConfig(firstRuntime, config);
+    now = 32_000;
+    await second.applyResolvedConfig(secondRuntime, config);
+    now = 33_000;
+    await vi.advanceTimersByTimeAsync(MESSAGING_LEASE_HEARTBEAT_MS);
+
+    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
+    expect(firstRuntime.isEnabled()).toBe(false);
+    expect(store.getInstance("instance-a")).toMatchObject({
+      desiredMessagingEnabled: true,
+      effectiveMessagingEnabled: false,
+      disabledReason: "lease_held",
+    });
+    expect(store.getMessagingLease()).toMatchObject({
+      ownerInstanceId: "instance-b",
+      status: "active",
+    });
+    second.shutdownSync();
+  });
+
+  it("releases the lease when runtime startup fails", async () => {
+    const runtime = createRuntime({ failApply: true });
+    const coordinator = new RuntimeMessagingLeaseCoordinator({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      now: () => 1_000,
+      store,
+    });
+
+    await expect(
+      coordinator.applyResolvedConfig(runtime, {
+        enabled: true,
+        inputDebounceMs: 500,
+        toolUpdateDefaultMode: "show_some",
+        telegram: {
+          channel: "telegram",
+          enabled: true,
+          botToken: "token",
+          streamingResponses: false,
+          authorizedActorIds: [],
+          authorizedSupergroupIds: [],
+        },
+      }),
+    ).rejects.toThrow("apply failed");
+
+    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(store.getMessagingLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "released",
+      releasedAt: 1_000,
+    });
+    expect(store.getInstance("instance-a")).toMatchObject({
+      desiredMessagingEnabled: true,
+      effectiveMessagingEnabled: false,
+      disabledReason: "startup_error",
+    });
   });
 
   it("releases the lease when the session disables messaging", async () => {
