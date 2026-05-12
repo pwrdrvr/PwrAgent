@@ -922,6 +922,15 @@ export class DesktopMessagingRuntime {
       this.handleAdapterReconnect(adapter.channel, info);
     });
 
+    try {
+      await controller.startMonitoringForEnabledBindings();
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: monitor rehydrate failed`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     this.runningAdapters.set(adapter.channel, {
       adapter,
       authorization,

@@ -833,6 +833,28 @@ export type MessagingActiveTurnSummary = {
   updatedAt: number;
 };
 
+export type MessagingMonitorState = {
+  enabled: boolean;
+  intervalMs: number;
+  lastRenderedAt?: number;
+  pinnedThreadLimit?: number;
+  recentThreadLimit?: number;
+  showLastResponseSnippet?: boolean;
+  showStatusLine?: boolean;
+  updatedAt: number;
+};
+
+export type MessagingMonitorSubscriptionRecord = {
+  id: string;
+  channel: MessagingChannelRef;
+  authorizedActorIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  revokedAt?: number;
+  monitor: MessagingMonitorState;
+  monitorSurface?: MessagingSurfaceRef;
+};
+
 export type MessagingThreadDisplaySummary = {
   /**
    * Deprecated migration fallback only. Current thread display facts must be
@@ -860,6 +882,8 @@ export type MessagingBindingRecord = {
   updatedAt: number;
   revokedAt?: number;
   displayName?: string;
+  monitor?: MessagingMonitorState;
+  monitorSurface?: MessagingSurfaceRef;
   pinnedStatusSurface?: MessagingSurfaceRef;
   preferences?: MessagingBindingPreferences;
   statusSurface?: MessagingSurfaceRef;

@@ -72,6 +72,74 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("rehydrates enabled Monitor bindings after adapter startup", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+      monitor: {
+        enabled: true,
+        intervalMs: 1,
+        updatedAt: 1000,
+      },
+    });
+
+    await runtime.start();
+    await waitFor(() => adapter.delivered.some((intent) => intent.kind === "status"));
+
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
+    });
+  });
+
+  it("rehydrates enabled channel Monitor subscriptions after adapter startup", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertMonitorSubscription({
+      id: "monitor:telegram:dm::chat-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+      monitor: {
+        enabled: true,
+        intervalMs: 1,
+        updatedAt: 1000,
+      },
+    });
+
+    await runtime.start();
+    await waitFor(() => adapter.delivered.some((intent) => intent.kind === "status"));
+
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
+    });
+  });
+
   it("surfaces adapter startup credential metadata in platform status", async () => {
     const { runtime } = await createRuntimeHarness({
       adapter: createAdapter("telegram", {
@@ -2035,6 +2103,16 @@ async function prepareRuntimeStore(): Promise<void> {
 async function flushMicrotasks(): Promise<void> {
   for (let index = 0; index < 10; index += 1) {
     await Promise.resolve();
+  }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error("timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 

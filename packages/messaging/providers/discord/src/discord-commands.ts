@@ -86,6 +86,13 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
     name: "detach",
     type: ApplicationCommandType.ChatInput,
   },
+  {
+    contexts: COMMAND_CONTEXTS,
+    description: "Monitor recent PwrAgent threads once per minute.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "monitor",
+    type: ApplicationCommandType.ChatInput,
+  },
 ];
 
 export async function reconcileDiscordApplicationCommands(params: {

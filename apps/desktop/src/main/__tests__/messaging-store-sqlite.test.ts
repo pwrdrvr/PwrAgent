@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
@@ -38,6 +39,30 @@ function buildBinding(
     authorizedActorIds: ["user-1"],
     createdAt: 1000,
     updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildMonitorSubscription(
+  overrides: Partial<MessagingMonitorSubscriptionRecord> = {},
+): MessagingMonitorSubscriptionRecord {
+  return {
+    id: "monitor:telegram:dm::chat-1",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    authorizedActorIds: ["user-1"],
+    createdAt: 1000,
+    updatedAt: 1000,
+    monitor: {
+      enabled: true,
+      intervalMs: 60_000,
+      updatedAt: 1000,
+    },
     ...overrides,
   };
 }
@@ -224,6 +249,139 @@ describe("SqliteMessagingStore", () => {
       expect.objectContaining({ id: "binding-codex" }),
       expect.objectContaining({ id: "binding-legacy" }),
     ]);
+  });
+
+  it("round-trips monitor state and monitor surface on bindings", async () => {
+    const store = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          lastRenderedAt: 2000,
+          pinnedThreadLimit: 5,
+          recentThreadLimit: 10,
+          showLastResponseSnippet: true,
+          showStatusLine: true,
+          updatedAt: 2000,
+        },
+        monitorSurface: {
+          channel: "telegram",
+          id: "monitor-message-1",
+          state: {
+            opaque: {
+              chatId: 123,
+              messageId: 456,
+              apiToken: "secret-token",
+            },
+          },
+        },
+        preferences: {
+          executionMode: "full-access",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          updatedAt: 1500,
+        },
+        statusSurface: {
+          channel: "telegram",
+          id: "status-message-1",
+        },
+      }),
+    );
+
+    await expect(store.getBinding("binding-1")).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 2000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+      },
+      monitorSurface: {
+        channel: "telegram",
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 123,
+            messageId: 456,
+            apiToken: "[REDACTED]",
+          },
+        },
+      },
+      preferences: {
+        executionMode: "full-access",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      },
+      statusSurface: {
+        id: "status-message-1",
+      },
+    });
+  });
+
+  it("round-trips channel monitor subscriptions", async () => {
+    const store = await createStore();
+    await store.upsertMonitorSubscription(
+      buildMonitorSubscription({
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          lastRenderedAt: 2000,
+          pinnedThreadLimit: 10,
+          recentThreadLimit: 5,
+          showLastResponseSnippet: true,
+          showStatusLine: true,
+          updatedAt: 2000,
+        },
+        monitorSurface: {
+          channel: "telegram",
+          id: "monitor-message-1",
+          state: {
+            opaque: {
+              chatId: 123,
+              apiToken: "secret-token",
+            },
+          },
+        },
+      }),
+    );
+
+    await expect(
+      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+    ).resolves.toMatchObject({
+      id: "monitor:telegram:dm::chat-1",
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 2000,
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 5,
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+      },
+      monitorSurface: {
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 123,
+            apiToken: "[REDACTED]",
+          },
+        },
+      },
+    });
+    await expect(
+      store.findActiveMonitorSubscriptionsForChannelKind({ channel: "telegram" }),
+    ).resolves.toHaveLength(1);
+
+    await store.revokeMonitorSubscription({
+      subscriptionId: "monitor:telegram:dm::chat-1",
+      revokedAt: 3000,
+    });
+    await expect(
+      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+    ).resolves.toBeUndefined();
   });
 
   it("can delete callback handles for a binding without revoking it", async () => {

@@ -5,6 +5,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
   MessagingJsonValue,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 import type { StateDb } from "./state-db.js";
@@ -135,6 +136,88 @@ export class SqliteMessagingStore {
     await this.deletePendingIntentsForChannel({ channel: current.channel });
     await this.deleteCallbackHandlesForBinding({ bindingId: params.bindingId });
 
+    return structuredClone(revoked);
+  }
+
+  async upsertMonitorSubscription(
+    subscription: MessagingMonitorSubscriptionRecord,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    const sanitized = sanitizeMonitorSubscription(subscription);
+    const channel = sanitized.channel;
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO monitor_subscriptions(subscription_id, channel_kind, channel_id, status, created_at, updated_at, revoked_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sanitized.id,
+        channel.channel,
+        buildChannelId(channel),
+        sanitized.revokedAt ? "revoked" : "active",
+        sanitized.createdAt,
+        sanitized.updatedAt,
+        sanitized.revokedAt ?? null,
+        JSON.stringify(sanitized),
+      );
+    return structuredClone(sanitized);
+  }
+
+  async getMonitorSubscription(
+    id: string,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare("SELECT payload FROM monitor_subscriptions WHERE subscription_id = ?")
+      .get(id) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async findActiveMonitorSubscriptionForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    const channelKey = buildMessagingConversationKey(channel);
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM monitor_subscriptions WHERE status = 'active' AND channel_kind = ?",
+      )
+      .all(channel.channel) as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord)
+      .filter(
+        (subscription) =>
+          !subscription.revokedAt &&
+          buildMessagingConversationKey(subscription.channel) === channelKey,
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
+  }
+
+  async findActiveMonitorSubscriptionsForChannelKind(params: {
+    channel: MessagingChannelRef["channel"];
+  }): Promise<MessagingMonitorSubscriptionRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM monitor_subscriptions WHERE status = 'active' AND channel_kind = ?",
+      )
+      .all(params.channel) as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingMonitorSubscriptionRecord)
+      .filter((subscription) => !subscription.revokedAt);
+  }
+
+  async revokeMonitorSubscription(params: {
+    subscriptionId: string;
+    revokedAt?: number;
+  }): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    const current = await this.getMonitorSubscription(params.subscriptionId);
+    if (!current) return undefined;
+
+    const revokedAt = params.revokedAt ?? Date.now();
+    const revoked: MessagingMonitorSubscriptionRecord = {
+      ...current,
+      revokedAt,
+      updatedAt: revokedAt,
+    };
+    await this.upsertMonitorSubscription(revoked);
+    await this.deletePendingIntentsForChannel({ channel: current.channel });
     return structuredClone(revoked);
   }
 
@@ -567,6 +650,7 @@ export class SqliteMessagingStore {
 
   async readSnapshot(): Promise<MessagingStoreData> {
     const bindings: Record<string, MessagingBindingRecord> = {};
+    const monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord> = {};
     const pendingIntents: Record<string, MessagingPendingIntentRecord> = {};
     const browseSessions: Record<string, MessagingBrowseSessionRecord> = {};
     const callbackHandles: Record<string, MessagingCallbackHandleRecord> = {};
@@ -576,6 +660,11 @@ export class SqliteMessagingStore {
       .prepare("SELECT binding_id, payload FROM bindings")
       .all() as { binding_id: string; payload: string }[]) {
       bindings[row.binding_id] = JSON.parse(row.payload);
+    }
+    for (const row of this.stateDb.raw
+      .prepare("SELECT subscription_id, payload FROM monitor_subscriptions")
+      .all() as { subscription_id: string; payload: string }[]) {
+      monitorSubscriptions[row.subscription_id] = JSON.parse(row.payload);
     }
     for (const row of this.stateDb.raw
       .prepare("SELECT intent_id, payload FROM pending_intents")
@@ -601,6 +690,7 @@ export class SqliteMessagingStore {
     return {
       version: CURRENT_MESSAGING_STORE_VERSION,
       bindings,
+      monitorSubscriptions,
       pendingIntents,
       browseSessions,
       callbackHandles,
@@ -636,6 +726,7 @@ function sanitizeBinding(
   return {
     ...rest,
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
+    monitorSurface: sanitizeSurfaceRef(binding.monitorSurface),
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
@@ -652,6 +743,16 @@ function sanitizePendingIntent(
       intent.intent as unknown as MessagingJsonValue,
     ) as unknown as MessagingPendingIntentRecord["intent"],
     surface: sanitizeSurfaceRef(intent.surface),
+  };
+}
+
+function sanitizeMonitorSubscription(
+  subscription: MessagingMonitorSubscriptionRecord,
+): MessagingMonitorSubscriptionRecord {
+  return {
+    ...subscription,
+    authorizedActorIds: [...new Set(subscription.authorizedActorIds)],
+    monitorSurface: sanitizeSurfaceRef(subscription.monitorSurface),
   };
 }
 
@@ -729,6 +830,11 @@ export type MessagingStoreLike = Pick<
   | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
   | "revokeBinding"
+  | "upsertMonitorSubscription"
+  | "getMonitorSubscription"
+  | "findActiveMonitorSubscriptionForChannel"
+  | "findActiveMonitorSubscriptionsForChannelKind"
+  | "revokeMonitorSubscription"
   | "upsertPendingIntent"
   | "getPendingIntent"
   | "findActivePendingIntentForChannel"

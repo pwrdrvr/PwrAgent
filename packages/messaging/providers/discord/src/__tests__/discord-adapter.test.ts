@@ -17,7 +17,10 @@ import {
   type DiscordGatewayListener,
   type DiscordMessageCreateDispatch,
 } from "../discord-adapter.ts";
-import type { DiscordApplicationCommand } from "../discord-commands.ts";
+import {
+  DISCORD_APPLICATION_COMMANDS,
+  type DiscordApplicationCommand,
+} from "../discord-commands.ts";
 
 const unknownChannelError = new Error("DiscordAPIError[10003]: Unknown Channel");
 const TEST_CHANNEL_ID = "1480556454498009352";
@@ -28,6 +31,15 @@ const TEST_OTHER_USER_ID = "1480556454498009356";
 const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
+  it("declares Monitor as a desired Discord application command", () => {
+    expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
+      "resume",
+      "status",
+      "detach",
+      "monitor",
+    ]);
+  });
+
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const adapter = new DiscordAdapter({

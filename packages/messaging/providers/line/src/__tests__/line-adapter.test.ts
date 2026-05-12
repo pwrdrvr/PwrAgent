@@ -545,6 +545,40 @@ describe("LineAdapter", () => {
     });
   });
 
+  it("dispatches LINE /monitor text as a generic command event", async () => {
+    const port = await getFreePort();
+    const config = createConfig({
+      authorizedGroupIds: [
+        { id: "C0123456789abcdef0123456789abcdef", displayName: "Team" },
+      ],
+      callbackBaseUrl: `http://127.0.0.1:${port}/`,
+    });
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+    });
+    adapters.push(adapter);
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await postLineWebhook(port, config.channelSecret, {
+      events: [lineGroupTextEvent({ text: "/monitor refresh" })],
+    });
+    await waitFor(() => events.length === 1);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "monitor",
+        args: ["refresh"],
+        rawText: "/monitor refresh",
+      }),
+    ]);
+  });
+
   it("allows pairing tokens from shared conversations before group authorization", async () => {
     const port = await getFreePort();
     const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });

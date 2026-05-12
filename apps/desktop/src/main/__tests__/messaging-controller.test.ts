@@ -1908,6 +1908,7 @@ describe("MessagingController", () => {
     expect(last?.body).toContain("`resume`");
     expect(last?.body).toContain("`status`");
     expect(last?.body).toContain("`detach`");
+    expect(last?.body).toContain("`monitor`");
     expect(last?.body).toContain("`help`");
     // Both invocation styles must be discoverable from the help text
     // — the whole reason we ship a catalog-derived body.
@@ -1924,7 +1925,7 @@ describe("MessagingController", () => {
       | { actions?: Array<{ id?: string; label?: string; style?: string }> }
       | undefined;
     expect(last?.actions).toBeDefined();
-    // One button per canonical verb (today: 4). Catalog fits a
+    // One button per canonical verb (today: 5). Catalog fits a
     // single page on every reasonable provider profile, so no nav
     // buttons are rendered.
     const ids = (last?.actions ?? []).map((a) => a.id);
@@ -1932,6 +1933,7 @@ describe("MessagingController", () => {
       "command:resume",
       "command:status",
       "command:detach",
+      "command:monitor",
       "command:help",
     ]);
     // Resume retains primary styling — matches the previous
@@ -1989,6 +1991,24 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clicking the Monitor button on the help surface dispatches the monitor command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:monitor",
+      }),
+    );
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
+    });
+  });
+
   it("clicking the help-page Cancel button replaces the surface with a dismissal", async () => {
     const harness = await createHarness();
 
@@ -2030,6 +2050,505 @@ describe("MessagingController", () => {
         replaceMarkup: true,
       },
     });
+  });
+
+  it("starts Monitor in an unbound conversation", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "monitor:stop" }),
+      ]),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+    ).resolves.toBeUndefined();
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 5,
+      },
+      monitorSurface: {
+        id: expect.stringContaining("surface:"),
+      },
+    });
+  });
+
+  it("preserves command routing state for the initial Monitor render", async () => {
+    const harness = await createHarness();
+    const event = {
+      ...buildCommandEvent("/monitor"),
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "channel-1",
+          kind: "channel",
+          parentId: "guild-1",
+        },
+      },
+      routingState: {
+        opaque: {
+          applicationId: "app-1",
+          interactionToken: "interaction-token-1",
+        },
+      },
+    } satisfies MessagingInboundEvent & { kind: "command" };
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      audit: expect.objectContaining({
+        channel: event.channel,
+      }),
+      targetSurface: {
+        channel: "discord",
+        id: event.id,
+        state: event.routingState,
+      },
+    });
+  });
+
+  it("starts Monitor for a bound conversation without changing the thread binding", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/monitor").channel,
+    );
+    harness.getNavigationSnapshot.mockClear();
+    harness.readThreadStatus.mockResolvedValue("active");
+    harness.delivered.splice(0);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/MONITOR"));
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.readThreadStatus).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "working",
+      text: expect.stringContaining("Monitor: Recent threads"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitor:stop",
+          fallbackText: "monitor stop",
+        }),
+      ]),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+    ).resolves.toEqual(binding);
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 5,
+      },
+      monitorSurface: {
+        id: expect.stringContaining("surface:"),
+      },
+    });
+  });
+
+  it("configures Monitor pinned and recent counts from commands and buttons", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor pins 10"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 5"),
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 5,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "monitor:recent" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 10"),
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 10,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor recent 0"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 0"),
+    });
+  });
+
+  it("configures Monitor interval from commands and buttons", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor interval 30s"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 30 sec"),
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          intervalMs: 30_000,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({ actionId: "monitor:interval" }),
+      );
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 1 min"),
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          intervalMs: 60_000,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor every 5m"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 5 min"),
+      });
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("configures Monitor status detail lines and response snippets", async () => {
+    const harness = await createHarness({
+      readThreadLastAssistantMessage: async (request) =>
+        `${request.threadId} latest assistant response for monitor display.`,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor status line"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: line | Snippet: off"),
+    });
+    expect(readDeliveredStatusText(harness.delivered.at(-1))).toContain(
+      "1. Thread one (codex)\n  Status: idle - updated",
+    );
+    expect(harness.readThreadLastAssistantMessage).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor snippet on"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: line | Snippet: on"),
+    });
+    expect(readDeliveredStatusText(harness.delivered.at(-1))).toContain(
+      "  Response: thread-1 latest assistant response for monitor display.",
+    );
+    expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "monitor:status" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: inline | Snippet: on"),
+    });
+  });
+
+  it("does not create duplicate Monitor timers for repeated starts", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps Monitor scheduled when the initial render fails", async () => {
+    vi.useFakeTimers();
+    const logger = {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const harness = await createHarness({ logger });
+    try {
+      await bindThread(harness);
+      harness.getNavigationSnapshot.mockRejectedValueOnce(
+        new Error("navigation unavailable"),
+      );
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      expect(logger.debug).toHaveBeenCalledWith(
+        "messaging channel monitor initial render failed",
+        expect.objectContaining({
+          error: "navigation unavailable",
+          subscriptionId: expect.stringContaining("monitor:"),
+        }),
+      );
+      expect(harness.delivered).toEqual([]);
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          enabled: true,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.waitFor(() => {
+        expect(harness.delivered.at(-1)).toMatchObject({
+          kind: "status",
+          text: expect.stringContaining("Monitor: Recent threads"),
+        });
+      });
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("revokes the channel Monitor subscription after permanent delivery failure", async () => {
+    vi.useFakeTimers();
+    let failDelivery = false;
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        if (failDelivery) {
+          return {
+            channel: "telegram",
+            deliveredAt: 1000,
+            outcome: "failed",
+            errorMessage: "Bad Request: chat not found",
+          };
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    try {
+      await bindThread(harness);
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      if (!binding) {
+        throw new Error("binding missing");
+      }
+
+      failDelivery = true;
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      await expect(harness.store.getBinding(binding.id)).resolves.toMatchObject({
+        id: binding.id,
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops Monitor without detaching the binding and cancels the next tick", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      harness.getNavigationSnapshot.mockClear();
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor stop"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor stopped",
+        delivery: {
+          mode: "update",
+        },
+      });
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      const subscription = await harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      expect(subscription).toMatchObject({
+        monitor: {
+          enabled: false,
+        },
+      });
+      expect(binding?.revokedAt).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rehydrates enabled Monitor bindings on controller startup", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/resume").channel,
+      );
+      if (!binding) {
+        throw new Error("binding missing");
+      }
+      await harness.store.upsertBinding({
+        ...binding,
+        monitor: {
+          enabled: true,
+          intervalMs: 1,
+          updatedAt: 1000,
+        },
+        updatedAt: 1000,
+      });
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.startMonitoringForEnabledBindings();
+
+      expect(harness.listBackends).toHaveBeenCalled();
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+        backend: "all",
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Monitor: Recent threads"),
+      });
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders enabled channel Monitor subscriptions immediately on controller startup", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({ channel: "telegram" });
+    try {
+      await harness.store.upsertMonitorSubscription({
+        id: "monitor:telegram:dm::chat-1",
+        channel: buildCommandEvent("/monitor").channel,
+        authorizedActorIds: ["user-1"],
+        createdAt: 1000,
+        updatedAt: 1000,
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          updatedAt: 1000,
+        },
+      });
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.startMonitoringForEnabledBindings();
+
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+        backend: "all",
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Monitor: Recent threads"),
+      });
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("updates the browse surface and removes actions when cancelling resume", async () => {
@@ -5442,6 +5961,9 @@ async function createHarness(options?: {
    * absent.
    */
   bindingChangedListener?: false;
+  readThreadLastAssistantMessage?: NonNullable<
+    MessagingBackendBridge["readThreadLastAssistantMessage"]
+  >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -5456,6 +5978,7 @@ async function createHarness(options?: {
   listBackends: ReturnType<typeof vi.fn>;
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
+  readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
@@ -5626,6 +6149,9 @@ async function createHarness(options?: {
     fetchedAt: 1000,
     backends: [buildBackendSummary()],
   }));
+  const readThreadLastAssistantMessage = vi.fn(
+    options?.readThreadLastAssistantMessage ?? (async () => undefined),
+  );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
@@ -5642,6 +6168,7 @@ async function createHarness(options?: {
     interruptTurn,
     listBackends,
     materializeDirectoryLaunchpad,
+    readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
@@ -5687,6 +6214,7 @@ async function createHarness(options?: {
     listBackends,
     materializeDirectoryLaunchpad,
     onBindingChanged,
+    readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
@@ -5890,6 +6418,13 @@ function findAction(
   return action;
 }
 
+function readDeliveredStatusText(intent: MessagingSurfaceIntent | undefined): string {
+  if (!intent || intent.kind !== "status") {
+    throw new Error("expected status intent");
+  }
+  return intent.text;
+}
+
 function buildCommandEvent(
   rawText: string,
   actor: { platformUserId: string; username?: string } = { platformUserId: "user-1" },
@@ -5988,4 +6523,10 @@ function buildCallbackEvent(params: {
     actionId: params.actionId,
     value: params.value,
   };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }

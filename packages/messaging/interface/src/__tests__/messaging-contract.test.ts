@@ -15,6 +15,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
+  type MessagingMonitorSubscriptionRecord,
   type MessagingSingleSelectIntent,
   type MessagingStreamUpdateIntent,
   type MessagingThreadPickerIntent,
@@ -472,6 +473,26 @@ describe("messaging surface contract", () => {
         toolUpdateMode: "show_all",
         updatedAt: 1000,
       },
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1500,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+        updatedAt: 1500,
+      },
+      monitorSurface: {
+        channel: "telegram",
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 124,
+          },
+        },
+      },
       statusSurface: {
         channel: "telegram",
         id: "message-1",
@@ -517,10 +538,36 @@ describe("messaging surface contract", () => {
         threadId: "thread-1",
       },
     } satisfies MessagingCallbackHandleRecord;
+    const monitorSubscription = {
+      id: "monitor:telegram:dm::chat-1",
+      channel: binding.channel,
+      authorizedActorIds: ["telegram-user-1"],
+      createdAt: 1000,
+      updatedAt: 1500,
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1500,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+        updatedAt: 1500,
+      },
+      monitorSurface: binding.monitorSurface,
+    } satisfies MessagingMonitorSubscriptionRecord;
 
     expect(callbackHandle.handle).not.toContain("thread-1");
     expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
+    expect(binding.monitor?.enabled).toBe(true);
+    expect(binding.monitor?.pinnedThreadLimit).toBe(5);
+    expect(binding.monitor?.showStatusLine).toBe(true);
+    expect(binding.monitorSurface?.id).toBe("monitor-message-1");
+    expect(monitorSubscription.monitor.enabled).toBe(true);
+    expect(monitorSubscription.monitor.recentThreadLimit).toBe(10);
+    expect(monitorSubscription.monitor.showLastResponseSnippet).toBe(true);
+    expect(monitorSubscription.monitorSurface?.id).toBe("monitor-message-1");
   });
 
   it("defines callback handles as long-lived sqlite routes", () => {

@@ -1518,6 +1518,10 @@ describe("TelegramAdapter", () => {
           command: "detach",
           description: "Detach this chat from PwrAgent",
         },
+        {
+          command: "monitor",
+          description: "Monitor recent PwrAgent threads",
+        },
       ],
     });
   });
