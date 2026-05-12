@@ -10,6 +10,7 @@ import type {
   MessagingCallbackHandleStore,
   MessagingChannelRef,
   MessagingInboundEvent,
+  MessagingRejectedInboundEvent,
 } from "@pwragent/messaging-interface";
 
 const baseConfig = {
@@ -297,6 +298,59 @@ describe("FeishuAdapter", () => {
         command: "help",
         args: ["threads"],
         rawText: "/help threads",
+      }),
+    ]);
+  });
+
+  it("lets pairing-token messages reach the runtime before authorization", async () => {
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_pair",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_new_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ text: "pair 11111111111111111111111111111111" }),
+          message_id: "om_message",
+          message_type: "text",
+        },
+      },
+    });
+    await adapter.stop();
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "pair",
+        args: ["11111111111111111111111111111111"],
+        actor: { platformUserId: "ou_new_user" },
       }),
     ]);
   });

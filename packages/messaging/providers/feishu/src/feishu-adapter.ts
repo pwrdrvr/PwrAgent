@@ -635,10 +635,6 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       } satisfies FeishuRoutingOpaqueState,
     };
 
-    if (!(await this.authorizeInbound({ actor, channel: channelRef, routingState }))) {
-      return;
-    }
-
     const text = extractFeishuText(message.content);
     const messageText = stripBotMentions(text, message.mentions);
     const eventBase = {
@@ -650,6 +646,24 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
     const command = parseFeishuCommandText(messageText);
     const pairingToken = extractMessagingPairingToken(messageText);
+    const inboundKind: MessagingInboundEvent["kind"] = command || pairingToken ? "command" : "text";
+    this.logger.info?.("feishu inbound message received", {
+      chatType: message.chat_type,
+      hasPairingToken: Boolean(pairingToken),
+      inboundKind,
+      messageType: message.message_type,
+    });
+
+    if (!(await this.authorizeInbound({
+      actor,
+      channel: channelRef,
+      kind: inboundKind,
+      pairing: Boolean(pairingToken),
+      routingState,
+    }))) {
+      return;
+    }
+
     const inbound: MessagingInboundEvent = command
       ? {
           ...eventBase,
@@ -759,12 +773,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private async authorizeInbound(params: {
     actor: MessagingActorIdentity;
     channel: MessagingChannelRef;
+    kind: MessagingInboundEvent["kind"];
+    pairing?: boolean;
     routingState?: MessagingAdapterState;
   }): Promise<boolean> {
+    if (params.pairing) return true;
+
     if (!this.authorizedActorIdsValue.includes(params.actor.platformUserId)) {
       await this.emitInboundRejected({
         id: `${params.actor.platformUserId}:${this.now()}`,
-        kind: "text",
+        kind: params.kind,
         actor: params.actor,
         channel: params.channel,
         receivedAt: this.now(),
@@ -785,7 +803,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       if (!chatAllowed && !tenantAllowed) {
         await this.emitInboundRejected({
           id: `${params.channel.conversation.id}:${this.now()}`,
-          kind: "text",
+          kind: params.kind,
           actor: params.actor,
           channel: params.channel,
           receivedAt: this.now(),
