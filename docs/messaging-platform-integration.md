@@ -339,19 +339,43 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
    desktop app opens an outbound SDK WebSocket to Lark, so operators do not need
    to expose a localhost listener through Cloudflare Tunnel, ngrok, or a public
    reverse proxy that can then be fuzzed by internet scanners.
-4. Subscribe these events:
-   - `im.message.receive_v1` so PwrAgent receives direct messages and group
-     mentions.
-   - `card.action.trigger` so interactive-card buttons work.
-   - `im.chat.access_event.bot_p2p_chat_entered_v1` is optional. Lark emits it
-     when a user opens or enters a bot DM; PwrAgent ignores it because it is not
-     a user command, but registering it avoids noisy "no handler" SDK logs if
-     the event is enabled.
+4. Subscribe the events PwrAgent consumes:
+   - Required: `im.message.receive_v1` so PwrAgent receives direct messages and
+     group mentions.
+   - Required: `card.action.trigger` so interactive-card buttons work.
+   - Optional/noisy: `im.chat.access_event.bot_p2p_chat_entered_v1`. Lark emits
+     it when a user opens or enters a bot DM; PwrAgent ignores it because it is
+     not a user command, but registering it avoids noisy "no handler" SDK logs
+     if the event is enabled.
+   - Not currently consumed: `im.chat.member.bot.added_v1`,
+     `im.chat.member.bot.deleted_v1`, `im.message.message_read_v1`,
+     `im.message.reaction.created_v1`, `im.message.reaction.deleted_v1`, and
+     `im.message.updated_v1`. They can be useful later for diagnostics,
+     membership tracking, read receipts, reactions, or edited-message handling,
+     but they are not required for the current adapter.
 5. Grant and publish the app version with the messaging permissions used by
-   those events and bot replies. At minimum, enable the Lark/Feishu console
-   permissions for receiving bot messages/events and sending messages as the
-   bot. New bot profile changes, event subscriptions, and permission scopes do
-   not take effect for a workspace until you create and publish a version of the
+   those events and bot replies. Useful Lark/Feishu console scopes for the
+   current adapter are:
+   - Required for group mentions: `im:message.group_at_msg:readonly` ("Receive
+     users' mentions"). `im:message.group_at_msg.include_bot:readonly` is
+     broader and only needed if you want events for mentions sent by other bots
+     too.
+   - Required: `im:message:send_as_bot` ("Send messages as an app") so PwrAgent
+     can reply and post status cards.
+   - Recommended: `im:message:readonly` ("Read direct messages and group chat
+     messages") because the message receive event and related Lark console
+     wiring reference it.
+   - Recommended: `im:message:update` ("Update message") so PwrAgent can refresh
+     or dismiss status cards instead of posting duplicates.
+   - Recommended for shared chats: `im:chat:readonly` ("Obtain group
+     information") so group membership events and chat metadata are available
+     when you allowlist group conversations.
+   - Broad shortcut: `im:message` ("Read and send direct messages and group chat
+     messages") covers multiple message read/send capabilities. It is fine for
+     a private internal app, but the narrower scopes above are easier to reason
+     about when Lark asks for approval.
+   New bot profile changes, event subscriptions, and permission scopes do not
+   take effect for a workspace until you create and publish a version of the
    internal app.
 6. Use webhook mode only as a fallback. If you set
    `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE=webhook`, configure event
