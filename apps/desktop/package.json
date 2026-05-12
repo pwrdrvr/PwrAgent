@@ -34,7 +34,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.63.1",
     "@pwragent/agent-core": "workspace:*",
     "@pwragent/codex-app-server-protocol": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
@@ -54,7 +53,6 @@
     "electron-log": "^5.4.3",
     "electron-updater": "^6.8.3",
     "node-fetch": "2.7.0",
-    "protobufjs": "7.5.7",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

@@ -32,11 +32,17 @@ export default defineConfig(({ command }) => {
             "@pwragent/messaging-provider-line",
             "@pwragent/messaging-provider-mattermost",
             "@pwragent/messaging-provider-slack",
-            "@pwragent/messaging-provider-telegram"
+            "@pwragent/messaging-provider-telegram",
+            "@larksuiteoapi/node-sdk",
+            "protobufjs",
+            "protobufjs/minimal"
           ]
         })
       ],
       build: {
+        commonjsOptions: {
+          transformMixedEsModules: true
+        },
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {

@@ -26,9 +26,6 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@larksuiteoapi/node-sdk':
-        specifier: 1.63.1
-        version: 1.63.1
       '@pwragent/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
@@ -86,9 +83,6 @@ importers:
       node-fetch:
         specifier: 2.7.0
         version: 2.7.0
-      protobufjs:
-        specifier: 7.5.7
-        version: 7.5.7
       react:
         specifier: ^19.2.0
         version: 19.2.5
