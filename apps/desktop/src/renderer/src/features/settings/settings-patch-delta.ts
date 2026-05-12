@@ -32,6 +32,9 @@ export function buildTelegramPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
+  if (snapshot.interactionMode.value !== candidate.interactionMode.value) {
+    patch.interactionMode = candidate.interactionMode.value;
+  }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
@@ -65,6 +68,9 @@ export function buildDiscordPatchDelta(
 
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.interactionMode.value !== candidate.interactionMode.value) {
+    patch.interactionMode = candidate.interactionMode.value;
   }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
@@ -102,6 +108,9 @@ export function buildMattermostPatchDelta(
 
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.interactionMode.value !== candidate.interactionMode.value) {
+    patch.interactionMode = candidate.interactionMode.value;
   }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
@@ -158,6 +167,9 @@ export function buildSlackPatchDelta(
 
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.interactionMode.value !== candidate.interactionMode.value) {
+    patch.interactionMode = candidate.interactionMode.value;
   }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
@@ -268,6 +280,9 @@ export function buildLinePatchDelta(
 
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.interactionMode.value !== candidate.interactionMode.value) {
+    patch.interactionMode = candidate.interactionMode.value;
   }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;

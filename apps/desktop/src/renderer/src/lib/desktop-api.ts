@@ -162,6 +162,7 @@ import type {
   DeleteDesktopPwrAgentProfileResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSettingsOpenRequest,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -429,6 +430,9 @@ export type DesktopApi = {
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  onOpenSettingsRequest?: (
+    callback: (request: DesktopSettingsOpenRequest) => void,
+  ) => () => void;
   writeSettingsConfig?: (
     request: WriteDesktopSettingsConfigRequest
   ) => Promise<DesktopSettingsWriteResponse>;

@@ -15,6 +15,7 @@ type Mattermost = DesktopSettingsSnapshot["messaging"]["mattermost"];
 function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
   return {
     enabled: { value: false, source: "default" },
+    interactionMode: { value: "buttons", source: "default" },
     streamingResponses: { value: false, source: "default" },
     botToken: { configured: false, source: "unset", writable: true },
     authorizedUserIds: { value: [], source: "default" },
@@ -26,6 +27,7 @@ function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
 function discordSnapshot(overrides: Partial<Discord> = {}): Discord {
   return {
     enabled: { value: false, source: "default" },
+    interactionMode: { value: "buttons", source: "default" },
     streamingResponses: { value: false, source: "default" },
     botToken: { configured: false, source: "unset", writable: true },
     applicationId: { value: "", source: "default" },
@@ -38,6 +40,7 @@ function discordSnapshot(overrides: Partial<Discord> = {}): Discord {
 function mattermostSnapshot(overrides: Partial<Mattermost> = {}): Mattermost {
   return {
     enabled: { value: false, source: "default" },
+    interactionMode: { value: "buttons", source: "default" },
     streamingResponses: { value: false, source: "default" },
     botToken: { configured: false, source: "unset", writable: true },
     hmacSecret: { configured: false, source: "unset", writable: true },
@@ -87,6 +90,18 @@ describe("buildTelegramPatchDelta", () => {
     };
     expect(buildTelegramPatchDelta(snapshot, candidate)).toEqual({
       streamingResponses: true,
+    });
+  });
+
+  it("emits interactionMode only when changed", () => {
+    const snapshot = telegramSnapshot();
+    const candidate: Telegram = {
+      ...snapshot,
+      interactionMode: { ...snapshot.interactionMode, value: "text" },
+    };
+
+    expect(buildTelegramPatchDelta(snapshot, candidate)).toEqual({
+      interactionMode: "text",
     });
   });
 

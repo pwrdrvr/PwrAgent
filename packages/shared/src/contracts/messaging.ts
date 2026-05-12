@@ -19,6 +19,11 @@ export const MESSAGING_TOOL_UPDATE_MODES = [
 
 export type MessagingToolUpdateMode = (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
 
+export const MESSAGING_INTERACTION_MODES = ["buttons", "text"] as const;
+
+export type MessagingInteractionMode =
+  (typeof MESSAGING_INTERACTION_MODES)[number];
+
 // String-literal primitives duplicated locally so shared/contracts/navigation.ts
 // can describe MessagingThreadBindingSummary without importing
 // @pwragent/messaging-interface (that would create a dependency

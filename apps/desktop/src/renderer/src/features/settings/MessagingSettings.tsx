@@ -34,6 +34,7 @@ import {
   type MessagingChannelKind,
   type MessagingPairingEntry,
   type MessagingPairingScope,
+  type MessagingInteractionMode,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
@@ -64,6 +65,7 @@ export function MessagingSettings(props: {
     secret: DesktopSettingsSecretName,
     value: string,
   ) => Promise<boolean>;
+  onInteractionModeChange: (mode: MessagingInteractionMode) => Promise<void>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
@@ -105,6 +107,7 @@ export function MessagingSettings(props: {
   const allowFullAccessThreadResume =
     props.snapshot.messaging.allowFullAccessThreadResume;
   const fullAccessWarning = props.snapshot.messaging.fullAccessWarning;
+  const interactionMode = props.snapshot.messaging.interactionMode;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const imageProfile = props.snapshot.messaging.attachments.imageProfile;
@@ -176,6 +179,17 @@ export function MessagingSettings(props: {
             }
             onChange={(enabled) => {
               void props.onMessagingEnabledChange(enabled);
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Default control style for button-capable chat platforms."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(interactionMode)}
+            value={interactionMode.value}
+            onChange={(mode) => {
+              void props.onInteractionModeChange(mode);
             }}
           />
           <SegmentedField
@@ -274,6 +288,23 @@ export function MessagingSettings(props: {
             state={telegram.botToken}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Override the global default for Telegram."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(telegram.interactionMode)}
+            value={telegram.interactionMode.value}
+            onChange={(interactionMode) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                interactionMode: {
+                  ...telegram.interactionMode,
+                  value: interactionMode,
+                },
+              });
+            }}
           />
           <SettingsField
             label="Connection test"
@@ -391,6 +422,23 @@ export function MessagingSettings(props: {
             state={discord.botToken}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Override the global default for Discord."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(discord.interactionMode)}
+            value={discord.interactionMode.value}
+            onChange={(interactionMode) => {
+              void props.onSaveDiscord({
+                ...discord,
+                interactionMode: {
+                  ...discord.interactionMode,
+                  value: interactionMode,
+                },
+              });
+            }}
           />
           <SettingsField
             label="Connection test"
@@ -523,6 +571,23 @@ export function MessagingSettings(props: {
             state={mattermost.botToken}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Override the global default for Mattermost."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(mattermost.interactionMode)}
+            value={mattermost.interactionMode.value}
+            onChange={(interactionMode) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                interactionMode: {
+                  ...mattermost.interactionMode,
+                  value: interactionMode,
+                },
+              });
+            }}
           />
           <TextField
             disabled={props.saving}
@@ -751,6 +816,23 @@ export function MessagingSettings(props: {
             state={slack.botToken}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Override the global default for Slack."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(slack.interactionMode)}
+            value={slack.interactionMode.value}
+            onChange={(interactionMode) => {
+              void props.onSaveSlack({
+                ...slack,
+                interactionMode: {
+                  ...slack.interactionMode,
+                  value: interactionMode,
+                },
+              });
+            }}
           />
           <SecretField
             disabled={props.saving || !slack.appToken.writable}
@@ -1207,6 +1289,23 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
+          <SegmentedField
+            disabled={props.saving}
+            label="Interaction mode"
+            sub="Override the global default for LINE."
+            options={INTERACTION_MODE_OPTIONS}
+            source={sourceBadge(line.interactionMode)}
+            value={line.interactionMode.value}
+            onChange={(interactionMode) => {
+              void props.onSaveLine({
+                ...line,
+                interactionMode: {
+                  ...line.interactionMode,
+                  value: interactionMode,
+                },
+              });
+            }}
+          />
           <SettingsField
             label="Connection test"
             sub="Validates the channel access token with LINE getBotInfo."
@@ -1392,6 +1491,14 @@ const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
   { label: "Yes - Always", value: "always" },
   { label: "Yes - Dismissable", value: "dismissable" },
   { label: "No", value: "never" },
+];
+
+const INTERACTION_MODE_OPTIONS: Array<{
+  label: string;
+  value: MessagingInteractionMode;
+}> = [
+  { label: "Buttons", value: "buttons" },
+  { label: "Text", value: "text" },
 ];
 
 const SLACK_INBOUND_MODE_OPTIONS: Array<{

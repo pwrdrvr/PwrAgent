@@ -1,4 +1,7 @@
-import type { MessagingToolUpdateMode } from "./messaging";
+import type {
+  MessagingInteractionMode,
+  MessagingToolUpdateMode,
+} from "./messaging";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "tiptap-wysiwyg-markdown-chips",
@@ -467,10 +470,12 @@ export type DesktopSettingsSnapshot = {
     allowFullAccessThreadResume: DesktopSettingsValue<boolean>;
     fullAccessWarning: DesktopSettingsValue<DesktopMessagingFullAccessWarningGlobalPolicy>;
     inputDebounceMs: DesktopSettingsValue<number>;
+    interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
+      interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
@@ -478,6 +483,7 @@ export type DesktopSettingsSnapshot = {
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;
+      interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       applicationId: DesktopSettingsValue<string>;
@@ -486,6 +492,7 @@ export type DesktopSettingsSnapshot = {
     };
     mattermost: {
       enabled: DesktopSettingsValue<boolean>;
+      interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       hmacSecret: DesktopSettingsSecretState;
@@ -499,6 +506,7 @@ export type DesktopSettingsSnapshot = {
     };
     slack: {
       enabled: DesktopSettingsValue<boolean>;
+      interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       appToken: DesktopSettingsSecretState;
@@ -529,6 +537,7 @@ export type DesktopSettingsSnapshot = {
     };
     line: {
       enabled: DesktopSettingsValue<boolean>;
+      interactionMode: DesktopSettingsValue<MessagingInteractionMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       channelAccessToken: DesktopSettingsSecretState;
       channelSecret: DesktopSettingsSecretState;
@@ -661,6 +670,7 @@ export type DesktopSettingsConfigPatch = {
     allowFullAccessThreadResume?: boolean;
     fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
+    interactionMode?: MessagingInteractionMode;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
@@ -669,12 +679,14 @@ export type DesktopSettingsConfigPatch = {
     };
     telegram?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
       authorizedSupergroups?: DesktopAuthorizedContact[];
     };
     discord?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: DesktopAuthorizedContact[];
@@ -682,6 +694,7 @@ export type DesktopSettingsConfigPatch = {
     };
     mattermost?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       serverUrl?: string;
       callbackBaseUrl?: string;
@@ -693,6 +706,7 @@ export type DesktopSettingsConfigPatch = {
     };
     slack?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;
       inboundMode?: "socket" | "events";
@@ -716,6 +730,7 @@ export type DesktopSettingsConfigPatch = {
     };
     line?: {
       enabled?: boolean;
+      interactionMode?: MessagingInteractionMode;
       streamingResponses?: boolean;
       webhookUrl?: string;
       callbackBaseUrl?: string;
@@ -790,6 +805,10 @@ export type ReadDesktopSettingsRequest = Record<string, never>;
 
 export type ReadDesktopSettingsResponse = {
   snapshot: DesktopSettingsSnapshot;
+};
+
+export type DesktopSettingsOpenRequest = {
+  section?: "applications" | "worktrees" | "messaging" | "models" | "experimental" | "about";
 };
 
 export type WriteDesktopSettingsConfigRequest = {

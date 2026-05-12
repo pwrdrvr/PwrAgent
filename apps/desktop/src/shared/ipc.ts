@@ -235,6 +235,7 @@ export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";
+export const SETTINGS_OPEN_REQUEST_CHANNEL = "settings:open-request";
 export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =

@@ -18,6 +18,7 @@ import type {
   DesktopSettingsValue,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
+  MessagingInteractionMode,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
@@ -51,6 +52,7 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_INTERACTION_MODE_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
   FEISHU_APP_ID_ENV,
   FEISHU_APP_SECRET_ENV,
@@ -76,6 +78,7 @@ import {
   LINE_CHANNEL_ACCESS_TOKEN_ENV,
   LINE_CHANNEL_SECRET_ENV,
   LINE_ENABLED_ENV,
+  LINE_INTERACTION_MODE_ENV,
   LINE_STREAMING_RESPONSES_ENV,
   LINE_WEBHOOK_URL_ENV,
   MATTERMOST_AUTHORIZED_CONVERSATIONS_ENV,
@@ -85,6 +88,7 @@ import {
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
   MATTERMOST_ENABLED_ENV,
+  MATTERMOST_INTERACTION_MODE_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
@@ -93,12 +97,14 @@ import {
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+  MESSAGING_INTERACTION_MODE_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_AUTHORIZED_USER_IDS_ENV,
   SLACK_AUTHORIZED_WORKSPACES_ENV,
   SLACK_BOT_TOKEN_ENV,
   SLACK_ENABLED_ENV,
   SLACK_INBOUND_MODE_ENV,
+  SLACK_INTERACTION_MODE_ENV,
   SLACK_REGISTER_SLASH_COMMANDS_ENV,
   SLACK_SIGNING_SECRET_ENV,
   SLACK_SLASH_COMMAND_PREFIX_ENV,
@@ -108,12 +114,14 @@ import {
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_INTERACTION_MODE_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
   WORKTREE_STORAGE_ENV,
   readEnvBoolean,
   readEnvInteger,
   readEnvList,
   readEnvMessagingImageProfile,
+  readEnvMessagingInteractionMode,
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
@@ -373,6 +381,10 @@ export class DesktopSettingsService {
     const feishuTenantRegion = this.resolveFeishuTenantRegion(
       config.messaging?.feishu?.tenantRegion,
     );
+    const messagingInteractionMode = this.resolveMessagingInteractionMode(
+      config.messaging?.interactionMode,
+      MESSAGING_INTERACTION_MODE_ENV,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -505,6 +517,7 @@ export class DesktopSettingsService {
         toolUpdateMode: this.resolveToolUpdateMode(
           config.messaging?.toolUpdateMode,
         ),
+        interactionMode: messagingInteractionMode,
         attachments: {
           imageProfile: this.resolveMessagingImageProfile(
             config.messaging?.attachments?.imageProfile,
@@ -526,6 +539,11 @@ export class DesktopSettingsService {
             false,
             TELEGRAM_ENABLED_ENV,
           ),
+          interactionMode: this.resolveMessagingInteractionMode(
+            config.messaging?.telegram?.interactionMode,
+            TELEGRAM_INTERACTION_MODE_ENV,
+            messagingInteractionMode.value,
+          ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.telegram?.streamingResponses,
             false,
@@ -546,6 +564,11 @@ export class DesktopSettingsService {
             config.messaging?.discord?.enabled,
             false,
             DISCORD_ENABLED_ENV,
+          ),
+          interactionMode: this.resolveMessagingInteractionMode(
+            config.messaging?.discord?.interactionMode,
+            DISCORD_INTERACTION_MODE_ENV,
+            messagingInteractionMode.value,
           ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.discord?.streamingResponses,
@@ -571,6 +594,11 @@ export class DesktopSettingsService {
             config.messaging?.mattermost?.enabled,
             false,
             MATTERMOST_ENABLED_ENV,
+          ),
+          interactionMode: this.resolveMessagingInteractionMode(
+            config.messaging?.mattermost?.interactionMode,
+            MATTERMOST_INTERACTION_MODE_ENV,
+            messagingInteractionMode.value,
           ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.mattermost?.streamingResponses,
@@ -615,6 +643,11 @@ export class DesktopSettingsService {
             config.messaging?.slack?.enabled,
             false,
             SLACK_ENABLED_ENV,
+          ),
+          interactionMode: this.resolveMessagingInteractionMode(
+            config.messaging?.slack?.interactionMode,
+            SLACK_INTERACTION_MODE_ENV,
+            messagingInteractionMode.value,
           ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.slack?.streamingResponses,
@@ -705,6 +738,11 @@ export class DesktopSettingsService {
             config.messaging?.line?.enabled,
             false,
             LINE_ENABLED_ENV,
+          ),
+          interactionMode: this.resolveMessagingInteractionMode(
+            config.messaging?.line?.interactionMode,
+            LINE_INTERACTION_MODE_ENV,
+            messagingInteractionMode.value,
           ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.line?.streamingResponses,
@@ -1525,6 +1563,27 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? "dismissable",
       source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveMessagingInteractionMode(
+    configValue: MessagingInteractionMode | undefined,
+    envKey: string,
+    defaultValue: MessagingInteractionMode = "buttons",
+  ): DesktopSettingsValue<MessagingInteractionMode> {
+    const envValue = readEnvMessagingInteractionMode(this.env, envKey);
+    if (envValue.value !== undefined) {
+      return {
+        value: envValue.value,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+      error: envValue.error,
     };
   }
 

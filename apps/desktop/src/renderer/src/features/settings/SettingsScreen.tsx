@@ -95,6 +95,7 @@ export function SettingsScreen(props: {
   settings: DesktopSettingsState;
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
+  initialSectionRequestId?: number;
   onClose?: () => void;
   /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
@@ -108,7 +109,7 @@ export function SettingsScreen(props: {
   // a future deep-link), follow it.
   useEffect(() => {
     if (props.initialSection) setSection(props.initialSection);
-  }, [props.initialSection]);
+  }, [props.initialSection, props.initialSectionRequestId]);
   const scrollClampFrameRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     const clampDocumentScroll = () => {
@@ -414,6 +415,13 @@ function SettingsSectionBody(props: {
         onPairingSettingsChanged={props.settings.refresh}
         onClearSecret={props.settings.clearSecret}
         onReplaceSecret={props.settings.replaceSecret}
+        onInteractionModeChange={async (interactionMode) => {
+          await props.settings.writeConfig({
+            messaging: {
+              interactionMode,
+            },
+          });
+        }}
         onToolUpdateModeChange={async (toolUpdateMode) => {
           await props.settings.writeConfig({
             messaging: {

@@ -190,6 +190,8 @@ function DesktopAppShell(props: {
   const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
+  const [settingsInitialSectionRequestId, setSettingsInitialSectionRequestId] =
+    useState(0);
   const desktopApi = props.desktopApi;
   // Spawning / focusing the Messaging Activity window is fire-and-forget
   // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
@@ -357,6 +359,7 @@ function DesktopAppShell(props: {
       setSettingsInitialSection(
         isSettingsSection(section) ? section : undefined,
       );
+      setSettingsInitialSectionRequestId((id) => id + 1);
       setMainView("settings");
     });
   }, [desktopApi]);
@@ -725,6 +728,7 @@ function DesktopAppShell(props: {
                 appearanceController={props.appearanceController}
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
+                initialSectionRequestId={settingsInitialSectionRequestId}
                 profiles={profiles}
                 settings={settings}
                 onClose={() => setMainView("thread")}
