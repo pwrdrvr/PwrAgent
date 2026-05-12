@@ -1035,6 +1035,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           actionId: action.id,
           allowedActorIds: params.allowedActorIds,
           bindingId: params.bindingId,
+          browseSessionId: browseSessionIdForIntent(params.intent),
           channel: params.channelRef,
           createdAt: issuedAt,
           updatedAt: issuedAt,
@@ -1851,6 +1852,14 @@ function callbackAllowedActorIds(
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.kind === "thread_picker" ||
+    intent.kind === "project_picker" ||
+    intent.kind === "confirmation"
+    ? intent.browseSessionId
+    : undefined;
 }
 
 function feishuCallbackRecordId(

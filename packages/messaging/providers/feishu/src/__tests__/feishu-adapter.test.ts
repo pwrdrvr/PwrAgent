@@ -141,6 +141,53 @@ describe("FeishuAdapter", () => {
     });
   });
 
+  it("persists browse session ids on picker callback handles", async () => {
+    const store = fakeStore();
+    const spies: { sent: unknown[] } = { sent: [] };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await adapter.deliver({
+      id: "resume-picker",
+      kind: "thread_picker",
+      browseSessionId: "browse-1",
+      createdAt: 1,
+      fallbackText: "Reply next.",
+      navigation: {
+        backend: "all",
+        fetchedAt: 1,
+        unchanged: false,
+      },
+      page: {
+        actions: [{ id: "browse:page:next", label: "Next", value: { pageIndex: 1 } }],
+        items: [],
+        pageIndex: 0,
+        pageSize: 8,
+        totalItems: 16,
+      },
+      prompt: "Choose a thread",
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(store.records).toHaveLength(1);
+    expect(store.records[0]).toMatchObject({
+      actionId: "browse:page:next",
+      browseSessionId: "browse-1",
+      pendingIntentId: "resume-picker",
+    });
+  });
+
   it("normalizes authorized webhook text events", async () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,
