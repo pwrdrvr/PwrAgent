@@ -155,6 +155,7 @@ export class CredentialTester {
   ): Promise<SettingsCredentialTestResult> {
     const startedAt = Date.now();
     let result: SettingsCredentialTestResult;
+    log.info("credential test started", { kind });
     try {
       result = await this.runProbe(kind, startedAt);
     } catch (error) {
@@ -167,11 +168,19 @@ export class CredentialTester {
       };
     }
     this.lastResults.set(kind, result);
-    log.debug("credential test", {
+    const logData = {
       kind,
       status: result.status,
       durationMs: result.durationMs,
-    });
+      ...(result.account ? { account: result.account } : {}),
+      ...(result.detail ? { detail: result.detail } : {}),
+      ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+    };
+    if (result.status === "failed") {
+      log.warn("credential test failed", logData);
+    } else {
+      log.info("credential test completed", logData);
+    }
     return result;
   }
 
