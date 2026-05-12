@@ -97,6 +97,22 @@ export function MessagingSettings(props: {
     ? !runtimeMessaging.disabled
     : messagingEnabled.value;
   const platformControlsDisabled = props.saving || !masterEnabled;
+  const leaseHolderLabel = runtimeMessaging.leaseHolder
+    ? [
+        runtimeMessaging.leaseHolder.cwdHint,
+        runtimeMessaging.leaseHolder.processId
+          ? `pid ${runtimeMessaging.leaseHolder.processId}`
+          : undefined,
+      ].filter(Boolean).join(" - ")
+    : undefined;
+  const runtimeWarningTitle =
+    runtimeMessaging.disabledReasonKind === "lease_held"
+      ? "Messaging active in another app instance"
+      : "Messaging disabled for this app instance";
+  const runtimeWarningBody =
+    runtimeMessaging.disabledReasonKind === "lease_held"
+      ? `Messaging is off here because another PwrAgent instance holds this profile's messaging lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance or wait for its lease to expire, then flip the master toggle to try again.`
+      : "Messaging is off because the app was launched with the no-messaging flag. You can override this for the current session by flipping the master toggle below, but make sure messaging is off in any other PwrAgent instances first. The override applies to this session only; the saved default is unchanged.";
 
   return (
     <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
@@ -111,15 +127,11 @@ export function MessagingSettings(props: {
           <div className="settings-panel__header">
             <div>
               <p className="eyebrow">Runtime Override</p>
-              <h2>Messaging disabled for this app instance</h2>
+              <h2>{runtimeWarningTitle}</h2>
             </div>
           </div>
           <p className="settings-row__description">
-            Messaging is off because the app was launched with the no-messaging
-            flag. You can override this for the current session by flipping the
-            master toggle below, but make sure messaging is off in any other
-            PwrAgent instances first. The override applies to this session only;
-            the saved default is unchanged.
+            {runtimeWarningBody}
           </p>
         </section>
       ) : null}
@@ -141,7 +153,9 @@ export function MessagingSettings(props: {
             }
             source={
               runtimeMessaging.overrideActive
-                ? "session"
+                ? runtimeMessaging.disabledReasonKind === "lease_held"
+                  ? "lease"
+                  : "session"
                 : sourceBadge(messagingEnabled)
             }
             onChange={(enabled) => {

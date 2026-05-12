@@ -155,10 +155,38 @@ CREATE TABLE IF NOT EXISTS monitor_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_subscriptions_channel
   ON monitor_subscriptions(channel_kind, channel_id);
+
+CREATE TABLE IF NOT EXISTS app_runtime_instances (
+  instance_id                 TEXT PRIMARY KEY,
+  profile_name                TEXT NOT NULL,
+  process_id                  INTEGER NOT NULL,
+  cwd_hint                    TEXT,
+  started_at                  INTEGER NOT NULL,
+  heartbeat_at                INTEGER NOT NULL,
+  exited_at                   INTEGER,
+  desired_messaging_enabled   INTEGER NOT NULL,
+  effective_messaging_enabled INTEGER NOT NULL,
+  disabled_reason             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_heartbeat
+  ON app_runtime_instances(profile_name, heartbeat_at DESC);
+
+CREATE TABLE IF NOT EXISTS messaging_runtime_lease (
+  lease_key         TEXT PRIMARY KEY,
+  owner_instance_id TEXT NOT NULL,
+  acquired_at       INTEGER NOT NULL,
+  heartbeat_at      INTEGER NOT NULL,
+  expires_at        INTEGER NOT NULL,
+  released_at       INTEGER,
+  status            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_runtime_lease_status_expires
+  ON messaging_runtime_lease(status, expires_at);
 `;
 
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const APP_RUNTIME_INSTANCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
@@ -264,6 +292,16 @@ export class StateDb {
           "UPDATE messaging_pairing_tokens SET status = 'expired' WHERE status IN ('pending', 'observed') AND expires_at < ?",
         )
         .run(now);
+      this.db
+        .prepare(
+          "UPDATE messaging_runtime_lease SET status = 'expired' WHERE status = 'active' AND expires_at < ?",
+        )
+        .run(now);
+      this.db
+        .prepare(
+          "DELETE FROM app_runtime_instances WHERE heartbeat_at < ? AND exited_at IS NOT NULL",
+        )
+        .run(now - APP_RUNTIME_INSTANCE_RETENTION_MS);
       this.db
         .prepare("DELETE FROM deliveries WHERE created_at < ?")
         .run(now - DELIVERIES_RETENTION_MS);

@@ -93,10 +93,21 @@ Single database containing all persistent state. Opened with WAL mode, `synchron
 | `directory_launchpads` | Per-directory launchpad drafts and settings |
 | `threads` | Thread overlay state (seen timestamps, git branch, linked dirs) |
 | `secrets` | `safeStorage`-encrypted secrets (bot tokens, API keys) |
+| `app_runtime_instances` | Per-process startup/heartbeat records for instances using this profile |
+| `messaging_runtime_lease` | Singleton profile lease that allows only one live instance to run messaging adapters |
 
 ## Multi-Instance Access
 
-Multiple desktop instances can share the same profile's `state.db` safely. sqlite WAL mode serializes writes automatically. No external lockfile is required.
+Multiple desktop instances can share the same profile's `state.db` safely. sqlite WAL mode serializes writes automatically. No external lockfile is required for normal state access.
+
+Messaging adapters are single-holder per profile. Each desktop process records
+an `app_runtime_instances` heartbeat, and only the process holding the
+`messaging_runtime_lease` starts provider adapters. If the holder exits cleanly,
+it releases the lease during shutdown. If it crashes or is killed, the lease
+expires after missed heartbeats and another instance can acquire it. This lease
+coordinates local processes that share the same profile database; it is not a
+cross-machine distributed lock for two different profile directories or two
+external bot deployments using the same token.
 
 ## Migration
 

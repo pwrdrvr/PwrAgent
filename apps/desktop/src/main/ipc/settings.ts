@@ -39,6 +39,7 @@ import { CredentialTester } from "../credential-tester/credential-tester";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
+import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { validateGhCommand } from "../settings/gh-discovery";
 
 function getService(service?: DesktopSettingsService): DesktopSettingsService {
@@ -85,11 +86,12 @@ async function applyLatestMessagingRuntimeConfig(
 ): Promise<void> {
   const runtime = getDesktopMessagingRuntime();
   const runtimeOverride = resolveRuntimeMessagingOverride();
-  await runtime.applyConfig(
-    await loadDesktopMessagingConfigFromSettings(service, process.env, {
-      logStartupEligibility: true,
-    }),
+  await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
+    runtime,
+    (options) =>
+      loadDesktopMessagingConfigFromSettings(service, process.env, options),
     {
+      logStartupEligibility: true,
       allowStart: !runtimeOverride.disabled || runtime.isEnabled(),
     },
   );
@@ -98,10 +100,18 @@ async function applyLatestMessagingRuntimeConfig(
 function applyRuntimeMessagingSnapshot(
   snapshot: DesktopSettingsSnapshot,
 ): DesktopSettingsSnapshot {
-  const overrideActive = snapshot.runtime.messaging.overrideActive === true;
+  const leaseSnapshot = getRuntimeMessagingLeaseCoordinator().snapshot();
+  const leaseOverrideActive = leaseSnapshot.disabledReasonKind === "lease_held";
+  const overrideActive =
+    snapshot.runtime.messaging.overrideActive === true || leaseOverrideActive;
   const runtimeEnabled = overrideActive
     ? getDesktopMessagingRuntime().isEnabled()
     : snapshot.messaging.enabled.value;
+  const disabledReason =
+    leaseSnapshot.disabledReason ?? snapshot.runtime.messaging.disabledReason;
+  const disabledReasonKind =
+    leaseSnapshot.disabledReasonKind
+    ?? snapshot.runtime.messaging.disabledReasonKind;
   return {
     ...snapshot,
     runtime: {
@@ -111,6 +121,12 @@ function applyRuntimeMessagingSnapshot(
         disabled: overrideActive
           ? !runtimeEnabled
           : snapshot.messaging.enabled.value === false,
+        overrideActive,
+        ...(disabledReason ? { disabledReason } : {}),
+        ...(disabledReasonKind ? { disabledReasonKind } : {}),
+        ...(leaseSnapshot.leaseHolder
+          ? { leaseHolder: leaseSnapshot.leaseHolder }
+          : {}),
       },
     },
   };

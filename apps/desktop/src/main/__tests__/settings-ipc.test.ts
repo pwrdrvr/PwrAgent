@@ -18,13 +18,35 @@ const providerMocks = vi.hoisted(() => ({
   resolveSlackContact: vi.fn(),
 }));
 const runtimeMock = vi.hoisted(() => ({
-  applyConfig: vi.fn(async () => undefined),
+  applyConfig: vi.fn(async (_config: unknown, _options?: unknown) => undefined),
   getPlatformCredentialMetadata: vi.fn(),
   isEnabled: vi.fn(() => false),
   requestCredentialValidation: vi.fn(),
 }));
 const messagingConfigMocks = vi.hoisted(() => ({
   loadDesktopMessagingConfigFromSettings: vi.fn(),
+}));
+const leaseCoordinatorMock = vi.hoisted(() => ({
+  applyLatestConfig: vi.fn(
+    async (
+      runtime: typeof runtimeMock,
+      loadConfig: (options: unknown) => Promise<unknown>,
+      options: { allowStart?: boolean },
+    ) => {
+      const config = await loadConfig({
+        logStartupEligibility: true,
+      });
+      await runtime.applyConfig(config, {
+        allowStart: options.allowStart ?? true,
+      });
+      return { enabled: runtime.isEnabled() };
+    },
+  ),
+  snapshot: vi.fn(() => ({
+    instanceId: "test-instance",
+    effectiveMessagingEnabled: false,
+    leaseHeld: false,
+  })),
 }));
 
 vi.mock("electron", () => ({
@@ -68,6 +90,10 @@ vi.mock("../messaging/messaging-config", async (importOriginal) => {
   };
 });
 
+vi.mock("../runtime-messaging-lease", () => ({
+  getRuntimeMessagingLeaseCoordinator: vi.fn(() => leaseCoordinatorMock),
+}));
+
 vi.mock("@pwragent/messaging-provider-telegram", () => ({
   resolveContact: providerMocks.resolveTelegramContact,
 }));
@@ -100,6 +126,8 @@ describe("settings ipc", () => {
     providerMocks.resolveMattermostContact.mockReset();
     providerMocks.resolveSlackContact.mockReset();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
+    leaseCoordinatorMock.applyLatestConfig.mockClear();
+    leaseCoordinatorMock.snapshot.mockClear();
     runtimeMock.applyConfig.mockClear();
     runtimeMock.getPlatformCredentialMetadata.mockReset();
     runtimeMock.isEnabled.mockClear();

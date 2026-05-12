@@ -3,6 +3,7 @@ import {
   resolveActiveProfilePath,
   updateLastUsed,
 } from "../profile";
+import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
 import { migrateIfNeeded } from "./migration.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
@@ -11,14 +12,21 @@ import { StateDb } from "./state-db.js";
 let stateDb: StateDb | null = null;
 let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
+let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 
 export function initializeAppState(): {
   stateDb: StateDb;
   messagingStore: SqliteMessagingStore;
   overlayStore: SqliteOverlayStore;
+  runtimeInstanceStore: AppRuntimeInstanceStore;
 } {
   if (stateDb) {
-    return { stateDb, messagingStore: messagingStore!, overlayStore: overlayStore! };
+    return {
+      stateDb,
+      messagingStore: messagingStore!,
+      overlayStore: overlayStore!,
+      runtimeInstanceStore: runtimeInstanceStore!,
+    };
   }
 
   const { profileName } = ensureProfileExists();
@@ -32,8 +40,9 @@ export function initializeAppState(): {
 
   messagingStore = new SqliteMessagingStore(stateDb);
   overlayStore = new SqliteOverlayStore(stateDb);
+  runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
 
-  return { stateDb, messagingStore, overlayStore };
+  return { stateDb, messagingStore, overlayStore, runtimeInstanceStore };
 }
 
 export function getAppStateDb(): StateDb {
@@ -51,12 +60,18 @@ export function getAppOverlayStore(): SqliteOverlayStore {
   return overlayStore;
 }
 
+export function getAppRuntimeInstanceStore(): AppRuntimeInstanceStore {
+  if (!runtimeInstanceStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  return runtimeInstanceStore;
+}
+
 export function disposeAppState(): void {
   if (stateDb) {
     stateDb.close();
     stateDb = null;
     messagingStore = null;
     overlayStore = null;
+    runtimeInstanceStore = null;
   }
 }
 
@@ -64,4 +79,5 @@ export function resetAppStateForTests(): void {
   stateDb = null;
   messagingStore = null;
   overlayStore = null;
+  runtimeInstanceStore = null;
 }

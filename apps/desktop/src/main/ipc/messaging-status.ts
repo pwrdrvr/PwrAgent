@@ -29,6 +29,7 @@ import { getMainLogger } from "../log";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
+import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { subscribersForChannel } from "../window-channels";
 import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -360,11 +361,12 @@ export function registerMessagingStatusIpcHandlers(): void {
       if (!pairing) throw new Error("Pairing request not found.");
       const approval = buildPairingApprovalPatch(pairing, await service.readSettings());
       const next = await service.writeConfigPatch(approval.patch);
-      await runtime.applyConfig(
-        await loadDesktopMessagingConfigFromSettings(service, process.env, {
+      await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
+        runtime,
+        (options) => loadDesktopMessagingConfigFromSettings(service, process.env, options),
+        {
           logStartupEligibility: true,
-        }),
-        { allowStart: true },
+        },
       );
       const consumed = markPairingConsumed(request.entryId);
       recordPairingActivity(consumed ?? pairing, "Approved pairing request");
@@ -430,27 +432,43 @@ export function registerMessagingStatusIpcHandlers(): void {
       request: SetMessagingEnabledRequest,
     ): Promise<SetMessagingEnabledResponse> => {
       if (request.enabled) {
-        await runtime.applyConfig(
-          await loadDesktopMessagingConfigFromSettings(
+        const result = await getRuntimeMessagingLeaseCoordinator().applyLatestConfig(
+          runtime,
+          (options) => loadDesktopMessagingConfigFromSettings(
             getDesktopSettingsService(),
             process.env,
-            {
-              logStartupEligibility: true,
-              messagingEnabledOverride: true,
-            },
+            options,
           ),
-          { allowStart: true },
+          {
+            logStartupEligibility: true,
+            messagingEnabledOverride: true,
+          },
         );
+        const override = resolveRuntimeMessagingOverride();
+        return {
+          enabled: result.enabled,
+          overridden: override.disabled || result.disabledReasonKind === "lease_held",
+          ...(override.reason ? { overrideReason: override.reason } : {}),
+          ...(result.disabledReason ? { disabledReason: result.disabledReason } : {}),
+          ...(result.disabledReasonKind
+            ? { disabledReasonKind: result.disabledReasonKind }
+            : {}),
+          ...(result.leaseHolder ? { leaseHolder: result.leaseHolder } : {}),
+        };
       } else {
-        await runtime.stop();
+        const result = await getRuntimeMessagingLeaseCoordinator()
+          .disableForSession(runtime);
+        const override = resolveRuntimeMessagingOverride();
+        return {
+          enabled: result.enabled,
+          overridden: override.disabled,
+          ...(override.reason ? { overrideReason: override.reason } : {}),
+          ...(result.disabledReason ? { disabledReason: result.disabledReason } : {}),
+          ...(result.disabledReasonKind
+            ? { disabledReasonKind: result.disabledReasonKind }
+            : {}),
+        };
       }
-
-      const override = resolveRuntimeMessagingOverride();
-      return {
-        enabled: runtime.isEnabled(),
-        overridden: override.disabled,
-        ...(override.reason ? { overrideReason: override.reason } : {}),
-      };
     },
   );
 

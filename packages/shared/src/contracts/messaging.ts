@@ -239,10 +239,26 @@ export type SetMessagingEnabledRequest = {
 export type SetMessagingEnabledResponse = {
   /** Effective runtime state after the toggle. */
   enabled: boolean;
-  /** True when the process was launched with a no-messaging override. */
+  /** True when this process cannot use saved messaging as-is. */
   overridden: boolean;
   /** Human-readable explanation of the launch override, when applicable. */
   overrideReason?: string;
+  /** Effective runtime-disabled reason after the toggle, when applicable. */
+  disabledReason?: string;
+  disabledReasonKind?:
+    | "explicit_override"
+    | "lease_held"
+    | "no_runnable_adapters"
+    | "runtime_stopped"
+    | "startup_error"
+    | "saved_disabled";
+  leaseHolder?: {
+    instanceId: string;
+    processId?: number;
+    cwdHint?: string;
+    startedAt?: number;
+    expiresAt: number;
+  };
 };
 
 export type MessagingPairingScope = "user_dm" | "bucket" | "user_in_group";
