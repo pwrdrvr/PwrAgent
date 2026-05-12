@@ -528,6 +528,9 @@ describe("FeishuAdapter", () => {
         },
       },
     });
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
     await adapter.stop();
 
     expect(events).toEqual([
@@ -540,6 +543,76 @@ describe("FeishuAdapter", () => {
         },
       }),
     ]);
+  });
+
+  it("acknowledges card callbacks without waiting for downstream handling", async () => {
+    const store = fakeStore();
+    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = { sent: [] };
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [{ id: "oc_chat", displayName: "Ops" }],
+      },
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+    await adapter.deliver({
+      id: "resume-picker",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Choose a thread",
+      actions: [{ id: "bind:codex:thread-1", label: "Resume" }],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        channel: {
+          channel: "feishu",
+          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    const card = spies.sent[0]?.card as {
+      elements: Array<{ actions?: Array<{ value?: { handle?: string } }> }>;
+    };
+    const actionElement = card.elements.find((element) => Array.isArray(element.actions));
+    const handle = actionElement?.actions?.[0]?.value?.handle;
+    let releaseListener: (() => void) | undefined;
+    const listenerDone = new Promise<void>((resolve) => {
+      releaseListener = resolve;
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+      await listenerDone;
+    });
+
+    await expect(adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_resume",
+        event_type: "card.action.trigger",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        operator: { open_id: "ou_user" },
+        tenant_key: "tenant_1",
+        context: {
+          open_chat_id: "oc_chat",
+          open_message_id: "om_sent",
+        },
+        action: {
+          value: { handle },
+        },
+      },
+    })).resolves.toEqual({ status: 200 });
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
+    releaseListener?.();
+    await adapter.stop();
   });
 
   it("requests low-permission bot identity on startup", async () => {

@@ -17,6 +17,7 @@ import type {
   MessagingConversationKind,
   MessagingDeliveryResult,
   MessagingDeliveryScope,
+  MessagingInboundCallbackEvent,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
@@ -834,7 +835,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       return;
     }
 
-    await this.listener?.({
+    this.dispatchInboundCallback({
       id: payload.header?.event_id ?? `${signed.handle}:${this.now()}`,
       kind: "callback",
       actor,
@@ -849,6 +850,20 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       receivedAt: this.now(),
       ...(record.surface?.state ? { routingState: record.surface.state } : {}),
     });
+  }
+
+  private dispatchInboundCallback(event: MessagingInboundCallbackEvent): void {
+    const listener = this.listener;
+    if (!listener) return;
+    void Promise.resolve()
+      .then(() => listener(event))
+      .catch((error) => {
+        this.logger.warn?.("feishu callback dispatch failed", {
+          actionId: event.actionId,
+          eventId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
 
   private async authorizeInbound(params: {
