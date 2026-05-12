@@ -1,10 +1,17 @@
-# Messaging Platform Integration
+# Messaging Platform Integration Operator Guide
 
 PwrAgent can run messaging adapters from the Electron main process so an
 allowlisted Telegram, Discord, Mattermost, Slack, Feishu/Lark, or LINE user can
 choose a thread, bind the current conversation, and send free-form text into that thread. The
 workflow logic is shared; the providers only own transport, formatting,
 callback handles, and platform limits.
+
+This document is the operator/admin setup guide. It intentionally includes
+per-provider configuration, permissions, callback URLs, and smoke-test notes.
+The contributor guide for implementing a new adapter is
+[`docs/messaging-adding-a-provider.md`](messaging-adding-a-provider.md). Provider
+packages may also keep rough setup notes next to the adapter when a platform's
+console behavior is still being validated.
 
 ## Commands
 
