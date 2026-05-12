@@ -4155,14 +4155,7 @@ export class DesktopBackendRegistry {
         projectKey: params.thread.projectKey,
         gitBranch: params.thread.observedGitBranch ?? params.thread.gitBranch,
       });
-      return [
-        {
-          branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
-          removedWorktree: false,
-          deletedBranch: false,
-          skippedReason: "No linked worktree directories were available for archive cleanup.",
-        },
-      ];
+      return [];
     }
 
     return await Promise.all(

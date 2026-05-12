@@ -3028,7 +3028,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("reports skipped cleanup when an archived thread has no linked worktrees", async () => {
+  it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive local thread",
@@ -3060,14 +3060,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(archiveWorktree).not.toHaveBeenCalled();
-    expect(response.cleanup).toEqual([
-      {
-        branch: "main",
-        removedWorktree: false,
-        deletedBranch: false,
-        skippedReason: "No linked worktree directories were available for archive cleanup.",
-      },
-    ]);
+    expect(response.cleanup).toEqual([]);
 
     await registry.close();
   });
