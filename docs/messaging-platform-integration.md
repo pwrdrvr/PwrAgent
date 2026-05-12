@@ -396,6 +396,12 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
    (`oc_...`) or tenant keys for shared conversations; empty shared-surface
    allowlists deny shared chat access.
 
+In Feishu / Lark group chats, PwrAgent's supported path is mention-triggered:
+type `@` and select the bot when sending a bound-thread message. Direct
+messages do not need the mention. Some tenants expose broader group-message
+read permissions, but those permissions are not the default operator path and
+may require extra workspace approval.
+
 Feishu / Lark interactive cards carry only signed opaque callback handles in
 button values. The persisted handle record owns the action id, binding id,
 allowed actors, and routing state so buttons survive app restarts and fail

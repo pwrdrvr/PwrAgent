@@ -920,6 +920,39 @@ describe("MessagingController", () => {
     });
   });
 
+  it("tells Feishu group bindings to @mention the bot", async () => {
+    const harness = await createHarness();
+    const feishuGroupChannel = {
+      channel: "feishu" as const,
+      conversation: {
+        id: "oc_chat",
+        kind: "channel" as const,
+        parentId: "tenant_1",
+      },
+    };
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel: feishuGroupChannel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
+      kind: "confirmation",
+      title: "Thread bound",
+      body: expect.stringContaining("@mention this bot"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("@mention this bot"),
+    });
+  });
+
   it("cycles per-binding streaming mode from the status card", async () => {
     const harness = await createHarness();
     await bindThread(harness);

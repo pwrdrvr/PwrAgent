@@ -114,6 +114,7 @@ export function buildBindingStatusIntent(params: {
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
       `Branch: ${branch ?? unavailable()}`,
       params.threadState.missing ? "Thread state: unavailable" : undefined,
+      mentionRequiredLine(params.binding),
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
@@ -141,6 +142,13 @@ export function buildBindingStatusIntent(params: {
       toolUpdateMode,
     }),
   };
+}
+
+function mentionRequiredLine(binding: MessagingBindingRecord): string | undefined {
+  return binding.channel.channel === "feishu" &&
+    binding.channel.conversation.kind !== "dm"
+    ? "Input: @mention this bot for messages to reach this bound thread."
+    : undefined;
 }
 
 function buildStatusActions(params: {

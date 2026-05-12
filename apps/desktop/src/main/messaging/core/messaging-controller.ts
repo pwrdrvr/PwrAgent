@@ -1547,8 +1547,8 @@ export class MessagingController {
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Thread bound",
-          body: "Messages in this conversation will route to the selected thread.",
-          fallbackText: "Send a message to continue the thread.",
+          body: boundThreadConfirmationBody(binding),
+          fallbackText: boundThreadFallbackText(binding),
         }),
         binding,
       );
@@ -2720,8 +2720,8 @@ export class MessagingController {
               }
             : undefined,
           title: "Thread bound",
-          body: "Messages in this conversation will route to the selected thread.",
-          fallbackText: "Send a message to continue the thread.",
+          body: boundThreadConfirmationBody(updatedBinding),
+          fallbackText: boundThreadFallbackText(updatedBinding),
           targetSurface: session.surface,
         }),
         undefined,
@@ -5677,6 +5677,24 @@ function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversa
     case "dm":
       return "conversation";
   }
+}
+
+function boundThreadConfirmationBody(binding: MessagingBindingRecord): string {
+  return [
+    "Messages in this conversation will route to the selected thread.",
+    feishuMentionRequiredNote(binding),
+  ].filter((line): line is string => Boolean(line)).join("\n\n");
+}
+
+function boundThreadFallbackText(binding: MessagingBindingRecord): string {
+  return feishuMentionRequiredNote(binding) ?? "Send a message to continue the thread.";
+}
+
+function feishuMentionRequiredNote(binding: MessagingBindingRecord): string | undefined {
+  return binding.channel.channel === "feishu" &&
+    binding.channel.conversation.kind !== "dm"
+    ? "In this Feishu / Lark group, @mention this bot for messages to reach the bound thread."
+    : undefined;
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
