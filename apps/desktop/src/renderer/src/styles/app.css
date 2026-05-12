@@ -4509,6 +4509,8 @@ textarea,
   background:
     linear-gradient(180deg, rgba(255, 138, 31, 0.08), rgba(255, 138, 31, 0.02)),
     var(--bg-panel-elevated);
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .transcript-review__header {
