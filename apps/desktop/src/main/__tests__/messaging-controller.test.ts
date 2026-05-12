@@ -2301,6 +2301,7 @@ describe("MessagingController", () => {
       expect(vi.getTimerCount()).toBe(1);
     } finally {
       harness.controller.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2350,6 +2351,7 @@ describe("MessagingController", () => {
       });
     } finally {
       harness.controller.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2400,6 +2402,7 @@ describe("MessagingController", () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       harness.controller.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2436,6 +2439,7 @@ describe("MessagingController", () => {
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       harness.controller.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2464,10 +2468,51 @@ describe("MessagingController", () => {
       await harness.controller.startMonitoringForEnabledBindings();
 
       expect(harness.listBackends).toHaveBeenCalled();
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+        backend: "all",
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Monitor: Recent threads"),
+      });
       expect(vi.getTimerCount()).toBe(1);
-      expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
     } finally {
       harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders enabled channel Monitor subscriptions immediately on controller startup", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({ channel: "telegram" });
+    try {
+      await harness.store.upsertMonitorSubscription({
+        id: "monitor:telegram:dm::chat-1",
+        channel: buildCommandEvent("/monitor").channel,
+        authorizedActorIds: ["user-1"],
+        createdAt: 1000,
+        updatedAt: 1000,
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          updatedAt: 1000,
+        },
+      });
+      harness.getNavigationSnapshot.mockClear();
+
+      await harness.controller.startMonitoringForEnabledBindings();
+
+      expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+        backend: "all",
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Monitor: Recent threads"),
+      });
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
     }
   });
 

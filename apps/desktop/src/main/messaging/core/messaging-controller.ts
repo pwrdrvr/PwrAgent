@@ -410,7 +410,7 @@ export class MessagingController {
         });
       for (const subscription of subscriptions) {
         if (subscription.monitor.enabled) {
-          this.scheduleMonitorSubscriptionTick(subscription);
+          await this.runMonitorSubscriptionTick(subscription.id);
         }
       }
     }
@@ -422,7 +422,7 @@ export class MessagingController {
       );
       for (const binding of bindings) {
         if (binding.monitor?.enabled) {
-          this.scheduleMonitorTick(binding);
+          await this.runMonitorTick(binding.id);
         }
       }
     }
