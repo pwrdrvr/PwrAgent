@@ -866,6 +866,10 @@ describe("DesktopSettingsService", () => {
       value: "lark",
       source: "config",
     });
+    expect(snapshot.messaging.feishu.inboundMode).toEqual({
+      value: "persistent",
+      source: "default",
+    });
     expect(snapshot.messaging.feishu.tenantUrl).toEqual({
       value: "https://open.larksuite.com",
       source: "default",

@@ -901,6 +901,20 @@ export function MessagingSettings(props: {
           />
           <SegmentedField
             disabled={props.saving}
+            label="Event subscription"
+            sub="Persistent connection is the default. It keeps callbacks on an outbound WebSocket so you do not expose a local port through a public tunnel."
+            options={FEISHU_INBOUND_MODE_OPTIONS}
+            source={sourceBadge(feishu.inboundMode)}
+            value={feishu.inboundMode.value}
+            onChange={(inboundMode) => {
+              void props.onSaveFeishu({
+                ...feishu,
+                inboundMode: { ...feishu.inboundMode, value: inboundMode },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
             label="Tenant region"
             sub="Feishu uses the China endpoint; Lark uses the global endpoint."
             options={FEISHU_TENANT_REGION_OPTIONS}
@@ -940,9 +954,9 @@ export function MessagingSettings(props: {
             }}
           />
           <TextField
-            disabled={props.saving}
+            disabled={props.saving || feishu.inboundMode.value !== "webhook"}
             label="Local Webhook Listener"
-            sub="Where PwrAgent listens locally before your tunnel forwards Feishu / Lark events."
+            sub="Webhook fallback only. Persistent connection avoids public tunnels and the scanner traffic they attract."
             help={<code>http://127.0.0.1:47823</code>}
             source={optionalStringSourceBadge(feishu.callbackBaseUrl)}
             value={feishu.callbackBaseUrl.value}
@@ -1291,6 +1305,14 @@ const FEISHU_TENANT_REGION_OPTIONS: Array<{
 }> = [
   { label: "Feishu", value: "feishu" },
   { label: "Lark", value: "lark" },
+];
+
+const FEISHU_INBOUND_MODE_OPTIONS: Array<{
+  label: string;
+  value: "persistent" | "webhook";
+}> = [
+  { label: "Persistent", value: "persistent" },
+  { label: "Webhook", value: "webhook" },
 ];
 
 const STREAMING_RESPONSES_WARNING =

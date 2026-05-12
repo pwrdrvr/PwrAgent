@@ -4,6 +4,7 @@ export type FeishuAuthorizedContact = {
 };
 
 export type FeishuTenantRegion = "feishu" | "lark";
+export type FeishuInboundMode = "persistent" | "webhook";
 
 export type FeishuMessagingConfig = {
   appId: string;
@@ -15,6 +16,7 @@ export type FeishuMessagingConfig = {
   channel: "feishu";
   enabled?: boolean;
   encryptKey?: string;
+  inboundMode?: FeishuInboundMode;
   registerSlashCommands?: boolean;
   slashCommandPrefix?: string;
   streamingResponses?: boolean;

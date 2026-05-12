@@ -40,6 +40,7 @@ import {
   FEISHU_CALLBACK_BASE_URL_ENV,
   FEISHU_ENABLED_ENV,
   FEISHU_ENCRYPT_KEY_ENV,
+  FEISHU_INBOUND_MODE_ENV,
   FEISHU_REGISTER_SLASH_COMMANDS_ENV,
   FEISHU_SLASH_COMMAND_PREFIX_ENV,
   FEISHU_STREAMING_RESPONSES_ENV,
@@ -449,6 +450,9 @@ export class DesktopSettingsService {
           appSecret: feishuAppSecret,
           encryptKey: feishuEncryptKey,
           verificationToken: feishuVerificationToken,
+          inboundMode: this.resolveFeishuInboundMode(
+            config.messaging?.feishu?.inboundMode,
+          ),
           tenantRegion: feishuTenantRegion,
           tenantUrl: this.resolveFeishuTenantUrl(
             config.messaging?.feishu?.tenantUrl,
@@ -931,6 +935,27 @@ export class DesktopSettingsService {
       source: configValue === undefined ? "default" : "config",
       ...(envValue !== undefined
         ? { error: `Invalid Feishu tenant region for ${FEISHU_TENANT_REGION_ENV}` }
+        : {}),
+    };
+  }
+
+  private resolveFeishuInboundMode(
+    configValue: "persistent" | "webhook" | undefined,
+  ): DesktopSettingsValue<"persistent" | "webhook"> {
+    const envValue = readEnvString(this.env, FEISHU_INBOUND_MODE_ENV);
+    if (envValue === "persistent" || envValue === "webhook") {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? "persistent",
+      source: configValue === undefined ? "default" : "config",
+      ...(envValue !== undefined
+        ? { error: `Invalid Feishu / Lark inbound mode for ${FEISHU_INBOUND_MODE_ENV}` }
         : {}),
     };
   }

@@ -210,6 +210,9 @@ export function buildFeishuPatchDelta(
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }
+  if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
+    patch.inboundMode = candidate.inboundMode.value;
+  }
   if (snapshot.tenantRegion.value !== candidate.tenantRegion.value) {
     patch.tenantRegion = candidate.tenantRegion.value;
   }

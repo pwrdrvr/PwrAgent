@@ -132,6 +132,7 @@ describe("desktop settings contracts", () => {
           appSecret: { configured: false, source: "unset", writable: true },
           encryptKey: { configured: false, source: "unset", writable: true },
           verificationToken: { configured: false, source: "unset", writable: true },
+          inboundMode: { value: "persistent", source: "default" },
           tenantRegion: { value: "feishu", source: "default" },
           tenantUrl: { value: "https://open.feishu.cn", source: "default" },
           callbackBaseUrl: { value: "http://127.0.0.1:47823", source: "default" },

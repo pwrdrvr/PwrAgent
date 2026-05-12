@@ -27,6 +27,7 @@ import {
   FEISHU_CALLBACK_BASE_URL_ENV,
   FEISHU_ENABLED_ENV,
   FEISHU_ENCRYPT_KEY_ENV,
+  FEISHU_INBOUND_MODE_ENV,
   FEISHU_REGISTER_SLASH_COMMANDS_ENV,
   FEISHU_SLASH_COMMAND_PREFIX_ENV,
   FEISHU_STREAMING_RESPONSES_ENV,
@@ -240,6 +241,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     channel: "irrelevant",
     enabled: "connection",
     encryptKey: "connection",
+    inboundMode: "connection",
     registerSlashCommands: "connection",
     slashCommandPrefix: "connection",
     streamingResponses: "rendering",
@@ -452,6 +454,7 @@ export function loadDesktopMessagingConfig(
   ).value;
   const feishuAppId = readEnv(env, FEISHU_APP_ID_ENV);
   const feishuAppSecret = readEnv(env, FEISHU_APP_SECRET_ENV);
+  const feishuInboundMode = readFeishuInboundMode(env[FEISHU_INBOUND_MODE_ENV]);
   const feishuTenantRegion = readFeishuTenantRegion(env[FEISHU_TENANT_REGION_ENV]);
   const feishuTenantUrl =
     readEnv(env, FEISHU_TENANT_URL_ENV)
@@ -582,6 +585,7 @@ export function loadDesktopMessagingConfig(
             enabled: true,
             appId: feishuAppId,
             appSecret: feishuAppSecret,
+            inboundMode: feishuInboundMode,
             tenantRegion: feishuTenantRegion,
             tenantUrl: feishuTenantUrl,
             callbackBaseUrl: feishuCallbackBaseUrl,
@@ -753,6 +757,8 @@ export async function loadDesktopMessagingConfigFromSettings(
     ?? snapshot.messaging.slack.registerSlashCommands.value;
   const feishuTenantRegion =
     envConfig.feishu?.tenantRegion ?? snapshot.messaging.feishu.tenantRegion.value;
+  const feishuInboundMode =
+    envConfig.feishu?.inboundMode ?? snapshot.messaging.feishu.inboundMode.value;
   const feishuTenantUrlRaw =
     envConfig.feishu?.tenantUrl
     || snapshot.messaging.feishu.tenantUrl.value
@@ -967,6 +973,7 @@ export async function loadDesktopMessagingConfigFromSettings(
             enabled: true,
             appId: feishuAppId!,
             appSecret: feishuAppSecret!,
+            inboundMode: feishuInboundMode,
             tenantRegion: feishuTenantRegion,
             tenantUrl: feishuTenantUrl,
             callbackBaseUrl: feishuCallbackBaseUrl,
@@ -1158,6 +1165,7 @@ export function redactDesktopMessagingConfig(
           verificationToken: config.feishu.verificationToken
             ? "[REDACTED]"
             : undefined,
+          inboundMode: config.feishu.inboundMode ?? "persistent",
           tenantRegion: config.feishu.tenantRegion ?? "feishu",
           tenantUrl: config.feishu.tenantUrl,
           callbackBaseUrl: config.feishu.callbackBaseUrl,
@@ -1306,6 +1314,11 @@ function readSlackInboundMode(value: string | undefined): "socket" | "events" | 
 function readFeishuTenantRegion(value: string | undefined): "feishu" | "lark" {
   const normalized = value?.trim().toLowerCase();
   return normalized === "lark" ? "lark" : "feishu";
+}
+
+function readFeishuInboundMode(value: string | undefined): "persistent" | "webhook" {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "webhook" ? "webhook" : "persistent";
 }
 
 function tenantUrlForFeishuRegion(region: "feishu" | "lark"): string {

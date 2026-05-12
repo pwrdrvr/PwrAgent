@@ -124,6 +124,7 @@ describe("desktop messaging config", () => {
       "channel",
       "enabled",
       "encryptKey",
+      "inboundMode",
       "registerSlashCommands",
       "slashCommandPrefix",
       "streamingResponses",

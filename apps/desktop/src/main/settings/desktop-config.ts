@@ -92,6 +92,7 @@ export type DesktopSettingsConfig = {
     feishu?: {
       enabled?: boolean;
       streamingResponses?: boolean;
+      inboundMode?: "persistent" | "webhook";
       tenantRegion?: "feishu" | "lark";
       tenantUrl?: string;
       callbackBaseUrl?: string;
@@ -474,6 +475,9 @@ export function desktopSettingsPatchToEdits(
   if (feishu?.streamingResponses !== undefined) {
     set(["messaging", "feishu", "streaming_responses"], feishu.streamingResponses);
   }
+  if (feishu?.inboundMode !== undefined) {
+    set(["messaging", "feishu", "inbound_mode"], feishu.inboundMode);
+  }
   if (feishu?.tenantRegion !== undefined) {
     set(["messaging", "feishu", "tenant_region"], feishu.tenantRegion);
   }
@@ -699,6 +703,7 @@ function normalizeDesktopConfig(
       feishu: {
         enabled: readBoolean(feishu?.enabled),
         streamingResponses: readBoolean(feishu?.streaming_responses),
+        inboundMode: readFeishuInboundMode(feishu?.inbound_mode),
         tenantRegion: readFeishuTenantRegion(feishu?.tenant_region),
         tenantUrl: readString(feishu?.tenant_url),
         callbackBaseUrl: readString(feishu?.callback_base_url),
@@ -902,6 +907,12 @@ function readSlackInboundMode(
   value: TomlScalar | undefined,
 ): "socket" | "events" | undefined {
   return value === "socket" || value === "events" ? value : undefined;
+}
+
+function readFeishuInboundMode(
+  value: TomlScalar | undefined,
+): "persistent" | "webhook" | undefined {
+  return value === "persistent" || value === "webhook" ? value : undefined;
 }
 
 function readFeishuTenantRegion(

@@ -269,6 +269,7 @@ Feishu / Lark:
 
 - `PWRAGENT_MESSAGING_FEISHU_APP_ID`
 - `PWRAGENT_MESSAGING_FEISHU_APP_SECRET`
+- `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE` (`persistent` or `webhook`, defaults to `persistent`)
 - `PWRAGENT_MESSAGING_FEISHU_TENANT_REGION` (`feishu` or `lark`)
 - `PWRAGENT_MESSAGING_FEISHU_TENANT_URL`
 - `PWRAGENT_MESSAGING_FEISHU_CALLBACK_BASE_URL`
@@ -317,6 +318,10 @@ toggles and environment overrides expose the same booleans. Binding-level
 `Stream: On` can opt a single binding into streaming without changing the
 provider default.
 
+Feishu / Lark also accepts `inbound_mode = "persistent"` or
+`inbound_mode = "webhook"` under `[messaging.feishu]`. Persistent connection is
+the default.
+
 ## Feishu / Lark setup
 
 Feishu and Lark share the same Open Platform protocol. PwrAgent uses `feishu`
@@ -329,22 +334,30 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
 2. In PwrAgent Settings > Messaging > Feishu / Lark, store the App ID and App
    Secret in Keychain. The connection test mints a tenant access token and
    calls the app self-info endpoint.
-3. Configure event subscriptions in the Open Platform console. Point the
-   callback URL at your public tunnel, forwarding to PwrAgent's local callback
-   listener (`http://127.0.0.1:47823` by default).
-4. Store the Verification Token in Keychain. Plain callback events are rejected
-   if their token does not match. The Encryption Key field is reserved for
-   encrypted callback payloads and should match the platform console when you
-   enable encrypted events.
-5. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
+3. In the Open Platform event configuration, use **Receive events through
+   persistent connection**. This is PwrAgent's default and recommended mode: the
+   desktop app opens an outbound SDK WebSocket to Lark, so operators do not need
+   to expose a localhost listener through Cloudflare Tunnel, ngrok, or a public
+   reverse proxy that can then be fuzzed by internet scanners.
+4. Use webhook mode only as a fallback. If you set
+   `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE=webhook`, configure event
+   subscriptions in the Open Platform console to point at your public tunnel,
+   forwarding to PwrAgent's local callback listener
+   (`http://127.0.0.1:47823` by default).
+5. Store the Verification Token in Keychain if webhook mode is enabled. Plain
+   webhook events are rejected if their token does not match. The Encryption Key
+   field is reserved for encrypted callback payloads and should match the
+   platform console when you enable encrypted events.
+6. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
    (`oc_...`) or tenant keys for shared conversations; empty shared-surface
    allowlists deny shared chat access.
 
 Feishu / Lark interactive cards carry only signed opaque callback handles in
 button values. The persisted handle record owns the action id, binding id,
 allowed actors, and routing state so buttons survive app restarts and fail
-closed after expiry. The v1 adapter uses direct Open Platform REST calls rather
-than the Node SDK so PwrAgent owns outbound rate-limit retry behavior.
+closed after expiry. The adapter uses the official Node SDK for persistent
+inbound events, but keeps outbound sends on direct Open Platform REST calls so
+PwrAgent owns rate-limit retry behavior.
 
 ## LINE setup
 

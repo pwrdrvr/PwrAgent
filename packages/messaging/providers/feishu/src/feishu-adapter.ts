@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import * as lark from "@larksuiteoapi/node-sdk";
 import type {
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
@@ -110,9 +111,29 @@ export type FeishuAdapterOptions = {
   config: FeishuMessagingConfig;
   logger?: FeishuProviderLogger;
   now?: () => number;
+  wsClientFactory?: FeishuWsClientFactory;
 };
 
 type FeishuInboundListener = (event: MessagingInboundEvent) => Promise<void>;
+
+type FeishuWsClient = {
+  close(params?: { force?: boolean }): void;
+  start(params: { eventDispatcher: lark.EventDispatcher }): Promise<void>;
+};
+
+type FeishuWsClientFactory = (params: {
+  appId: string;
+  appSecret: string;
+  domain: lark.Domain;
+}) => FeishuWsClient;
+
+type LarkSdkLogger = {
+  debug: (...msg: unknown[]) => void;
+  error: (...msg: unknown[]) => void;
+  info: (...msg: unknown[]) => void;
+  trace: (...msg: unknown[]) => void;
+  warn: (...msg: unknown[]) => void;
+};
 
 type FeishuRoutingOpaqueState = {
   chatId?: string;
@@ -231,11 +252,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private readonly now: () => number;
   private readonly server: Server;
   private readonly signingSecret: string;
+  private readonly wsClientFactory: FeishuWsClientFactory;
   private authorizedActorIdsValue: string[];
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private listener: FeishuInboundListener | undefined;
   private started = false;
+  private webhookListening = false;
+  private wsClient: FeishuWsClient | undefined;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
 
@@ -250,6 +274,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       options.config.verificationToken?.trim()
       || options.config.appSecret.trim()
       || randomBytes(32).toString("hex");
+    this.wsClientFactory = options.wsClientFactory ?? ((params) => new lark.WSClient({
+      appId: params.appId,
+      appSecret: params.appSecret,
+      domain: params.domain,
+      logger: larkLoggerFromProviderLogger(this.logger),
+      loggerLevel: lark.LoggerLevel.info,
+      source: "pwragent",
+    }));
     this.server = createServer((request, response) => {
       void this.handleWebhookRequest(request, response);
     });
@@ -316,20 +348,29 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const botInfo = await this.api.getBotInfo();
     this.botAccount = botInfo.appName ?? botInfo.openId;
     this.botAccountDetail = botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
-    await this.listenForCallbacks();
+    if (this.config.inboundMode === "webhook") {
+      await this.listenForCallbacks();
+    } else {
+      await this.startPersistentConnection();
+    }
     this.started = true;
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => {
-        if (error) reject(error);
-        else resolve();
+    this.wsClient?.close({ force: true });
+    this.wsClient = undefined;
+    if (this.webhookListening) {
+      await new Promise<void>((resolve, reject) => {
+        this.server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      }).catch((error) => {
+        this.logger.warn?.("feishu webhook listener close failed", { error });
       });
-    }).catch((error) => {
-      this.logger.warn?.("feishu webhook listener close failed", { error });
-    });
+      this.webhookListening = false;
+    }
     this.listener = undefined;
     this.started = false;
   }
@@ -1080,6 +1121,32 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         resolve();
       });
     });
+    this.webhookListening = true;
+  }
+
+  private async startPersistentConnection(): Promise<void> {
+    const eventDispatcher = new lark.EventDispatcher({
+      ...(this.config.encryptKey ? { encryptKey: this.config.encryptKey } : {}),
+      logger: larkLoggerFromProviderLogger(this.logger),
+      loggerLevel: lark.LoggerLevel.info,
+      ...(this.config.verificationToken
+        ? { verificationToken: this.config.verificationToken }
+        : {}),
+    }).register({
+      "card.action.trigger": async (data: unknown) => {
+        await this.handleCardActionEvent(feishuCardActionEnvelopeFromPersistentEvent(data));
+      },
+      "im.message.receive_v1": async (data: unknown) => {
+        await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
+      },
+    });
+    const wsClient = this.wsClientFactory({
+      appId: this.config.appId,
+      appSecret: this.config.appSecret,
+      domain: this.config.tenantRegion === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
+    });
+    this.wsClient = wsClient;
+    await wsClient.start({ eventDispatcher });
   }
 
   private async handleWebhookRequest(
@@ -1362,6 +1429,73 @@ function channelRefFromSignedCallbackChannel(
       id: channel.i,
       kind: channel.k,
       ...(channel.p ? { parentId: channel.p } : {}),
+    },
+  };
+}
+
+function feishuMessageEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
+  const record = objectRecord(data);
+  return {
+    header: {
+      event_id: stringField(record.event_id),
+      event_type: "im.message.receive_v1",
+      tenant_key: stringField(record.tenant_key),
+      token: stringField(record.token),
+    },
+    event: {
+      message: objectRecord(record.message) as FeishuReceiveMessageEvent["message"],
+      sender: objectRecord(record.sender) as FeishuReceiveMessageEvent["sender"],
+    },
+    schema: "2.0",
+  };
+}
+
+function feishuCardActionEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
+  const record = objectRecord(data);
+  return {
+    header: {
+      event_id: stringField(record.event_id),
+      event_type: "card.action.trigger",
+      tenant_key: stringField(record.tenant_key),
+      token: stringField(record.token),
+    },
+    event: {
+      action: objectRecord(record.action) as FeishuCardActionEvent["action"],
+      context: objectRecord(record.context) as FeishuCardActionEvent["context"],
+      operator: objectRecord(record.operator) as FeishuCardActionEvent["operator"],
+      tenant_key: stringField(record.tenant_key),
+      token: stringField(record.token),
+    },
+    schema: "2.0",
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function larkLoggerFromProviderLogger(logger: FeishuProviderLogger): LarkSdkLogger {
+  return {
+    debug: (...msg: unknown[]) => {
+      logger.debug?.("feishu sdk", { message: msg.map(String).join(" ") });
+    },
+    error: (...msg: unknown[]) => {
+      logger.error?.("feishu sdk", { message: msg.map(String).join(" ") });
+    },
+    info: (...msg: unknown[]) => {
+      logger.info?.("feishu sdk", { message: msg.map(String).join(" ") });
+    },
+    trace: (...msg: unknown[]) => {
+      logger.debug?.("feishu sdk trace", { message: msg.map(String).join(" ") });
+    },
+    warn: (...msg: unknown[]) => {
+      logger.warn?.("feishu sdk", { message: msg.map(String).join(" ") });
     },
   };
 }

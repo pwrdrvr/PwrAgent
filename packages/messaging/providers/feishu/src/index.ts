@@ -1,5 +1,6 @@
 export type {
   FeishuAuthorizedContact,
+  FeishuInboundMode,
   FeishuMessagingConfig,
   FeishuTenantRegion,
 } from "./feishu-config.ts";

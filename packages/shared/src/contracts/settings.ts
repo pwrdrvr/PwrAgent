@@ -324,6 +324,7 @@ export type DesktopSettingsSnapshot = {
       appSecret: DesktopSettingsSecretState;
       encryptKey: DesktopSettingsSecretState;
       verificationToken: DesktopSettingsSecretState;
+      inboundMode: DesktopSettingsValue<"persistent" | "webhook">;
       tenantRegion: DesktopSettingsValue<"feishu" | "lark">;
       tenantUrl: DesktopSettingsValue<string>;
       callbackBaseUrl: DesktopSettingsValue<string>;
@@ -418,6 +419,7 @@ export type DesktopSettingsConfigPatch = {
     feishu?: {
       enabled?: boolean;
       streamingResponses?: boolean;
+      inboundMode?: "persistent" | "webhook";
       tenantRegion?: "feishu" | "lark";
       tenantUrl?: string;
       callbackBaseUrl?: string;

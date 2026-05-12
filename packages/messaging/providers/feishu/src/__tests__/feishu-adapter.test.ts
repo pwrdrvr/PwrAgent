@@ -12,6 +12,7 @@ const baseConfig = {
   appSecret: "secret",
   authorizedActorIds: [{ id: "ou_user", displayName: "Alice" }],
   channel: "feishu" as const,
+  inboundMode: "webhook" as const,
   tenantUrl: "https://open.feishu.cn",
   verificationToken: "verify-token",
 };
@@ -169,6 +170,66 @@ describe("FeishuAdapter", () => {
         kind: "text",
         text: "hello",
         actor: { platformUserId: "ou_user" },
+      }),
+    ]);
+  });
+
+  it("uses Lark persistent connection events by default", async () => {
+    let started = false;
+    let closed = false;
+    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+      | undefined;
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+      wsClientFactory: () => ({
+        close: () => {
+          closed = true;
+        },
+        start: async (params) => {
+          started = true;
+          dispatcher = params.eventDispatcher;
+        },
+      }),
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await dispatcher?.invoke({
+      schema: "2.0",
+      header: {
+        event_id: "evt_ws",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ text: "/help" }),
+          message_id: "om_message",
+          message_type: "text",
+        },
+      },
+    }, { needCheck: false });
+    await adapter.stop();
+
+    expect(started).toBe(true);
+    expect(closed).toBe(true);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        rawText: "/help",
       }),
     ]);
   });

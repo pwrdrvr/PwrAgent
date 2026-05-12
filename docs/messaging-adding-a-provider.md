@@ -728,7 +728,7 @@ Concrete code references in the tree, kept current as adapters evolve:
 | `packages/messaging/providers/mattermost/src/mattermost-formatting.ts` | Multi-attachment auto-flow rendering. Action ID alphanumeric sanitization. |
 | `packages/messaging/providers/slack/src/slack-adapter.ts` | Socket Mode provider with Block Kit rendering, Slack mrkdwn translation, opaque callback handles in button `value`, and stable Slack ID validation. |
 | `packages/messaging/providers/slack/src/slack-formatting.ts` | Slack Block Kit action rows, button text limits, `slack-mrkdwn` conversion, and action-id sanitization. |
-| `packages/messaging/providers/feishu/src/feishu-adapter.ts` | Webhook provider for Feishu/Lark with App ID/App Secret tenant-token auth, direct Open Platform REST calls, interactive-card callbacks, signed opaque button values, and stable `ou_`/`oc_` ID validation. |
+| `packages/messaging/providers/feishu/src/feishu-adapter.ts` | Feishu/Lark provider with App ID/App Secret tenant-token auth, direct Open Platform REST outbound calls, SDK persistent-connection inbound events by default, webhook fallback, interactive-card callbacks, signed opaque button values, and stable `ou_`/`oc_` ID validation. |
 | `packages/messaging/providers/feishu/src/feishu-formatting.ts` | Feishu/Lark interactive-card modules, `lark_md` boundary translation, action rows, and 20-character button labels. |
 | `packages/messaging/providers/line/src/line-adapter.ts` | Webhook-only provider with raw-body `X-Line-Signature` verification, Flex Message buttons, tight 20-character labels, 300-character postback data, and stable LINE ID validation. |
 | `packages/messaging/providers/line/src/line-formatting.ts` | Flex Message action bubbles and LINE's no-markdown/no-editing text model. |
@@ -811,6 +811,7 @@ Captured while hardening [issue #284](https://github.com/pwrdrvr/PwrAgent/issues
 Captured while implementing [issue #262](https://github.com/pwrdrvr/PwrAgent/issues/262).
 
 - **Code identifiers should pick one brand.** The adapter uses `feishu` for the package and channel kind while the UI says "Feishu / Lark"; tenant region chooses `open.feishu.cn` vs `open.larksuite.com`.
-- **Direct REST can be preferable to the official SDK when rate-limit ownership matters.** The Open Platform endpoints are straightforward for tenant-token minting, message create/update/delete, and app self-info. Avoiding SDK-managed retries keeps `clientRateLimitStrategy: "direct"` honest.
+- **Persistent connection is the operator-friendly inbound default.** The official Node SDK's `WSClient` avoids a public callback tunnel, so desktop operators don't expose a localhost port to scanner traffic. Keep webhook mode as an explicit fallback.
+- **Direct REST can still be preferable for outbound calls when rate-limit ownership matters.** The Open Platform endpoints are straightforward for tenant-token minting, message create/update/delete, and app self-info. Avoiding SDK-managed outbound retries keeps `clientRateLimitStrategy: "direct"` honest.
 - **Card callbacks need routing breadcrumbs.** Feishu/Lark card action payloads can be sparse compared with delivery-time state. Persist the full generic callback-handle record and keep the card `value` to a signed opaque handle.
 - **Slash-command bodies can arrive as the full command text.** Normalize `/cas_click <token>` whether the platform supplies args or the complete command body; this mirrors the prior openclaw Feishu finding and prevents approval-click regressions.
