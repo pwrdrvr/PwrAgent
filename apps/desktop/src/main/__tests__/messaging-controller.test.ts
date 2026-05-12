@@ -2184,6 +2184,57 @@ describe("MessagingController", () => {
     });
   });
 
+  it("configures Monitor status detail lines and response snippets", async () => {
+    const harness = await createHarness({
+      readThreadLastAssistantMessage: async (request) =>
+        `${request.threadId} latest assistant response for monitor display.`,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor status line"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: line | Snippet: off"),
+    });
+    expect(readDeliveredStatusText(harness.delivered.at(-1))).toContain(
+      "1. Thread one (codex)\n  Status: idle - updated",
+    );
+    expect(harness.readThreadLastAssistantMessage).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor snippet on"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: line | Snippet: on"),
+    });
+    expect(readDeliveredStatusText(harness.delivered.at(-1))).toContain(
+      "  Response: thread-1 latest assistant response for monitor display.",
+    );
+    expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        showLastResponseSnippet: true,
+        showStatusLine: true,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "monitor:status" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Status: inline | Snippet: on"),
+    });
+  });
+
   it("does not create duplicate Monitor timers for repeated starts", async () => {
     vi.useFakeTimers();
     const harness = await createHarness();
@@ -5778,6 +5829,9 @@ async function createHarness(options?: {
    * absent.
    */
   bindingChangedListener?: false;
+  readThreadLastAssistantMessage?: NonNullable<
+    MessagingBackendBridge["readThreadLastAssistantMessage"]
+  >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -5792,6 +5846,7 @@ async function createHarness(options?: {
   listBackends: ReturnType<typeof vi.fn>;
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
+  readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
@@ -5962,6 +6017,9 @@ async function createHarness(options?: {
     fetchedAt: 1000,
     backends: [buildBackendSummary()],
   }));
+  const readThreadLastAssistantMessage = vi.fn(
+    options?.readThreadLastAssistantMessage ?? (async () => undefined),
+  );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
@@ -5978,6 +6036,7 @@ async function createHarness(options?: {
     interruptTurn,
     listBackends,
     materializeDirectoryLaunchpad,
+    readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
@@ -6023,6 +6082,7 @@ async function createHarness(options?: {
     listBackends,
     materializeDirectoryLaunchpad,
     onBindingChanged,
+    readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
@@ -6224,6 +6284,13 @@ function findAction(
     throw new Error(`Action ${actionId} not found`);
   }
   return action;
+}
+
+function readDeliveredStatusText(intent: MessagingSurfaceIntent | undefined): string {
+  if (!intent || intent.kind !== "status") {
+    throw new Error("expected status intent");
+  }
+  return intent.text;
 }
 
 function buildCommandEvent(

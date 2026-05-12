@@ -85,6 +85,18 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return response.threadStatus ?? response.replay.threadStatus;
   }
 
+  async readThreadLastAssistantMessage(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const response = await this.registry.readThread({
+      backend: request.backend,
+      limit: 20,
+      threadId: request.threadId,
+    });
+    return response.replay.lastAssistantMessage;
+  }
+
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {

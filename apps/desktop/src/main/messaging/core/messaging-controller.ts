@@ -146,12 +146,19 @@ type MonitorCommandAction =
   | { kind: "refresh" }
   | { kind: "cycle-pinned" }
   | { kind: "cycle-recent" }
+  | { kind: "toggle-snippet" }
+  | { kind: "toggle-status-line" }
   | { kind: "set-pinned"; count: number }
-  | { kind: "set-recent"; count: number };
+  | { kind: "set-recent"; count: number }
+  | { kind: "set-snippet"; enabled: boolean }
+  | { kind: "set-status-line"; enabled: boolean };
 
 type MonitorStateOptions = Pick<
   MessagingMonitorState,
-  "pinnedThreadLimit" | "recentThreadLimit"
+  | "pinnedThreadLimit"
+  | "recentThreadLimit"
+  | "showLastResponseSnippet"
+  | "showStatusLine"
 >;
 
 type AssistantStreamDelta = {
@@ -3458,6 +3465,8 @@ export class MessagingController {
         lastRenderedAt: existing?.monitor.lastRenderedAt,
         pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
         recentThreadLimit: monitorOptions.recentThreadLimit,
+        showLastResponseSnippet: monitorOptions.showLastResponseSnippet,
+        showStatusLine: monitorOptions.showStatusLine,
         updatedAt: now,
       },
       monitorSurface: existing?.monitorSurface,
@@ -4849,6 +4858,10 @@ export class MessagingController {
       snapshot,
       binding.monitor,
     );
+    const snippetsByThreadKey = await this.resolveMonitorSnippets(
+      snapshot,
+      binding.monitor,
+    );
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
       binding,
@@ -4856,6 +4869,7 @@ export class MessagingController {
       createdAt: now,
       id: this.newIntentId("monitor"),
       navigation: snapshot,
+      snippetsByThreadKey,
     });
     const result = await this.deliver(intent, binding, event);
     const latestBinding = await this.options.store.getBinding(binding.id);
@@ -4897,6 +4911,10 @@ export class MessagingController {
       snapshot,
       subscription.monitor,
     );
+    const snippetsByThreadKey = await this.resolveMonitorSnippets(
+      snapshot,
+      subscription.monitor,
+    );
     const intent = {
       ...buildMonitorStatusIntent({
         activeTurnsByThreadKey: activeTurns,
@@ -4907,6 +4925,7 @@ export class MessagingController {
         monitor: subscription.monitor,
         monitorSurface: subscription.monitorSurface,
         navigation: snapshot,
+        snippetsByThreadKey,
       }),
       allowedActorIds: subscription.authorizedActorIds,
       audit: buildMessagingAuditContext({
@@ -5111,6 +5130,44 @@ export class MessagingController {
       }),
     );
     return activeTurns;
+  }
+
+  private async resolveMonitorSnippets(
+    navigation: NavigationSnapshot,
+    monitor?: MessagingMonitorState,
+  ): Promise<ReadonlyMap<string, string>> {
+    const snippets = new Map<string, string>();
+    if (
+      monitor?.showLastResponseSnippet !== true ||
+      !this.options.backend.readThreadLastAssistantMessage
+    ) {
+      return snippets;
+    }
+
+    const threads = selectMonitorThreads({ monitor, navigation }).threads;
+    await Promise.all(
+      threads.map(async (thread) => {
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        try {
+          const text =
+            await this.options.backend.readThreadLastAssistantMessage?.({
+              backend: thread.source,
+              threadId: thread.id,
+            });
+          const trimmed = text?.trim();
+          if (trimmed) {
+            snippets.set(threadKey, trimmed);
+          }
+        } catch (error) {
+          this.logger.debug?.("messaging monitor thread snippet read failed", {
+            backend: thread.source,
+            error: error instanceof Error ? error.message : String(error),
+            threadId: thread.id,
+          });
+        }
+      }),
+    );
+    return snippets;
   }
 
   private async resolveMonitorBackendKinds(): Promise<AppServerBackendKind[]> {
@@ -5971,6 +6028,26 @@ function normalizeMonitorCommandAction(
       ? { kind: "set-recent", count }
       : { kind: "cycle-recent" };
   }
+  if (
+    normalized === "status" ||
+    normalized === "details" ||
+    normalized === "detail"
+  ) {
+    const enabled = parseMonitorStatusLineArg(args?.[1]);
+    return typeof enabled === "boolean"
+      ? { kind: "set-status-line", enabled }
+      : { kind: "toggle-status-line" };
+  }
+  if (
+    normalized === "snippet" ||
+    normalized === "snippets" ||
+    normalized === "response"
+  ) {
+    const enabled = parseMonitorBooleanArg(args?.[1]);
+    return typeof enabled === "boolean"
+      ? { kind: "set-snippet", enabled }
+      : { kind: "toggle-snippet" };
+  }
   return { kind: "start" };
 }
 
@@ -5980,6 +6057,12 @@ function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction 
   }
   if (actionId === "monitor:recent") {
     return { kind: "cycle-recent" };
+  }
+  if (actionId === "monitor:status") {
+    return { kind: "toggle-status-line" };
+  }
+  if (actionId === "monitor:snippet") {
+    return { kind: "toggle-snippet" };
   }
   return { kind: "refresh" };
 }
@@ -5996,27 +6079,65 @@ function resolveMonitorStateOptions(
     monitor?.recentThreadLimit,
     MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
   );
+  const currentShowStatusLine = monitor?.showStatusLine === true;
+  const currentShowSnippet = monitor?.showLastResponseSnippet === true;
 
   switch (action.kind) {
     case "cycle-pinned":
       return {
         pinnedThreadLimit: nextMonitorThreadLimit(currentPinned),
         recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
       };
     case "cycle-recent":
       return {
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: nextMonitorThreadLimit(currentRecent),
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
+      };
+    case "toggle-status-line":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: !currentShowStatusLine,
+      };
+    case "toggle-snippet":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: !currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
       };
     case "set-pinned":
       return {
         pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
         recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
       };
     case "set-recent":
       return {
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
+      };
+    case "set-status-line":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: action.enabled,
+      };
+    case "set-snippet":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: action.enabled,
+        showStatusLine: currentShowStatusLine,
       };
     case "refresh":
     case "start":
@@ -6024,6 +6145,8 @@ function resolveMonitorStateOptions(
       return {
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
       };
   }
 }
@@ -6034,6 +6157,39 @@ function parseMonitorCountArg(arg: string | undefined): number | undefined {
   }
   const parsed = Number(arg.trim());
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseMonitorStatusLineArg(arg: string | undefined): boolean | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "line" ||
+    normalized === "lines" ||
+    normalized === "detail" ||
+    normalized === "details"
+  ) {
+    return true;
+  }
+  if (normalized === "inline" || normalized === "off") {
+    return false;
+  }
+  return parseMonitorBooleanArg(normalized);
+}
+
+function parseMonitorBooleanArg(arg: string | undefined): boolean | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "on" || normalized === "true" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "off" || normalized === "false" || normalized === "no") {
+    return false;
+  }
+  return undefined;
 }
 
 function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {

@@ -92,6 +92,10 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<AppServerThreadStatus | undefined>;
+  readThreadLastAssistantMessage?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined>;
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;

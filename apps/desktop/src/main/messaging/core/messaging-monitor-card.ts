@@ -29,6 +29,7 @@ export const MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT = 5;
 export const MESSAGING_MONITOR_THREAD_LIMIT =
   MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT;
 export const MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS = [0, 5, 10] as const;
+export const MESSAGING_MONITOR_SNIPPET_LENGTH = 100;
 
 const MONITOR_MIN_ACTIONS = 1;
 
@@ -50,6 +51,7 @@ export function buildMonitorStatusIntent(params: {
   monitor?: MessagingMonitorState;
   monitorSurface?: MessagingSurfaceRef;
   navigation: NavigationSnapshot;
+  snippetsByThreadKey?: ReadonlyMap<string, string>;
   threadLimit?: number;
 }): MessagingStatusIntent {
   const monitor = params.binding?.monitor ?? params.monitor;
@@ -70,6 +72,9 @@ export function buildMonitorStatusIntent(params: {
     navigation: params.navigation,
     now: params.createdAt,
     selection,
+    showSnippets: monitor?.showLastResponseSnippet === true,
+    showStatusLine: monitor?.showStatusLine === true,
+    snippetsByThreadKey: params.snippetsByThreadKey ?? new Map(),
   });
   const canUpdateSurface = Boolean(
     monitorSurface &&
@@ -92,6 +97,7 @@ export function buildMonitorStatusIntent(params: {
       `Updated: ${formatTimeOfDay(params.createdAt)}`,
       `Interval: ${formatInterval(monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS)}`,
       `Pins: ${selection.pinnedThreadLimit} | Recent: ${selection.recentThreadLimit}`,
+      `Status: ${monitor?.showStatusLine === true ? "line" : "inline"} | Snippet: ${monitor?.showLastResponseSnippet === true ? "on" : "off"}`,
       "",
       ...lines,
     ].join("\n"),
@@ -99,6 +105,8 @@ export function buildMonitorStatusIntent(params: {
       pinnedThreadLimit: selection.pinnedThreadLimit,
       profile: params.capabilityProfile,
       recentThreadLimit: selection.recentThreadLimit,
+      showSnippets: monitor?.showLastResponseSnippet === true,
+      showStatusLine: monitor?.showStatusLine === true,
     }),
   };
 }
@@ -163,6 +171,8 @@ function buildMonitorActions(params: {
   pinnedThreadLimit: number;
   profile?: MessagingCapabilityProfile;
   recentThreadLimit: number;
+  showSnippets: boolean;
+  showStatusLine: boolean;
 }): MessagingSurfaceAction[] {
   const { profile } = params;
   if (profile && !capabilityProfileSupportsActionCount(profile, MONITOR_MIN_ACTIONS)) {
@@ -199,6 +209,20 @@ function buildMonitorActions(params: {
         fallbackText: `monitor recent ${nextMonitorThreadLimit(params.recentThreadLimit)}`,
         priority: 4,
       },
+      {
+        id: "monitor:status",
+        label: `Status: ${params.showStatusLine ? "Line" : "Inline"}`,
+        style: "secondary",
+        fallbackText: `monitor status ${params.showStatusLine ? "inline" : "line"}`,
+        priority: 5,
+      },
+      {
+        id: "monitor:snippet",
+        label: `Snippet: ${params.showSnippets ? "On" : "Off"}`,
+        style: "secondary",
+        fallbackText: `monitor snippet ${params.showSnippets ? "off" : "on"}`,
+        priority: 6,
+      },
     ],
     profile,
   );
@@ -209,6 +233,9 @@ function formatMonitorThreadSections(params: {
   navigation: NavigationSnapshot;
   now: number;
   selection: MessagingMonitorThreadSelection;
+  showSnippets: boolean;
+  showStatusLine: boolean;
+  snippetsByThreadKey: ReadonlyMap<string, string>;
 }): string[] {
   const lines: string[] = [];
   if (params.selection.pinnedThreads.length > 0) {
@@ -220,6 +247,11 @@ function formatMonitorThreadSections(params: {
           labelPrefix: "P",
           navigation: params.navigation,
           now: params.now,
+          showSnippet: params.showSnippets,
+          showStatusLine: params.showStatusLine,
+          snippet: params.snippetsByThreadKey.get(
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
           thread,
           turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
         }),
@@ -238,6 +270,11 @@ function formatMonitorThreadSections(params: {
           index,
           navigation: params.navigation,
           now: params.now,
+          showSnippet: params.showSnippets,
+          showStatusLine: params.showStatusLine,
+          snippet: params.snippetsByThreadKey.get(
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
           thread,
           turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
         }),
@@ -262,6 +299,9 @@ function formatThreadLine(params: {
   labelPrefix?: string;
   navigation: NavigationSnapshot;
   now: number;
+  showSnippet: boolean;
+  showStatusLine: boolean;
+  snippet?: string;
   thread: NavigationThreadSummary;
   turn?: MessagingActiveTurnSummary;
 }): string {
@@ -271,7 +311,18 @@ function formatThreadLine(params: {
   const updated = formatRelativeTime(params.thread.updatedAt, params.now);
   const directorySuffix = directory ? ` - ${directory}` : "";
   const label = `${params.labelPrefix ?? ""}${params.index + 1}`;
-  return `${label}. ${title} (${params.thread.source}) - ${state} - ${updated}${directorySuffix}`;
+  const details: string[] = [];
+  if (params.showStatusLine) {
+    details.push(`  Status: ${state} - ${updated}${directorySuffix}`);
+  }
+  if (params.showSnippet && params.snippet) {
+    details.push(`  Response: ${formatResponseSnippet(params.snippet)}`);
+  }
+
+  const firstLine = params.showStatusLine
+    ? `${label}. ${title} (${params.thread.source})`
+    : `${label}. ${title} (${params.thread.source}) - ${state} - ${updated}${directorySuffix}`;
+  return details.length > 0 ? [firstLine, ...details].join("\n") : firstLine;
 }
 
 function formatThreadTitle(thread: NavigationThreadSummary): string {
@@ -310,12 +361,20 @@ function formatThreadState(
     return "working";
   }
   if (turn?.status === "waiting") {
-    return "waiting";
+    return "awaiting approval";
   }
   if (thread.queuedExecutionMode) {
     return "queued permissions";
   }
   return "idle";
+}
+
+function formatResponseSnippet(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= MESSAGING_MONITOR_SNIPPET_LENGTH) {
+    return compact;
+  }
+  return `${compact.slice(0, MESSAGING_MONITOR_SNIPPET_LENGTH - 3)}...`;
 }
 
 function formatRelativeTime(epochMs: number | undefined, now: number): string {

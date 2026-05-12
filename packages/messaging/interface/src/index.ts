@@ -839,6 +839,8 @@ export type MessagingMonitorState = {
   lastRenderedAt?: number;
   pinnedThreadLimit?: number;
   recentThreadLimit?: number;
+  showLastResponseSnippet?: boolean;
+  showStatusLine?: boolean;
   updatedAt: number;
 };
 

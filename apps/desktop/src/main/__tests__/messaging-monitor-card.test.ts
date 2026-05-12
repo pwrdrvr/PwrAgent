@@ -45,9 +45,20 @@ describe("buildMonitorStatusIntent", () => {
           fallbackText: "monitor recent 10",
           label: "Recent: 5",
         }),
+        expect.objectContaining({
+          id: "monitor:status",
+          fallbackText: "monitor status line",
+          label: "Status: Inline",
+        }),
+        expect.objectContaining({
+          id: "monitor:snippet",
+          fallbackText: "monitor snippet on",
+          label: "Snippet: Off",
+        }),
       ]),
     });
     expect(intent.text).toContain("Pins: 5 | Recent: 5");
+    expect(intent.text).toContain("Status: inline | Snippet: off");
     expect(intent.text).toContain("Pins\nP1. Pinned release watch (codex) - idle - updated just now - PwrAgent");
     expect(intent.text).toContain("Recent\n1. Fix messaging monitor (codex) - idle - updated 2m ago - PwrAgent");
     expect(intent.text).toContain("2. Review provider commands (grok) - queued permissions - updated just now - Messaging");
@@ -172,6 +183,61 @@ describe("buildMonitorStatusIntent", () => {
           id: "monitor:recent",
           fallbackText: "monitor recent 0",
           label: "Recent: 10",
+        }),
+      ]),
+    );
+  });
+
+  it("can render status and last response snippets on indented detail lines", () => {
+    const intent = buildMonitorStatusIntent({
+      activeTurnsByThreadKey: new Map([
+        [
+          "codex:thread-1",
+          {
+            status: "waiting",
+            turnId: "turn-1",
+            updatedAt: 121_000,
+          },
+        ],
+      ]),
+      binding: buildBinding({
+        monitor: {
+          enabled: true,
+          intervalMs: MESSAGING_MONITOR_INTERVAL_MS,
+          showLastResponseSnippet: true,
+          showStatusLine: true,
+          updatedAt: 1000,
+        },
+      }),
+      createdAt: 121_000,
+      id: "monitor-1",
+      navigation: buildNavigationSnapshot(),
+      snippetsByThreadKey: new Map([
+        [
+          "codex:thread-1",
+          "I checked the monitor command path and found that the latest rendering pass can use the existing transcript replay data.",
+        ],
+      ]),
+    });
+
+    expect(intent.text).toContain("Status: line | Snippet: on");
+    expect(intent.text).toContain(
+      "1. Fix messaging monitor (codex)\n  Status: awaiting approval - updated 2m ago - PwrAgent\n  Response: I checked the monitor command path",
+    );
+    expect(intent.text).not.toContain(
+      "Fix messaging monitor (codex) - awaiting approval",
+    );
+    expect(intent.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitor:status",
+          fallbackText: "monitor status inline",
+          label: "Status: Line",
+        }),
+        expect.objectContaining({
+          id: "monitor:snippet",
+          fallbackText: "monitor snippet off",
+          label: "Snippet: On",
         }),
       ]),
     );
