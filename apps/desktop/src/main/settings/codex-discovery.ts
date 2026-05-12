@@ -1,8 +1,6 @@
-import { execFile as execFileCallback } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { readFile, realpath } from "node:fs/promises";
-import { promisify } from "node:util";
+import { realpath } from "node:fs/promises";
 import type {
   DesktopCodexCandidateSource,
   DesktopCodexDiscoveryCandidate,
@@ -15,7 +13,6 @@ import {
   type ResolvedCommandCandidate,
 } from "./command-discovery";
 
-const execFile = promisify(execFileCallback);
 export const MINIMUM_CODEX_CLI_VERSION = "0.125.0";
 
 export type ResolvedCodexCommandCandidate = {
@@ -114,6 +111,12 @@ export function compareCodexCliVersions(left?: string, right?: string): number {
   return comparePrerelease(leftVersion.prerelease, rightVersion.prerelease);
 }
 
+function validateCodexCliVersion(version: string): string | undefined {
+  return compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0
+    ? "codex_too_old"
+    : undefined;
+}
+
 function getCodexAppCandidatePaths(): string[] {
   return [
     "/Applications/Codex.app/Contents/Resources/codex",
@@ -133,21 +136,19 @@ async function inspectCodexCandidateBeforeVersionProbe(params: {
     return undefined;
   }
 
-  const version = await readCodexVersionWithoutExecution(params.command);
+  const version = await readHomebrewCodexVersionWithoutExecution(params.command);
   if (!version) {
     return undefined;
   }
 
   return {
     version,
-    failureReason: compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0
-      ? "codex_too_old"
-      : undefined,
+    failureReason: validateCodexCliVersion(version),
     skipVersionProbe: true,
   };
 }
 
-async function readCodexVersionWithoutExecution(command: string): Promise<string | undefined> {
+async function readHomebrewCodexVersionWithoutExecution(command: string): Promise<string | undefined> {
   const candidatePaths = [command];
   try {
     const resolved = await realpath(command);
@@ -164,11 +165,6 @@ async function readCodexVersionWithoutExecution(command: string): Promise<string
     if (homebrewVersion) {
       return homebrewVersion;
     }
-
-    const appVersion = await readCodexAppBundleVersion(candidatePath);
-    if (appVersion) {
-      return appVersion;
-    }
   }
 
   return undefined;
@@ -180,56 +176,6 @@ function readHomebrewCodexVersionFromPath(candidatePath: string): string | undef
     /\/(?:Caskroom|Cellar)\/codex\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\/|$)/,
   );
   return match?.[1];
-}
-
-async function readCodexAppBundleVersion(candidatePath: string): Promise<string | undefined> {
-  const appPath = readContainingAppBundlePath(candidatePath);
-  if (!appPath) {
-    return undefined;
-  }
-
-  const plistPath = path.join(appPath, "Contents", "Info.plist");
-  const plutilVersion =
-    await readPlistString(plistPath, "CFBundleShortVersionString")
-    ?? await readPlistString(plistPath, "CFBundleVersion");
-  if (plutilVersion) {
-    return parseCodexVersionOutput(plutilVersion);
-  }
-
-  try {
-    const plist = await readFile(plistPath, "utf8");
-    const match = plist.match(
-      /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/,
-    ) ?? plist.match(/<key>CFBundleVersion<\/key>\s*<string>([^<]+)<\/string>/);
-    return parseCodexVersionOutput(match?.[1] ?? "");
-  } catch {
-    return undefined;
-  }
-}
-
-async function readPlistString(
-  plistPath: string,
-  key: "CFBundleShortVersionString" | "CFBundleVersion",
-): Promise<string | undefined> {
-  try {
-    const result = await execFile(
-      "/usr/bin/plutil",
-      ["-extract", key, "raw", "-o", "-", plistPath],
-      { timeout: 2_000 },
-    );
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readContainingAppBundlePath(candidatePath: string): string | undefined {
-  const normalized = candidatePath.replace(/\\/g, "/");
-  const appSuffixIndex = normalized.indexOf(".app/");
-  if (appSuffixIndex === -1) {
-    return undefined;
-  }
-  return normalized.slice(0, appSuffixIndex + ".app".length);
 }
 
 export async function discoverCodexCommands(params?: {
@@ -257,6 +203,7 @@ export async function discoverCodexCommands(params?: {
     ],
     parseVersion: parseCodexVersionOutput,
     compareVersions: compareCodexCliVersions,
+    validateVersion: validateCodexCliVersion,
     preflightCandidate: ({ command, platform }) =>
       inspectCodexCandidateBeforeVersionProbe({ command, platform }),
   }) as Promise<DesktopCodexDiscoverySnapshot>;

@@ -251,11 +251,7 @@ function getCredentialTester(
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
         const snapshot = await resolveService().readSettings();
-        return (
-          snapshot.models.codex.discovery.selectedCommand
-          ?? snapshot.models.codex.path.value
-          ?? undefined
-        );
+        return snapshot.models.codex.discovery.selectedCommand ?? undefined;
       },
       validateMessagingCredentials: (request) =>
         getDesktopMessagingRuntime().requestCredentialValidation(request),

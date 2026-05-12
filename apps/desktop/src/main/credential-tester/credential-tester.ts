@@ -8,6 +8,10 @@ import type {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
+import {
+  compareCodexCliVersions,
+  MINIMUM_CODEX_CLI_VERSION,
+} from "../settings/codex-discovery";
 
 const execFileAsync = promisify(execFile);
 
@@ -339,13 +343,24 @@ export class CredentialTester {
       const output = `${stdout}\n${stderr}`;
       const match = output.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/);
       if (match) {
+        const version = match[1];
+        if (compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0) {
+          return {
+            kind: "codex",
+            status: "failed",
+            testedAt,
+            durationMs,
+            account: command,
+            errorMessage: `Codex CLI ${version} is older than the minimum supported version ${MINIMUM_CODEX_CLI_VERSION}`,
+          };
+        }
         return {
           kind: "codex",
           status: "ok",
           testedAt,
           durationMs,
           account: command,
-          detail: match[1],
+          detail: version,
         };
       }
       return {
