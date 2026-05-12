@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MESSAGING_LEASE_HEARTBEAT_MS,
+  PWRAGENT_INSTANCE_ROOT_ENV,
   RuntimeMessagingLeaseCoordinator,
 } from "../runtime-messaging-lease";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
@@ -81,6 +82,43 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       disabledReason: "explicit_override",
     });
     expect(store.getMessagingLease()).toBeUndefined();
+  });
+
+  it("uses the launch root env var for lease owner identity", async () => {
+    const runtime = createRuntime();
+    const coordinator = new RuntimeMessagingLeaseCoordinator({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      now: () => 1_000,
+      store,
+      env: {
+        [PWRAGENT_INSTANCE_ROOT_ENV]: "/Users/example/PwrAgnt",
+      } as NodeJS.ProcessEnv,
+    });
+
+    await expect(
+      coordinator.applyResolvedConfig(runtime, {
+        enabled: true,
+        inputDebounceMs: 500,
+        toolUpdateDefaultMode: "show_some",
+        telegram: {
+          channel: "telegram" as const,
+          enabled: true,
+          botToken: "token",
+          streamingResponses: false,
+          authorizedActorIds: [],
+          authorizedSupergroupIds: [],
+        },
+      }),
+    ).resolves.toMatchObject({ enabled: true });
+
+    expect(store.getInstance("instance-a")).toMatchObject({
+      cwdHint: "PwrAgnt",
+      cwdHash: "c976f17804e892f9",
+    });
+
+    coordinator.shutdownSync();
   });
 
   it("does not claim the lease when no adapters are runnable", async () => {

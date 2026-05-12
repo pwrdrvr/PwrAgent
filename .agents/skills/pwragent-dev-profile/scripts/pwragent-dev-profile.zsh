@@ -1,6 +1,8 @@
 #!/bin/zsh
 set -u
 
+INSTANCE_ROOT_ENV="PWRAGENT_INSTANCE_ROOT"
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -9,10 +11,11 @@ Usage:
   pwragent-dev-profile.zsh close   [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH]
   pwragent-dev-profile.zsh status  [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH]
   pwragent-dev-profile.zsh verify  [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH] [--timeout SECONDS]
+  pwragent-dev-profile.zsh leases  [--profile NAME]
   pwragent-dev-profile.zsh self-test
 
 Manages a detached local PwrAgent Electron dev app with PWRAGENT_PROFILE=dev.
-The default root is the current working directory.
+Process ownership is resolved from the app's profile runtime lease records.
 USAGE
 }
 
@@ -41,10 +44,6 @@ process_command() {
   ps -p "$1" -o command= 2>/dev/null
 }
 
-process_with_env() {
-  ps eww -p "$1" -o command= 2>/dev/null
-}
-
 parent_pid() {
   ps -p "$1" -o ppid= 2>/dev/null | tr -d ' '
 }
@@ -61,9 +60,25 @@ is_self_or_parent() {
   [[ "$1" == "$$" || "$1" == "$PPID" ]]
 }
 
+is_valid_profile() {
+  [[ "$1" =~ '^[a-z0-9][a-z0-9_-]{0,31}$' && "$1" != "." && "$1" != ".." && "$1" != "con" && "$1" != "nul" && "$1" != "aux" && "$1" != "prn" ]]
+}
+
 is_under_root() {
   local value="$1"
   [[ "$value" == "$root" || "$value" == "$root/"* ]]
+}
+
+is_path_boundary_before() {
+  local character="${1:-}"
+
+  [[ -z "$character" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' || "$character" == "=" ]]
+}
+
+is_path_boundary_after() {
+  local character="${1:-}"
+
+  [[ -z "$character" || "$character" == "/" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' ]]
 }
 
 command_mentions_root() {
@@ -87,33 +102,6 @@ command_mentions_root() {
   return 1
 }
 
-is_path_boundary_before() {
-  local character="${1:-}"
-
-  [[ -z "$character" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' || "$character" == "=" ]]
-}
-
-is_path_boundary_after() {
-  local character="${1:-}"
-
-  [[ -z "$character" || "$character" == "/" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' ]]
-}
-
-env_has_assignment() {
-  local env_text="$1"
-  local name="$2"
-  local value="$3"
-
-  [[ " $env_text " == *" $name=$value "* ]]
-}
-
-process_has_profile() {
-  local command_with_env
-
-  command_with_env="$(process_with_env "$1")"
-  env_has_assignment "$command_with_env" "PWRAGENT_PROFILE" "$profile"
-}
-
 is_dev_command() {
   local command="$1"
   [[ "$command" == *"pnpm dev"* ]] && return 0
@@ -125,7 +113,7 @@ is_dev_command() {
   return 1
 }
 
-pid_is_root_scoped_dev() {
+root_scoped_dev_pid() {
   local pid="$1"
   local command cwd
 
@@ -134,7 +122,6 @@ pid_is_root_scoped_dev() {
   command="$(process_command "$pid")"
   [[ -n "$command" ]] || return 1
   is_dev_command "$command" || return 1
-  process_has_profile "$pid" || return 1
 
   cwd="$(cwd_of_pid "$pid")"
   if [[ -n "$cwd" ]]; then
@@ -156,6 +143,108 @@ descendants_of() {
   done
 }
 
+dev_parent_chain_of() {
+  local parent command
+
+  parent="$(parent_pid "$1")"
+  while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
+    is_self_or_parent "$parent" && break
+    command="$(process_command "$parent")"
+    if [[ -n "$command" ]] && is_dev_command "$command" && root_scoped_dev_pid "$parent"; then
+      print -r -- "$parent"
+      parent="$(parent_pid "$parent")"
+    else
+      break
+    fi
+  done
+}
+
+compute_root_hash() {
+  printf '%s' "${1:A}" | shasum -a 256 | awk '{ print substr($1, 1, 16) }'
+}
+
+state_db_path() {
+  local pwragent_home="${PWRAGENT_HOME:-$HOME/.pwragent}"
+  print -r -- "${pwragent_home:A}/profiles/$profile/state/state.db"
+}
+
+launch_job_label() {
+  print -r -- "local.pwragent.dev-profile.$profile.$root_hash_value"
+}
+
+launch_job_pid() {
+  command -v launchctl >/dev/null 2>&1 || return 1
+  launchctl list 2>/dev/null | awk -v label="$(launch_job_label)" '$3 == label && $1 ~ /^[0-9]+$/ { print $1; exit }'
+}
+
+launch_job_exists() {
+  command -v launchctl >/dev/null 2>&1 || return 1
+  launchctl list 2>/dev/null | awk -v label="$(launch_job_label)" '$3 == label { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+remove_launch_job() {
+  launch_job_exists || return 1
+  launchctl remove "$(launch_job_label)" >/dev/null 2>&1
+}
+
+runtime_tables_ready() {
+  [[ -f "$state_db" ]] || return 1
+  sqlite3 -readonly "$state_db" "SELECT cwd_hash FROM app_runtime_instances LIMIT 0;" >/dev/null 2>&1
+}
+
+query_root_instances() {
+  runtime_tables_ready || return 1
+  sqlite3 -readonly -separator $'\t' "$state_db" \
+    "SELECT instance_id, process_id, coalesce(cwd_hint, ''), heartbeat_at,
+            desired_messaging_enabled, effective_messaging_enabled,
+            coalesce(disabled_reason, '')
+     FROM app_runtime_instances
+     WHERE profile_name = '$profile'
+       AND cwd_hash = '$root_hash_value'
+       AND exited_at IS NULL
+     ORDER BY heartbeat_at DESC;"
+}
+
+query_profile_instances() {
+  runtime_tables_ready || return 1
+  sqlite3 -readonly -separator $'\t' "$state_db" \
+    "SELECT instance_id, process_id, coalesce(cwd_hint, ''), coalesce(cwd_hash, ''),
+            heartbeat_at, desired_messaging_enabled, effective_messaging_enabled,
+            coalesce(disabled_reason, ''), coalesce(exited_at, '')
+     FROM app_runtime_instances
+     WHERE profile_name = '$profile'
+     ORDER BY heartbeat_at DESC
+     LIMIT 20;"
+}
+
+query_active_lease() {
+  runtime_tables_ready || return 1
+  sqlite3 -readonly -separator $'\t' "$state_db" \
+    "SELECT l.owner_instance_id, l.heartbeat_at, l.expires_at,
+            coalesce(i.process_id, ''), coalesce(i.cwd_hint, ''),
+            coalesce(i.cwd_hash, ''), coalesce(i.effective_messaging_enabled, 0)
+     FROM messaging_runtime_lease l
+     LEFT JOIN app_runtime_instances i
+       ON i.instance_id = l.owner_instance_id
+     WHERE l.lease_key = 'profile-messaging'
+       AND l.status = 'active'
+       AND l.expires_at > CAST(strftime('%s', 'now') AS INTEGER) * 1000
+     LIMIT 1;"
+}
+
+managed_app_pids() {
+  local instance_id pid cwd_hint heartbeat desired effective disabled
+
+  query_root_instances 2>/dev/null | while IFS=$'\t' read -r instance_id pid cwd_hint heartbeat desired effective disabled; do
+    [[ -n "$pid" ]] || continue
+    if is_live_pid "$pid"; then
+      print -r -- "$pid"
+      descendants_of "$pid"
+      dev_parent_chain_of "$pid"
+    fi
+  done
+}
+
 pid_file_pids() {
   local managed_pid
 
@@ -164,40 +253,20 @@ pid_file_pids() {
   [[ -n "$managed_pid" ]] || return 0
   is_self_or_parent "$managed_pid" && return 0
 
-  if is_live_pid "$managed_pid" && pid_is_root_scoped_dev "$managed_pid"; then
+  if is_live_pid "$managed_pid" && root_scoped_dev_pid "$managed_pid"; then
     print -r -- "$managed_pid"
     descendants_of "$managed_pid"
   fi
 }
 
 matching_dev_pids() {
-  local pid parent command
-
   {
+    managed_app_pids
     pid_file_pids
-    pgrep -f 'pnpm.*dev|electron-vite.*dev|scripts/rebuild-native-for-electron.mjs|Electron.app|PwrAgent' 2>/dev/null | while read -r pid; do
-      [[ -z "$pid" ]] && continue
-      if pid_is_root_scoped_dev "$pid"; then
-        print -r -- "$pid"
-        descendants_of "$pid"
-
-        parent="$(parent_pid "$pid")"
-        while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
-          is_self_or_parent "$parent" && break
-          command="$(process_command "$parent")"
-          if [[ -n "$command" ]] && is_dev_command "$command"; then
-            print -r -- "$parent"
-            parent="$(parent_pid "$parent")"
-          else
-            break
-          fi
-        done
-      fi
-    done
   } | sort -rnu
 }
 
-describe_pids() {
+describe_matching_processes() {
   local pid
 
   for pid in $(matching_dev_pids); do
@@ -205,18 +274,85 @@ describe_pids() {
   done
 }
 
-write_status() {
-  local rows
+describe_root_instances() {
+  local instance_id pid cwd_hint heartbeat desired effective disabled live
 
-  rows="$(describe_pids)"
-  if [[ -z "$rows" ]]; then
-    say "no $profile profile dev app processes found for $root"
+  query_root_instances 2>/dev/null | while IFS=$'\t' read -r instance_id pid cwd_hint heartbeat desired effective disabled; do
+    live="stale"
+    is_live_pid "$pid" && live="live"
+    say "instance id=$instance_id pid=$pid $live cwd=$cwd_hint heartbeat=$heartbeat desiredMessaging=$desired effectiveMessaging=$effective disabledReason=${disabled:-none}"
+  done
+}
+
+describe_active_lease() {
+  local owner heartbeat expires pid cwd_hint cwd_hash effective live
+  local row
+
+  row="$(query_active_lease 2>/dev/null || true)"
+  if [[ -z "$row" ]]; then
+    say "no active $profile profile messaging lease"
     return 1
   fi
 
-  say "$profile profile dev app processes for $root:"
-  print -r -- "$rows"
+  IFS=$'\t' read -r owner heartbeat expires pid cwd_hint cwd_hash effective <<< "$row"
+  live="unknown"
+  if [[ -n "$pid" ]]; then
+    live="stale"
+    is_live_pid "$pid" && live="live"
+  fi
+  say "active messaging lease owner=$owner pid=${pid:-unknown} $live cwd=${cwd_hint:-unknown} cwdHash=${cwd_hash:-unknown} effectiveMessaging=$effective expiresAt=$expires"
+}
+
+write_status() {
+  local rows processes
+
+  if ! runtime_tables_ready; then
+    say "no lease metadata yet for profile $profile at $state_db"
+    return 1
+  fi
+
+  rows="$(query_root_instances 2>/dev/null || true)"
+  if [[ -z "$rows" ]]; then
+    say "no lease-backed $profile profile app instances found for $root"
+    describe_active_lease >/dev/null || true
+    return 1
+  fi
+
+  if ! has_live_root_instance; then
+    say "only stale lease-backed $profile profile app instances found for $root"
+    describe_root_instances
+    describe_active_lease || true
+    return 1
+  fi
+
+  say "$profile profile app instances for $root:"
+  describe_root_instances
+  describe_active_lease || true
+
+  processes="$(describe_matching_processes)"
+  if [[ -n "$processes" ]]; then
+    say "managed process tree:"
+    print -r -- "$processes"
+  fi
   return 0
+}
+
+write_leases() {
+  local instance_id pid cwd_hint cwd_hash heartbeat desired effective disabled exited live
+
+  if ! runtime_tables_ready; then
+    say "no lease metadata yet for profile $profile at $state_db"
+    return 1
+  fi
+
+  describe_active_lease || true
+  say "recent $profile profile app instances:"
+  query_profile_instances | while IFS=$'\t' read -r instance_id pid cwd_hint cwd_hash heartbeat desired effective disabled exited; do
+    live="stale"
+    [[ -n "$exited" ]] && live="exited"
+    [[ -z "$exited" ]] && is_live_pid "$pid" && live="live"
+    say "instance id=$instance_id pid=$pid $live cwd=${cwd_hint:-unknown} cwdHash=${cwd_hash:-unknown} heartbeat=$heartbeat desiredMessaging=$desired effectiveMessaging=$effective disabledReason=${disabled:-none}"
+  done
 }
 
 stop_matches() {
@@ -230,14 +366,18 @@ stop_matches() {
 }
 
 close_app() {
-  local remaining
+  local remaining removed_job=0
 
   mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
-  log_line "close root=$root profile=$profile" >> "$log_path"
+  log_line "close root=$root profile=$profile rootHash=$root_hash_value" >> "$log_path"
+  if remove_launch_job; then
+    removed_job=1
+    log_line "removed launchd job label=$(launch_job_label)" >> "$log_path"
+  fi
 
-  if [[ -z "$(matching_dev_pids)" ]]; then
+  if [[ -z "$(matching_dev_pids)" && "$removed_job" == "0" ]]; then
     rm -f "$pid_file"
-    say "no $profile profile dev app processes found for $root"
+    say "no lease-backed $profile profile app processes found for $root"
     return 0
   fi
 
@@ -250,28 +390,88 @@ close_app() {
   fi
 
   rm -f "$pid_file"
-  say "closed $profile profile dev app for $root"
+  say "closed $profile profile app for $root"
 }
 
-has_started_process() {
-  local pid command
+tail_log() {
+  if [[ -f "$log_path" ]]; then
+    tail -100 "$log_path"
+  else
+    say "log does not exist yet: $log_path"
+  fi
+}
 
-  for pid in $(matching_dev_pids); do
-    command="$(process_command "$pid")"
-    [[ "$command" == *"electron-vite"* && "$command" == *"dev"* ]] && return 0
-    [[ "$command" == *"Electron.app"* ]] && return 0
-    [[ "$command" == *"PwrAgent"* && "$command" == *"apps/desktop"* ]] && return 0
+has_live_root_instance() {
+  local instance_id pid cwd_hint heartbeat desired effective disabled
+
+  query_root_instances 2>/dev/null | while IFS=$'\t' read -r instance_id pid cwd_hint heartbeat desired effective disabled; do
+    [[ -n "$pid" ]] || continue
+    if is_live_pid "$pid"; then
+      return 0
+    fi
   done
 
   return 1
 }
 
-tail_log() {
-  if [[ -f "$log_path" ]]; then
-    tail -80 "$log_path"
+verify_app() {
+  local elapsed=0
+  local sleep_step=2
+  local managed_pid=""
+
+  [[ -f "$pid_file" ]] && managed_pid="$(tr -dc '0-9' < "$pid_file")"
+
+  while (( elapsed <= timeout )); do
+    if has_live_root_instance; then
+      say "$profile profile app is running for $root"
+      say "log: $log_path"
+      describe_root_instances
+      describe_active_lease || true
+      return 0
+    fi
+
+    if [[ -n "$managed_pid" ]] && ! is_live_pid "$managed_pid"; then
+      say "managed process exited before lease-backed verification completed (pid=$managed_pid)"
+      tail_log
+      return 1
+    fi
+
+    sleep "$sleep_step"
+    elapsed=$((elapsed + sleep_step))
+  done
+
+  say "timed out waiting ${timeout}s for lease-backed $profile profile app record"
+  tail_log
+  return 1
+}
+
+start_app() {
+  local start_pid command
+
+  [[ -f "$root/package.json" ]] || die "root does not look like the PwrAgent repository root: $root"
+  mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
+
+  close_app
+
+  log_line "start root=$root profile=$profile rootHash=$root_hash_value command=PWRAGENT_PROFILE=$profile $INSTANCE_ROOT_ENV=$root pnpm dev" >> "$log_path"
+  command="trap '' HUP TERM; cd $(shell_quote "$root") && exec env PWRAGENT_PROFILE=$(shell_quote "$profile") $INSTANCE_ROOT_ENV=$(shell_quote "$root") pnpm dev"
+
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
+    launchctl submit -l "$(launch_job_label)" -o "$log_path" -e "$log_path" -- /bin/zsh -lc "$command" \
+      || die "failed to submit launchd job: $(launch_job_label)"
+    sleep 1
+    start_pid="$(launch_job_pid)"
   else
-    say "log does not exist yet: $log_path"
+    nohup /bin/zsh -lc "$command" </dev/null >> "$log_path" 2>&1 &
+    start_pid="$!"
+    disown "$start_pid" 2>/dev/null || true
   fi
+
+  print -r -- "$start_pid" > "$pid_file"
+
+  say "started $profile profile dev app supervisor pid=${start_pid:-unknown} label=$(launch_job_label)"
+  say "log: $log_path"
+  verify_app
 }
 
 assert_success() {
@@ -292,70 +492,19 @@ assert_failure() {
 
 run_self_test() {
   root="/Users/example/PwrAgnt"
+  root_hash_value="$(compute_root_hash "$root")"
   profile="dev"
 
+  assert_success "valid profile" is_valid_profile "dev"
+  assert_failure "profile prefix" is_valid_profile "Dev"
   assert_success "exact root command" command_mentions_root "cd /Users/example/PwrAgnt && pnpm dev"
   assert_success "root child path" command_mentions_root "/Users/example/PwrAgnt/apps/desktop"
   assert_success "root env-style assignment" command_mentions_root "PWD=/Users/example/PwrAgnt"
   assert_failure "sibling checkout prefix" command_mentions_root "/Users/example/PwrAgnt-old/apps/desktop"
   assert_failure "sibling checkout suffix" command_mentions_root "/Users/example/PwrAgnt2/apps/desktop"
-
-  assert_success "exact profile assignment" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=dev SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
-  assert_failure "profile prefix dev2" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=dev2 SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
-  assert_failure "profile prefix development" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=development SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
+  [[ "$root_hash_value" == "c976f17804e892f9" ]] || die "self-test failed: unexpected root hash $root_hash_value"
 
   say "self-test passed"
-}
-
-verify_app() {
-  local elapsed=0
-  local sleep_step=2
-  local managed_pid=""
-
-  [[ -f "$pid_file" ]] && managed_pid="$(tr -dc '0-9' < "$pid_file")"
-
-  while (( elapsed <= timeout )); do
-    if [[ -n "$managed_pid" ]] && ! is_live_pid "$managed_pid"; then
-      say "managed process exited before verification completed (pid=$managed_pid)"
-      tail_log
-      return 1
-    fi
-
-    if has_started_process; then
-      sleep 3
-      if [[ -z "$managed_pid" ]] || is_live_pid "$managed_pid"; then
-        say "$profile profile dev app is running for $root"
-        say "log: $log_path"
-        return 0
-      fi
-    fi
-
-    sleep "$sleep_step"
-    elapsed=$((elapsed + sleep_step))
-  done
-
-  say "timed out waiting ${timeout}s for $profile profile dev app to come up"
-  tail_log
-  return 1
-}
-
-start_app() {
-  local start_pid command
-
-  [[ -f "$root/package.json" ]] || die "root does not look like the PwrAgent repository root: $root"
-  mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
-
-  close_app
-
-  log_line "start root=$root profile=$profile command=PWRAGENT_PROFILE=$profile pnpm dev" >> "$log_path"
-  command="cd $(shell_quote "$root") && exec env PWRAGENT_PROFILE=$(shell_quote "$profile") pnpm dev"
-  nohup /bin/zsh -lc "$command" >> "$log_path" 2>&1 &
-  start_pid="$!"
-  print -r -- "$start_pid" > "$pid_file"
-
-  say "started $profile profile dev app supervisor pid=$start_pid"
-  say "log: $log_path"
-  verify_app
 }
 
 mode="${1:-}"
@@ -404,11 +553,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$mode" == "start" || "$mode" == "restart" || "$mode" == "close" || "$mode" == "status" || "$mode" == "verify" || "$mode" == "self-test" ]] || die "unknown mode: $mode"
+[[ "$mode" == "start" || "$mode" == "restart" || "$mode" == "close" || "$mode" == "status" || "$mode" == "verify" || "$mode" == "leases" || "$mode" == "self-test" ]] || die "unknown mode: $mode"
 [[ "$timeout" == <-> ]] || die "--timeout must be an integer number of seconds"
+is_valid_profile "$profile" || die "invalid profile: $profile"
 
 root="${root:A}"
 [[ -d "$root" ]] || die "root does not exist: $root"
+root_hash_value="$(compute_root_hash "$root")"
+state_db="$(state_db_path)"
 
 if [[ -z "$log_path" ]]; then
   log_path="$root/.local/pwragent-dev-profile.log"
@@ -432,6 +584,9 @@ case "$mode" in
     ;;
   verify)
     verify_app
+    ;;
+  leases)
+    write_leases
     ;;
   self-test)
     run_self_test

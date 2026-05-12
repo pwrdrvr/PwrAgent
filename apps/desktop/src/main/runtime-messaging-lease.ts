@@ -27,6 +27,7 @@ import { getMainLogger } from "./log";
 
 export const MESSAGING_LEASE_TTL_MS = 30_000;
 export const MESSAGING_LEASE_HEARTBEAT_MS = 10_000;
+export const PWRAGENT_INSTANCE_ROOT_ENV = "PWRAGENT_INSTANCE_ROOT";
 
 const leaseLog = getMainLogger("pwragent:messaging-lease");
 
@@ -84,7 +85,11 @@ export class RuntimeMessagingLeaseCoordinator {
     this.instanceId = options.instanceId ?? randomUUID();
     this.profileName = options.profileName ?? resolveActiveProfileName();
     this.processId = options.processId ?? process.pid;
-    this.cwd = options.cwd ?? process.cwd();
+    this.cwd =
+      options.cwd
+      ?? options.env?.[PWRAGENT_INSTANCE_ROOT_ENV]
+      ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV]
+      ?? process.cwd();
     this.now = options.now ?? Date.now;
     this.store = options.store ?? getAppRuntimeInstanceStore();
     this.env = options.env;

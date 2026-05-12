@@ -45,6 +45,7 @@ describe("AppRuntimeInstanceStore", () => {
       profileName: "dev",
       processId: 123,
       cwdHint: "PwrAgnt",
+      cwdHash: "c976f17804e892f9",
       startedAt: 1_000,
       heartbeatAt: 1_000,
       desiredMessagingEnabled: true,
@@ -57,6 +58,29 @@ describe("AppRuntimeInstanceStore", () => {
       expiresAt: 31_000,
       status: "active",
     });
+  });
+
+  it("stores the same cwd hash for equivalent absolute paths", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: path.join(tempDir, "..", path.basename(tempDir)),
+      startedAt: 1_000,
+      desiredMessagingEnabled: true,
+    });
+    store.recordInstanceStart({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: tempDir,
+      startedAt: 2_000,
+      desiredMessagingEnabled: true,
+    });
+
+    expect(store.getInstance("instance-a")?.cwdHash).toBe(
+      store.getInstance("instance-b")?.cwdHash,
+    );
   });
 
   it("renews the current holder lease without changing the original acquisition time", () => {
@@ -291,6 +315,32 @@ describe("AppRuntimeInstanceStore", () => {
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-b",
       status: "active",
+    });
+  });
+
+  it("repairs missing runtime lease tables when user_version already advanced", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.exec(`
+      DROP TABLE IF EXISTS messaging_runtime_lease;
+      DROP TABLE IF EXISTS app_runtime_instances;
+      PRAGMA user_version = 4;
+    `);
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath, { profileName: "dev" });
+    store = new AppRuntimeInstanceStore(stateDb);
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/Users/example/PwrAgnt",
+      startedAt: 1_000,
+      desiredMessagingEnabled: true,
+    });
+
+    expect(store.getInstance("instance-a")).toMatchObject({
+      instanceId: "instance-a",
+      cwdHash: "c976f17804e892f9",
     });
   });
 });

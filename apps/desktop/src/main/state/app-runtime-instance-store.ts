@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { StateDb } from "./state-db.js";
 
@@ -15,6 +16,7 @@ export type AppRuntimeInstanceRecord = {
   profileName: string;
   processId: number;
   cwdHint?: string;
+  cwdHash?: string;
   startedAt: number;
   heartbeatAt: number;
   exitedAt?: number;
@@ -45,6 +47,7 @@ type InstanceRow = {
   profile_name: string;
   process_id: number;
   cwd_hint: string | null;
+  cwd_hash: string | null;
   started_at: number;
   heartbeat_at: number;
   exited_at: number | null;
@@ -70,6 +73,7 @@ export class AppRuntimeInstanceStore {
     profileName: string;
     processId: number;
     cwd?: string;
+    cwdHash?: string;
     startedAt: number;
     desiredMessagingEnabled: boolean;
     effectiveMessagingEnabled?: boolean;
@@ -82,16 +86,17 @@ export class AppRuntimeInstanceStore {
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO app_runtime_instances(
-           instance_id, profile_name, process_id, cwd_hint, started_at,
+           instance_id, profile_name, process_id, cwd_hint, cwd_hash, started_at,
            heartbeat_at, exited_at, desired_messaging_enabled,
            effective_messaging_enabled, disabled_reason
-         ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
       )
       .run(
         params.instanceId,
         params.profileName,
         params.processId,
         sanitizeCwdHint(params.cwd),
+        params.cwdHash ?? hashCwd(params.cwd),
         params.startedAt,
         params.startedAt,
         booleanToSql(params.desiredMessagingEnabled),
@@ -302,6 +307,7 @@ function mapInstanceRow(row: InstanceRow): AppRuntimeInstanceRecord {
     profileName: row.profile_name,
     processId: row.process_id,
     ...(row.cwd_hint ? { cwdHint: row.cwd_hint } : {}),
+    ...(row.cwd_hash ? { cwdHash: row.cwd_hash } : {}),
     startedAt: row.started_at,
     heartbeatAt: row.heartbeat_at,
     ...(row.exited_at !== null ? { exitedAt: row.exited_at } : {}),
@@ -335,6 +341,12 @@ function sanitizeCwdHint(cwd: string | undefined): string | null {
   const value = cwd?.trim();
   if (!value) return null;
   return path.basename(value).slice(0, 120) || null;
+}
+
+export function hashCwd(cwd: string | undefined): string | null {
+  const value = cwd?.trim();
+  if (!value) return null;
+  return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, 16);
 }
 
 function normalizeDisabledReason(

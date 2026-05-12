@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS app_runtime_instances (
   profile_name                TEXT NOT NULL,
   process_id                  INTEGER NOT NULL,
   cwd_hint                    TEXT,
+  cwd_hash                    TEXT,
   started_at                  INTEGER NOT NULL,
   heartbeat_at                INTEGER NOT NULL,
   exited_at                   INTEGER,
@@ -250,6 +251,11 @@ export class StateDb {
       })();
     }
     ensureCurrentSchema(db);
+    if ((db.pragma("user_version", { simple: true }) as number) < 5) {
+      db.transaction(() => {
+        db.pragma("user_version = 5");
+      })();
+    }
 
     return new StateDb(db);
   }
@@ -378,4 +384,23 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
       db.pragma("user_version = 4");
     }
   })();
+
+  if (!columnExists(db, "app_runtime_instances", "cwd_hash")) {
+    db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
+  }
+  db.exec(`
+CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
+  ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
+`);
+}
+
+function columnExists(
+  db: BetterSqlite3.Database,
+  tableName: string,
+  columnName: string,
+): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name: string;
+  }>;
+  return rows.some((row) => row.name === columnName);
 }
