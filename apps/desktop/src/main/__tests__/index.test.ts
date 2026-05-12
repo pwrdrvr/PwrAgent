@@ -29,6 +29,8 @@ const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
+const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
+const messagingLeaseShutdownSyncMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
@@ -154,6 +156,13 @@ vi.mock("../messaging/messaging-runtime", () => ({
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
 }));
 
+vi.mock("../runtime-messaging-lease", () => ({
+  getRuntimeMessagingLeaseCoordinator: vi.fn(() => ({
+    start: messagingLeaseStartMock,
+    shutdownSync: messagingLeaseShutdownSyncMock,
+  })),
+}));
+
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
@@ -202,6 +211,9 @@ describe("bootstrapApp", () => {
     mainLogErrorMock.mockReset();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
+    messagingLeaseStartMock.mockReset();
+    messagingLeaseStartMock.mockResolvedValue();
+    messagingLeaseShutdownSyncMock.mockReset();
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -245,7 +257,7 @@ describe("bootstrapApp", () => {
     resolveStart();
     await flushMicrotasks();
 
-    expect(messagingRuntimeStartMock).toHaveBeenCalledTimes(1);
+    expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
     expect(createMainWindowMock).toHaveBeenCalledWith({
       startupCpuProfiler: startupProfilerInstance,
     });
@@ -262,12 +274,12 @@ describe("bootstrapApp", () => {
 
   it("creates the first window without waiting for messaging startup", async () => {
     startupProfilerInstance.start.mockResolvedValue();
-    messagingRuntimeStartMock.mockReturnValue(new Promise(() => {}));
+    messagingLeaseStartMock.mockReturnValue(new Promise(() => {}));
 
     await import("../index");
     await flushMicrotasks();
 
-    expect(messagingRuntimeStartMock).toHaveBeenCalledTimes(1);
+    expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
     expect(registerMessagingStatusIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(createMainWindowMock).toHaveBeenCalledWith({
       startupCpuProfiler: startupProfilerInstance,
@@ -276,7 +288,7 @@ describe("bootstrapApp", () => {
 
   it("logs unexpected background messaging startup failures", async () => {
     startupProfilerInstance.start.mockResolvedValue();
-    messagingRuntimeStartMock.mockRejectedValue(new Error("config load failed"));
+    messagingLeaseStartMock.mockRejectedValue(new Error("config load failed"));
 
     await import("../index");
     await flushMicrotasks();
@@ -338,6 +350,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(messagingRuntimeStartMock).not.toHaveBeenCalled();
+    expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
     expect(mainLogInfoMock).toHaveBeenCalledWith(
       "messaging runtime disabled for this app instance",
       expect.objectContaining({

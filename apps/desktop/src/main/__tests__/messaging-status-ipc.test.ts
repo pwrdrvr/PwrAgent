@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const runtimeMock = vi.hoisted(() => ({
-  applyConfig: vi.fn(async () => undefined),
+  applyConfig: vi.fn(async (_config: unknown, _options?: unknown) => undefined),
   deliverPairingOutcome: vi.fn(async () => undefined),
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
@@ -27,6 +27,23 @@ const messagingConfigMocks = vi.hoisted(() => ({
     enabled: true,
     inputDebounceMs: 500,
   })),
+}));
+const leaseCoordinatorMock = vi.hoisted(() => ({
+  applyLatestConfig: vi.fn(
+    async (
+      runtime: typeof runtimeMock,
+      loadConfig: (options: unknown) => Promise<unknown>,
+      options: unknown,
+    ) => {
+      const config = await loadConfig(options);
+      await runtime.applyConfig(config, { allowStart: true });
+      return { enabled: true };
+    },
+  ),
+  disableForSession: vi.fn(async (runtime: typeof runtimeMock) => {
+    await runtime.stop();
+    return { enabled: false, disabledReasonKind: "runtime_stopped" };
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -53,6 +70,10 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 vi.mock("../messaging/messaging-config", () => ({
   loadDesktopMessagingConfigFromSettings:
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings,
+}));
+
+vi.mock("../runtime-messaging-lease", () => ({
+  getRuntimeMessagingLeaseCoordinator: vi.fn(() => leaseCoordinatorMock),
 }));
 
 vi.mock("../messaging/desktop-messaging-pairing-store", () => ({
@@ -101,6 +122,8 @@ describe("messaging status ipc", () => {
     pairingStoreMock.markStatus.mockReset();
     activityLogMock.record.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
+    leaseCoordinatorMock.applyLatestConfig.mockClear();
+    leaseCoordinatorMock.disableForSession.mockClear();
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
@@ -121,6 +144,14 @@ describe("messaging status ipc", () => {
       logStartupEligibility: true,
       messagingEnabledOverride: true,
     });
+    expect(leaseCoordinatorMock.applyLatestConfig).toHaveBeenCalledWith(
+      runtimeMock,
+      expect.any(Function),
+      {
+        logStartupEligibility: true,
+        messagingEnabledOverride: true,
+      },
+    );
     expect(runtimeMock.applyConfig).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: true }),
       { allowStart: true },
@@ -164,6 +195,11 @@ describe("messaging status ipc", () => {
       },
     });
     expect(runtimeMock.deliverPairingOutcome).toHaveBeenCalledWith(consumed, "approved");
+    expect(leaseCoordinatorMock.applyLatestConfig).toHaveBeenCalledWith(
+      runtimeMock,
+      expect.any(Function),
+      { logStartupEligibility: true },
+    );
   });
 
   it("approves LINE group and room pairing into separate bucket lists", async () => {

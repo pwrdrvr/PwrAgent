@@ -41,13 +41,13 @@ The desktop style guide defines:
 To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):
 
 ```bash
-pnpm --filter @pwragent/desktop dev:no-messaging
+pnpm --filter @pwragent/desktop dev
 ```
 
 - Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
-- `dev:no-messaging` disables the Telegram/Discord messaging interface, which avoids bot-token prompts and Keychain access issues during development.
-- For visual verification of UI changes, use this command so you can see real threads in the sidebar and thread detail pane.
-- The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
+- Messaging adapters are guarded by a profile-scoped sqlite lease. If another live instance already owns messaging for the active profile, this process stays usable but leaves messaging stopped.
+- Use `pnpm --filter @pwragent/desktop dev:no-messaging` when you explicitly want to guarantee that this app process never starts messaging adapters.
+- For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
 ## Inspecting Branch Drift Dialog E2E
