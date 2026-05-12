@@ -8,8 +8,10 @@ import type {
   MessagingActiveTurnSummary,
   MessagingBindingRecord,
   MessagingCapabilityProfile,
+  MessagingMonitorState,
   MessagingStatusIntent,
   MessagingSurfaceAction,
+  MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -23,13 +25,18 @@ const MONITOR_MIN_ACTIONS = 1;
 
 export function buildMonitorStatusIntent(params: {
   activeTurnsByThreadKey?: ReadonlyMap<string, MessagingActiveTurnSummary>;
-  binding: MessagingBindingRecord;
+  binding?: MessagingBindingRecord;
+  bindingId?: string;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
+  monitor?: MessagingMonitorState;
+  monitorSurface?: MessagingSurfaceRef;
   navigation: NavigationSnapshot;
   threadLimit?: number;
 }): MessagingStatusIntent {
+  const monitor = params.binding?.monitor ?? params.monitor;
+  const monitorSurface = params.binding?.monitorSurface ?? params.monitorSurface;
   const threadLimit = Math.max(1, params.threadLimit ?? MESSAGING_MONITOR_THREAD_LIMIT);
   const threads = params.navigation.threads.slice(0, threadLimit);
   const activeTurns = params.activeTurnsByThreadKey ?? new Map();
@@ -50,25 +57,25 @@ export function buildMonitorStatusIntent(params: {
         )
       : ["No recent threads."];
   const canUpdateSurface = Boolean(
-    params.binding.monitorSurface &&
+    monitorSurface &&
       params.capabilityProfile?.text.supportsMessageEdit !== false,
   );
 
   return {
     id: params.id,
     kind: "status",
-    bindingId: params.binding.id,
+    bindingId: params.binding?.id ?? params.bindingId,
     createdAt: params.createdAt,
     delivery: {
       mode: canUpdateSurface ? "update" : "present",
       fallback: "present_new",
     },
-    targetSurface: canUpdateSurface ? params.binding.monitorSurface : undefined,
+    targetSurface: canUpdateSurface ? monitorSurface : undefined,
     status: hasWorkingThread ? "working" : "idle",
     text: [
       "Monitor: Recent threads",
       `Updated: ${formatTimeOfDay(params.createdAt)}`,
-      `Interval: ${formatInterval(params.binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS)}`,
+      `Interval: ${formatInterval(monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS)}`,
       "",
       ...lines,
     ].join("\n"),

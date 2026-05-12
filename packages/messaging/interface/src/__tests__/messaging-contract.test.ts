@@ -15,6 +15,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
+  type MessagingMonitorSubscriptionRecord,
   type MessagingSingleSelectIntent,
   type MessagingStreamUpdateIntent,
   type MessagingThreadPickerIntent,
@@ -533,12 +534,28 @@ describe("messaging surface contract", () => {
         threadId: "thread-1",
       },
     } satisfies MessagingCallbackHandleRecord;
+    const monitorSubscription = {
+      id: "monitor:telegram:dm::chat-1",
+      channel: binding.channel,
+      authorizedActorIds: ["telegram-user-1"],
+      createdAt: 1000,
+      updatedAt: 1500,
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1500,
+        updatedAt: 1500,
+      },
+      monitorSurface: binding.monitorSurface,
+    } satisfies MessagingMonitorSubscriptionRecord;
 
     expect(callbackHandle.handle).not.toContain("thread-1");
     expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
     expect(binding.monitor?.enabled).toBe(true);
     expect(binding.monitorSurface?.id).toBe("monitor-message-1");
+    expect(monitorSubscription.monitor.enabled).toBe(true);
+    expect(monitorSubscription.monitorSurface?.id).toBe("monitor-message-1");
   });
 
   it("defines callback handles as long-lived sqlite routes", () => {

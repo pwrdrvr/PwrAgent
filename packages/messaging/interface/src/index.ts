@@ -840,6 +840,17 @@ export type MessagingMonitorState = {
   updatedAt: number;
 };
 
+export type MessagingMonitorSubscriptionRecord = {
+  id: string;
+  channel: MessagingChannelRef;
+  authorizedActorIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  revokedAt?: number;
+  monitor: MessagingMonitorState;
+  monitorSurface?: MessagingSurfaceRef;
+};
+
 export type MessagingThreadDisplaySummary = {
   /**
    * Deprecated migration fallback only. Current thread display facts must be

@@ -8,6 +8,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
   MessagingJsonValue,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 import {
@@ -104,6 +105,79 @@ export class MessagingStore {
       const revoked = revokeBindingInData(
         data,
         params.bindingId,
+        params.revokedAt ?? Date.now(),
+      );
+      return revoked ? structuredClone(revoked) : undefined;
+    });
+  }
+
+  async upsertMonitorSubscription(
+    subscription: MessagingMonitorSubscriptionRecord,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    const sanitized = sanitizeMonitorSubscription(subscription);
+    const channelKey = buildMessagingConversationKey(sanitized.channel);
+    return await this.withData((data) => {
+      for (const existing of Object.values(data.monitorSubscriptions)) {
+        if (
+          existing.id !== sanitized.id &&
+          !existing.revokedAt &&
+          buildMessagingConversationKey(existing.channel) === channelKey
+        ) {
+          revokeMonitorSubscriptionInData(data, existing.id, sanitized.updatedAt);
+        }
+      }
+      data.monitorSubscriptions[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
+  async getMonitorSubscription(
+    id: string,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    return await this.withReadData((data) =>
+      cloneOptional(data.monitorSubscriptions[id]),
+    );
+  }
+
+  async findActiveMonitorSubscriptionForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    const channelKey = buildMessagingConversationKey(channel);
+    return await this.withReadData((data) =>
+      cloneOptional(
+        Object.values(data.monitorSubscriptions)
+          .filter(
+            (subscription) =>
+              !subscription.revokedAt &&
+              buildMessagingConversationKey(subscription.channel) === channelKey,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
+      ),
+    );
+  }
+
+  async findActiveMonitorSubscriptionsForChannelKind(params: {
+    channel: MessagingChannelRef["channel"];
+  }): Promise<MessagingMonitorSubscriptionRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.monitorSubscriptions)
+        .filter(
+          (subscription) =>
+            !subscription.revokedAt &&
+            subscription.channel.channel === params.channel,
+        )
+        .map((subscription) => structuredClone(subscription)),
+    );
+  }
+
+  async revokeMonitorSubscription(params: {
+    subscriptionId: string;
+    revokedAt?: number;
+  }): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    return await this.withData((data) => {
+      const revoked = revokeMonitorSubscriptionInData(
+        data,
+        params.subscriptionId,
         params.revokedAt ?? Date.now(),
       );
       return revoked ? structuredClone(revoked) : undefined;
@@ -501,6 +575,16 @@ function sanitizePendingIntent(
   };
 }
 
+function sanitizeMonitorSubscription(
+  subscription: MessagingMonitorSubscriptionRecord,
+): MessagingMonitorSubscriptionRecord {
+  return {
+    ...subscription,
+    authorizedActorIds: [...new Set(subscription.authorizedActorIds)],
+    monitorSurface: sanitizeSurfaceRef(subscription.monitorSurface),
+  };
+}
+
 function sanitizeBrowseSession(
   session: MessagingBrowseSessionRecord,
 ): MessagingBrowseSessionRecord {
@@ -565,6 +649,29 @@ function revokeBindingInData(
   }
   deleteCallbackHandlesForBindingInData(data, bindingId);
 
+  return revoked;
+}
+
+function revokeMonitorSubscriptionInData(
+  data: MessagingStoreData,
+  subscriptionId: string,
+  revokedAt: number,
+): MessagingMonitorSubscriptionRecord | undefined {
+  const current = data.monitorSubscriptions[subscriptionId];
+  if (!current) {
+    return undefined;
+  }
+
+  const revoked: MessagingMonitorSubscriptionRecord = {
+    ...current,
+    revokedAt,
+    updatedAt: revokedAt,
+  };
+  data.monitorSubscriptions[subscriptionId] = revoked;
+  deletePendingIntentsForChannelInData(
+    data,
+    buildMessagingConversationKey(current.channel),
+  );
   return revoked;
 }
 

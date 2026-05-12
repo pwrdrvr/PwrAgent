@@ -3,6 +3,7 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingDeliveryResult,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 
@@ -28,6 +29,7 @@ export type MessagingStoreData = {
   browseSessions: Record<string, MessagingBrowseSessionRecord>;
   bindings: Record<string, MessagingBindingRecord>;
   callbackHandles: Record<string, MessagingCallbackHandleRecord>;
+  monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord>;
   pendingIntents: Record<string, MessagingPendingIntentRecord>;
   deliveries: Record<string, MessagingDeliveryRecord>;
 };
@@ -37,6 +39,7 @@ const EMPTY_MESSAGING_STORE_DATA: MessagingStoreData = {
   browseSessions: {},
   bindings: {},
   callbackHandles: {},
+  monitorSubscriptions: {},
   pendingIntents: {},
   deliveries: {},
 };
@@ -52,6 +55,10 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
     bindings: migrateBindingRecords(record.bindings),
     callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
+    monitorSubscriptions: migrateRecord(
+      record.monitorSubscriptions,
+      isMessagingMonitorSubscriptionRecord,
+    ),
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
@@ -120,6 +127,29 @@ function isMessagingPendingIntentRecord(
       Array.isArray(record.allowedActorIds) &&
       typeof record.createdAt === "number" &&
       typeof record.expiresAt === "number",
+  );
+}
+
+function isMessagingMonitorSubscriptionRecord(
+  value: unknown,
+): value is MessagingMonitorSubscriptionRecord {
+  const record = asRecord(value);
+  const channel = asRecord(record?.channel);
+  const conversation = asRecord(channel?.conversation);
+  const monitor = asRecord(record?.monitor);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      Array.isArray(record.authorizedActorIds) &&
+      typeof channel?.channel === "string" &&
+      typeof conversation?.id === "string" &&
+      typeof conversation?.kind === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      monitor &&
+      typeof monitor.enabled === "boolean" &&
+      typeof monitor.intervalMs === "number" &&
+      typeof monitor.updatedAt === "number",
   );
 }
 

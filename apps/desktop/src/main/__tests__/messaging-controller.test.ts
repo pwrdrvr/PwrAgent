@@ -2000,15 +2000,12 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "No thread bound",
-      actions: [
-        expect.objectContaining({
-          id: "command:resume",
-        }),
-      ],
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
     });
   });
 
@@ -2055,28 +2052,46 @@ describe("MessagingController", () => {
     });
   });
 
-  it("explains that Monitor requires a bound conversation", async () => {
+  it("starts Monitor in an unbound conversation", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
-    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "No thread bound",
-      body: expect.stringContaining("before starting Monitor"),
-      actions: [
-        expect.objectContaining({
-          id: "command:resume",
-          label: "Resume",
-        }),
-      ],
+      kind: "status",
+      text: expect.stringContaining("Monitor: Recent threads"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "monitor:stop" }),
+      ]),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+    ).resolves.toBeUndefined();
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 1000,
+      },
+      monitorSurface: {
+        id: expect.stringContaining("surface:"),
+      },
     });
   });
 
-  it("starts Monitor for a bound conversation and stores the update surface", async () => {
+  it("starts Monitor for a bound conversation without changing the thread binding", async () => {
     const harness = await createHarness();
     await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/monitor").channel,
+    );
     harness.getNavigationSnapshot.mockClear();
     harness.readThreadStatus.mockResolvedValue("active");
     harness.delivered.splice(0);
@@ -2101,6 +2116,11 @@ describe("MessagingController", () => {
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+    ).resolves.toEqual(binding);
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
     ).resolves.toMatchObject({
       monitor: {
         enabled: true,
@@ -2149,16 +2169,17 @@ describe("MessagingController", () => {
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
       expect(logger.debug).toHaveBeenCalledWith(
-        "messaging monitor initial render failed",
+        "messaging channel monitor initial render failed",
         expect.objectContaining({
-          bindingId: expect.stringContaining("binding:"),
           error: "navigation unavailable",
-          threadId: "thread-1",
+          subscriptionId: expect.stringContaining("monitor:"),
         }),
       );
       expect(harness.delivered).toEqual([]);
       await expect(
-        harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
       ).resolves.toMatchObject({
         monitor: {
           enabled: true,
@@ -2178,7 +2199,7 @@ describe("MessagingController", () => {
     }
   });
 
-  it("does not reactivate a binding after permanent Monitor delivery failure", async () => {
+  it("revokes the channel Monitor subscription after permanent delivery failure", async () => {
     vi.useFakeTimers();
     let failDelivery = false;
     const harness = await createHarness({
@@ -2215,10 +2236,12 @@ describe("MessagingController", () => {
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
 
       await expect(harness.store.getBinding(binding.id)).resolves.toMatchObject({
-        revokedAt: 1000,
+        id: binding.id,
       });
       await expect(
-        harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
       ).resolves.toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -2247,7 +2270,10 @@ describe("MessagingController", () => {
       const binding = await harness.store.findActiveBindingForChannel(
         buildCommandEvent("/monitor").channel,
       );
-      expect(binding).toMatchObject({
+      const subscription = await harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      expect(subscription).toMatchObject({
         monitor: {
           enabled: false,
         },

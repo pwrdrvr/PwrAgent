@@ -142,6 +142,21 @@ CREATE INDEX idx_messaging_pairing_status
   ON messaging_pairing_tokens(status, expires_at);
 `;
 
+const SCHEMA_V4 = `
+CREATE TABLE monitor_subscriptions (
+  subscription_id  TEXT PRIMARY KEY,
+  channel_kind     TEXT NOT NULL,
+  channel_id       TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL,
+  revoked_at       INTEGER,
+  payload          TEXT NOT NULL
+);
+CREATE INDEX idx_monitor_subscriptions_channel
+  ON monitor_subscriptions(channel_kind, channel_id);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 /**
@@ -198,6 +213,12 @@ export class StateDb {
       db.transaction(() => {
         db.exec(SCHEMA_V3);
         db.pragma("user_version = 3");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 4) {
+      db.transaction(() => {
+        db.exec(SCHEMA_V4);
+        db.pragma("user_version = 4");
       })();
     }
 

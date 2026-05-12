@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
 } from "@pwragent/messaging-interface";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
@@ -38,6 +39,30 @@ function buildBinding(
     authorizedActorIds: ["user-1"],
     createdAt: 1000,
     updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildMonitorSubscription(
+  overrides: Partial<MessagingMonitorSubscriptionRecord> = {},
+): MessagingMonitorSubscriptionRecord {
+  return {
+    id: "monitor:telegram:dm::chat-1",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    authorizedActorIds: ["user-1"],
+    createdAt: 1000,
+    updatedAt: 1000,
+    monitor: {
+      enabled: true,
+      intervalMs: 60_000,
+      updatedAt: 1000,
+    },
     ...overrides,
   };
 }
@@ -286,6 +311,61 @@ describe("SqliteMessagingStore", () => {
         id: "status-message-1",
       },
     });
+  });
+
+  it("round-trips channel monitor subscriptions", async () => {
+    const store = await createStore();
+    await store.upsertMonitorSubscription(
+      buildMonitorSubscription({
+        monitor: {
+          enabled: true,
+          intervalMs: 60_000,
+          lastRenderedAt: 2000,
+          updatedAt: 2000,
+        },
+        monitorSurface: {
+          channel: "telegram",
+          id: "monitor-message-1",
+          state: {
+            opaque: {
+              chatId: 123,
+              apiToken: "secret-token",
+            },
+          },
+        },
+      }),
+    );
+
+    await expect(
+      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+    ).resolves.toMatchObject({
+      id: "monitor:telegram:dm::chat-1",
+      monitor: {
+        enabled: true,
+        intervalMs: 60_000,
+        lastRenderedAt: 2000,
+      },
+      monitorSurface: {
+        id: "monitor-message-1",
+        state: {
+          opaque: {
+            chatId: 123,
+            apiToken: "[REDACTED]",
+          },
+        },
+      },
+    });
+    await expect(
+      store.findActiveMonitorSubscriptionsForChannelKind({ channel: "telegram" }),
+    ).resolves.toHaveLength(1);
+
+    await store.revokeMonitorSubscription({
+      subscriptionId: "monitor:telegram:dm::chat-1",
+      revokedAt: 3000,
+    });
+    await expect(
+      store.findActiveMonitorSubscriptionForChannel(buildMonitorSubscription().channel),
+    ).resolves.toBeUndefined();
   });
 
   it("can delete callback handles for a binding without revoking it", async () => {

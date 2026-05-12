@@ -26,6 +26,7 @@ import type {
   MessagingActiveTurnSummary,
   MessagingApprovalDecision,
   MessagingChannelKind,
+  MessagingChannelRef,
   MessagingConfirmationIntent,
   MessagingDeliveryScope,
   MessagingDeliveryResult,
@@ -37,6 +38,7 @@ import type {
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingMessageIntent,
+  MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
   MessagingSurfaceRef,
@@ -328,6 +330,10 @@ export class MessagingController {
     string,
     ReturnType<typeof setTimeout>
   >();
+  private readonly monitorTimersBySubscriptionId = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly deliveryBudget?: MessagingDeliveryBudget;
   /**
    * Per-thread map of the most-recent "permissions queued" audit message
@@ -366,6 +372,18 @@ export class MessagingController {
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
+    if (this.options.channel) {
+      const subscriptions =
+        await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
+          channel: this.options.channel,
+        });
+      for (const subscription of subscriptions) {
+        if (subscription.monitor.enabled) {
+          this.scheduleMonitorSubscriptionTick(subscription);
+        }
+      }
+    }
+
     const backends = await this.resolveMonitorBackendKinds();
     for (const backend of backends) {
       const bindings = this.filterBindingsForChannel(
@@ -2275,6 +2293,10 @@ export class MessagingController {
       clearTimeout(timer);
     }
     this.monitorTimersByBindingId.clear();
+    for (const timer of this.monitorTimersBySubscriptionId.values()) {
+      clearTimeout(timer);
+    }
+    this.monitorTimersBySubscriptionId.clear();
     for (const pending of this.pendingNewThreadPrompts.values()) {
       if (pending.timer) {
         clearTimeout(pending.timer);
@@ -3373,58 +3395,148 @@ export class MessagingController {
 
   private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
     const action = normalizeMonitorCommandAction(event.args?.[0]);
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.deliverMonitorUnbound(event);
-      return;
-    }
-
     if (action === "stop") {
-      await this.stopMonitoringForBinding(binding, event);
+      await this.stopMonitoringForChannel(event);
       return;
     }
 
-    await this.enableAndRenderMonitor(binding, event);
+    await this.enableAndRenderChannelMonitor(event);
   }
 
   private async handleMonitorCallback(
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
-      await this.deliverMonitorUnbound(event);
-      return;
-    }
-
     if (actionId === "monitor:stop") {
-      await this.stopMonitoringForBinding(binding, event);
+      await this.stopMonitoringForChannel(event);
       return;
     }
 
-    await this.enableAndRenderMonitor(binding, event);
+    await this.enableAndRenderChannelMonitor(event);
   }
 
-  private async deliverMonitorUnbound(event: MessagingInboundEvent): Promise<void> {
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("monitor-unbound"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "No thread bound",
-        body: "Use /resume to choose a PwrAgent thread before starting Monitor.",
-        actions: [
-          {
-            id: "command:resume",
-            label: "Resume",
-            style: "primary",
-            fallbackText: "/resume",
-          },
-        ],
-      }),
-      undefined,
-      event,
-    );
+  private async enableAndRenderChannelMonitor(
+    event: MessagingInboundEvent,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    const now = this.now();
+    const existing =
+      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+    const subscription = await this.options.store.upsertMonitorSubscription({
+      id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
+      channel: event.channel,
+      authorizedActorIds: existing?.authorizedActorIds.length
+        ? existing.authorizedActorIds
+        : this.monitorAuthorizedActorIds(event),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      monitor: {
+        enabled: true,
+        intervalMs:
+          existing?.monitor.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        lastRenderedAt: existing?.monitor.lastRenderedAt,
+        updatedAt: now,
+      },
+      monitorSurface: existing?.monitorSurface,
+    });
+    try {
+      const rendered = await this.renderChannelMonitorStatus(subscription, event);
+      this.scheduleMonitorSubscriptionTick(rendered);
+      return rendered;
+    } catch (error) {
+      this.logger.debug?.("messaging channel monitor initial render failed", {
+        error: error instanceof Error ? error.message : String(error),
+        subscriptionId: subscription.id,
+      });
+      this.scheduleMonitorSubscriptionTick(subscription);
+      return subscription;
+    }
+  }
+
+  private async stopMonitoringForChannel(
+    event: MessagingInboundEvent,
+  ): Promise<MessagingMonitorSubscriptionRecord | undefined> {
+    const subscription =
+      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+    if (!subscription) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("monitor-stopped"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Monitor stopped",
+          body: "Monitor was not running for this conversation.",
+          actions: [],
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    this.clearMonitorSubscriptionTimer(subscription.id);
+    const now = this.now();
+    if (subscription.monitorSurface) {
+      try {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("monitor-stopped"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: now,
+            title: "Monitor stopped",
+            body: "Recent thread updates will no longer post to this conversation.",
+            actions: [],
+            delivery: {
+              mode: this.capabilityProfile.text.supportsMessageEdit
+                ? "update"
+                : "present",
+              replaceMarkup: true,
+              fallback: "present_new",
+            },
+            targetSurface: this.capabilityProfile.text.supportsMessageEdit
+              ? subscription.monitorSurface
+              : undefined,
+          }),
+          undefined,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging channel monitor stop update failed", {
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id,
+        });
+      }
+    } else {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("monitor-stopped"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: now,
+          title: "Monitor stopped",
+          body: "Recent thread updates will no longer post to this conversation.",
+          actions: [],
+        }),
+        undefined,
+        event,
+      );
+    }
+
+    return await this.options.store.upsertMonitorSubscription({
+      ...subscription,
+      monitor: {
+        enabled: false,
+        intervalMs: subscription.monitor.intervalMs,
+        lastRenderedAt: subscription.monitor.lastRenderedAt,
+        updatedAt: now,
+      },
+      monitorSurface: undefined,
+      updatedAt: now,
+    });
+  }
+
+  private monitorAuthorizedActorIds(event: MessagingInboundEvent): string[] {
+    return this.authorizedActorIds.size > 0
+      ? [...this.authorizedActorIds]
+      : [event.actor.platformUserId];
   }
 
   private async enableAndRenderMonitor(
@@ -4741,6 +4853,77 @@ export class MessagingController {
     });
   }
 
+  private async renderChannelMonitorStatus(
+    subscription: MessagingMonitorSubscriptionRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    const snapshot =
+      navigation ??
+      (await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      }));
+    const now = this.now();
+    const activeTurns = await this.resolveMonitorActiveTurns(snapshot);
+    const intent = {
+      ...buildMonitorStatusIntent({
+        activeTurnsByThreadKey: activeTurns,
+        bindingId: subscription.id,
+        capabilityProfile: this.capabilityProfile,
+        createdAt: now,
+        id: this.newIntentId("monitor"),
+        monitor: subscription.monitor,
+        monitorSurface: subscription.monitorSurface,
+        navigation: snapshot,
+      }),
+      allowedActorIds: subscription.authorizedActorIds,
+      audit: buildMessagingAuditContext({
+        action: "monitor.deliver",
+        actor: event?.actor ?? {
+          platformUserId: subscription.authorizedActorIds[0] ?? "unknown",
+        },
+        bindingId: subscription.id,
+        channel: subscription.channel,
+        now,
+      }),
+    };
+    const result = await this.deliver(intent, undefined, event);
+    if (isPermanentMessagingTargetFailure(result)) {
+      const revoked = await this.options.store.revokeMonitorSubscription({
+        subscriptionId: subscription.id,
+        revokedAt: now,
+      });
+      this.clearMonitorSubscriptionTimer(subscription.id);
+      return revoked ?? {
+        ...subscription,
+        revokedAt: now,
+        updatedAt: now,
+      };
+    }
+
+    const latest =
+      await this.options.store.getMonitorSubscription(subscription.id);
+    if (latest?.revokedAt) {
+      this.clearMonitorSubscriptionTimer(subscription.id);
+      return latest;
+    }
+    const current = latest ?? subscription;
+    return await this.options.store.upsertMonitorSubscription({
+      ...current,
+      monitor: {
+        enabled: true,
+        intervalMs: current.monitor.intervalMs,
+        lastRenderedAt: now,
+        updatedAt: now,
+      },
+      monitorSurface:
+        result.surface && result.outcome !== "failed"
+          ? result.surface
+          : current.monitorSurface,
+      updatedAt: now,
+    });
+  }
+
   private scheduleMonitorTick(binding: MessagingBindingRecord): void {
     if (
       binding.revokedAt ||
@@ -4758,6 +4941,26 @@ export class MessagingController {
     this.monitorTimersByBindingId.set(binding.id, timer);
   }
 
+  private scheduleMonitorSubscriptionTick(
+    subscription: MessagingMonitorSubscriptionRecord,
+  ): void {
+    if (
+      subscription.revokedAt ||
+      !subscription.monitor.enabled ||
+      this.monitorTimersBySubscriptionId.has(subscription.id)
+    ) {
+      return;
+    }
+
+    const intervalMs =
+      subscription.monitor.intervalMs || MESSAGING_MONITOR_INTERVAL_MS;
+    const timer = setTimeout(() => {
+      this.monitorTimersBySubscriptionId.delete(subscription.id);
+      void this.runMonitorSubscriptionTick(subscription.id);
+    }, intervalMs);
+    this.monitorTimersBySubscriptionId.set(subscription.id, timer);
+  }
+
   private clearMonitorTimer(bindingId: string): void {
     const timer = this.monitorTimersByBindingId.get(bindingId);
     if (!timer) {
@@ -4765,6 +4968,15 @@ export class MessagingController {
     }
     clearTimeout(timer);
     this.monitorTimersByBindingId.delete(bindingId);
+  }
+
+  private clearMonitorSubscriptionTimer(subscriptionId: string): void {
+    const timer = this.monitorTimersBySubscriptionId.get(subscriptionId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.monitorTimersBySubscriptionId.delete(subscriptionId);
   }
 
   private async runMonitorTick(bindingId: string): Promise<void> {
@@ -4788,6 +5000,35 @@ export class MessagingController {
     const latest = rendered ?? await this.options.store.getBinding(bindingId);
     if (latest && !latest.revokedAt && latest.monitor?.enabled) {
       this.scheduleMonitorTick(latest);
+    }
+  }
+
+  private async runMonitorSubscriptionTick(subscriptionId: string): Promise<void> {
+    const subscription =
+      await this.options.store.getMonitorSubscription(subscriptionId);
+    if (
+      !subscription ||
+      subscription.revokedAt ||
+      !subscription.monitor.enabled
+    ) {
+      this.clearMonitorSubscriptionTimer(subscriptionId);
+      return;
+    }
+
+    let rendered: MessagingMonitorSubscriptionRecord | undefined;
+    try {
+      rendered = await this.renderChannelMonitorStatus(subscription);
+    } catch (error) {
+      this.logger.debug?.("messaging channel monitor tick failed", {
+        error: error instanceof Error ? error.message : String(error),
+        subscriptionId,
+      });
+    }
+
+    const latest =
+      rendered ?? await this.options.store.getMonitorSubscription(subscriptionId);
+    if (latest && !latest.revokedAt && latest.monitor.enabled) {
+      this.scheduleMonitorSubscriptionTick(latest);
     }
   }
 
@@ -5681,6 +5922,10 @@ function normalizeMonitorCommandAction(
     return "refresh";
   }
   return "start";
+}
+
+function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {
+  return `monitor:${buildMessagingConversationKey(channel)}`;
 }
 
 /**

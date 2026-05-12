@@ -10,31 +10,31 @@ deepened: 2026-05-11
 
 ## Overview
 
-Add a channel-bound `monitor` command to the messaging help surface so a bound conversation can receive a once-per-minute "Monitor the Situation" snapshot of recent PwrAgent threads. The command should be discoverable from `/help`, usable from slash commands or bot mentions where the provider supports them, and scoped to the conversation's existing binding.
+Add a channel-bound `monitor` command to the messaging help surface so any authorized conversation can receive a once-per-minute "Monitor the Situation" snapshot of recent PwrAgent threads. The command should be discoverable from `/help`, usable from slash commands or bot mentions where the provider supports them, and scoped to the messaging conversation, not to a single thread binding.
 
 The native Electron Help menu is intentionally not the first implementation target. It has no channel or binding context, while the messaging `/help` surface already owns command discovery, command buttons, and channel-bound workflow entry points.
 
 ## Problem Frame
 
-PwrAgent messaging can already bind a conversation to a thread, show that bound thread's `/status`, and keep status surfaces fresh when backend events arrive. What is missing is a lightweight remote monitoring mode: when the user is away from the desktop, a bound channel should be able to ask PwrAgent to periodically summarize the current state of recent threads without requiring manual `/status` refreshes or opening the desktop.
+PwrAgent messaging can already bind a conversation to a thread, show that bound thread's `/status`, and keep status surfaces fresh when backend events arrive. What is missing is a lightweight remote monitoring mode: when the user is away from the desktop, a clean monitoring channel should be able to ask PwrAgent to periodically summarize the current state of recent threads without requiring a thread binding, manual `/status` refreshes, or opening the desktop.
 
 The feature should feel like a messaging command, not a provider feature. The controller should decide what "recent threads" means from the same navigation snapshot that powers Recents, then deliver a compact generic status surface through the existing adapter abstraction.
 
 ## Requirements Trace
 
 - R1. Add a user-facing `monitor` command surfaced as `Monitor` in the messaging help command list and help action row.
-- R2. `/monitor` or `@<bot> monitor` in an unbound conversation explains that the conversation must be bound first and offers the existing Resume action.
-- R3. `/monitor` in a bound conversation toggles monitoring on, starts a once-per-minute refresh loop, and immediately renders the first recent-thread status snapshot.
-- R4. A bound conversation can stop monitoring without detaching from the thread.
+- R2. `/monitor` or `@<bot> monitor` in an unbound conversation starts channel monitoring and immediately renders the first recent-thread status snapshot.
+- R3. `/monitor` in any authorized conversation toggles monitoring on and starts a once-per-minute refresh loop for that conversation.
+- R4. A conversation can stop monitoring without detaching from any thread binding it may also have.
 - R5. The monitor snapshot summarizes recent threads, not only the single bound thread, using the same backend/navigation state that powers the desktop Recents lens.
 - R6. The implementation remains channel-neutral: no Telegram, Discord, Slack, Mattermost, or LINE SDK types or platform IDs leak into controller or shared workflow logic.
-- R7. Monitoring state is bound to the active conversation binding, survives controller/runtime restart where practical, and is cleared when the binding is revoked.
-- R8. Periodic delivery avoids unbounded timers, duplicate loops, and avoidable channel spam; platforms that support surface updates should update the monitor surface in place.
+- R7. Monitoring state is bound to the messaging conversation, survives controller/runtime restart where practical, and remains independent from thread binding/revoke lifecycle.
+- R8. Periodic delivery avoids unbounded timers and duplicate loops; platforms that support surface updates should update the monitor surface in place, while non-editing platforms may post a fresh snapshot each minute.
 - R9. Existing status-card behavior, thread event refreshes, assistant delivery, queued turns, and provider authorization behavior remain unchanged.
 
 ## Scope Boundaries
 
-- In scope: messaging command catalog, command dispatch, help buttons, provider native command registration where currently supported, binding-level monitor state, controller timer lifecycle, monitor status rendering, and focused tests.
+- In scope: messaging command catalog, command dispatch, help buttons, provider native command registration where currently supported, channel-level monitor state, controller timer lifecycle, monitor status rendering, and focused tests.
 - In scope: compact recent-thread snapshot with thread title, backend, project/directory label when available, turn/activity state, permission queue hint, and last-updated time.
 - In scope: a Stop Monitor action on the monitor surface plus text fallback through the existing command parser.
 - Out of scope: native Electron Help menu integration, desktop renderer UI for monitoring, user-configurable interval, configurable thread count, notifications outside messaging channels, and historical monitoring logs.
@@ -67,8 +67,8 @@ The feature should feel like a messaging command, not a provider feature. The co
 ## Key Technical Decisions
 
 - **Implement Monitor as a messaging command, not a native app Help item.** The requested behavior depends on a channel binding. The Electron Help menu in `apps/desktop/src/main/index.ts` has no active messaging channel context and would require a separate selection flow before it could act.
-- **Use one monitor loop per active binding.** Monitoring is a channel-bound preference, so the timer should key by binding id and be created, restored, and disposed with the controller that owns that provider.
-- **Persist monitor intent on the binding record.** A binding already represents "this conversation controls this thread" and survives app restart. Adding provider-neutral monitor fields to binding preferences and a monitor surface ref keeps the state with the conversation without introducing a new table.
+- **Use one monitor loop per active channel monitor subscription.** Monitoring is a conversation-level preference, so the timer should key by monitor subscription id and be created, restored, and disposed with the controller that owns that provider.
+- **Persist monitor intent separately from thread bindings.** Monitor can be useful in a clean channel that is not bound to any thread. A provider-neutral monitor subscription record keeps the delivery channel, authorized actors, interval, and surface ref without making `/status` or normal message routing think the conversation is thread-bound.
 - **Render a managed monitor status surface.** The monitor output should use the generic status intent shape and store a monitor-specific surface ref so subsequent minute ticks update the same post when adapters can edit. Fallback delivery may present a fresh message on providers that cannot update.
 - **Reuse navigation snapshots for "recent threads."** The monitor should ask the existing backend bridge for a navigation snapshot and summarize its `threads` in Recents order. Do not add a new backend RPC for this first slice.
 - **Keep `/status` unchanged.** The existing status card remains a bound-thread control surface. Monitor is a separate periodic summary and should not overload the existing `statusSurface` or `pinnedStatusSurface`.
@@ -79,8 +79,8 @@ The feature should feel like a messaging command, not a provider feature. The co
 ### Resolved During Planning
 
 - **Does "Help menu" mean the Electron Help menu?** No for this slice. Because the requested output is bound-channel behavior, the plan treats "Help menu" as the messaging `/help` command surface and leaves native Electron Help unchanged.
-- **Should Monitor start only after `/resume` binds a channel?** Yes. Unbound conversations should be prompted to Resume rather than creating a global monitor destination.
-- **Should Monitor summarize only the bound thread?** No. The user asked for recent threads, so the monitor should summarize the same recent-thread set the desktop navigation snapshot exposes, while using the bound thread only as the authorization/delivery context.
+- **Should Monitor start only after `/resume` binds a channel?** No. The intended workflow is `/monitor` in an otherwise unbound monitoring channel so it can summarize all recent threads.
+- **Should Monitor summarize only the bound thread?** No. The user asked for recent threads, so the monitor should summarize the same recent-thread set the desktop navigation snapshot exposes, independent from any current thread binding.
 - **Should the first implementation add interval or count settings?** No. Keep the first slice fixed and small: once per minute, compact recent list.
 
 ### Deferred to Implementation
@@ -96,13 +96,11 @@ The feature should feel like a messaging command, not a provider feature. The co
 ```mermaid
 stateDiagram-v2
     [*] --> Unbound
-    Unbound --> ResumePrompt: monitor command
-    ResumePrompt --> BoundIdle: resume binds conversation
+    Unbound --> Monitoring: monitor command / Monitor button
     BoundIdle --> Monitoring: monitor command / Monitor button
     Monitoring --> Monitoring: one-minute tick renders recent-thread status
-    Monitoring --> BoundIdle: stop monitor action / monitor off command
-    BoundIdle --> Monitoring: monitor command again
-    Monitoring --> [*]: binding revoked or controller disposed
+    Monitoring --> Unbound: stop monitor action / monitor off command
+    Monitoring --> [*]: subscription revoked or controller disposed
 ```
 
 ```mermaid
@@ -114,17 +112,12 @@ sequenceDiagram
     participant Adapter as Provider adapter
 
     User->>Controller: /monitor or help Monitor button
-    Controller->>Store: find active binding for channel
-    alt no binding
-      Controller->>Adapter: confirmation with Resume action
-    else binding exists
-      Controller->>Store: persist monitor enabled on binding
-      Controller->>Backend: getNavigationSnapshot
-      Controller->>Adapter: present/update monitor status surface
-      Controller->>Controller: schedule next tick in 60s
-    end
+    Controller->>Store: upsert channel monitor subscription
+    Controller->>Backend: getNavigationSnapshot
+    Controller->>Adapter: present/update monitor status surface
+    Controller->>Controller: schedule next tick in 60s
     Controller->>Backend: getNavigationSnapshot on tick
-    Controller->>Adapter: update monitor status surface
+    Controller->>Adapter: present/update monitor status surface
 ```
 
 ## Implementation Units
@@ -172,9 +165,9 @@ flowchart TB
 **Verification:**
 - Command catalog tests and controller help-surface tests prove Monitor is discoverable and routable without drifting from the catalog.
 
-- [x] **Unit 2: Add provider-neutral monitor state to bindings**
+- [x] **Unit 2: Add provider-neutral monitor state to channels**
 
-**Goal:** Persist whether a bound conversation is being monitored and remember the monitor surface used for in-place updates.
+**Goal:** Persist whether a messaging conversation is being monitored and remember the monitor surface used for in-place updates.
 
 **Requirements:** R3, R4, R7, R8
 
@@ -188,10 +181,10 @@ flowchart TB
 - Test: `apps/desktop/src/main/__tests__/messaging-store-sqlite.test.ts`
 
 **Approach:**
-- Add binding-level monitor metadata in the provider-neutral interface, including enabled state, interval, last-render timestamp, and an optional monitor surface reference.
-- Prefer extending binding preferences for user intent and adding a sibling surface ref for the managed monitor post, mirroring the existing status surface pattern.
+- Add channel-level monitor subscription metadata in the provider-neutral interface, including enabled state, interval, last-render timestamp, authorized actors, channel ref, and an optional monitor surface reference.
+- Keep thread bindings and monitor subscriptions separate so `/monitor` does not make `/status` or normal text routing think the conversation is bound to a thread.
 - Update store sanitization so monitor surface refs are sanitized through the same helper as `statusSurface` and `pinnedStatusSurface`.
-- Avoid a new sqlite table; binding JSON payload persistence already supports binding-local feature state.
+- Add sqlite persistence for monitor subscriptions.
 
 **Patterns to follow:**
 - `MessagingBindingPreferences`, `MessagingBindingRecord`, and `MessagingSurfaceRef` in `packages/messaging/interface/src/index.ts`.
@@ -199,14 +192,14 @@ flowchart TB
 - Existing `statusSurface` / `pinnedStatusSurface` persistence.
 
 **Test scenarios:**
-- Happy path: a binding with monitor enabled and a monitor surface round-trips through the sqlite store.
+- Happy path: a channel monitor subscription with monitor enabled and a monitor surface round-trips through the sqlite store.
 - Happy path: monitor preferences update without dropping existing model, reasoning, execution mode, streaming, or tool-update preferences.
 - Edge case: a malformed or incomplete monitor surface is sanitized out rather than persisted.
 - Regression: revoked bindings keep enough historical payload for audit but do not remain active monitor candidates.
 - Regression: interface contract tests prove the shape is provider-neutral and serializable.
 
 **Verification:**
-- Store tests prove monitor state persists with the binding and does not corrupt existing status or preference fields.
+- Store tests prove monitor state persists independently from thread bindings and does not corrupt existing status or preference fields.
 
 - [x] **Unit 3: Build a compact recent-thread monitor status surface**
 
@@ -249,7 +242,7 @@ flowchart TB
 
 - [x] **Unit 4: Wire monitor command flow and timer lifecycle**
 
-**Goal:** Let a bound conversation start, stop, and periodically refresh monitoring without leaking timers or duplicating loops.
+**Goal:** Let a conversation start, stop, and periodically refresh monitoring without leaking timers or duplicating loops.
 
 **Requirements:** R2, R3, R4, R5, R7, R8, R9
 
@@ -261,12 +254,12 @@ flowchart TB
 
 **Approach:**
 - Add monitor command handling:
-  - Unbound channel: deliver a confirmation explaining that monitoring requires a bound conversation and offer `command:resume`.
-  - Bound channel with monitoring off: persist enabled state, render immediately, and schedule the next tick.
-  - Bound channel with monitoring on: render a concise "already monitoring" or toggle/refresh behavior that does not create a second timer.
+  - Unbound channel: persist a channel monitor subscription, render immediately, and schedule the next tick.
+  - Bound channel: do the same without modifying or revoking the thread binding.
+  - Conversation with monitoring on: refresh without creating a second timer.
 - Add monitor callback handling for Stop Monitor and optional Refresh Monitor.
-- Add a controller map of monitor timers keyed by binding id. Timer creation should be idempotent.
-- On each tick, re-read the binding, verify it is active and monitor-enabled, fetch a fresh navigation snapshot, render/update the monitor surface, persist the new surface and timestamp, then schedule the next tick.
+- Add a controller map of monitor timers keyed by subscription id. Timer creation should be idempotent.
+- On each tick, re-read the subscription, verify it is active and monitor-enabled, fetch a fresh navigation snapshot, render/update the monitor surface, persist the new surface and timestamp, then schedule the next tick.
 - Ensure `dispose()` clears monitor timers alongside existing turn admission, prompt debounce, and tool-update policy cleanup.
 - Reuse the controller's logger for tick failures and avoid throwing out of timer callbacks.
 
@@ -276,10 +269,10 @@ flowchart TB
 - Active binding filtering and revoked-binding checks used by status refresh paths.
 
 **Test scenarios:**
-- Happy path: `/monitor` on a bound channel persists enabled state, renders immediately, and schedules exactly one timer.
+- Happy path: `/monitor` on an unbound channel persists enabled state, renders immediately, and schedules exactly one timer.
 - Happy path: a timer tick fetches a fresh navigation snapshot and updates the stored monitor surface.
-- Happy path: Stop Monitor clears enabled state and cancels the timer without revoking the binding.
-- Edge case: `/monitor` on an unbound channel does not call `getNavigationSnapshot` and offers Resume.
+- Happy path: Stop Monitor clears enabled state and cancels the timer without revoking any thread binding.
+- Edge case: `/monitor` on a bound channel leaves the thread binding unchanged.
 - Edge case: repeated `/monitor` while already enabled does not create duplicate timers.
 - Error path: backend navigation failure logs and leaves the loop recoverable for the next tick.
 - Error path: delivery failure does not crash the controller or clear monitoring unless the binding is gone.
@@ -333,7 +326,7 @@ flowchart TB
 
 - [x] **Unit 6: Rehydrate and retire monitoring safely**
 
-**Goal:** Make monitoring restart-aware and binding-lifecycle aware so enabled monitors do not silently stop, duplicate, or keep posting after detach.
+**Goal:** Make monitoring restart-aware and channel-lifecycle aware so enabled monitors do not silently stop, duplicate, or keep posting after permanent delivery failure.
 
 **Requirements:** R4, R7, R8, R9
 
@@ -348,10 +341,10 @@ flowchart TB
 - Test: `apps/desktop/src/main/__tests__/messaging-store-sqlite.test.ts`
 
 **Approach:**
-- Add a controller startup path that schedules timers for active bindings on that controller's channel with monitor enabled.
+- Add a controller startup path that schedules timers for active monitor subscriptions on that controller's channel.
 - On runtime adapter start/reconfigure, schedule only bindings owned by the adapter/channel instance.
-- On binding revoke/detach, clear monitor state and timer as part of the same controller/runtime path that retires status surfaces and pending intents.
-- Decide whether detach should also dismiss or update the monitor surface. Prefer a final "Monitor stopped" update when a monitor surface exists and the provider supports it, but do not block detach on that delivery.
+- On permanent monitor delivery failure, revoke the monitor subscription so a dead destination is not retried forever.
+- Stopping monitor should update the monitor surface when possible, or post a fresh stop message on non-editing providers, without touching any thread binding.
 - Keep monitoring best-effort on restart: if the stored monitor surface can no longer be edited, adapter fallback may present a fresh surface and update the stored ref.
 
 **Patterns to follow:**
@@ -360,12 +353,11 @@ flowchart TB
 - Store active-binding queries in `apps/desktop/src/main/state/messaging-store-sqlite.ts`.
 
 **Test scenarios:**
-- Happy path: controller/runtime startup schedules monitoring for an active enabled binding.
+- Happy path: controller/runtime startup schedules monitoring for an active enabled channel monitor subscription.
 - Happy path: stopping the runtime disposes controllers and clears all monitor timers.
-- Happy path: detaching a monitored binding disables monitoring and stops future ticks.
-- Edge case: a stored enabled monitor for a binding whose provider is no longer configured does not schedule a timer.
-- Edge case: a binding with monitor enabled but revoked is ignored by rehydration.
-- Error path: final monitor-stop surface delivery failure during detach is logged and detach still succeeds.
+- Edge case: a stored enabled monitor for a provider that is no longer configured does not schedule a timer.
+- Edge case: a revoked monitor subscription is ignored by rehydration.
+- Error path: monitor-stop surface delivery failure is logged and stop still succeeds.
 - Regression: status surfaces and pinned status surfaces continue to be retired as before.
 
 **Verification:**
@@ -384,9 +376,9 @@ flowchart TB
 
 | Risk | Mitigation |
 | --- | --- |
-| Periodic monitor output spams a channel or hits provider write budgets. | Use managed status updates where possible, keep one surface per binding, and avoid per-thread messages. Leave interval fixed at one minute for the first slice. |
-| Duplicate timers produce duplicate minute ticks. | Key timers by binding id, make scheduler idempotent, and add fake-timer tests for repeated `/monitor` and restart. |
-| Binding preference updates clobber monitor state. | Update binding preferences through existing merge helpers and add tests that monitor state coexists with model/reasoning/permissions/streaming preferences. |
+| Periodic monitor output spams a channel or hits provider write budgets. | Use managed status updates where possible, keep one surface per subscription on editing providers, and allow fresh per-minute posts on non-editing monitor channels. |
+| Duplicate timers produce duplicate minute ticks. | Key timers by subscription id, make scheduler idempotent, and add fake-timer tests for repeated `/monitor` and restart. |
+| Thread binding updates clobber monitor state. | Keep channel monitor subscriptions separate from thread bindings and cover both in store/controller tests. |
 | Provider command registration drifts from generic help. | Update provider registration tests in the same unit and avoid changing help text outside the command catalog. |
 | Stale monitor surface cannot be edited after restart. | Rely on adapter fallback to present a fresh surface and persist the replacement surface ref. |
 | Native Electron Help menu expectation remains ambiguous. | Document that this slice targets messaging `/help`; native Help menu integration can be planned separately if the user wants a desktop entry point. |
@@ -394,7 +386,7 @@ flowchart TB
 ## Documentation / Operational Notes
 
 - Update operator-facing messaging docs only if they currently enumerate commands. Likely files to review are `docs/messaging-platform-integration.md` and `docs/messaging-adding-a-provider.md`.
-- No migration is needed for existing bindings if monitor fields are optional and default to disabled.
+- Existing bindings need no conversion; channel monitor subscriptions are stored separately and default to absent/disabled.
 - No new license or third-party dependency changes are expected.
 
 ## Sources & References
