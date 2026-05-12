@@ -23,9 +23,12 @@ import {
   resolveRuntimeMessagingOverride,
   type RuntimeMessagingOverride,
 } from "./runtime-flags";
+import { getMainLogger } from "./log";
 
 export const MESSAGING_LEASE_TTL_MS = 30_000;
 export const MESSAGING_LEASE_HEARTBEAT_MS = 10_000;
+
+const leaseLog = getMainLogger("pwragent:messaging-lease");
 
 export type RuntimeMessagingDisabledReasonKind =
   | AppRuntimeMessagingDisabledReason
@@ -196,8 +199,13 @@ export class RuntimeMessagingLeaseCoordinator {
     }
 
     this.leaseHeld = true;
-    this.startHeartbeat();
-    await runtime.applyConfig(config, { allowStart: true });
+    this.startHeartbeat(runtime);
+    try {
+      await runtime.applyConfig(config, { allowStart: true });
+    } catch (error) {
+      await this.releaseAfterStartupFailure(runtime, now);
+      throw error;
+    }
     return { enabled: runtime.isEnabled() };
   }
 
@@ -300,7 +308,7 @@ export class RuntimeMessagingLeaseCoordinator {
     this.leaseHeld = false;
   }
 
-  private startHeartbeat(): void {
+  private startHeartbeat(runtime: DesktopMessagingRuntime): void {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(() => {
       const renewed = this.store.renewMessagingLease({
@@ -309,11 +317,65 @@ export class RuntimeMessagingLeaseCoordinator {
         ttlMs: MESSAGING_LEASE_TTL_MS,
       });
       if (!renewed) {
-        this.leaseHeld = false;
-        this.stopHeartbeat();
+        void this.stopRuntimeAfterLeaseLoss(runtime).catch((error) => {
+          leaseLog.error("messaging runtime stop failed after lease loss", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
     }, MESSAGING_LEASE_HEARTBEAT_MS);
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
+  }
+
+  private async releaseAfterStartupFailure(
+    runtime: DesktopMessagingRuntime,
+    now: number,
+  ): Promise<void> {
+    this.stopHeartbeat();
+    try {
+      await runtime.stop();
+    } catch (error) {
+      leaseLog.warn("messaging runtime stop failed during startup cleanup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (this.leaseHeld) {
+        this.store.releaseMessagingLease({ instanceId: this.instanceId, now });
+      }
+      this.store.markDesiredMessaging({
+        instanceId: this.instanceId,
+        desiredMessagingEnabled: true,
+        effectiveMessagingEnabled: false,
+        disabledReason: "startup_error",
+        now,
+      });
+      this.leaseHeld = false;
+    }
+  }
+
+  private async stopRuntimeAfterLeaseLoss(
+    runtime: DesktopMessagingRuntime,
+  ): Promise<void> {
+    const now = this.now();
+    this.stopHeartbeat();
+    this.leaseHeld = false;
+    try {
+      await runtime.stop();
+    } finally {
+      const lease = this.store.getMessagingLease();
+      const heldByAnotherInstance =
+        lease
+        && lease.status === "active"
+        && lease.ownerInstanceId !== this.instanceId
+        && lease.expiresAt > now;
+      this.store.markDesiredMessaging({
+        instanceId: this.instanceId,
+        desiredMessagingEnabled: true,
+        effectiveMessagingEnabled: false,
+        disabledReason: heldByAnotherInstance ? "lease_held" : "runtime_stopped",
+        now,
+      });
+    }
   }
 
   private stopHeartbeat(): void {
