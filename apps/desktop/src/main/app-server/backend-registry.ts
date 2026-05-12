@@ -621,6 +621,19 @@ function turnIdFromStartedNotification(
   return notification.params.turnId ?? notification.params.turn.id;
 }
 
+function turnIdFromTerminalNotification(
+  notification: {
+    params: {
+      turnId?: string;
+      turn?: {
+        id?: string;
+      };
+    };
+  },
+): string | undefined {
+  return notification.params.turnId ?? notification.params.turn?.id;
+}
+
 function logBackendLifecycleNotification(
   backend: AppServerBackendKind,
   notification: AppServerNotification,
@@ -2743,6 +2756,67 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private async adoptThreadBranchChangeFromActiveTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const thread = await this.findThreadForWorkspaceHandoff({
+      backend: params.backend,
+      callerReason: "active-turn-branch-adoption",
+      threadId: params.threadId,
+    });
+    const sourcePath = resolveThreadGitSourcePath(
+      thread,
+      overlay?.extraLinkedDirectories ?? [],
+    );
+    const observedBranch = sourcePath
+      ? await readCurrentGitBranch(sourcePath).catch(() => thread?.observedGitBranch)
+      : thread?.observedGitBranch;
+    const normalizedObservedBranch = observedBranch?.trim() || undefined;
+
+    if (!normalizedObservedBranch) {
+      return;
+    }
+
+    if (normalizedObservedBranch === "HEAD") {
+      await this.overlayStore.setThreadObservedBranch({
+        backend: params.backend,
+        threadId: params.threadId,
+        branch: normalizedObservedBranch,
+      });
+      return;
+    }
+
+    const previousExpectedBranch = resolveExpectedThreadBranch({
+      overlay,
+      thread,
+    });
+    await this.overlayStore.setThreadExpectedBranch({
+      backend: params.backend,
+      threadId: params.threadId,
+      branch: normalizedObservedBranch,
+    });
+    await this.updateThreadGitBranchMetadata({
+      backend: params.backend,
+      threadId: params.threadId,
+      branch: normalizedObservedBranch,
+    });
+
+    if (previousExpectedBranch !== normalizedObservedBranch) {
+      backendRegistryLog.info("adopted active-turn branch change", {
+        backend: params.backend,
+        observedBranch: normalizedObservedBranch,
+        previousExpectedBranch,
+        sourcePath,
+        threadId: params.threadId,
+      });
+    }
+  }
+
   async updateThreadExpectedBranch(
     params: UpdateThreadExpectedBranchRequest,
   ): Promise<UpdateThreadExpectedBranchResponse> {
@@ -4369,15 +4443,29 @@ export class DesktopBackendRegistry {
       const notification = event.notification as {
         params: {
           threadId: string;
-          turnId: string;
+          turnId?: string;
+          turn?: {
+            id?: string;
+          };
         };
       };
-      this.activeCodexTurnModes.delete(
-        buildActiveTurnModeKey(
+      const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        const activeTurnModeKey = buildActiveTurnModeKey(
           notification.params.threadId,
-          notification.params.turnId,
-        ),
-      );
+          turnId,
+        );
+        const wasKnownActiveTurn =
+          !turnId.startsWith("pending:") &&
+          this.activeCodexTurnModes.has(activeTurnModeKey);
+        this.activeCodexTurnModes.delete(activeTurnModeKey);
+        if (wasKnownActiveTurn) {
+          await this.adoptThreadBranchChangeFromActiveTurn({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+          });
+        }
+      }
       // Turn-end is the resume boundary — flush any queued mode change
       // now. Fire-and-forget; failures are logged + retried inside
       // flushQueuedExecutionModeIfPresent.
@@ -4392,10 +4480,20 @@ export class DesktopBackendRegistry {
       readStatusType(event.notification.params.status) !== "active"
     ) {
       const keyPrefix = `${event.notification.params.threadId}:`;
+      let hadKnownActiveTurn = false;
       for (const key of this.activeCodexTurnModes.keys()) {
         if (key.startsWith(keyPrefix)) {
+          if (!key.startsWith(`${keyPrefix}pending:`)) {
+            hadKnownActiveTurn = true;
+          }
           this.activeCodexTurnModes.delete(key);
         }
+      }
+      if (hadKnownActiveTurn) {
+        await this.adoptThreadBranchChangeFromActiveTurn({
+          backend: event.backend,
+          threadId: event.notification.params.threadId,
+        });
       }
       // Same resume-boundary flush, triggered from the
       // `thread/status/changed → idle` path (codex emits both, depending

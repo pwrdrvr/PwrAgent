@@ -4079,6 +4079,119 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("adopts a named branch change from an active turn before notifying listeners", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-active-turn-branch-"));
+    const repo = path.join(root, "app");
+    await mkdir(repo, { recursive: true });
+    await git(repo, ["init", "-b", "feature/old"]);
+    await git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
+    ]);
+
+    const thread: AppServerThreadSummary = {
+      id: "thread-branch",
+      title: "Active branch turn",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: `directory:${repo}`,
+          label: "app",
+          path: repo,
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/old",
+      observedGitBranch: "feature/old",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-branch": {
+          backend: "codex",
+          threadId: "thread-branch",
+          executionMode: "default",
+          gitBranch: "feature/old",
+          observedGitBranch: "feature/old",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/metadata/update"] },
+      threads: [thread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    let overlayDuringTerminalEvent: ThreadOverlayState | undefined;
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "turn/completed") {
+        return;
+      }
+      overlayDuringTerminalEvent =
+        await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-branch",
+        });
+    });
+
+    try {
+      await codexClient.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-branch",
+          turnId: "turn-branch",
+          turn: {
+            id: "turn-branch",
+            status: "in_progress",
+          },
+        },
+      });
+      await git(repo, ["switch", "-c", "fix/queued-review-release"]);
+
+      await codexClient.emit(
+        {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-branch",
+            turn: {
+              id: "turn-branch",
+              status: "completed",
+              output: [],
+            },
+          },
+        } as unknown as AppServerNotification,
+      );
+
+      expect(overlayDuringTerminalEvent).toMatchObject({
+        gitBranch: "fix/queued-review-release",
+        observedGitBranch: "fix/queued-review-release",
+      });
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-branch",
+        gitInfo: {
+          branch: "fix/queued-review-release",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist a retained branch drift pair when expected branch is HEAD", async () => {
     const overlayStore = createOverlayStoreMock({
       overlays: {
