@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { validateCredentials } from "../validate-credentials.ts";
 
 describe("Feishu validateCredentials", () => {
-  it("returns account metadata from tenant token and self probes", async () => {
+  it("returns account metadata from tenant token and bot info probes", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(
         new Response(JSON.stringify({
@@ -13,10 +13,9 @@ describe("Feishu validateCredentials", () => {
       .mockResolvedValueOnce(
         new Response(JSON.stringify({
           code: 0,
-          data: {
-            app: { app_name: "PwrAgent" },
-            bot: { open_id: "ou_bot" },
-            tenant_key: "tenant_1",
+          bot: {
+            app_name: "PwrAgent",
+            open_id: "ou_bot",
           },
         })),
       );
@@ -28,14 +27,14 @@ describe("Feishu validateCredentials", () => {
     }, { fetch })).resolves.toMatchObject({
       status: "ok",
       account: "PwrAgent",
-      detail: "tenant_1",
+      detail: "ou_bot",
     });
     expect(fetch).toHaveBeenCalledWith(
       "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetch).toHaveBeenCalledWith(
-      "https://open.feishu.cn/open-apis/application/v6/applications/self?lang=en_us",
+      "https://open.feishu.cn/open-apis/bot/v3/info",
       expect.objectContaining({
         headers: { authorization: "Bearer tenant-token" },
       }),
@@ -53,8 +52,8 @@ describe("Feishu validateCredentials", () => {
       .mockResolvedValueOnce(
         new Response(JSON.stringify({
           code: 0,
-          data: {
-            app: { app_name: "PwrAgent" },
+          bot: {
+            app_name: "PwrAgent",
           },
         })),
       );
@@ -75,7 +74,7 @@ describe("Feishu validateCredentials", () => {
       app_secret: "secret",
     }));
     expect(fetch.mock.calls[1]?.[0]).toBe(
-      "https://open.larksuite.com/open-apis/application/v6/applications/self?lang=en_us",
+      "https://open.larksuite.com/open-apis/bot/v3/info",
     );
   });
 

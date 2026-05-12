@@ -66,41 +66,33 @@ export async function validateCredentials(
       }));
     }
 
-    const selfUrl = `${baseUrl}/open-apis/application/v6/applications/self?lang=en_us`;
-    const selfResponse = await fetchImpl(
-      selfUrl,
+    const botInfoUrl = `${baseUrl}/open-apis/bot/v3/info`;
+    const botInfoResponse = await fetchImpl(
+      botInfoUrl,
       {
         headers: {
           authorization: `Bearer ${tokenBody.payload.tenant_access_token}`,
         },
       },
     );
-    const selfBody = await readResponseJson<{
-      code?: number;
-      data?: {
-        app?: { app_name?: string };
-        bot?: { open_id?: string };
-        tenant_key?: string;
-      };
-      error?: FeishuOpenApiError;
-      msg?: string;
-    }>(selfResponse);
-    if (!selfResponse.ok || selfBody.payload?.code !== 0) {
+    const botInfoBody = await readResponseJson<FeishuBotInfoPayload>(botInfoResponse);
+    if (!botInfoResponse.ok || botInfoBody.payload?.code !== 0) {
       throw new Error(formatFeishuApiError({
-        body: selfBody.text,
-        endpoint: selfUrl,
-        payload: selfBody.payload,
-        response: selfResponse,
-        stage: "app self",
+        body: botInfoBody.text,
+        endpoint: botInfoUrl,
+        payload: botInfoBody.payload,
+        response: botInfoResponse,
+        stage: "bot info",
       }));
     }
+    const botInfo = extractFeishuBotInfo(botInfoBody.payload);
 
     return {
       status: "ok",
       durationMs: Date.now() - startedAt,
       testedAt: Date.now(),
-      account: selfBody.payload.data?.app?.app_name ?? selfBody.payload.data?.bot?.open_id ?? appId,
-      detail: selfBody.payload.data?.tenant_key ?? hostFromUrl(tenantUrl),
+      account: botInfo.appName ?? botInfo.openId ?? appId,
+      detail: botInfo.openId ?? hostFromUrl(tenantUrl),
     };
   } catch (error) {
     return {
@@ -112,6 +104,35 @@ export async function validateCredentials(
       ),
     };
   }
+}
+
+type FeishuBotInfoPayload = FeishuApiPayload & {
+  bot?: FeishuBotInfoRecord;
+  data?: {
+    app?: { app_name?: string };
+    bot?: FeishuBotInfoRecord;
+    open_id?: string;
+    tenant_key?: string;
+  };
+};
+
+type FeishuBotInfoRecord = {
+  app_name?: string;
+  avatar_url?: string;
+  open_id?: string;
+};
+
+function extractFeishuBotInfo(payload: FeishuBotInfoPayload | undefined): {
+  appName?: string;
+  openId?: string;
+  tenantKey?: string;
+} {
+  const bot = payload?.bot ?? payload?.data?.bot;
+  return {
+    appName: bot?.app_name ?? payload?.data?.app?.app_name,
+    openId: bot?.open_id ?? payload?.data?.open_id,
+    tenantKey: payload?.data?.tenant_key,
+  };
 }
 
 type FeishuOpenApiError = {

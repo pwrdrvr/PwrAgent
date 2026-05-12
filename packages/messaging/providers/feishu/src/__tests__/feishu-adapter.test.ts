@@ -366,7 +366,7 @@ describe("FeishuAdapter", () => {
     ]);
   });
 
-  it("requests bot self info with Lark's required language parameter", async () => {
+  it("requests low-permission bot identity on startup", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
@@ -375,13 +375,13 @@ describe("FeishuAdapter", () => {
           tenant_access_token: "tenant-token",
         }));
       }
-      if (url.endsWith("/open-apis/application/v6/applications/self?lang=en_us")) {
+      if (url.endsWith("/open-apis/bot/v3/info")) {
         return new Response(JSON.stringify({
           code: 0,
-          data: {
-            app: { app_name: "PwrAgent" },
-            bot: { open_id: "ou_bot" },
-            tenant_key: "tenant_1",
+          bot: {
+            app_name: "PwrAgent",
+            avatar_url: "https://example.com/avatar.png",
+            open_id: "ou_bot",
           },
         }));
       }
@@ -393,11 +393,12 @@ describe("FeishuAdapter", () => {
 
     await expect(createFeishuApi(baseConfig).getBotInfo()).resolves.toEqual({
       appName: "PwrAgent",
+      avatarUrl: "https://example.com/avatar.png",
       openId: "ou_bot",
-      tenantKey: "tenant_1",
+      tenantKey: undefined,
     });
     expect(fetch).toHaveBeenCalledWith(
-      "https://open.feishu.cn/open-apis/application/v6/applications/self?lang=en_us",
+      "https://open.feishu.cn/open-apis/bot/v3/info",
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer tenant-token",

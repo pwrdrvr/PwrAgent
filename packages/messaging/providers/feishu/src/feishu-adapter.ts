@@ -1218,12 +1218,13 @@ class DirectFeishuApi implements FeishuApi {
   }
 
   async getBotInfo(): Promise<FeishuBotInfo> {
-    const data = await this.request<{ app?: { app_name?: string }; bot?: { open_id?: string }; tenant_key?: string }>(
-      "/open-apis/application/v6/applications/self?lang=en_us",
+    const data = await this.request<{ bot?: { app_name?: string; avatar_url?: string; open_id?: string }; tenant_key?: string }>(
+      "/open-apis/bot/v3/info",
       { method: "GET" },
     );
     return {
-      appName: data.app?.app_name,
+      appName: data.bot?.app_name,
+      avatarUrl: data.bot?.avatar_url,
       openId: data.bot?.open_id,
       tenantKey: data.tenant_key,
     };
@@ -1313,7 +1314,7 @@ class DirectFeishuApi implements FeishuApi {
       },
     });
     const text = await response.text();
-    let parsed: { code?: number; data?: T; msg?: string } = {};
+    let parsed: { bot?: unknown; code?: number; data?: T; msg?: string } = {};
     try {
       parsed = text ? JSON.parse(text) : {};
     } catch {
@@ -1327,7 +1328,7 @@ class DirectFeishuApi implements FeishuApi {
       }
       throw error;
     }
-    return (parsed.data ?? ({} as T)) as T;
+    return (parsed.data ?? (parsed.bot ? { bot: parsed.bot } : {}) as T) as T;
   }
 
   private async getTenantAccessToken(): Promise<string> {
