@@ -36,6 +36,7 @@ export type DiscoverCommandOptions<Source extends string> = {
   versionArgs?: string[];
   parseVersion: (output: string) => string | undefined;
   compareVersions?: (left?: string, right?: string) => number;
+  validateVersion?: (version: string) => string | undefined;
   preflightCandidate?: (params: {
     command: string;
     source: Source;
@@ -201,6 +202,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     platform?: NodeJS.Platform;
     versionArgs?: string[];
     parseVersion: (output: string) => string | undefined;
+    validateVersion?: (version: string) => string | undefined;
     preflightCandidate?: (params: {
       command: string;
       source: Source;
@@ -263,6 +265,22 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
           versionArgs: options.versionArgs ?? ["--version"],
         })
     : { ran: false, failureReason: "not_found" };
+  const version = versionResult.version ?? preflightResult?.version;
+  const versionValidationFailure = version
+    ? options.validateVersion?.(version)
+    : undefined;
+  if (versionValidationFailure) {
+    return {
+      command: resolvedCommand || trimmedCommand,
+      source: candidate.source,
+      executable: false,
+      selected: false,
+      version,
+      versionFailureReason: undefined,
+      failureReason: versionValidationFailure,
+    };
+  }
+
   const executable = accessExecutable || versionResult.ran;
 
   return {
@@ -270,7 +288,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     source: candidate.source,
     executable,
     selected: false,
-    version: versionResult.version ?? preflightResult?.version,
+    version,
     versionFailureReason: executable ? versionResult.failureReason : undefined,
     failureReason: executable
       ? undefined

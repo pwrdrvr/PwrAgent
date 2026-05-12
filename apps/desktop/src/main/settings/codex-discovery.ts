@@ -111,6 +111,12 @@ export function compareCodexCliVersions(left?: string, right?: string): number {
   return comparePrerelease(leftVersion.prerelease, rightVersion.prerelease);
 }
 
+function validateCodexCliVersion(version: string): string | undefined {
+  return compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0
+    ? "codex_too_old"
+    : undefined;
+}
+
 function getCodexAppCandidatePaths(): string[] {
   return [
     "/Applications/Codex.app/Contents/Resources/codex",
@@ -137,9 +143,7 @@ async function inspectCodexCandidateBeforeVersionProbe(params: {
 
   return {
     version,
-    failureReason: compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0
-      ? "codex_too_old"
-      : undefined,
+    failureReason: validateCodexCliVersion(version),
     skipVersionProbe: true,
   };
 }
@@ -199,6 +203,7 @@ export async function discoverCodexCommands(params?: {
     ],
     parseVersion: parseCodexVersionOutput,
     compareVersions: compareCodexCliVersions,
+    validateVersion: validateCodexCliVersion,
     preflightCandidate: ({ command, platform }) =>
       inspectCodexCandidateBeforeVersionProbe({ command, platform }),
   }) as Promise<DesktopCodexDiscoverySnapshot>;

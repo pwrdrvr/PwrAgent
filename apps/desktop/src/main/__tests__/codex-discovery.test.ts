@@ -165,6 +165,58 @@ describe("Codex discovery", () => {
     );
   });
 
+  it("rejects old Codex.app helper versions after probing the helper binary", async () => {
+    const appCommand = "/Applications/Codex.app/Contents/Resources/codex";
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === appCommand) return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, result?: { stdout: string }) => void,
+      ) => {
+        if (command === appCommand) {
+          callback(null, { stdout: "codex-cli 0.94.0\n" });
+          return;
+        }
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        callback(error);
+      },
+    );
+    const { discoverCodexCommands, resolveCodexCommand } = await import(
+      "../settings/codex-discovery"
+    );
+
+    const snapshot = await discoverCodexCommands({
+      env: {},
+      platform: "darwin",
+    });
+
+    expect(snapshot.selectedCommand).toBeUndefined();
+    expect(
+      snapshot.candidates.find((candidate) => candidate.source === "application"),
+    ).toMatchObject({
+      command: appCommand,
+      executable: false,
+      failureReason: "codex_too_old",
+      version: "0.94.0",
+    });
+    await expect(
+      resolveCodexCommand({
+        command: "codex",
+        env: {},
+        platform: "darwin",
+      }),
+    ).rejects.toThrow("older than the minimum supported version 0.125.0");
+  });
+
   it("selects env overrides above configured and auto-discovered commands", async () => {
     accessMock.mockResolvedValue(undefined);
     realpathMock.mockImplementation(async (candidate: string) => candidate);
