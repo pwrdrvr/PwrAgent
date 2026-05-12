@@ -745,6 +745,20 @@ export type MessagingInboundRejectedListener = (
   event: MessagingRejectedInboundEvent,
 ) => Promise<void> | void;
 
+export type MessagingAdapterDiagnosticEvent = {
+  id: string;
+  platform: MessagingChannelKind;
+  summary: string;
+  observedAt: number;
+  actor?: MessagingActorIdentity;
+  channel?: MessagingChannelRef;
+  payload?: Record<string, MessagingJsonValue>;
+};
+
+export type MessagingAdapterDiagnosticListener = (
+  event: MessagingAdapterDiagnosticEvent,
+) => Promise<void> | void;
+
 export type MessagingInboundTextEvent = MessagingInboundBaseEvent & {
   kind: "text";
   text: string;

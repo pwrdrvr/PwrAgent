@@ -4,6 +4,8 @@ import { Readable } from "node:stream";
 import type {
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
+  MessagingAdapterDiagnosticEvent,
+  MessagingAdapterDiagnosticListener,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingAdapterState,
   MessagingAttachmentDownloadRequest,
@@ -95,6 +97,7 @@ export type FeishuProviderAdapter = {
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onDiagnostic?(listener: MessagingAdapterDiagnosticListener): () => void;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
   readCredentialMetadata?(): { account?: string; detail?: string } | undefined;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
@@ -263,6 +266,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private started = false;
   private webhookListening = false;
   private wsClient: FeishuWsClient | undefined;
+  private readonly diagnosticListeners = new Set<MessagingAdapterDiagnosticListener>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
 
@@ -333,6 +337,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     this.inboundRejectedListeners.add(listener);
     return () => {
       this.inboundRejectedListeners.delete(listener);
+    };
+  }
+
+  onDiagnostic(listener: MessagingAdapterDiagnosticListener): () => void {
+    this.diagnosticListeners.add(listener);
+    return () => {
+      this.diagnosticListeners.delete(listener);
     };
   }
 
@@ -513,12 +524,32 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const eventType = payload.header?.event_type;
     if (eventType === "im.message.receive_v1") {
       await this.handleMessageEvent(payload);
-    } else if (
-      eventType === "card.action.trigger"
-      || eventType === "im.message.message_read_v1"
-      || payload.event
-    ) {
+    } else if (eventType === "card.action.trigger" || isFeishuCardActionEnvelope(payload)) {
       await this.handleCardActionEvent(payload);
+    } else if (eventType === "im.chat.access_event.bot_p2p_chat_entered_v1") {
+      await this.handleBotP2pChatEnteredEvent(payload);
+    } else if (eventType === "im.message.message_read_v1") {
+      await this.emitDiagnostic({
+        id: payload.header?.event_id ?? `feishu:message-read:${this.now()}`,
+        platform: this.channel,
+        summary: "Feishu / Lark message read event received; no action needed.",
+        observedAt: this.now(),
+        payload: {
+          eventType,
+          tenantKey: payload.header?.tenant_key ?? null,
+        },
+      });
+    } else if (eventType) {
+      await this.emitDiagnostic({
+        id: payload.header?.event_id ?? `feishu:unsupported:${this.now()}`,
+        platform: this.channel,
+        summary: `Unsupported Feishu / Lark event received: ${eventType}`,
+        observedAt: this.now(),
+        payload: {
+          eventType,
+          tenantKey: payload.header?.tenant_key ?? null,
+        },
+      });
     }
     return { status: 200 };
   }
@@ -688,6 +719,56 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     await this.listener?.(inbound);
   }
 
+  private async handleBotP2pChatEnteredEvent(payload: FeishuEventEnvelope): Promise<void> {
+    const event = objectRecord(payload.event);
+    const operatorId = objectRecord(
+      event.operator_id ?? event.user_id ?? event.sender_id,
+    );
+    const openId =
+      stringField(operatorId.open_id)
+      ?? stringField(event.open_id)
+      ?? stringField(event.operator_open_id);
+    const chatId =
+      stringField(event.chat_id)
+      ?? stringField(event.open_chat_id);
+    const tenantKey =
+      payload.header?.tenant_key
+      ?? stringField(event.tenant_key)
+      ?? stringField(operatorId.tenant_key);
+
+    const openIdValidation = validateFeishuOpenId(openId);
+    const actor = openIdValidation.ok
+      ? { platformUserId: openId as string }
+      : undefined;
+    const channel = openIdValidation.ok
+      ? {
+          channel: this.channel,
+          conversation: {
+            id: openId as string,
+            kind: "dm" as const,
+            ...(tenantKey ? { parentId: tenantKey } : {}),
+          },
+        }
+      : undefined;
+
+    await this.emitDiagnostic({
+      id: payload.header?.event_id ?? `feishu:p2p-entered:${this.now()}`,
+      platform: this.channel,
+      summary: openIdValidation.ok
+        ? "Feishu / Lark DM opened; waiting for message receive event."
+        : "Feishu / Lark DM opened, but the event did not include a valid open_id.",
+      observedAt: this.now(),
+      ...(actor ? { actor } : {}),
+      ...(channel ? { channel } : {}),
+      payload: {
+        eventType: payload.header?.event_type ?? "im.chat.access_event.bot_p2p_chat_entered_v1",
+        hasChatId: Boolean(chatId),
+        hasOpenId: Boolean(openId),
+        hasTenantKey: Boolean(tenantKey),
+      },
+    });
+  }
+
   private async handleCardActionEvent(payload: FeishuEventEnvelope): Promise<void> {
     const event = payload.event as FeishuCardActionEvent | undefined;
     const openId = event?.operator?.open_id;
@@ -818,6 +899,16 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private async emitInboundRejected(event: MessagingRejectedInboundEvent): Promise<void> {
     for (const listener of this.inboundRejectedListeners) {
+      await listener(event);
+    }
+  }
+
+  private async emitDiagnostic(event: MessagingAdapterDiagnosticEvent): Promise<void> {
+    this.logger.info?.("feishu adapter diagnostic", {
+      eventId: event.id,
+      summary: event.summary,
+    });
+    for (const listener of this.diagnosticListeners) {
       await listener(event);
     }
   }
@@ -1161,8 +1252,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       "card.action.trigger": async (data: unknown) => {
         await this.handleCardActionEvent(feishuCardActionEnvelopeFromPersistentEvent(data));
       },
-      "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
-        this.logger.debug?.("feishu bot p2p chat entered event ignored");
+      "im.chat.access_event.bot_p2p_chat_entered_v1": async (data: unknown) => {
+        await this.handleBotP2pChatEnteredEvent(
+          feishuEnvelopeFromPersistentEvent(
+            data,
+            "im.chat.access_event.bot_p2p_chat_entered_v1",
+          ),
+        );
       },
       "im.message.receive_v1": async (data: unknown) => {
         await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
@@ -1463,40 +1559,77 @@ function channelRefFromSignedCallbackChannel(
 }
 
 function feishuMessageEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
-  const record = objectRecord(data);
+  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
   return {
     header: {
-      event_id: stringField(record.event_id),
+      event_id: stringField(header.event_id) ?? stringField(record.event_id),
       event_type: "im.message.receive_v1",
-      tenant_key: stringField(record.tenant_key),
-      token: stringField(record.token),
+      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      token: stringField(header.token) ?? stringField(record.token),
     },
     event: {
-      message: objectRecord(record.message) as FeishuReceiveMessageEvent["message"],
-      sender: objectRecord(record.sender) as FeishuReceiveMessageEvent["sender"],
+      message: objectRecord(event.message) as FeishuReceiveMessageEvent["message"],
+      sender: objectRecord(event.sender) as FeishuReceiveMessageEvent["sender"],
     },
     schema: "2.0",
   };
 }
 
 function feishuCardActionEnvelopeFromPersistentEvent(data: unknown): FeishuEventEnvelope {
-  const record = objectRecord(data);
+  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
   return {
     header: {
-      event_id: stringField(record.event_id),
+      event_id: stringField(header.event_id) ?? stringField(record.event_id),
       event_type: "card.action.trigger",
-      tenant_key: stringField(record.tenant_key),
-      token: stringField(record.token),
+      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      token: stringField(header.token) ?? stringField(record.token),
     },
     event: {
-      action: objectRecord(record.action) as FeishuCardActionEvent["action"],
-      context: objectRecord(record.context) as FeishuCardActionEvent["context"],
-      operator: objectRecord(record.operator) as FeishuCardActionEvent["operator"],
-      tenant_key: stringField(record.tenant_key),
-      token: stringField(record.token),
+      action: objectRecord(event.action) as FeishuCardActionEvent["action"],
+      context: objectRecord(event.context) as FeishuCardActionEvent["context"],
+      operator: objectRecord(event.operator) as FeishuCardActionEvent["operator"],
+      tenant_key: stringField(event.tenant_key) ?? stringField(record.tenant_key),
+      token: stringField(event.token) ?? stringField(record.token),
     },
     schema: "2.0",
   };
+}
+
+function feishuEnvelopeFromPersistentEvent(
+  data: unknown,
+  eventType: string,
+): FeishuEventEnvelope {
+  const { event, header, record } = feishuEnvelopePartsFromPersistentEvent(data);
+  return {
+    header: {
+      event_id: stringField(header.event_id) ?? stringField(record.event_id),
+      event_type: eventType,
+      tenant_key: stringField(header.tenant_key) ?? stringField(record.tenant_key),
+      token: stringField(header.token) ?? stringField(record.token),
+    },
+    event: event as FeishuEventEnvelope["event"],
+    schema: "2.0",
+  };
+}
+
+function feishuEnvelopePartsFromPersistentEvent(data: unknown): {
+  event: Record<string, unknown>;
+  header: Record<string, unknown>;
+  record: Record<string, unknown>;
+} {
+  const record = objectRecord(data);
+  const header = objectRecord(record.header);
+  const event = objectRecord(record.event);
+  return {
+    record,
+    header,
+    event: Object.keys(event).length > 0 ? event : record,
+  };
+}
+
+function isFeishuCardActionEnvelope(payload: FeishuEventEnvelope): boolean {
+  const event = payload.event as FeishuCardActionEvent | undefined;
+  return Boolean(event?.action || event?.operator || event?.context);
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

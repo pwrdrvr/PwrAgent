@@ -9,6 +9,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingChannelRef,
+  MessagingAdapterDiagnosticEvent,
   MessagingInboundEvent,
   MessagingRejectedInboundEvent,
 } from "@pwragent/messaging-interface";
@@ -249,6 +250,118 @@ describe("FeishuAdapter", () => {
         kind: "command",
         command: "help",
         rawText: "/help",
+      }),
+    ]);
+  });
+
+  it("normalizes persistent message events when the SDK forwards the full envelope", async () => {
+    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+      | undefined;
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+      wsClientFactory: () => ({
+        close: () => undefined,
+        start: async (params) => {
+          dispatcher = params.eventDispatcher;
+        },
+      }),
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await dispatcher?.invoke({
+      schema: "2.0",
+      header: {
+        event_id: "evt_full_envelope",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          content: JSON.stringify({ text: "pair 11111111111111111111111111111111" }),
+          message_id: "om_message",
+          message_type: "text",
+        },
+      },
+    }, { needCheck: false });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: "evt_full_envelope",
+        kind: "command",
+        command: "pair",
+        args: ["11111111111111111111111111111111"],
+      }),
+    ]);
+  });
+
+  it("surfaces persistent p2p chat-entered events as diagnostics", async () => {
+    let dispatcher: { invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown> }
+      | undefined;
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+      wsClientFactory: () => ({
+        close: () => undefined,
+        start: async (params) => {
+          dispatcher = params.eventDispatcher;
+        },
+      }),
+    });
+    const events: MessagingInboundEvent[] = [];
+    const diagnostics: MessagingAdapterDiagnosticEvent[] = [];
+    adapter.onDiagnostic((event) => {
+      diagnostics.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await dispatcher?.invoke({
+      schema: "2.0",
+      header: {
+        event_id: "evt_entered",
+        event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
+        tenant_key: "tenant_1",
+      },
+      event: {
+        operator_id: { open_id: "ou_user" },
+        chat_id: "oc_chat",
+        tenant_key: "tenant_1",
+      },
+    }, { needCheck: false });
+    await adapter.stop();
+
+    expect(events).toEqual([]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        id: "evt_entered",
+        platform: "feishu",
+        summary: "Feishu / Lark DM opened; waiting for message receive event.",
+        actor: { platformUserId: "ou_user" },
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "ou_user",
+            kind: "dm",
+            parentId: "tenant_1",
+          }),
+        }),
       }),
     ]);
   });
