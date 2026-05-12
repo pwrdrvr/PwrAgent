@@ -49,6 +49,10 @@ export function buildMonitorStatusIntent(params: {
           }),
         )
       : ["No recent threads."];
+  const canUpdateSurface = Boolean(
+    params.binding.monitorSurface &&
+      params.capabilityProfile?.text.supportsMessageEdit !== false,
+  );
 
   return {
     id: params.id,
@@ -56,10 +60,10 @@ export function buildMonitorStatusIntent(params: {
     bindingId: params.binding.id,
     createdAt: params.createdAt,
     delivery: {
-      mode: params.binding.monitorSurface ? "update" : "present",
+      mode: canUpdateSurface ? "update" : "present",
       fallback: "present_new",
     },
-    targetSurface: params.binding.monitorSurface,
+    targetSurface: canUpdateSurface ? params.binding.monitorSurface : undefined,
     status: hasWorkingThread ? "working" : "idle",
     text: [
       "Monitor: Recent threads",

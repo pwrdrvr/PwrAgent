@@ -4718,24 +4718,35 @@ export class MessagingController {
       navigation: snapshot,
     });
     const result = await this.deliver(intent, binding, event);
+    const latestBinding = await this.options.store.getBinding(binding.id);
+    if (latestBinding?.revokedAt) {
+      this.clearMonitorTimer(binding.id);
+      return latestBinding;
+    }
+    const currentBinding = latestBinding ?? binding;
     return await this.options.store.upsertBinding({
-      ...binding,
+      ...currentBinding,
       monitor: {
         enabled: true,
-        intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        intervalMs:
+          currentBinding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: now,
         updatedAt: now,
       },
       monitorSurface:
         result.surface && result.outcome !== "failed"
           ? result.surface
-          : binding.monitorSurface,
+          : currentBinding.monitorSurface,
       updatedAt: now,
     });
   }
 
   private scheduleMonitorTick(binding: MessagingBindingRecord): void {
-    if (!binding.monitor?.enabled || this.monitorTimersByBindingId.has(binding.id)) {
+    if (
+      binding.revokedAt ||
+      !binding.monitor?.enabled ||
+      this.monitorTimersByBindingId.has(binding.id)
+    ) {
       return;
     }
 

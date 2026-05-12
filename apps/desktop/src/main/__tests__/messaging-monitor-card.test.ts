@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationSnapshot } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   buildMonitorStatusIntent,
   MESSAGING_MONITOR_INTERVAL_MS,
@@ -63,6 +64,33 @@ describe("buildMonitorStatusIntent", () => {
       channel: "telegram",
       id: "surface-1",
     });
+  });
+
+  it("presents a fresh monitor snapshot when the provider cannot edit messages", () => {
+    const intent = buildMonitorStatusIntent({
+      binding: buildBinding({
+        monitorSurface: {
+          channel: "line",
+          id: "surface-1",
+        },
+      }),
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        text: {
+          ...PERMISSIVE_CAPABILITY_PROFILE.text,
+          supportsMessageEdit: false,
+        },
+      },
+      createdAt: 121_000,
+      id: "monitor-1",
+      navigation: buildNavigationSnapshot(),
+    });
+
+    expect(intent.delivery).toMatchObject({
+      mode: "present",
+      fallback: "present_new",
+    });
+    expect(intent.targetSurface).toBeUndefined();
   });
 
   it("marks the monitor as working when any shown recent thread has active work", () => {

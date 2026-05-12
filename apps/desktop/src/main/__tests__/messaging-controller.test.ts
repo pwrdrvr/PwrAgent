@@ -2178,6 +2178,54 @@ describe("MessagingController", () => {
     }
   });
 
+  it("does not reactivate a binding after permanent Monitor delivery failure", async () => {
+    vi.useFakeTimers();
+    let failDelivery = false;
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        if (failDelivery) {
+          return {
+            channel: "telegram",
+            deliveredAt: 1000,
+            outcome: "failed",
+            errorMessage: "Bad Request: chat not found",
+          };
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    try {
+      await bindThread(harness);
+      const binding = await harness.store.findActiveBindingForChannel(
+        buildCommandEvent("/monitor").channel,
+      );
+      if (!binding) {
+        throw new Error("binding missing");
+      }
+
+      failDelivery = true;
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+
+      await expect(harness.store.getBinding(binding.id)).resolves.toMatchObject({
+        revokedAt: 1000,
+      });
+      await expect(
+        harness.store.findActiveBindingForChannel(buildCommandEvent("/monitor").channel),
+      ).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
   it("stops Monitor without detaching the binding and cancels the next tick", async () => {
     vi.useFakeTimers();
     const harness = await createHarness();
