@@ -92,6 +92,73 @@ export function useQueuedTurnRelease(params: {
       return;
     }
 
+    const releaseQueuedTurn = async (
+      current: typeof params,
+      thread: NavigationThreadSummary,
+      queuedTurn: ComposerQueuedTurnSnapshot,
+      scopeKey: string,
+    ): Promise<void> => {
+      inFlightScopeKeysRef.current.add(scopeKey);
+      try {
+        if (thread.gitBranch && current.desktopApi?.checkThreadBranchDrift) {
+          const drift = await current.desktopApi.checkThreadBranchDrift({
+            backend: thread.source,
+            expectedBranch: thread.gitBranch,
+            threadId: thread.id,
+          });
+          if (drift.drifted) {
+            return;
+          }
+        }
+
+        const input = buildQueuedTurnInput(queuedTurn);
+        if (input.length === 0) {
+          current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
+          return;
+        }
+
+        const backend = current.backends.find(
+          (candidate) => candidate.kind === thread.source,
+        );
+        if (!backend?.available || !backend.capabilities.startTurn) {
+          return;
+        }
+
+        const selectedModelOption =
+          backend.launchpadOptions?.models?.find((option) => option.id === thread.model) ??
+          getDefaultModelOption(backend);
+        const supportsReasoning =
+          selectedModelOption?.supportsReasoning ??
+          Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+        const supportsFast =
+          backend.kind === "codex"
+            ? selectedModelOption?.supportsFast ??
+              backend.launchpadOptions?.supportsFastMode ??
+              false
+            : false;
+
+        await startTurn({
+          backend: thread.source,
+          threadId: thread.id,
+          input,
+          executionMode: thread.executionMode,
+          model: selectedModelOption?.id,
+          reasoningEffort: supportsReasoning
+            ? getReasoningEffortValue(backend, thread.reasoningEffort)
+            : undefined,
+          serviceTier:
+            thread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
+          fastMode:
+            thread.source === "codex" && supportsFast
+              ? Boolean(thread.fastMode)
+              : undefined,
+        });
+        current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
+      } finally {
+        inFlightScopeKeysRef.current.delete(scopeKey);
+      }
+    };
+
     return desktopApi.onAgentEvent((event) => {
       const current = paramsRef.current;
       if (!TERMINAL_TURN_METHODS.has(event.notification.method)) {
@@ -128,59 +195,9 @@ export function useQueuedTurnRelease(params: {
         return;
       }
 
-      if (thread.gitBranch && current.desktopApi?.checkThreadBranchDrift) {
-        return;
-      }
-
-      const input = buildQueuedTurnInput(queuedTurn);
-      if (input.length === 0) {
-        current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
-        return;
-      }
-
-      const backend = current.backends.find(
-        (candidate) => candidate.kind === thread.source,
-      );
-      if (!backend?.available || !backend.capabilities.startTurn) {
-        return;
-      }
-
-      const selectedModelOption =
-        backend.launchpadOptions?.models?.find((option) => option.id === thread.model) ??
-        getDefaultModelOption(backend);
-      const supportsReasoning =
-        selectedModelOption?.supportsReasoning ??
-        Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-      const supportsFast =
-        backend.kind === "codex"
-          ? selectedModelOption?.supportsFast ??
-            backend.launchpadOptions?.supportsFastMode ??
-            false
-          : false;
-
-      inFlightScopeKeysRef.current.add(scopeKey);
-      void startTurn({
-        backend: thread.source,
-        threadId: thread.id,
-        input,
-        executionMode: thread.executionMode,
-        model: selectedModelOption?.id,
-        reasoningEffort: supportsReasoning
-          ? getReasoningEffortValue(backend, thread.reasoningEffort)
-          : undefined,
-        serviceTier:
-          thread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
-        fastMode:
-          thread.source === "codex" && supportsFast
-            ? Boolean(thread.fastMode)
-            : undefined,
-      })
-        .then(() => {
-          current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
-        })
-        .finally(() => {
-          inFlightScopeKeysRef.current.delete(scopeKey);
-        });
+      void releaseQueuedTurn(current, thread, queuedTurn, scopeKey).catch(() => {
+        inFlightScopeKeysRef.current.delete(scopeKey);
+      });
     });
   }, [params.desktopApi]);
 }

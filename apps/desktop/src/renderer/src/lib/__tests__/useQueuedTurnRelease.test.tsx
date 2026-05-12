@@ -295,10 +295,17 @@ describe("useQueuedTurnRelease", () => {
     ).toBe("Second background reply");
   });
 
-  it("does not background-release a branch-tracked thread that needs the drift guard", async () => {
+  it("does not background-release a branch-tracked thread when the drift guard reports drift", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn();
-    const checkThreadBranchDrift = vi.fn();
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "feature/expected",
+      observedBranch: "feature/actual",
+      drifted: true,
+      checkedAt: Date.now(),
+    }));
     const desktopApi: DesktopApi = {
       checkThreadBranchDrift,
       onAgentEvent: (listener) => {
@@ -351,10 +358,94 @@ describe("useQueuedTurnRelease", () => {
     });
 
     expect(startTurn).not.toHaveBeenCalled();
-    expect(checkThreadBranchDrift).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalledWith({
+        backend: "codex",
+        expectedBranch: "feature/expected",
+        threadId: "thread-a",
+      });
+    });
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Guarded background reply");
+  });
+
+  it("background-releases a branch-tracked thread when the drift guard passes", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-next",
+    }));
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "fix/queued-review-release",
+      observedBranch: "fix/queued-review-release",
+      drifted: false,
+      checkedAt: Date.now(),
+    }));
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-branch",
+      text: "Release background reply",
+      imageAttachments: [],
+      input: [{ type: "text", text: "Release background reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", { gitBranch: "feature/expected" }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-a",
+          input: [{ type: "text", text: "Release background reply" }],
+        })
+      );
+    });
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
   });
 
   it("leaves the focused thread queue for the mounted composer to release", async () => {
