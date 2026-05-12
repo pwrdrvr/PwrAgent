@@ -9,6 +9,7 @@ Usage:
   pwragent-dev-profile.zsh close   [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH]
   pwragent-dev-profile.zsh status  [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH]
   pwragent-dev-profile.zsh verify  [--root PATH] [--profile NAME] [--log PATH] [--pid-file PATH] [--timeout SECONDS]
+  pwragent-dev-profile.zsh self-test
 
 Manages a detached local PwrAgent Electron dev app with PWRAGENT_PROFILE=dev.
 The default root is the current working directory.
@@ -66,14 +67,51 @@ is_under_root() {
 }
 
 command_mentions_root() {
-  [[ "$1" == *"$root"* ]]
+  local command="$1"
+  local rest="$command"
+  local before after previous next
+
+  while [[ "$rest" == *"$root"* ]]; do
+    before="${rest%%"$root"*}"
+    after="${rest#*"$root"}"
+    previous="${before[-1]:-}"
+    next="${after[1]:-}"
+
+    if is_path_boundary_before "$previous" && is_path_boundary_after "$next"; then
+      return 0
+    fi
+
+    rest="$after"
+  done
+
+  return 1
+}
+
+is_path_boundary_before() {
+  local character="${1:-}"
+
+  [[ -z "$character" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' || "$character" == "=" ]]
+}
+
+is_path_boundary_after() {
+  local character="${1:-}"
+
+  [[ -z "$character" || "$character" == "/" || "$character" == " " || "$character" == $'\t' || "$character" == "'" || "$character" == '"' ]]
+}
+
+env_has_assignment() {
+  local env_text="$1"
+  local name="$2"
+  local value="$3"
+
+  [[ " $env_text " == *" $name=$value "* ]]
 }
 
 process_has_profile() {
   local command_with_env
 
   command_with_env="$(process_with_env "$1")"
-  [[ "$command_with_env" == *"PWRAGENT_PROFILE=$profile"* ]]
+  env_has_assignment "$command_with_env" "PWRAGENT_PROFILE" "$profile"
 }
 
 is_dev_command() {
@@ -99,8 +137,9 @@ pid_is_root_scoped_dev() {
   process_has_profile "$pid" || return 1
 
   cwd="$(cwd_of_pid "$pid")"
-  if [[ -n "$cwd" ]] && is_under_root "$cwd"; then
-    return 0
+  if [[ -n "$cwd" ]]; then
+    is_under_root "$cwd"
+    return $?
   fi
 
   command_mentions_root "$command"
@@ -235,6 +274,39 @@ tail_log() {
   fi
 }
 
+assert_success() {
+  local description="$1"
+  shift
+
+  "$@" || die "self-test failed: expected success for $description"
+}
+
+assert_failure() {
+  local description="$1"
+  shift
+
+  if "$@"; then
+    die "self-test failed: expected failure for $description"
+  fi
+}
+
+run_self_test() {
+  root="/Users/example/PwrAgnt"
+  profile="dev"
+
+  assert_success "exact root command" command_mentions_root "cd /Users/example/PwrAgnt && pnpm dev"
+  assert_success "root child path" command_mentions_root "/Users/example/PwrAgnt/apps/desktop"
+  assert_success "root env-style assignment" command_mentions_root "PWD=/Users/example/PwrAgnt"
+  assert_failure "sibling checkout prefix" command_mentions_root "/Users/example/PwrAgnt-old/apps/desktop"
+  assert_failure "sibling checkout suffix" command_mentions_root "/Users/example/PwrAgnt2/apps/desktop"
+
+  assert_success "exact profile assignment" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=dev SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
+  assert_failure "profile prefix dev2" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=dev2 SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
+  assert_failure "profile prefix development" env_has_assignment "PATH=/bin PWRAGENT_PROFILE=development SHELL=/bin/zsh" "PWRAGENT_PROFILE" "dev"
+
+  say "self-test passed"
+}
+
 verify_app() {
   local elapsed=0
   local sleep_step=2
@@ -332,7 +404,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$mode" == "start" || "$mode" == "restart" || "$mode" == "close" || "$mode" == "status" || "$mode" == "verify" ]] || die "unknown mode: $mode"
+[[ "$mode" == "start" || "$mode" == "restart" || "$mode" == "close" || "$mode" == "status" || "$mode" == "verify" || "$mode" == "self-test" ]] || die "unknown mode: $mode"
 [[ "$timeout" == <-> ]] || die "--timeout must be an integer number of seconds"
 
 root="${root:A}"
@@ -360,5 +432,8 @@ case "$mode" in
     ;;
   verify)
     verify_app
+    ;;
+  self-test)
+    run_self_test
     ;;
 esac
