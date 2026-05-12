@@ -67,6 +67,28 @@ test("renders captured Codex review findings once in the review card", async () 
     );
     await expect(reviewCard).toContainText("Lines 971-979");
 
+    const findingTitle = reviewCard.getByText(
+      "Preserve async pasted images for launchpad scopes"
+    );
+    const findingTitleBox = await findingTitle.boundingBox();
+    expect(findingTitleBox).not.toBeNull();
+    await app.window.mouse.move(
+      findingTitleBox!.x + 4,
+      findingTitleBox!.y + findingTitleBox!.height / 2
+    );
+    await app.window.mouse.down();
+    await app.window.mouse.move(
+      findingTitleBox!.x + findingTitleBox!.width - 4,
+      findingTitleBox!.y + findingTitleBox!.height / 2,
+      { steps: 12 }
+    );
+    await app.window.mouse.up();
+    await expect
+      .poll(async () =>
+        app.window.evaluate(() => window.getSelection()?.toString() ?? "")
+      )
+      .toContain("Preserve async pasted images");
+
     await expect(
       transcript.getByText("Preserve async pasted images for launchpad scopes")
     ).toHaveCount(1);
