@@ -221,10 +221,18 @@ textarea,
   padding-right: 56px;
 }
 
+.thread-view:has(.context-rail.is-open) .thread-header {
+  /* The header sits above `.thread-view__layout`, so the layout's
+     pinned-rail padding does not protect the right-aligned messaging
+     indicators. Reserve the opened rail width here as well; the
+     title/chips shrink first and the status indicators keep their
+     visible slot. */
+  padding-right: calc(min(var(--context-rail-width, 380px), calc(100% - 32px)) + 12px);
+}
+
+.thread-view:has(.context-rail.is-pinned) .thread-header,
 .thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
-  /* When the rail is pinned open, it pushes the layout left and is no
-     longer fixed at the screen edge — the header reclaims the space. */
-  padding-right: 0;
+  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 12px);
 }
 
 .thread-header button,
@@ -238,7 +246,7 @@ textarea,
   display: flex;
   flex-direction: column;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 
 .messaging-status-bar {
@@ -246,6 +254,7 @@ textarea,
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  min-width: max-content;
   padding: 4px 8px;
   -webkit-app-region: no-drag;
 }
@@ -3609,9 +3618,12 @@ textarea,
   display: flex;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .thread-header__compact-title {
+  flex: 1 1 auto;
   max-width: min(58vw, 520px);
   min-width: 0;
   margin: 0;
@@ -3623,6 +3635,11 @@ textarea,
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-header__eyebrow-row > .thread-row__chip {
+  flex: 0 0 auto;
+  max-width: min(26ch, 28%);
 }
 
 .thread-header__warning {
@@ -7605,6 +7622,11 @@ textarea,
   .thread-view__layout {
     flex-direction: column;
     padding-right: 0;
+  }
+
+  .thread-view:has(.context-rail.is-open) .thread-header,
+  .thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
+    padding-right: 56px;
   }
 
   .transcript-list__scroll-bottom {
