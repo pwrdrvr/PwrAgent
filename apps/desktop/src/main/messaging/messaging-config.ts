@@ -4,7 +4,12 @@ import type { LineMessagingConfig } from "@pwragent/messaging-provider-line";
 import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
 import type { SlackMessagingConfig } from "@pwragent/messaging-provider-slack";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
-import type { MessagingToolUpdateMode } from "@pwragent/shared";
+import type {
+  DesktopAuthorizedContact,
+  DesktopMessagingFullAccessWarningGlobalPolicy,
+  MessagingToolUpdateMode,
+  MessagingChannelKind,
+} from "@pwragent/shared";
 import type {
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
@@ -154,12 +159,24 @@ export type DesktopMessagingConfig = {
   discord?: DiscordMessagingConfig;
   enabled?: boolean;
   feishu?: FeishuMessagingConfig;
+  fullAccessControls?: DesktopMessagingFullAccessControls;
   inputDebounceMs?: number;
   line?: LineMessagingConfig;
   mattermost?: MattermostMessagingConfig;
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
+};
+
+export type DesktopMessagingFullAccessControls = {
+  allowEscalation: boolean;
+  allowThreadResume: boolean;
+  warningPolicy: DesktopMessagingFullAccessWarningGlobalPolicy;
+  authorizedUsers: Partial<Record<MessagingChannelKind, DesktopAuthorizedContact[]>>;
+  dismissWarning?: (params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }) => Promise<void>;
 };
 
 export type DesktopMessagingConfigFieldImpact =
@@ -173,6 +190,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   discord: "connection",
   enabled: "connection",
   feishu: "connection",
+  fullAccessControls: "irrelevant",
   inputDebounceMs: "connection",
   line: "connection",
   mattermost: "connection",
@@ -298,6 +316,7 @@ export type DesktopMessagingChannelConfigUpdate =
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
   | "readSettings"
+  | "writeConfigPatch"
   | "resolveDiscordBotTokenSync"
   | "resolveTelegramBotTokenSync"
   | "resolveMattermostBotTokenSync"
@@ -501,6 +520,12 @@ export function loadDesktopMessagingConfig(
 
   return {
     enabled: true,
+    fullAccessControls: {
+      allowEscalation: true,
+      allowThreadResume: true,
+      warningPolicy: "dismissable",
+      authorizedUsers: {},
+    },
     inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
     toolUpdateDefaultMode: "show_some",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
@@ -1038,6 +1063,22 @@ export async function loadDesktopMessagingConfigFromSettings(
 
   return {
     enabled: messagingEnabled,
+    fullAccessControls: {
+      allowEscalation: snapshot.messaging.allowFullAccessEscalation.value,
+      allowThreadResume: snapshot.messaging.allowFullAccessThreadResume.value,
+      warningPolicy: snapshot.messaging.fullAccessWarning.value,
+      authorizedUsers: {
+        telegram: snapshot.messaging.telegram.authorizedUserIds.value,
+        discord: snapshot.messaging.discord.authorizedUserIds.value,
+        mattermost: snapshot.messaging.mattermost.authorizedUserIds.value,
+        slack: snapshot.messaging.slack.authorizedUserIds.value,
+        feishu: snapshot.messaging.feishu.authorizedUserIds.value,
+        line: snapshot.messaging.line.authorizedUserIds.value,
+      },
+      dismissWarning: async ({ actorId, channel }) => {
+        await dismissMessagingFullAccessWarning(settings, channel, actorId);
+      },
+    },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
@@ -1120,6 +1161,13 @@ export function redactDesktopMessagingConfig(
         }
       : undefined,
     enabled: config.enabled !== false,
+    fullAccessControls: config.fullAccessControls
+      ? {
+          allowEscalation: config.fullAccessControls.allowEscalation,
+          allowThreadResume: config.fullAccessControls.allowThreadResume,
+          warningPolicy: config.fullAccessControls.warningPolicy,
+        }
+      : undefined,
     toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
     inputDebounceMs: config.inputDebounceMs ?? 500,
     discord: config.discord
@@ -1209,6 +1257,80 @@ export function redactDesktopMessagingConfig(
       : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
+}
+
+async function dismissMessagingFullAccessWarning(
+  settings: DesktopMessagingSettingsSource,
+  channel: MessagingChannelKind,
+  actorId: string,
+): Promise<void> {
+  const snapshot = await settings.readSettings();
+  const contacts = contactsForFullAccessWarningChannel(snapshot, channel);
+  const nextContacts = contacts.map((contact) =>
+    contact.id === actorId
+      ? { ...contact, fullAccessWarningDismissed: true }
+      : contact,
+  );
+  if (!nextContacts.some((contact) => contact.id === actorId)) {
+    return;
+  }
+
+  switch (channel) {
+    case "telegram":
+      await settings.writeConfigPatch({
+        messaging: { telegram: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    case "discord":
+      await settings.writeConfigPatch({
+        messaging: { discord: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    case "mattermost":
+      await settings.writeConfigPatch({
+        messaging: { mattermost: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    case "slack":
+      await settings.writeConfigPatch({
+        messaging: { slack: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    case "feishu":
+      await settings.writeConfigPatch({
+        messaging: { feishu: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    case "line":
+      await settings.writeConfigPatch({
+        messaging: { line: { authorizedUserIds: nextContacts } },
+      });
+      return;
+    default:
+      return;
+  }
+}
+
+function contactsForFullAccessWarningChannel(
+  snapshot: Awaited<ReturnType<DesktopMessagingSettingsSource["readSettings"]>>,
+  channel: MessagingChannelKind,
+): DesktopAuthorizedContact[] {
+  switch (channel) {
+    case "telegram":
+      return snapshot.messaging.telegram.authorizedUserIds.value;
+    case "discord":
+      return snapshot.messaging.discord.authorizedUserIds.value;
+    case "mattermost":
+      return snapshot.messaging.mattermost.authorizedUserIds.value;
+    case "slack":
+      return snapshot.messaging.slack.authorizedUserIds.value;
+    case "feishu":
+      return snapshot.messaging.feishu.authorizedUserIds.value;
+    case "line":
+      return snapshot.messaging.line.authorizedUserIds.value;
+    default:
+      return [];
+  }
 }
 
 function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {

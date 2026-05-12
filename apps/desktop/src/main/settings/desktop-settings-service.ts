@@ -1,6 +1,7 @@
 import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -289,6 +290,17 @@ export class DesktopSettingsService {
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
+        allowFullAccessEscalation: this.resolveConfigBoolean(
+          config.messaging?.allowFullAccessEscalation,
+          true,
+        ),
+        allowFullAccessThreadResume: this.resolveConfigBoolean(
+          config.messaging?.allowFullAccessThreadResume,
+          true,
+        ),
+        fullAccessWarning: this.resolveConfigFullAccessWarningPolicy(
+          config.messaging?.fullAccessWarning,
+        ),
         inputDebounceMs: this.resolveClampedNumber(
           config.messaging?.inputDebounceMs,
           DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS,
@@ -1039,6 +1051,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<MessagingToolUpdateMode> {
     return {
       value: configValue ?? "show_some",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveConfigFullAccessWarningPolicy(
+    configValue: DesktopMessagingFullAccessWarningGlobalPolicy | undefined,
+  ): DesktopSettingsValue<DesktopMessagingFullAccessWarningGlobalPolicy> {
+    return {
+      value: configValue ?? "dismissable",
       source: configValue === undefined ? "default" : "config",
     };
   }

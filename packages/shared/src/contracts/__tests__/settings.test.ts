@@ -37,6 +37,18 @@ describe("desktop settings contracts", () => {
           value: true,
           source: "default",
         },
+        allowFullAccessEscalation: {
+          value: true,
+          source: "default",
+        },
+        allowFullAccessThreadResume: {
+          value: true,
+          source: "default",
+        },
+        fullAccessWarning: {
+          value: "dismissable",
+          source: "default",
+        },
         inputDebounceMs: {
           value: 500,
           source: "default",

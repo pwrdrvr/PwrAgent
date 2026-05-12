@@ -261,6 +261,27 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onFullAccessThreadResumeChange={async (allowFullAccessThreadResume) => {
+          await props.settings.writeConfig({
+            messaging: {
+              allowFullAccessThreadResume,
+            },
+          });
+        }}
+        onFullAccessEscalationChange={async (allowFullAccessEscalation) => {
+          await props.settings.writeConfig({
+            messaging: {
+              allowFullAccessEscalation,
+            },
+          });
+        }}
+        onFullAccessWarningPolicyChange={async (fullAccessWarning) => {
+          await props.settings.writeConfig({
+            messaging: {
+              fullAccessWarning,
+            },
+          });
+        }}
         onSaveDiscord={async (discord) => {
           const delta = buildDiscordPatchDelta(
             props.snapshot.messaging.discord,

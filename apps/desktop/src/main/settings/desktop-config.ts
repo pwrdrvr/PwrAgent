@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopMessagingFullAccessWarningGlobalPolicy,
+  DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
   DesktopWorktreeStorageLocation,
@@ -49,6 +51,9 @@ export type DesktopSettingsConfig = {
   };
   messaging?: {
     enabled?: boolean;
+    allowFullAccessEscalation?: boolean;
+    allowFullAccessThreadResume?: boolean;
+    fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
@@ -276,6 +281,12 @@ export function desktopSettingsPatchToEdits(
       value: normalizedContacts.map((contact) => ({
         id: contact.id,
         display_name: contact.displayName,
+        ...(contact.fullAccessWarningOverride
+          ? { full_access_warning: contact.fullAccessWarningOverride }
+          : {}),
+        ...(contact.fullAccessWarningDismissed === true
+          ? { full_access_warning_dismissed: true }
+          : {}),
       })),
     });
   };
@@ -307,6 +318,21 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.messaging?.enabled !== undefined) {
     set(["messaging", "enabled"], patch.messaging.enabled);
+  }
+  if (patch.messaging?.allowFullAccessThreadResume !== undefined) {
+    set(
+      ["messaging", "allow_full_access_thread_resume"],
+      patch.messaging.allowFullAccessThreadResume,
+    );
+  }
+  if (patch.messaging?.allowFullAccessEscalation !== undefined) {
+    set(
+      ["messaging", "allow_full_access_escalation"],
+      patch.messaging.allowFullAccessEscalation,
+    );
+  }
+  if (patch.messaging?.fullAccessWarning !== undefined) {
+    set(["messaging", "full_access_warning"], patch.messaging.fullAccessWarning);
   }
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
@@ -634,6 +660,15 @@ function normalizeDesktopConfig(
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
+      allowFullAccessEscalation: readBoolean(
+        messaging?.allow_full_access_escalation,
+      ),
+      allowFullAccessThreadResume: readBoolean(
+        messaging?.allow_full_access_thread_resume,
+      ),
+      fullAccessWarning: readFullAccessWarningGlobalPolicy(
+        messaging?.full_access_warning,
+      ),
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
       attachments: {
@@ -793,9 +828,15 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const line = config.messaging?.line;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const enabled = config.messaging?.enabled;
+  const allowFullAccessEscalation = config.messaging?.allowFullAccessEscalation;
+  const allowFullAccessThreadResume = config.messaging?.allowFullAccessThreadResume;
+  const fullAccessWarning = config.messaging?.fullAccessWarning;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
     enabled !== undefined ||
+    allowFullAccessEscalation !== undefined ||
+    allowFullAccessThreadResume !== undefined ||
+    fullAccessWarning !== undefined ||
     inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
     (attachments && hasDefinedValue(attachments))
@@ -809,6 +850,15 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.messaging = {};
     if (enabled !== undefined) {
       pruned.messaging.enabled = enabled;
+    }
+    if (allowFullAccessEscalation !== undefined) {
+      pruned.messaging.allowFullAccessEscalation = allowFullAccessEscalation;
+    }
+    if (allowFullAccessThreadResume !== undefined) {
+      pruned.messaging.allowFullAccessThreadResume = allowFullAccessThreadResume;
+    }
+    if (fullAccessWarning !== undefined) {
+      pruned.messaging.fullAccessWarning = fullAccessWarning;
     }
     if (inputDebounceMs !== undefined) {
       pruned.messaging.inputDebounceMs = inputDebounceMs;
@@ -931,6 +981,25 @@ function readFeishuTenantRegion(
   return value === "feishu" || value === "lark" ? value : undefined;
 }
 
+function readFullAccessWarningGlobalPolicy(
+  value: TomlScalar | undefined,
+): DesktopMessagingFullAccessWarningGlobalPolicy | undefined {
+  return value === "always" || value === "dismissable" || value === "never"
+    ? value
+    : undefined;
+}
+
+function isFullAccessWarningUserPolicy(
+  value: unknown,
+): value is DesktopMessagingFullAccessWarningUserPolicy {
+  return (
+    value === "default" ||
+    value === "always" ||
+    value === "dismissable" ||
+    value === "never"
+  );
+}
+
 function readBoolean(value: TomlScalar | undefined): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -987,6 +1056,16 @@ function readAuthorizedContactArray(
           : typeof entry.displayName === "string"
             ? entry.displayName
             : "",
+      fullAccessWarningOverride: isFullAccessWarningUserPolicy(
+        entry.full_access_warning,
+      )
+        ? entry.full_access_warning
+        : isFullAccessWarningUserPolicy(entry.fullAccessWarningOverride)
+          ? entry.fullAccessWarningOverride
+          : undefined,
+      fullAccessWarningDismissed:
+        entry.full_access_warning_dismissed === true ||
+        entry.fullAccessWarningDismissed === true,
     })),
   );
 }
@@ -998,6 +1077,13 @@ function normalizeAuthorizedContacts(
     .map((contact) => ({
       id: contact.id.trim(),
       displayName: sanitizeMessagingContactLabel(contact.displayName),
+      ...(isFullAccessWarningUserPolicy(contact.fullAccessWarningOverride) &&
+      contact.fullAccessWarningOverride !== "default"
+        ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
+        : {}),
+      ...(contact.fullAccessWarningDismissed === true
+        ? { fullAccessWarningDismissed: true }
+        : {}),
     }))
     .filter((contact) => contact.id.length > 0);
 }

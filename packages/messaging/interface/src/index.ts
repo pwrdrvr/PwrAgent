@@ -949,6 +949,7 @@ export type MessagingBrowseSessionRecord = {
   channel: MessagingChannelRef;
   createdAt: number;
   expiresAt: number;
+  fullAccessRiskAcceptedAt?: number;
   launchAction: MessagingBrowseLaunchAction;
   mode: MessagingBrowseMode;
   pageIndex: number;

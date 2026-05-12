@@ -395,6 +395,27 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Permissions: Full Access");
   });
 
+  it("hides the Full Access escalation action when messaging escalation is disabled", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.executionMode = "default";
+
+    const intent = buildBindingStatusIntent({
+      id: "status-no-escalation",
+      allowFullAccessEscalation: false,
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Permissions: Default Access");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+      }),
+    );
+  });
+
   it("adds the status handoff action when a handoff context is available", () => {
     const binding = buildBinding();
     const navigation = buildNavigationSnapshot();

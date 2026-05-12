@@ -92,6 +92,61 @@ describe("MessagingController", () => {
       });
   });
 
+  it("filters Full Access threads out of messaging resume when disabled", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [
+      {
+        ...navigation.threads[0]!,
+        executionMode: "full-access",
+      },
+      {
+        id: "thread-2",
+        title: "Default thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: "directory:pwragent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
+          },
+        ],
+        inbox: {
+          inInbox: false,
+        },
+        executionMode: "default",
+        updatedAt: 900,
+      },
+    ];
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      threadKeys: ["codex:thread-1", "codex:thread-2"],
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: false,
+        warningPolicy: "dismissable",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker",
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "thread-2",
+          }),
+        ],
+      },
+    });
+    expect(JSON.stringify(harness.delivered[0])).not.toContain("thread-1");
+  });
+
   it("shows projects from /resume --projects and filters threads after a project click", async () => {
     const harness = await createHarness();
 
@@ -5571,6 +5626,137 @@ describe("MessagingController", () => {
     );
   });
 
+  it("blocks messaging Full Access escalation when the setting disallows it", async () => {
+    const onFullAccessPolicyViolation = vi.fn();
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: false,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+      },
+      onFullAccessPolicyViolation,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(onFullAccessPolicyViolation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user-1",
+        backend: "codex",
+        bindingId: expect.any(String),
+        requestedAction: "messaging.full_access.escalate_thread",
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+      body: expect.stringContaining("Escalating to Full Access"),
+    });
+  });
+
+  it("requires a messaging risk acknowledgment before Full Access escalation", async () => {
+    const dismissWarning = vi.fn(async () => undefined);
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+        dismissWarning,
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    const warning = harness.delivered.at(-1);
+    expect(warning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+      body: expect.stringContaining("data can be exfiltrated"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "full-access-risk:accept", label: "Yes" }),
+        expect.objectContaining({
+          id: "full-access-risk:dismiss",
+          label: "Yes - and stop warning me",
+        }),
+        expect.objectContaining({ id: "full-access-risk:cancel", label: "Cancel" }),
+      ]),
+    });
+    const dismiss = findAction(warning, "full-access-risk:dismiss");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:dismiss",
+        value: dismiss.value,
+      }),
+    );
+
+    expect(dismissWarning).toHaveBeenCalledWith({
+      actorId: "user-1",
+      channel: "telegram",
+    });
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+  });
+
+  it("applies Full Access to a resumed Default Access thread after risk acknowledgment", async () => {
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --yolo"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    const warning = harness.delivered.at(-1);
+    expect(warning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+  });
+
   it("posts a permissions-queue audit message with a Cancel button on thread/executionMode/queued", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -6508,6 +6694,8 @@ async function createHarness(options?: {
   now?: () => number;
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
+  fullAccessControls?: MessagingControllerOptions["fullAccessControls"];
+  onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   materializeDirectoryLaunchpad?: NonNullable<
@@ -6786,7 +6974,13 @@ async function createHarness(options?: {
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    fullAccessControls: options?.fullAccessControls ?? {
+      allowEscalation: true,
+      allowThreadResume: true,
+      warningPolicy: "never",
+    },
     onDeliveryBudgetEvent: options?.onDeliveryBudgetEvent,
+    onFullAccessPolicyViolation: options?.onFullAccessPolicyViolation,
     // Pass the spy by default so tests can assert on fan-out. The
     // `bindingChangedListener: false` opt-out exists for tests that
     // verify the nullish-callback guard — production wiring always

@@ -62,6 +62,9 @@ function createSnapshot(
     },
     messaging: {
       enabled: { value: true, source: "default" },
+      allowFullAccessEscalation: { value: true, source: "default" },
+      allowFullAccessThreadResume: { value: true, source: "default" },
+      fullAccessWarning: { value: "dismissable", source: "default" },
       inputDebounceMs: { value: 500, source: "default" },
       toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
@@ -1586,6 +1589,35 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: { enabled: false },
+      });
+    });
+  });
+
+  it("persists messaging Full Access policy controls", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Resume Full Access threads" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { allowFullAccessThreadResume: false },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("switch", { name: "Escalate to Full Access" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { allowFullAccessEscalation: false },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Always" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { fullAccessWarning: "always" },
       });
     });
   });
