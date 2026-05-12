@@ -1,7 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import * as lark from "@larksuiteoapi/node-sdk";
 import type {
   MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
@@ -116,16 +115,20 @@ export type FeishuAdapterOptions = {
 
 type FeishuInboundListener = (event: MessagingInboundEvent) => Promise<void>;
 
+type FeishuEventDispatcher = {
+  invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown>;
+};
+
 type FeishuWsClient = {
   close(params?: { force?: boolean }): void;
-  start(params: { eventDispatcher: lark.EventDispatcher }): Promise<void>;
+  start(params: { eventDispatcher: FeishuEventDispatcher }): Promise<void>;
 };
 
 type FeishuWsClientFactory = (params: {
   appId: string;
   appSecret: string;
-  domain: lark.Domain;
-}) => FeishuWsClient;
+  domain: "feishu" | "lark";
+}) => FeishuWsClient | Promise<FeishuWsClient>;
 
 type LarkSdkLogger = {
   debug: (...msg: unknown[]) => void;
@@ -274,14 +277,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       options.config.verificationToken?.trim()
       || options.config.appSecret.trim()
       || randomBytes(32).toString("hex");
-    this.wsClientFactory = options.wsClientFactory ?? ((params) => new lark.WSClient({
-      appId: params.appId,
-      appSecret: params.appSecret,
-      domain: params.domain,
-      logger: larkLoggerFromProviderLogger(this.logger),
-      loggerLevel: lark.LoggerLevel.info,
-      source: "pwragent",
-    }));
+    this.wsClientFactory = options.wsClientFactory ?? (async (params) => {
+      const lark = await import("@larksuiteoapi/node-sdk");
+      return new lark.WSClient({
+        appId: params.appId,
+        appSecret: params.appSecret,
+        domain: params.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
+        logger: larkLoggerFromProviderLogger(this.logger),
+        loggerLevel: lark.LoggerLevel.info,
+        source: "pwragent",
+      });
+    });
     this.server = createServer((request, response) => {
       void this.handleWebhookRequest(request, response);
     });
@@ -1125,6 +1131,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   }
 
   private async startPersistentConnection(): Promise<void> {
+    const lark = await import("@larksuiteoapi/node-sdk");
     const eventDispatcher = new lark.EventDispatcher({
       ...(this.config.encryptKey ? { encryptKey: this.config.encryptKey } : {}),
       logger: larkLoggerFromProviderLogger(this.logger),
@@ -1140,10 +1147,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
       },
     });
-    const wsClient = this.wsClientFactory({
+    const wsClient = await this.wsClientFactory({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
-      domain: this.config.tenantRegion === "lark" ? lark.Domain.Lark : lark.Domain.Feishu,
+      domain: this.config.tenantRegion === "lark" ? "lark" : "feishu",
     });
     this.wsClient = wsClient;
     await wsClient.start({ eventDispatcher });
