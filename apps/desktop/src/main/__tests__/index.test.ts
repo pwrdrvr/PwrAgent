@@ -27,6 +27,7 @@ const registerSettingsIpcHandlersMock = vi.fn();
 const disposeSettingsIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
+const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const requestBindingRevokeAllForThreadMock = vi.fn();
@@ -38,9 +39,15 @@ const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
 const setNameMock = vi.fn();
 const setAboutPanelOptionsMock = vi.fn();
+const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
 const getAllWindowsMock = vi.fn(() => []);
+const dockSetIconMock = vi.fn();
+const nativeImageMock = {
+  isEmpty: vi.fn(() => false),
+};
+const nativeImageCreateFromPathMock = vi.fn(() => nativeImageMock);
 const startupProfilerInstance = {
   start: vi.fn<() => Promise<void>>(),
   attachWindow: vi.fn(),
@@ -53,9 +60,13 @@ vi.mock("electron", () => ({
   app: {
     setName: setNameMock,
     setAboutPanelOptions: setAboutPanelOptionsMock,
+    getAppPath: getAppPathMock,
     getVersion: getVersionMock,
     showAboutPanel: vi.fn(),
     whenReady: whenReadyMock,
+    dock: {
+      setIcon: dockSetIconMock,
+    },
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
     }),
@@ -70,6 +81,9 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: vi.fn(),
+  },
+  nativeImage: {
+    createFromPath: nativeImageCreateFromPathMock,
   },
 }));
 
@@ -140,6 +154,7 @@ vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
   getMainLogger: vi.fn(() => ({
     info: mainLogInfoMock,
+    warn: mainLogWarnMock,
     error: mainLogErrorMock,
   })),
 }));
@@ -199,6 +214,7 @@ describe("bootstrapApp", () => {
     disposeSettingsIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     mainLogInfoMock.mockReset();
+    mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
@@ -210,6 +226,11 @@ describe("bootstrapApp", () => {
     setApplicationMenuMock.mockReset();
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
+    getAppPathMock.mockClear();
+    dockSetIconMock.mockClear();
+    nativeImageMock.isEmpty.mockReset();
+    nativeImageMock.isEmpty.mockReturnValue(false);
+    nativeImageCreateFromPathMock.mockClear();
     whenReadyMock.mockReset();
     whenReadyMock.mockReturnValue(Promise.resolve());
     getAllWindowsMock.mockReset();
@@ -258,6 +279,21 @@ describe("bootstrapApp", () => {
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the PwrAgent icon for the development Dock icon on macOS", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(nativeImageCreateFromPathMock).toHaveBeenCalledWith(
+      "/test/app/build/icon.png",
+    );
+    expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
   });
 
   it("creates the first window without waiting for messaging startup", async () => {
