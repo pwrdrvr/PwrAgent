@@ -1286,7 +1286,7 @@ textarea,
   position: absolute;
   right: 14px;
   bottom: 10px;
-  z-index: 1;
+  z-index: 2;
   /* Mute the add affordance until the user is interacting with the
      row; revealed on hover, focus, or while the picker is open. */
   opacity: 0;
@@ -1548,6 +1548,10 @@ textarea,
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+
+.thread-row--can-react .thread-row__chips {
+  padding-right: 50px;
 }
 
 /* Focus ring for any role="button" chip in the flow (PR, binding,
