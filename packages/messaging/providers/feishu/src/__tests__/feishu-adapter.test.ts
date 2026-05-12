@@ -230,6 +230,15 @@ describe("FeishuAdapter", () => {
         },
       },
     }, { needCheck: false });
+    await dispatcher?.invoke({
+      schema: "2.0",
+      header: {
+        event_id: "evt_entered",
+        event_type: "im.chat.access_event.bot_p2p_chat_entered_v1",
+        tenant_key: "tenant_1",
+      },
+      event: {},
+    }, { needCheck: false });
     await adapter.stop();
 
     expect(started).toBe(true);

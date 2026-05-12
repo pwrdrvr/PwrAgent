@@ -1143,6 +1143,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       "card.action.trigger": async (data: unknown) => {
         await this.handleCardActionEvent(feishuCardActionEnvelopeFromPersistentEvent(data));
       },
+      "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
+        this.logger.debug?.("feishu bot p2p chat entered event ignored");
+      },
       "im.message.receive_v1": async (data: unknown) => {
         await this.handleMessageEvent(feishuMessageEnvelopeFromPersistentEvent(data));
       },

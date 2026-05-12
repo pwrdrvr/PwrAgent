@@ -330,25 +330,39 @@ defaults to `https://open.feishu.cn`, while `Lark` defaults to
 `https://open.larksuite.com`.
 
 1. Create a Feishu / Lark custom app in the Open Platform console and enable
-   bot messaging permissions for sending and receiving IM messages.
+   the Bot capability.
 2. In PwrAgent Settings > Messaging > Feishu / Lark, store the App ID and App
    Secret in Keychain. The connection test mints a tenant access token and
-   calls the app self-info endpoint.
+   calls the low-permission bot info endpoint (`/open-apis/bot/v3/info`).
 3. In the Open Platform event configuration, use **Receive events through
    persistent connection**. This is PwrAgent's default and recommended mode: the
    desktop app opens an outbound SDK WebSocket to Lark, so operators do not need
    to expose a localhost listener through Cloudflare Tunnel, ngrok, or a public
    reverse proxy that can then be fuzzed by internet scanners.
-4. Use webhook mode only as a fallback. If you set
+4. Subscribe these events:
+   - `im.message.receive_v1` so PwrAgent receives direct messages and group
+     mentions.
+   - `card.action.trigger` so interactive-card buttons work.
+   - `im.chat.access_event.bot_p2p_chat_entered_v1` is optional. Lark emits it
+     when a user opens or enters a bot DM; PwrAgent ignores it because it is not
+     a user command, but registering it avoids noisy "no handler" SDK logs if
+     the event is enabled.
+5. Grant and publish the app version with the messaging permissions used by
+   those events and bot replies. At minimum, enable the Lark/Feishu console
+   permissions for receiving bot messages/events and sending messages as the
+   bot. New bot profile changes, event subscriptions, and permission scopes do
+   not take effect for a workspace until you create and publish a version of the
+   internal app.
+6. Use webhook mode only as a fallback. If you set
    `PWRAGENT_MESSAGING_FEISHU_INBOUND_MODE=webhook`, configure event
    subscriptions in the Open Platform console to point at your public tunnel,
    forwarding to PwrAgent's local callback listener
    (`http://127.0.0.1:47823` by default).
-5. Store the Verification Token in Keychain if webhook mode is enabled. Plain
+7. Store the Verification Token in Keychain if webhook mode is enabled. Plain
    webhook events are rejected if their token does not match. The Encryption Key
    field is reserved for encrypted callback payloads and should match the
    platform console when you enable encrypted events.
-6. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
+8. Add allowlisted Feishu / Lark `open_id` values (`ou_...`). Add chat IDs
    (`oc_...`) or tenant keys for shared conversations; empty shared-surface
    allowlists deny shared chat access.
 
