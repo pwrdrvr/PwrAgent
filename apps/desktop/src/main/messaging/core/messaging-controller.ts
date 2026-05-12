@@ -38,6 +38,7 @@ import type {
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingMessageIntent,
+  MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
@@ -52,8 +53,12 @@ import {
 } from "./messaging-command-catalog.js";
 import {
   buildMonitorStatusIntent,
+  MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
+  MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
   MESSAGING_MONITOR_INTERVAL_MS,
-  MESSAGING_MONITOR_THREAD_LIMIT,
+  nextMonitorThreadLimit,
+  normalizeMonitorThreadLimit,
+  selectMonitorThreads,
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
@@ -134,6 +139,20 @@ const ACTIVE_TURN_HANDOFF_ERROR =
 // coalesces noisy token deltas into human-visible refreshes.
 const STREAM_UPDATE_REFRESH_MS = 1_000;
 const messagingControllerLog = getMainLogger("pwragent:messaging");
+
+type MonitorCommandAction =
+  | { kind: "start" }
+  | { kind: "stop" }
+  | { kind: "refresh" }
+  | { kind: "cycle-pinned" }
+  | { kind: "cycle-recent" }
+  | { kind: "set-pinned"; count: number }
+  | { kind: "set-recent"; count: number };
+
+type MonitorStateOptions = Pick<
+  MessagingMonitorState,
+  "pinnedThreadLimit" | "recentThreadLimit"
+>;
 
 type AssistantStreamDelta = {
   delta: string;
@@ -3394,13 +3413,13 @@ export class MessagingController {
   }
 
   private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
-    const action = normalizeMonitorCommandAction(event.args?.[0]);
-    if (action === "stop") {
+    const action = normalizeMonitorCommandAction(event.args);
+    if (action.kind === "stop") {
       await this.stopMonitoringForChannel(event);
       return;
     }
 
-    await this.enableAndRenderChannelMonitor(event);
+    await this.enableAndRenderChannelMonitor(event, action);
   }
 
   private async handleMonitorCallback(
@@ -3412,15 +3431,17 @@ export class MessagingController {
       return;
     }
 
-    await this.enableAndRenderChannelMonitor(event);
+    await this.enableAndRenderChannelMonitor(event, normalizeMonitorCallbackAction(actionId));
   }
 
   private async enableAndRenderChannelMonitor(
     event: MessagingInboundEvent,
+    action: MonitorCommandAction = { kind: "start" },
   ): Promise<MessagingMonitorSubscriptionRecord> {
     const now = this.now();
     const existing =
       await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+    const monitorOptions = resolveMonitorStateOptions(existing?.monitor, action);
     const subscription = await this.options.store.upsertMonitorSubscription({
       id: existing?.id ?? buildMonitorSubscriptionId(event.channel),
       channel: event.channel,
@@ -3430,10 +3451,13 @@ export class MessagingController {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       monitor: {
+        ...existing?.monitor,
         enabled: true,
         intervalMs:
           existing?.monitor.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: existing?.monitor.lastRenderedAt,
+        pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
+        recentThreadLimit: monitorOptions.recentThreadLimit,
         updatedAt: now,
       },
       monitorSurface: existing?.monitorSurface,
@@ -3523,6 +3547,7 @@ export class MessagingController {
     return await this.options.store.upsertMonitorSubscription({
       ...subscription,
       monitor: {
+        ...subscription.monitor,
         enabled: false,
         intervalMs: subscription.monitor.intervalMs,
         lastRenderedAt: subscription.monitor.lastRenderedAt,
@@ -4820,7 +4845,10 @@ export class MessagingController {
         backend: "all",
       }));
     const now = this.now();
-    const activeTurns = await this.resolveMonitorActiveTurns(snapshot);
+    const activeTurns = await this.resolveMonitorActiveTurns(
+      snapshot,
+      binding.monitor,
+    );
     const intent = buildMonitorStatusIntent({
       activeTurnsByThreadKey: activeTurns,
       binding,
@@ -4839,6 +4867,7 @@ export class MessagingController {
     return await this.options.store.upsertBinding({
       ...currentBinding,
       monitor: {
+        ...currentBinding.monitor,
         enabled: true,
         intervalMs:
           currentBinding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
@@ -4864,7 +4893,10 @@ export class MessagingController {
         backend: "all",
       }));
     const now = this.now();
-    const activeTurns = await this.resolveMonitorActiveTurns(snapshot);
+    const activeTurns = await this.resolveMonitorActiveTurns(
+      snapshot,
+      subscription.monitor,
+    );
     const intent = {
       ...buildMonitorStatusIntent({
         activeTurnsByThreadKey: activeTurns,
@@ -4911,6 +4943,7 @@ export class MessagingController {
     return await this.options.store.upsertMonitorSubscription({
       ...current,
       monitor: {
+        ...current.monitor,
         enabled: true,
         intervalMs: current.monitor.intervalMs,
         lastRenderedAt: now,
@@ -5034,13 +5067,14 @@ export class MessagingController {
 
   private async resolveMonitorActiveTurns(
     navigation: NavigationSnapshot,
+    monitor?: MessagingMonitorState,
   ): Promise<ReadonlyMap<string, MessagingActiveTurnSummary>> {
     const activeTurns = new Map(this.activeTurnsByThreadKey);
     if (!this.options.backend.readThreadStatus) {
       return activeTurns;
     }
 
-    const threads = navigation.threads.slice(0, MESSAGING_MONITOR_THREAD_LIMIT);
+    const threads = selectMonitorThreads({ monitor, navigation }).threads;
     await Promise.all(
       threads.map(async (thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -5912,16 +5946,94 @@ function readMonitorAction(event: MessagingInboundCallbackEvent): string | undef
 }
 
 function normalizeMonitorCommandAction(
-  action: string | undefined,
-): "start" | "stop" | "refresh" {
-  const normalized = action?.trim().toLowerCase();
+  args: readonly string[] | undefined,
+): MonitorCommandAction {
+  const normalized = args?.[0]?.trim().toLowerCase();
   if (normalized === "stop" || normalized === "off" || normalized === "disable") {
-    return "stop";
+    return { kind: "stop" };
   }
   if (normalized === "refresh" || normalized === "now") {
-    return "refresh";
+    return { kind: "refresh" };
   }
-  return "start";
+  if (normalized === "pins" || normalized === "pin") {
+    const count = parseMonitorCountArg(args?.[1]);
+    return typeof count === "number"
+      ? { kind: "set-pinned", count }
+      : { kind: "cycle-pinned" };
+  }
+  if (
+    normalized === "recent" ||
+    normalized === "recents" ||
+    normalized === "threads"
+  ) {
+    const count = parseMonitorCountArg(args?.[1]);
+    return typeof count === "number"
+      ? { kind: "set-recent", count }
+      : { kind: "cycle-recent" };
+  }
+  return { kind: "start" };
+}
+
+function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction {
+  if (actionId === "monitor:pins") {
+    return { kind: "cycle-pinned" };
+  }
+  if (actionId === "monitor:recent") {
+    return { kind: "cycle-recent" };
+  }
+  return { kind: "refresh" };
+}
+
+function resolveMonitorStateOptions(
+  monitor: MessagingMonitorState | undefined,
+  action: MonitorCommandAction,
+): MonitorStateOptions {
+  const currentPinned = normalizeMonitorThreadLimit(
+    monitor?.pinnedThreadLimit,
+    MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
+  );
+  const currentRecent = normalizeMonitorThreadLimit(
+    monitor?.recentThreadLimit,
+    MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
+  );
+
+  switch (action.kind) {
+    case "cycle-pinned":
+      return {
+        pinnedThreadLimit: nextMonitorThreadLimit(currentPinned),
+        recentThreadLimit: currentRecent,
+      };
+    case "cycle-recent":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: nextMonitorThreadLimit(currentRecent),
+      };
+    case "set-pinned":
+      return {
+        pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
+        recentThreadLimit: currentRecent,
+      };
+    case "set-recent":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
+      };
+    case "refresh":
+    case "start":
+    case "stop":
+      return {
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+      };
+  }
+}
+
+function parseMonitorCountArg(arg: string | undefined): number | undefined {
+  if (!arg) {
+    return undefined;
+  }
+  const parsed = Number(arg.trim());
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {

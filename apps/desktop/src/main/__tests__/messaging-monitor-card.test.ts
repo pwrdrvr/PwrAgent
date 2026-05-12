@@ -8,7 +8,7 @@ import {
 } from "../messaging/core/messaging-monitor-card.js";
 
 describe("buildMonitorStatusIntent", () => {
-  it("renders a compact recent-thread summary with a Stop Monitor action", () => {
+  it("renders pinned threads above non-pinned recents with configuration actions", () => {
     const intent = buildMonitorStatusIntent({
       binding: buildBinding(),
       createdAt: 121_000,
@@ -25,7 +25,7 @@ describe("buildMonitorStatusIntent", () => {
         fallback: "present_new",
       },
       text: expect.stringContaining("Monitor: Recent threads"),
-      actions: [
+      actions: expect.arrayContaining([
         expect.objectContaining({
           id: "monitor:stop",
           fallbackText: "monitor stop",
@@ -35,9 +35,21 @@ describe("buildMonitorStatusIntent", () => {
           id: "monitor:refresh",
           fallbackText: "monitor refresh",
         }),
-      ],
+        expect.objectContaining({
+          id: "monitor:pins",
+          fallbackText: "monitor pins 10",
+          label: "Pins: 5",
+        }),
+        expect.objectContaining({
+          id: "monitor:recent",
+          fallbackText: "monitor recent 10",
+          label: "Recent: 5",
+        }),
+      ]),
     });
-    expect(intent.text).toContain("1. Fix messaging monitor (codex) - idle - updated 2m ago - PwrAgent");
+    expect(intent.text).toContain("Pins: 5 | Recent: 5");
+    expect(intent.text).toContain("Pins\nP1. Pinned release watch (codex) - idle - updated just now - PwrAgent");
+    expect(intent.text).toContain("Recent\n1. Fix messaging monitor (codex) - idle - updated 2m ago - PwrAgent");
     expect(intent.text).toContain("2. Review provider commands (grok) - queued permissions - updated just now - Messaging");
     expect(intent.text).toContain(`Interval: ${MESSAGING_MONITOR_INTERVAL_MS / 60_000} min`);
     expect(intent.text).not.toContain("undefined");
@@ -127,7 +139,42 @@ describe("buildMonitorStatusIntent", () => {
     });
 
     expect(intent.status).toBe("idle");
-    expect(intent.text).toContain("No recent threads.");
+    expect(intent.text).toContain("No matching recent threads.");
+  });
+
+  it("can hide pins or expand recents independently", () => {
+    const intent = buildMonitorStatusIntent({
+      binding: buildBinding({
+        monitor: {
+          enabled: true,
+          intervalMs: MESSAGING_MONITOR_INTERVAL_MS,
+          pinnedThreadLimit: 0,
+          recentThreadLimit: 10,
+          updatedAt: 1000,
+        },
+      }),
+      createdAt: 121_000,
+      id: "monitor-1",
+      navigation: buildNavigationSnapshot(),
+    });
+
+    expect(intent.text).toContain("Pins: 0 | Recent: 10");
+    expect(intent.text).not.toContain("Pinned release watch");
+    expect(intent.text).toContain("Recent\n1. Fix messaging monitor");
+    expect(intent.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitor:pins",
+          fallbackText: "monitor pins 5",
+          label: "Pins: 0",
+        }),
+        expect.objectContaining({
+          id: "monitor:recent",
+          fallbackText: "monitor recent 0",
+          label: "Recent: 10",
+        }),
+      ]),
+    );
   });
 });
 
@@ -163,6 +210,25 @@ function buildNavigationSnapshot(): NavigationSnapshot {
     fetchedAt: 121_000,
     unchanged: false,
     threads: [
+      {
+        id: "thread-pinned",
+        title: "Pinned release watch",
+        titleSource: "explicit",
+        source: "codex",
+        pinnedRank: "1024",
+        linkedDirectories: [
+          {
+            id: "directory:pwragent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
+          },
+        ],
+        inbox: {
+          inInbox: false,
+        },
+        updatedAt: 120_000,
+      },
       {
         id: "thread-1",
         title: "Fix messaging monitor",

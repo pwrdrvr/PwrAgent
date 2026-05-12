@@ -477,6 +477,8 @@ describe("messaging surface contract", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 1500,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
         updatedAt: 1500,
       },
       monitorSurface: {
@@ -544,6 +546,8 @@ describe("messaging surface contract", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 1500,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
         updatedAt: 1500,
       },
       monitorSurface: binding.monitorSurface,
@@ -553,8 +557,10 @@ describe("messaging surface contract", () => {
     expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
     expect(binding.monitor?.enabled).toBe(true);
+    expect(binding.monitor?.pinnedThreadLimit).toBe(5);
     expect(binding.monitorSurface?.id).toBe("monitor-message-1");
     expect(monitorSubscription.monitor.enabled).toBe(true);
+    expect(monitorSubscription.monitor.recentThreadLimit).toBe(10);
     expect(monitorSubscription.monitorSurface?.id).toBe("monitor-message-1");
   });
 

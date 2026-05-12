@@ -1,4 +1,9 @@
-import { buildThreadIdentityKey, shortenDerivedThreadTitle } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  comparePinnedThreads,
+  isPinnedThread,
+  shortenDerivedThreadTitle,
+} from "@pwragent/shared";
 import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
@@ -19,9 +24,21 @@ import {
 } from "@pwragent/messaging-interface";
 
 export const MESSAGING_MONITOR_INTERVAL_MS = 60_000;
-export const MESSAGING_MONITOR_THREAD_LIMIT = 5;
+export const MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT = 5;
+export const MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT = 5;
+export const MESSAGING_MONITOR_THREAD_LIMIT =
+  MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT;
+export const MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS = [0, 5, 10] as const;
 
 const MONITOR_MIN_ACTIONS = 1;
+
+export type MessagingMonitorThreadSelection = {
+  pinnedThreadLimit: number;
+  pinnedThreads: NavigationThreadSummary[];
+  recentThreadLimit: number;
+  recentThreads: NavigationThreadSummary[];
+  threads: NavigationThreadSummary[];
+};
 
 export function buildMonitorStatusIntent(params: {
   activeTurnsByThreadKey?: ReadonlyMap<string, MessagingActiveTurnSummary>;
@@ -37,25 +54,23 @@ export function buildMonitorStatusIntent(params: {
 }): MessagingStatusIntent {
   const monitor = params.binding?.monitor ?? params.monitor;
   const monitorSurface = params.binding?.monitorSurface ?? params.monitorSurface;
-  const threadLimit = Math.max(1, params.threadLimit ?? MESSAGING_MONITOR_THREAD_LIMIT);
-  const threads = params.navigation.threads.slice(0, threadLimit);
+  const selection = selectMonitorThreads({
+    monitor,
+    navigation: params.navigation,
+    threadLimit: params.threadLimit,
+  });
+  const threads = selection.threads;
   const activeTurns = params.activeTurnsByThreadKey ?? new Map();
   const hasWorkingThread = threads.some((thread) => {
     const turn = activeTurns.get(buildThreadIdentityKey(thread.source, thread.id));
     return turn?.status === "working" || turn?.status === "waiting";
   });
-  const lines =
-    threads.length > 0
-      ? threads.map((thread, index) =>
-          formatThreadLine({
-            index,
-            navigation: params.navigation,
-            now: params.createdAt,
-            thread,
-            turn: activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
-          }),
-        )
-      : ["No recent threads."];
+  const lines = formatMonitorThreadSections({
+    activeTurns,
+    navigation: params.navigation,
+    now: params.createdAt,
+    selection,
+  });
   const canUpdateSurface = Boolean(
     monitorSurface &&
       params.capabilityProfile?.text.supportsMessageEdit !== false,
@@ -76,16 +91,80 @@ export function buildMonitorStatusIntent(params: {
       "Monitor: Recent threads",
       `Updated: ${formatTimeOfDay(params.createdAt)}`,
       `Interval: ${formatInterval(monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS)}`,
+      `Pins: ${selection.pinnedThreadLimit} | Recent: ${selection.recentThreadLimit}`,
       "",
       ...lines,
     ].join("\n"),
-    actions: buildMonitorActions(params.capabilityProfile),
+    actions: buildMonitorActions({
+      pinnedThreadLimit: selection.pinnedThreadLimit,
+      profile: params.capabilityProfile,
+      recentThreadLimit: selection.recentThreadLimit,
+    }),
   };
 }
 
-function buildMonitorActions(
-  profile?: MessagingCapabilityProfile,
-): MessagingSurfaceAction[] {
+export function selectMonitorThreads(params: {
+  monitor?: MessagingMonitorState;
+  navigation: NavigationSnapshot;
+  threadLimit?: number;
+}): MessagingMonitorThreadSelection {
+  const pinnedThreadLimit = normalizeMonitorThreadLimit(
+    params.monitor?.pinnedThreadLimit,
+    MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
+  );
+  const recentThreadLimit = normalizeMonitorThreadLimit(
+    params.monitor?.recentThreadLimit ?? params.threadLimit,
+    params.threadLimit ?? MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
+  );
+  const pinnedThreads = params.navigation.threads
+    .filter(isPinnedThread)
+    .sort(comparePinnedThreads)
+    .slice(0, pinnedThreadLimit);
+  const recentThreads = params.navigation.threads
+    .filter((thread) => !isPinnedThread(thread))
+    .slice(0, recentThreadLimit);
+
+  return {
+    pinnedThreadLimit,
+    pinnedThreads,
+    recentThreadLimit,
+    recentThreads,
+    threads: [...pinnedThreads, ...recentThreads],
+  };
+}
+
+export function normalizeMonitorThreadLimit(
+  value: number | undefined,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  if (value <= 0) {
+    return 0;
+  }
+  if (value <= 5) {
+    return 5;
+  }
+  return 10;
+}
+
+export function nextMonitorThreadLimit(value: number | undefined): number {
+  const current = normalizeMonitorThreadLimit(value, 5);
+  const index = MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS.indexOf(
+    current as (typeof MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS)[number],
+  );
+  const nextIndex =
+    index === -1 ? 0 : (index + 1) % MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS.length;
+  return MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS[nextIndex];
+}
+
+function buildMonitorActions(params: {
+  pinnedThreadLimit: number;
+  profile?: MessagingCapabilityProfile;
+  recentThreadLimit: number;
+}): MessagingSurfaceAction[] {
+  const { profile } = params;
   if (profile && !capabilityProfileSupportsActionCount(profile, MONITOR_MIN_ACTIONS)) {
     return [];
   }
@@ -106,13 +185,81 @@ function buildMonitorActions(
         fallbackText: "monitor refresh",
         priority: 2,
       },
+      {
+        id: "monitor:pins",
+        label: `Pins: ${params.pinnedThreadLimit}`,
+        style: "secondary",
+        fallbackText: `monitor pins ${nextMonitorThreadLimit(params.pinnedThreadLimit)}`,
+        priority: 3,
+      },
+      {
+        id: "monitor:recent",
+        label: `Recent: ${params.recentThreadLimit}`,
+        style: "secondary",
+        fallbackText: `monitor recent ${nextMonitorThreadLimit(params.recentThreadLimit)}`,
+        priority: 4,
+      },
     ],
     profile,
   );
 }
 
+function formatMonitorThreadSections(params: {
+  activeTurns: ReadonlyMap<string, MessagingActiveTurnSummary>;
+  navigation: NavigationSnapshot;
+  now: number;
+  selection: MessagingMonitorThreadSelection;
+}): string[] {
+  const lines: string[] = [];
+  if (params.selection.pinnedThreads.length > 0) {
+    lines.push("Pins");
+    lines.push(
+      ...params.selection.pinnedThreads.map((thread, index) =>
+        formatThreadLine({
+          index,
+          labelPrefix: "P",
+          navigation: params.navigation,
+          now: params.now,
+          thread,
+          turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
+        }),
+      ),
+    );
+  }
+
+  if (params.selection.recentThreads.length > 0) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push("Recent");
+    lines.push(
+      ...params.selection.recentThreads.map((thread, index) =>
+        formatThreadLine({
+          index,
+          navigation: params.navigation,
+          now: params.now,
+          thread,
+          turn: params.activeTurns.get(buildThreadIdentityKey(thread.source, thread.id)),
+        }),
+      ),
+    );
+  }
+
+  if (lines.length > 0) {
+    return lines;
+  }
+  if (
+    params.selection.pinnedThreadLimit === 0 &&
+    params.selection.recentThreadLimit === 0
+  ) {
+    return ["No threads selected. Increase Pins or Recent to show items."];
+  }
+  return ["No matching recent threads."];
+}
+
 function formatThreadLine(params: {
   index: number;
+  labelPrefix?: string;
   navigation: NavigationSnapshot;
   now: number;
   thread: NavigationThreadSummary;
@@ -123,7 +270,8 @@ function formatThreadLine(params: {
   const state = formatThreadState(params.thread, params.turn);
   const updated = formatRelativeTime(params.thread.updatedAt, params.now);
   const directorySuffix = directory ? ` - ${directory}` : "";
-  return `${params.index + 1}. ${title} (${params.thread.source}) - ${state} - ${updated}${directorySuffix}`;
+  const label = `${params.labelPrefix ?? ""}${params.index + 1}`;
+  return `${label}. ${title} (${params.thread.source}) - ${state} - ${updated}${directorySuffix}`;
 }
 
 function formatThreadTitle(thread: NavigationThreadSummary): string {

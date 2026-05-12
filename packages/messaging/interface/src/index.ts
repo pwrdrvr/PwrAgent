@@ -837,6 +837,8 @@ export type MessagingMonitorState = {
   enabled: boolean;
   intervalMs: number;
   lastRenderedAt?: number;
+  pinnedThreadLimit?: number;
+  recentThreadLimit?: number;
   updatedAt: number;
 };
 

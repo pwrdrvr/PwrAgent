@@ -2079,6 +2079,8 @@ describe("MessagingController", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 1000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 5,
       },
       monitorSurface: {
         id: expect.stringContaining("surface:"),
@@ -2126,10 +2128,59 @@ describe("MessagingController", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 1000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 5,
       },
       monitorSurface: {
         id: expect.stringContaining("surface:"),
       },
+    });
+  });
+
+  it("configures Monitor pinned and recent counts from commands and buttons", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor pins 10"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 5"),
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 5,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "monitor:recent" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 10"),
+    });
+    await expect(
+      harness.store.findActiveMonitorSubscriptionForChannel(
+        buildCommandEvent("/monitor").channel,
+      ),
+    ).resolves.toMatchObject({
+      monitor: {
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 10,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/monitor recent 0"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Pins: 10 | Recent: 0"),
     });
   });
 

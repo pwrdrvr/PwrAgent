@@ -259,6 +259,8 @@ describe("SqliteMessagingStore", () => {
           enabled: true,
           intervalMs: 60_000,
           lastRenderedAt: 2000,
+          pinnedThreadLimit: 5,
+          recentThreadLimit: 10,
           updatedAt: 2000,
         },
         monitorSurface: {
@@ -290,6 +292,8 @@ describe("SqliteMessagingStore", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 2000,
+        pinnedThreadLimit: 5,
+        recentThreadLimit: 10,
       },
       monitorSurface: {
         channel: "telegram",
@@ -321,6 +325,8 @@ describe("SqliteMessagingStore", () => {
           enabled: true,
           intervalMs: 60_000,
           lastRenderedAt: 2000,
+          pinnedThreadLimit: 10,
+          recentThreadLimit: 5,
           updatedAt: 2000,
         },
         monitorSurface: {
@@ -344,6 +350,8 @@ describe("SqliteMessagingStore", () => {
         enabled: true,
         intervalMs: 60_000,
         lastRenderedAt: 2000,
+        pinnedThreadLimit: 10,
+        recentThreadLimit: 5,
       },
       monitorSurface: {
         id: "monitor-message-1",
