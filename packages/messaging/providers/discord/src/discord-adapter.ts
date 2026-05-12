@@ -786,6 +786,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channelType: message.channel_type,
       isThread: message.is_thread,
     });
+    const hasAttachments = Boolean(message.attachments?.length);
 
     // `<@botUserId> <verb>` text mention → command. Run BEFORE the
     // attachment branch so captions like `@PwrAgent resume` on a
@@ -800,7 +801,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     // (the application id and bot user id were unified for bots
     // created since 2016).
     if (message.content !== undefined) {
-      if (mentionRemainder !== undefined) {
+      if (
+        mentionRemainder !== undefined &&
+        // A bare mention caption has no command verb. Let the media
+        // branch handle the upload so bound conversations can send it
+        // to the thread; unbound conversations will get the
+        // controller's normal "bind before attachments" response.
+        !(mentionRemainder.length === 0 && hasAttachments)
+      ) {
         // Synthesize the slash form so the controller sees the same
         // `MessagingInboundCommandEvent` shape as a `/`-prefixed
         // message. The slash regex below extracts verb + args. If

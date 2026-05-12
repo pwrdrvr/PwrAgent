@@ -1148,6 +1148,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const mentionRemainder = mentionCandidate
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
+    const attachments = this.attachmentsFromMessage(message);
     if (
       !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
@@ -1159,7 +1160,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     ) {
       return;
     }
-    if (mentionRemainder !== undefined && mentionCandidate !== undefined) {
+    if (
+      mentionRemainder !== undefined &&
+      mentionCandidate !== undefined &&
+      // A bare mention caption has no command verb. Let the media
+      // branch handle the upload so bound conversations can send it
+      // to the thread; unbound conversations will get the
+      // controller's normal "bind before attachments" response.
+      !(mentionRemainder.length === 0 && attachments.length > 0)
+    ) {
       // If the remainder after the mention doesn't form a valid verb
       // (e.g. a second mention, or a digit-leading token), we
       // deliberately fall through to the attachment / slash / text
@@ -1186,7 +1195,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     }
 
-    const attachments = this.attachmentsFromMessage(message);
     if (attachments.length > 0) {
       await listener({
         id: `telegram:update:${updateId}:message:${message.message_id}`,

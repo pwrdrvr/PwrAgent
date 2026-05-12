@@ -384,6 +384,53 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("preserves media dispatch when a photo caption is only a bare bot mention", async () => {
+    const harness = await createControllerHarness();
+    const events: MessagingInboundEvent[] = [];
+    await harness.adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        caption: "@PwrAgentBot",
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        photo: [
+          {
+            file_id: "AgADBA",
+            height: 480,
+            width: 640,
+          },
+        ],
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "media",
+      text: "@PwrAgentBot",
+      attachments: [
+        expect.objectContaining({
+          id: "telegram:photo:AgADBA",
+          kind: "image",
+          name: "telegram-photo.jpg",
+        }),
+      ],
+    });
+  });
+
   it("treats `@PwrAgentBot help` as a command and a non-leading mention as text", async () => {
     const harness = await createControllerHarness();
     const events: MessagingInboundEvent[] = [];
