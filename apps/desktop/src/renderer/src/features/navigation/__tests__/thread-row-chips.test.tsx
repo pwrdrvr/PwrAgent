@@ -115,6 +115,27 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.textContent).not.toContain("sl");
   });
 
+  it("renders Feishu / Lark binding chips with the Lark icon", () => {
+    const feishuBinding: MessagingThreadBindingSummary = {
+      ...telegramBinding,
+      bindingId: "binding-feishu-1",
+      platform: "feishu",
+      conversationKind: "dm",
+      conversationTitle: "Lark DM",
+      parentTitle: undefined,
+    };
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [feishuBinding],
+        reactions: [],
+      },
+    });
+    const bindingChip = container.querySelector(".thread-row__chip--binding");
+    expect(bindingChip?.querySelector("img")).not.toBeNull();
+    expect(bindingChip?.textContent).not.toContain("fe");
+  });
+
   it("does not invoke onSelectThread when a binding chip is clicked", () => {
     const { container, onSelectThread, onUnbindMessagingBinding } = renderRow();
     const bindingChip = container.querySelector(

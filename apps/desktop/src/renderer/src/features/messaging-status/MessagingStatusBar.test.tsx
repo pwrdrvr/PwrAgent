@@ -13,6 +13,32 @@ afterEach(() => {
 });
 
 describe("MessagingStatusBar", () => {
+  it("renders Feishu / Lark with the brand icon instead of the text fallback", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "feishu",
+        account: "PwrAgent",
+        detail: "open.larksuite.com",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => statuses),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+    };
+
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText(/Feishu \/ Lark: Enabled/),
+      ).toBeInTheDocument();
+    });
+    expect(container.querySelector(".messaging-status-chip img")).not.toBeNull();
+    expect(container.querySelector(".messaging-status-chip__fallback")).toBeNull();
+  });
+
   it("renders degraded status with rate-limit detail in the tooltip", async () => {
     const statuses = [
       {
