@@ -92,14 +92,23 @@ describe("ThreadRow chip flow", () => {
 
   it("positions the add-reaction trigger outside the wrapping chip flow", () => {
     const { container } = renderRow();
-    const shell = container.querySelector(".thread-row-shell");
+    const actions = container.querySelector(".thread-row__actions");
     const flow = container.querySelector(".thread-row__chips");
     const addReaction = container.querySelector(".thread-row__chip--add-reaction");
-    expect(shell).not.toBeNull();
+    expect(actions).not.toBeNull();
     expect(flow).not.toBeNull();
     expect(addReaction).not.toBeNull();
-    expect(addReaction?.parentElement).toBe(shell);
+    expect(addReaction?.parentElement).toBe(actions);
     expect(flow?.contains(addReaction)).toBe(false);
+  });
+
+  it("keeps the add-reaction trigger left of the overflow action", () => {
+    const { container } = renderRow();
+    const actions = container.querySelector(".thread-row__actions");
+    expect(actions).not.toBeNull();
+    const actionChildren = Array.from(actions!.children) as HTMLElement[];
+    expect(actionChildren[0]).toHaveClass("thread-row__chip--add-reaction");
+    expect(actionChildren[1]).toHaveClass("thread-row__overflow-button");
   });
 
   it("uses span[role=button] for the binding chip (not nested <button>)", () => {
