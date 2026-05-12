@@ -1150,6 +1150,243 @@ describe("App", () => {
     });
   });
 
+  it("releases a queued review for a thread after navigating away", async () => {
+    const agentEventListeners = new Set<
+      (event: {
+        backend: "codex";
+        notification: {
+          method: string;
+          params: Record<string, unknown>;
+        };
+      }) => void
+    >();
+    const startTurn = vi.fn<
+      (request: StartTurnRequest) => Promise<StartTurnResponse>
+    >(async (request) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-active",
+    }));
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex";
+        threadId: string;
+      }) => ({
+        backend,
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false
+          }
+        }
+      })
+    );
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: []
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start", "review/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: true,
+                startReview: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true
+                }
+              ]
+            }
+          ]
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-a", "codex:thread-b"],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex",
+            executionMode: "default",
+          },
+          threads: [
+            {
+              id: "thread-a",
+              title: "Active background thread",
+              titleSource: "explicit",
+              summary: "Has an active turn with a queued reply",
+              source: "codex",
+              executionMode: "default",
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread"
+              },
+              updatedAt: Date.now()
+            },
+            {
+              id: "thread-b",
+              title: "Focused thread",
+              titleSource: "explicit",
+              summary: "Selected while the first thread finishes",
+              source: "codex",
+              executionMode: "default",
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread"
+              },
+              updatedAt: Date.now() - 1000
+            }
+          ]
+        }),
+        markThreadSeen: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now()
+        }),
+        onAgentEvent: (
+          listener: (event: {
+            backend: "codex";
+            notification: {
+              method: string;
+              params: Record<string, unknown>;
+            };
+          }) => void
+        ) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        onWindowFocus: () => () => undefined,
+        readThread,
+        startReview,
+        startTurn,
+        platform: "darwin",
+        versions: {
+          electron: "41.2.1"
+        }
+      }
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Active background thread"
+    });
+
+    pasteComposerText(
+      await screen.findByRole("textbox", { name: "Reply" }),
+      "Start the active turn",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-a",
+          input: [{ type: "text", text: "Start the active turn" }],
+        })
+      );
+    });
+
+    pasteComposerText(
+      await screen.findByRole("textbox", { name: "Reply" }),
+      "/review main",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    expect(await screen.findByLabelText("Queued message")).toHaveTextContent(
+      "Review changes against main"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Focused thread/i }));
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Focused thread"
+    });
+
+    await act(async () => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-active",
+              turn: {
+                id: "turn-active",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-a",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+        delivery: "inline",
+      });
+    });
+    expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps assistant response text out of the thread header", async () => {
     const response =
       'I don\'t have a built-in "X Search" tool or direct real-time access to the X/Twitter API with the available workspace tools.';

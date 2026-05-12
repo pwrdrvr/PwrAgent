@@ -88,7 +88,8 @@ export function useQueuedTurnRelease(params: {
   useEffect(() => {
     const desktopApi = params.desktopApi;
     const startTurn = desktopApi?.startTurn;
-    if (!desktopApi?.onAgentEvent || !startTurn) {
+    const startReview = desktopApi?.startReview;
+    if (!desktopApi?.onAgentEvent || (!startTurn && !startReview)) {
       return;
     }
 
@@ -100,6 +101,10 @@ export function useQueuedTurnRelease(params: {
     ): Promise<void> => {
       inFlightScopeKeysRef.current.add(scopeKey);
       try {
+        let releaseState = current;
+        let releaseThread = thread;
+        let releaseQueuedSnapshot = queuedTurn;
+
         if (thread.gitBranch && current.desktopApi?.checkThreadBranchDrift) {
           const drift = await current.desktopApi.checkThreadBranchDrift({
             backend: thread.source,
@@ -111,21 +116,72 @@ export function useQueuedTurnRelease(params: {
           }
         }
 
-        const input = buildQueuedTurnInput(queuedTurn);
-        if (input.length === 0) {
-          current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
+        releaseState = paramsRef.current;
+        if (
+          releaseState.selectedThread?.source === thread.source &&
+          releaseState.selectedThread.id === thread.id
+        ) {
           return;
         }
 
-        const backend = current.backends.find(
-          (candidate) => candidate.kind === thread.source,
+        const latestQueuedTurn = releaseState.composerDraftStore.getQueuedTurn(scopeKey);
+        if (!latestQueuedTurn || latestQueuedTurn.id !== queuedTurn.id) {
+          return;
+        }
+        releaseQueuedSnapshot = latestQueuedTurn;
+
+        const latestThread = releaseState.threads.find(
+          (candidate) =>
+            candidate.source === thread.source && candidate.id === thread.id,
         );
-        if (!backend?.available || !backend.capabilities.startTurn) {
+        if (!latestThread) {
+          return;
+        }
+        releaseThread = latestThread;
+
+        const backend = releaseState.backends.find(
+          (candidate) => candidate.kind === releaseThread.source,
+        );
+        if (!backend?.available) {
+          return;
+        }
+
+        if (releaseQueuedSnapshot.reviewCommand) {
+          const startReview = releaseState.desktopApi?.startReview;
+          if (!startReview || !backend.capabilities.startReview) {
+            return;
+          }
+
+          await startReview({
+            backend: releaseThread.source,
+            threadId: releaseThread.id,
+            target: releaseQueuedSnapshot.reviewCommand.target,
+            delivery: "inline",
+          });
+          releaseState.composerDraftStore.removeQueuedTurnById(
+            scopeKey,
+            releaseQueuedSnapshot.id,
+          );
+          return;
+        }
+
+        const input = buildQueuedTurnInput(releaseQueuedSnapshot);
+        if (input.length === 0) {
+          releaseState.composerDraftStore.removeQueuedTurnById(
+            scopeKey,
+            releaseQueuedSnapshot.id,
+          );
+          return;
+        }
+
+        if (!startTurn || !backend.capabilities.startTurn) {
           return;
         }
 
         const selectedModelOption =
-          backend.launchpadOptions?.models?.find((option) => option.id === thread.model) ??
+          backend.launchpadOptions?.models?.find(
+            (option) => option.id === releaseThread.model,
+          ) ??
           getDefaultModelOption(backend);
         const supportsReasoning =
           selectedModelOption?.supportsReasoning ??
@@ -138,22 +194,25 @@ export function useQueuedTurnRelease(params: {
             : false;
 
         await startTurn({
-          backend: thread.source,
-          threadId: thread.id,
+          backend: releaseThread.source,
+          threadId: releaseThread.id,
           input,
-          executionMode: thread.executionMode,
+          executionMode: releaseThread.executionMode,
           model: selectedModelOption?.id,
           reasoningEffort: supportsReasoning
-            ? getReasoningEffortValue(backend, thread.reasoningEffort)
+            ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
             : undefined,
           serviceTier:
-            thread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
+            releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
           fastMode:
-            thread.source === "codex" && supportsFast
-              ? Boolean(thread.fastMode)
+            releaseThread.source === "codex" && supportsFast
+              ? Boolean(releaseThread.fastMode)
               : undefined,
         });
-        current.composerDraftStore.removeQueuedTurnById(scopeKey, queuedTurn.id);
+        releaseState.composerDraftStore.removeQueuedTurnById(
+          scopeKey,
+          releaseQueuedSnapshot.id,
+        );
       } finally {
         inFlightScopeKeysRef.current.delete(scopeKey);
       }
