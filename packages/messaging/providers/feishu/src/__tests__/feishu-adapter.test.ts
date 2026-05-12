@@ -173,6 +173,129 @@ describe("FeishuAdapter", () => {
     ]);
   });
 
+  it("strips bot mentions before parsing group chat commands", async () => {
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [{ id: "oc_chat", displayName: "Ops" }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_mention",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "group",
+          content: JSON.stringify({ text: "@_user_1 /help threads" }),
+          mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" }],
+          message_id: "om_message",
+          message_type: "text",
+        },
+      },
+    });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        args: ["threads"],
+        rawText: "/help threads",
+      }),
+    ]);
+  });
+
+  it("resolves group chat card callbacks against the delivered chat channel", async () => {
+    const store = fakeStore();
+    const spies: { sent: Array<{ card?: { elements?: unknown[] } }> } = { sent: [] };
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [{ id: "oc_chat", displayName: "Ops" }],
+      },
+      callbackHandleStore: store,
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+    await adapter.deliver({
+      id: "approval-1",
+      kind: "status",
+      createdAt: 1,
+      status: "waiting",
+      text: "Ship it?",
+      actions: [{ id: "approve", label: "Approve", value: "yes" }],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    const card = spies.sent[0]?.card as {
+      elements: Array<{ actions?: Array<{ value?: { handle?: string } }> }>;
+    };
+    const actionElement = card.elements.find((element) => Array.isArray(element.actions));
+    const handle = actionElement?.actions?.[0]?.value?.handle;
+    expect(handle).toEqual(expect.any(String));
+
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_card",
+        event_type: "card.action.trigger",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        operator: { open_id: "ou_user" },
+        tenant_key: "tenant_1",
+        context: {
+          open_chat_id: "oc_chat",
+          open_message_id: "om_sent",
+        },
+        action: {
+          value: { handle },
+        },
+      },
+    });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "callback",
+        actionId: "approve",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },
+        },
+      }),
+    ]);
+  });
+
   it("parses Feishu approval click command bodies", () => {
     expect(parseFeishuCommandText("/cas_click abc123")).toEqual({
       command: "cas_click",

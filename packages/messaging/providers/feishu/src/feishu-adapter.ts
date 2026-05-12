@@ -164,6 +164,7 @@ type FeishuCardActionEvent = {
     value?: Record<string, unknown>;
   };
   context?: {
+    open_chat_id?: string;
     open_message_id?: string;
   };
   operator?: {
@@ -173,6 +174,12 @@ type FeishuCardActionEvent = {
   };
   tenant_key?: string;
   token?: string;
+};
+
+type FeishuSignedCallbackChannel = {
+  i: string;
+  k: "dm" | "channel";
+  p?: string;
 };
 
 export class FeishuAdapter implements FeishuProviderAdapter {
@@ -586,6 +593,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
 
     const text = extractFeishuText(message.content);
+    const messageText = stripBotMentions(text, message.mentions);
     const eventBase = {
       id: payload.header?.event_id ?? ids.messageId,
       actor,
@@ -593,15 +601,15 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       receivedAt: this.now(),
       routingState,
     };
-    const command = parseFeishuCommandText(text);
-    const pairingToken = extractMessagingPairingToken(text);
+    const command = parseFeishuCommandText(messageText);
+    const pairingToken = extractMessagingPairingToken(messageText);
     const inbound: MessagingInboundEvent = command
       ? {
           ...eventBase,
           kind: "command",
           command: command.command,
           args: command.args,
-          rawText: text,
+          rawText: messageText,
         }
       : pairingToken
         ? {
@@ -609,12 +617,12 @@ export class FeishuAdapter implements FeishuProviderAdapter {
             kind: "command",
             command: "pair",
             args: [pairingToken],
-            rawText: text,
+            rawText: messageText,
           }
         : {
             ...eventBase,
             kind: "text",
-            text: stripBotMentions(text, message.mentions),
+            text: messageText,
           };
     await this.listener?.(inbound);
   }
@@ -663,14 +671,14 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
     const actorId = openId as string;
     const actor = { platformUserId: actorId };
-    const channelRef: MessagingChannelRef = {
-      channel: this.channel,
-      conversation: {
-        id: actorId,
-        kind: "dm",
-        ...(tenantKey ? { parentId: tenantKey } : {}),
-      },
-    };
+    const channelRef =
+      signed.channel
+      ?? this.cardActionChannelRef({
+        actorId,
+        chatId: event?.context?.open_chat_id,
+        tenantKey,
+      });
+    if (!channelRef) return;
     const record = await this.callbackHandleStore.resolveCallbackHandle({
       actorId,
       channel: channelRef,
@@ -761,7 +769,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         .digest("base64url")
         .slice(0, 18)}`;
       const issuedAt = this.now();
-      const sig = this.signCallbackValue(handle, params.intent.id, issuedAt);
+      const signedChannel = signedCallbackChannelFor(params.channelRef);
+      const sig = this.signCallbackValue(handle, params.intent.id, issuedAt, signedChannel);
       const surface = {
         channel: this.channel,
         id: params.intent.id,
@@ -796,6 +805,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         v: FEISHU_SIGNED_VALUE_VERSION,
         h: handle,
         i: params.intent.id,
+        c: signedChannel,
         t: issuedAt,
         s: sig,
       });
@@ -804,7 +814,12 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
   private parseSignedCallbackValue(
     value: string,
-  ): { handle: string; intentId: string; issuedAt: number } | undefined {
+  ): {
+    channel?: MessagingChannelRef;
+    handle: string;
+    intentId: string;
+    issuedAt: number;
+  } | undefined {
     let parsed: unknown;
     try {
       parsed = JSON.parse(value);
@@ -813,6 +828,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
     const record = parsed as {
       h?: unknown;
+      c?: unknown;
       i?: unknown;
       s?: unknown;
       t?: unknown;
@@ -827,21 +843,82 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     ) {
       return undefined;
     }
-    const expected = this.signCallbackValue(record.h, record.i, record.t);
+    const signedChannel = parseSignedCallbackChannel(record.c);
+    if (record.c !== undefined && !signedChannel) return undefined;
+    const expected = this.signCallbackValue(record.h, record.i, record.t, signedChannel);
     if (!safeEqual(expected, record.s)) {
       this.logger.warn?.("feishu callback signature rejected", {
         handleHash: createHash("sha256").update(record.h).digest("hex").slice(0, 8),
       });
       return undefined;
     }
-    return { handle: record.h, intentId: record.i, issuedAt: record.t };
+    return {
+      handle: record.h,
+      intentId: record.i,
+      issuedAt: record.t,
+      ...(signedChannel ? { channel: channelRefFromSignedCallbackChannel(signedChannel) } : {}),
+    };
   }
 
-  private signCallbackValue(handle: string, intentId: string, issuedAt: number): string {
+  private signCallbackValue(
+    handle: string,
+    intentId: string,
+    issuedAt: number,
+    channel?: FeishuSignedCallbackChannel,
+  ): string {
     return createHmac("sha256", this.signingSecret)
-      .update(JSON.stringify([handle, intentId, issuedAt]))
+      .update(JSON.stringify(channel
+        ? [handle, intentId, issuedAt, channel]
+        : [handle, intentId, issuedAt]))
       .digest("base64url")
       .slice(0, 32);
+  }
+
+  private cardActionChannelRef(params: {
+    actorId: string;
+    chatId?: unknown;
+    tenantKey?: unknown;
+  }): MessagingChannelRef | undefined {
+    if (params.chatId !== undefined) {
+      const chatValidation = validateFeishuChatId(params.chatId);
+      if (!chatValidation.ok) {
+        logFeishuInvalidIdentifier({
+          field: "chat_id",
+          logger: this.logger,
+          reason: chatValidation.reason,
+          value: params.chatId,
+        });
+        return undefined;
+      }
+      if (params.tenantKey !== undefined) {
+        const tenantValidation = validateFeishuTenantKey(params.tenantKey);
+        if (!tenantValidation.ok) {
+          logFeishuInvalidIdentifier({
+            field: "tenant_key",
+            logger: this.logger,
+            reason: tenantValidation.reason,
+            value: params.tenantKey,
+          });
+          return undefined;
+        }
+      }
+      return {
+        channel: this.channel,
+        conversation: {
+          id: params.chatId as string,
+          kind: "channel",
+          ...(params.tenantKey ? { parentId: params.tenantKey as string } : {}),
+        },
+      };
+    }
+
+    return {
+      channel: this.channel,
+      conversation: {
+        id: params.actorId,
+        kind: "dm",
+      },
+    };
   }
 
   private validateInboundIds(params: {
@@ -1245,6 +1322,48 @@ function stripBotMentions(
     if (mention.key) stripped = stripped.replaceAll(mention.key, "");
   }
   return stripped.trim();
+}
+
+function signedCallbackChannelFor(channelRef: MessagingChannelRef): FeishuSignedCallbackChannel {
+  return {
+    i: channelRef.conversation.id,
+    k: channelRef.conversation.kind === "dm" ? "dm" : "channel",
+    ...(channelRef.conversation.parentId ? { p: channelRef.conversation.parentId } : {}),
+  };
+}
+
+function parseSignedCallbackChannel(value: unknown): FeishuSignedCallbackChannel | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as { i?: unknown; k?: unknown; p?: unknown };
+  if (
+    typeof record.i !== "string"
+    || (record.k !== "dm" && record.k !== "channel")
+    || (record.p !== undefined && typeof record.p !== "string")
+  ) {
+    return undefined;
+  }
+  const idValidation =
+    record.k === "dm" ? validateFeishuOpenId(record.i) : validateFeishuChatId(record.i);
+  if (!idValidation.ok) return undefined;
+  if (record.p !== undefined && !validateFeishuTenantKey(record.p).ok) return undefined;
+  return {
+    i: record.i,
+    k: record.k,
+    ...(record.p !== undefined ? { p: record.p } : {}),
+  };
+}
+
+function channelRefFromSignedCallbackChannel(
+  channel: FeishuSignedCallbackChannel,
+): MessagingChannelRef {
+  return {
+    channel: "feishu",
+    conversation: {
+      id: channel.i,
+      kind: channel.k,
+      ...(channel.p ? { parentId: channel.p } : {}),
+    },
+  };
 }
 
 function callbackAllowedActorIds(

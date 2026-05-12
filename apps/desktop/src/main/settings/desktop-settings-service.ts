@@ -125,6 +125,8 @@ type ConfigReadResult = {
 
 const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
+const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
+const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
 const settingsLog = getMainLogger("pwragent:settings");
 
 function clampInteger(value: number, maxValue: number): number {
@@ -245,6 +247,9 @@ export class DesktopSettingsService {
       argv: this.argv,
       env: this.env,
     });
+    const feishuTenantRegion = this.resolveFeishuTenantRegion(
+      config.messaging?.feishu?.tenantRegion,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -444,13 +449,10 @@ export class DesktopSettingsService {
           appSecret: feishuAppSecret,
           encryptKey: feishuEncryptKey,
           verificationToken: feishuVerificationToken,
-          tenantRegion: this.resolveFeishuTenantRegion(
-            config.messaging?.feishu?.tenantRegion,
-          ),
-          tenantUrl: this.resolveStringWithDefault(
+          tenantRegion: feishuTenantRegion,
+          tenantUrl: this.resolveFeishuTenantUrl(
             config.messaging?.feishu?.tenantUrl,
-            "https://open.feishu.cn",
-            FEISHU_TENANT_URL_ENV,
+            feishuTenantRegion.value,
           ),
           callbackBaseUrl: this.resolveStringWithDefault(
             config.messaging?.feishu?.callbackBaseUrl,
@@ -646,10 +648,13 @@ export class DesktopSettingsService {
   }
 
   resolveFeishuTenantUrlSync(): string | undefined {
+    const config = this.readConfig().config.messaging?.feishu;
     return (
       readEnvString(this.env, FEISHU_TENANT_URL_ENV)
-      ?? this.readConfig().config.messaging?.feishu?.tenantUrl
-      ?? "https://open.feishu.cn"
+      ?? config?.tenantUrl
+      ?? feishuTenantUrlForRegion(
+        this.resolveFeishuTenantRegion(config?.tenantRegion).value,
+      )
     );
   }
 
@@ -930,6 +935,25 @@ export class DesktopSettingsService {
     };
   }
 
+  private resolveFeishuTenantUrl(
+    configValue: string | undefined,
+    tenantRegion: "feishu" | "lark",
+  ): DesktopSettingsValue<string> {
+    const envValue = readEnvString(this.env, FEISHU_TENANT_URL_ENV);
+    if (envValue !== undefined) {
+      return {
+        value: envValue,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? feishuTenantUrlForRegion(tenantRegion),
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
   private resolveConfigString(
     configValue: string | undefined,
   ): DesktopSettingsValue<string> {
@@ -1045,4 +1069,8 @@ export class DesktopSettingsService {
       ?? this.options.secretStore.getSecretSync?.(secret)
     );
   }
+}
+
+function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {
+  return region === "lark" ? LARK_DEFAULT_TENANT_URL : FEISHU_DEFAULT_TENANT_URL;
 }
