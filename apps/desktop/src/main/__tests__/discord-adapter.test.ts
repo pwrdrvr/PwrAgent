@@ -68,6 +68,10 @@ describe("DiscordAdapter", () => {
           description: "Detach this conversation from its current PwrAgent thread.",
           name: "detach",
         }),
+        createApplicationCommand("cmd-monitor", {
+          description: "Monitor recent PwrAgent threads once per minute.",
+          name: "monitor",
+        }),
       ],
     });
     const adapter = new DiscordAdapter({
@@ -129,11 +133,17 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(1);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(2);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
         name: "detach",
+      }),
+    );
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      DISCORD_APP_ID,
+      expect.objectContaining({
+        name: "monitor",
       }),
     );
   });
@@ -155,7 +165,7 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(3);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(4);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
