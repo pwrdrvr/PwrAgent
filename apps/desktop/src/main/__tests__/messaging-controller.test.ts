@@ -10,6 +10,7 @@ import type {
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
+  MessagingInteractionMode,
   MessagingToolUpdateMode,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
@@ -145,6 +146,33 @@ describe("MessagingController", () => {
       },
     });
     expect(JSON.stringify(harness.delivered[0])).not.toContain("thread-1");
+  });
+
+  it("renders action intents as text prompts when interaction mode is text", async () => {
+    const harness = await createHarness({ interactionModeDefault: "text" });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    const delivered = harness.delivered[0];
+    expect(delivered).toMatchObject({
+      kind: "thread_picker",
+      prompt: expect.stringContaining("Reply with: 1, projects, new, cancel."),
+      fallbackText: undefined,
+      page: {
+        actions: [],
+      },
+    });
+    const pending = await harness.store.getPendingIntent(delivered!.id, {
+      now: 1000,
+    });
+    expect(pending?.intent).toMatchObject({
+      kind: "thread_picker",
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:select-thread" }),
+        ]),
+      },
+    });
   });
 
   it("shows projects from /resume --projects and filters threads after a project click", async () => {
@@ -7108,6 +7136,7 @@ async function createHarness(options?: {
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   handoff?: false;
   inputDebounceMs?: number;
+  interactionModeDefault?: MessagingInteractionMode;
   logger?: MessagingControllerOptions["logger"];
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
@@ -7400,6 +7429,7 @@ async function createHarness(options?: {
     channel: options?.channel,
     deliveryBudget: options?.deliveryBudget,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
+    interactionModeDefault: options?.interactionModeDefault,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
     fullAccessControls: options?.fullAccessControls ?? {

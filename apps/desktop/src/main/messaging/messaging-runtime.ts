@@ -829,6 +829,8 @@ export class DesktopMessagingRuntime {
       channel: adapter.channel,
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
+      interactionModeDefault: async () =>
+        interactionModeDefaultForChannel(await this.loadConfig(), adapter.channel),
       store,
       streamingResponsesDefault: streamingResponsesDefaultForChannel(
         config,
@@ -2103,6 +2105,17 @@ function streamingResponsesDefaultForChannel(
     default:
       return false;
   }
+}
+
+function interactionModeDefaultForChannel(
+  config: DesktopMessagingConfig,
+  channel: MessagingChannelKind,
+): "buttons" | "text" {
+  return (
+    config.interactionModeByChannel?.[channel]
+    ?? config.interactionModeDefault
+    ?? "buttons"
+  );
 }
 
 function definedCredentialMetadata(
