@@ -24,6 +24,12 @@ import {
 } from "@pwragent/messaging-interface";
 
 export const MESSAGING_MONITOR_INTERVAL_MS = 60_000;
+export const MESSAGING_MONITOR_INTERVAL_OPTIONS_MS = [
+  10_000,
+  30_000,
+  60_000,
+  5 * 60_000,
+] as const;
 export const MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT = 5;
 export const MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT = 5;
 export const MESSAGING_MONITOR_THREAD_LIMIT =
@@ -103,6 +109,7 @@ export function buildMonitorStatusIntent(params: {
     ].join("\n"),
     actions: buildMonitorActions({
       pinnedThreadLimit: selection.pinnedThreadLimit,
+      intervalMs: monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
       profile: params.capabilityProfile,
       recentThreadLimit: selection.recentThreadLimit,
       showSnippets: monitor?.showLastResponseSnippet === true,
@@ -167,7 +174,31 @@ export function nextMonitorThreadLimit(value: number | undefined): number {
   return MESSAGING_MONITOR_THREAD_LIMIT_OPTIONS[nextIndex];
 }
 
+export function normalizeMonitorIntervalMs(
+  value: number | undefined,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const positive = Math.max(0, value);
+  return MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.reduce((nearest, option) =>
+    Math.abs(option - positive) < Math.abs(nearest - positive) ? option : nearest,
+  );
+}
+
+export function nextMonitorIntervalMs(value: number | undefined): number {
+  const current = normalizeMonitorIntervalMs(value, MESSAGING_MONITOR_INTERVAL_MS);
+  const index = MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.indexOf(
+    current as (typeof MESSAGING_MONITOR_INTERVAL_OPTIONS_MS)[number],
+  );
+  const nextIndex =
+    index === -1 ? 0 : (index + 1) % MESSAGING_MONITOR_INTERVAL_OPTIONS_MS.length;
+  return MESSAGING_MONITOR_INTERVAL_OPTIONS_MS[nextIndex];
+}
+
 function buildMonitorActions(params: {
+  intervalMs: number;
   pinnedThreadLimit: number;
   profile?: MessagingCapabilityProfile;
   recentThreadLimit: number;
@@ -210,18 +241,27 @@ function buildMonitorActions(params: {
         priority: 4,
       },
       {
+        id: "monitor:interval",
+        label: `Interval: ${formatCompactInterval(params.intervalMs)}`,
+        style: "secondary",
+        fallbackText: `monitor interval ${formatCompactInterval(
+          nextMonitorIntervalMs(params.intervalMs),
+        )}`,
+        priority: 5,
+      },
+      {
         id: "monitor:status",
         label: `Status: ${params.showStatusLine ? "Line" : "Inline"}`,
         style: "secondary",
         fallbackText: `monitor status ${params.showStatusLine ? "inline" : "line"}`,
-        priority: 5,
+        priority: 6,
       },
       {
         id: "monitor:snippet",
         label: `Snippet: ${params.showSnippets ? "On" : "Off"}`,
         style: "secondary",
         fallbackText: `monitor snippet ${params.showSnippets ? "off" : "on"}`,
-        priority: 6,
+        priority: 7,
       },
     ],
     profile,
@@ -407,6 +447,17 @@ function formatTimeOfDay(epochMs: number): string {
 }
 
 function formatInterval(intervalMs: number): string {
+  if (intervalMs < 60_000) {
+    const seconds = Math.max(1, Math.round(intervalMs / 1000));
+    return `${seconds} sec`;
+  }
   const minutes = Math.max(1, Math.round(intervalMs / 60_000));
   return `${minutes} min`;
+}
+
+function formatCompactInterval(intervalMs: number): string {
+  if (intervalMs < 60_000) {
+    return `${Math.max(1, Math.round(intervalMs / 1000))}s`;
+  }
+  return `${Math.max(1, Math.round(intervalMs / 60_000))}m`;
 }

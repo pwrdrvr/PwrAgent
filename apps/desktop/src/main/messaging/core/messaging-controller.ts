@@ -56,7 +56,9 @@ import {
   MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
   MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
   MESSAGING_MONITOR_INTERVAL_MS,
+  nextMonitorIntervalMs,
   nextMonitorThreadLimit,
+  normalizeMonitorIntervalMs,
   normalizeMonitorThreadLimit,
   selectMonitorThreads,
 } from "./messaging-monitor-card.js";
@@ -144,17 +146,20 @@ type MonitorCommandAction =
   | { kind: "start" }
   | { kind: "stop" }
   | { kind: "refresh" }
+  | { kind: "cycle-interval" }
   | { kind: "cycle-pinned" }
   | { kind: "cycle-recent" }
   | { kind: "toggle-snippet" }
   | { kind: "toggle-status-line" }
   | { kind: "set-pinned"; count: number }
+  | { kind: "set-interval"; intervalMs: number }
   | { kind: "set-recent"; count: number }
   | { kind: "set-snippet"; enabled: boolean }
   | { kind: "set-status-line"; enabled: boolean };
 
 type MonitorStateOptions = Pick<
   MessagingMonitorState,
+  | "intervalMs"
   | "pinnedThreadLimit"
   | "recentThreadLimit"
   | "showLastResponseSnippet"
@@ -3460,8 +3465,7 @@ export class MessagingController {
       monitor: {
         ...existing?.monitor,
         enabled: true,
-        intervalMs:
-          existing?.monitor.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
+        intervalMs: monitorOptions.intervalMs,
         lastRenderedAt: existing?.monitor.lastRenderedAt,
         pinnedThreadLimit: monitorOptions.pinnedThreadLimit,
         recentThreadLimit: monitorOptions.recentThreadLimit,
@@ -3471,6 +3475,9 @@ export class MessagingController {
       },
       monitorSurface: existing?.monitorSurface,
     });
+    if (existing) {
+      this.clearMonitorSubscriptionTimer(existing.id);
+    }
     try {
       const rendered = await this.renderChannelMonitorStatus(subscription, event);
       this.scheduleMonitorSubscriptionTick(rendered);
@@ -6012,6 +6019,16 @@ function normalizeMonitorCommandAction(
   if (normalized === "refresh" || normalized === "now") {
     return { kind: "refresh" };
   }
+  if (
+    normalized === "interval" ||
+    normalized === "every" ||
+    normalized === "frequency"
+  ) {
+    const intervalMs = parseMonitorIntervalArg(args?.[1]);
+    return typeof intervalMs === "number"
+      ? { kind: "set-interval", intervalMs }
+      : { kind: "cycle-interval" };
+  }
   if (normalized === "pins" || normalized === "pin") {
     const count = parseMonitorCountArg(args?.[1]);
     return typeof count === "number"
@@ -6052,6 +6069,9 @@ function normalizeMonitorCommandAction(
 }
 
 function normalizeMonitorCallbackAction(actionId: string): MonitorCommandAction {
+  if (actionId === "monitor:interval") {
+    return { kind: "cycle-interval" };
+  }
   if (actionId === "monitor:pins") {
     return { kind: "cycle-pinned" };
   }
@@ -6075,6 +6095,10 @@ function resolveMonitorStateOptions(
     monitor?.pinnedThreadLimit,
     MESSAGING_MONITOR_DEFAULT_PINNED_THREAD_LIMIT,
   );
+  const currentIntervalMs = normalizeMonitorIntervalMs(
+    monitor?.intervalMs,
+    MESSAGING_MONITOR_INTERVAL_MS,
+  );
   const currentRecent = normalizeMonitorThreadLimit(
     monitor?.recentThreadLimit,
     MESSAGING_MONITOR_DEFAULT_RECENT_THREAD_LIMIT,
@@ -6085,6 +6109,7 @@ function resolveMonitorStateOptions(
   switch (action.kind) {
     case "cycle-pinned":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: nextMonitorThreadLimit(currentPinned),
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
@@ -6092,13 +6117,23 @@ function resolveMonitorStateOptions(
       };
     case "cycle-recent":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: nextMonitorThreadLimit(currentRecent),
         showLastResponseSnippet: currentShowSnippet,
         showStatusLine: currentShowStatusLine,
       };
+    case "cycle-interval":
+      return {
+        intervalMs: nextMonitorIntervalMs(currentIntervalMs),
+        pinnedThreadLimit: currentPinned,
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
+      };
     case "toggle-status-line":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
@@ -6106,6 +6141,7 @@ function resolveMonitorStateOptions(
       };
     case "toggle-snippet":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: !currentShowSnippet,
@@ -6113,13 +6149,23 @@ function resolveMonitorStateOptions(
       };
     case "set-pinned":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: normalizeMonitorThreadLimit(action.count, currentPinned),
+        recentThreadLimit: currentRecent,
+        showLastResponseSnippet: currentShowSnippet,
+        showStatusLine: currentShowStatusLine,
+      };
+    case "set-interval":
+      return {
+        intervalMs: normalizeMonitorIntervalMs(action.intervalMs, currentIntervalMs),
+        pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
         showStatusLine: currentShowStatusLine,
       };
     case "set-recent":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: normalizeMonitorThreadLimit(action.count, currentRecent),
         showLastResponseSnippet: currentShowSnippet,
@@ -6127,6 +6173,7 @@ function resolveMonitorStateOptions(
       };
     case "set-status-line":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
@@ -6134,6 +6181,7 @@ function resolveMonitorStateOptions(
       };
     case "set-snippet":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: action.enabled,
@@ -6143,6 +6191,7 @@ function resolveMonitorStateOptions(
     case "start":
     case "stop":
       return {
+        intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
         recentThreadLimit: currentRecent,
         showLastResponseSnippet: currentShowSnippet,
@@ -6157,6 +6206,28 @@ function parseMonitorCountArg(arg: string | undefined): number | undefined {
   }
   const parsed = Number(arg.trim());
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseMonitorIntervalArg(arg: string | undefined): number | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  const match = normalized.match(
+    /^(\d+(?:\.\d+)?)(?:\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes))?$/,
+  );
+  if (!match) {
+    return undefined;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  const unit = match[2];
+  if (unit?.startsWith("m")) {
+    return value * 60_000;
+  }
+  return value * 1000;
 }
 
 function parseMonitorStatusLineArg(arg: string | undefined): boolean | undefined {

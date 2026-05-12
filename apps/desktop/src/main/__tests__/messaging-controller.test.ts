@@ -2184,6 +2184,58 @@ describe("MessagingController", () => {
     });
   });
 
+  it("configures Monitor interval from commands and buttons", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor interval 30s"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 30 sec"),
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          intervalMs: 30_000,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({ actionId: "monitor:interval" }),
+      );
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 1 min"),
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/monitor").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          intervalMs: 60_000,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor every 5m"));
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining("Interval: 5 min"),
+      });
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("configures Monitor status detail lines and response snippets", async () => {
     const harness = await createHarness({
       readThreadLastAssistantMessage: async (request) =>

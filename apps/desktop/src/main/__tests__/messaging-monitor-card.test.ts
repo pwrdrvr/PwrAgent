@@ -46,6 +46,11 @@ describe("buildMonitorStatusIntent", () => {
           label: "Recent: 5",
         }),
         expect.objectContaining({
+          id: "monitor:interval",
+          fallbackText: "monitor interval 5m",
+          label: "Interval: 1m",
+        }),
+        expect.objectContaining({
           id: "monitor:status",
           fallbackText: "monitor status line",
           label: "Status: Inline",
@@ -183,6 +188,32 @@ describe("buildMonitorStatusIntent", () => {
           id: "monitor:recent",
           fallbackText: "monitor recent 0",
           label: "Recent: 10",
+        }),
+      ]),
+    );
+  });
+
+  it("can render short monitor intervals", () => {
+    const intent = buildMonitorStatusIntent({
+      binding: buildBinding({
+        monitor: {
+          enabled: true,
+          intervalMs: 30_000,
+          updatedAt: 1000,
+        },
+      }),
+      createdAt: 121_000,
+      id: "monitor-1",
+      navigation: buildNavigationSnapshot(),
+    });
+
+    expect(intent.text).toContain("Interval: 30 sec");
+    expect(intent.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "monitor:interval",
+          fallbackText: "monitor interval 1m",
+          label: "Interval: 30s",
         }),
       ]),
     );
