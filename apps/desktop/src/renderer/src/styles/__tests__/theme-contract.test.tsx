@@ -215,6 +215,24 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("the header reclaims the space");
   });
 
+  it("keeps hidden thread row actions from stealing row clicks", () => {
+    const actionsRule = extractRuleBody(css, ".thread-row__actions");
+
+    expect(actionsRule).toContain("pointer-events: none;");
+    expect(css).toMatch(
+      /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
+    );
+  });
+
+  it("hides thread row timestamps behind focused or open row actions", () => {
+    expect(css).toMatch(
+      /\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+    );
+  });
+
   it("keeps composer autocomplete visually separated from transcript surfaces", () => {
     const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
 

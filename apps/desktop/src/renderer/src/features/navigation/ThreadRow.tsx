@@ -180,9 +180,10 @@ export function ThreadRow(props: ThreadRowProps) {
         </span>
 
         {/* Single ordered chip flow: meta (agent/mode/dir/branch/drift)
-            → PR chips → messaging binding chips → reactions → add-
-            reaction. flex-wrap handles overflow naturally; every chip
-            is a sibling, no per-type containers. */}
+            → PR chips → messaging binding chips → reactions. flex-wrap
+            handles content overflow naturally; the hover-only add-
+            reaction affordance is positioned outside the flow so it
+            cannot reserve a phantom wrapped row while hidden. */}
         <span
           className="thread-row__chips"
           onMouseEnter={prs.length > 0 ? armHoverPrefetch : undefined}
@@ -230,16 +231,38 @@ export function ThreadRow(props: ThreadRowProps) {
               onToggle={() => toggleReaction(emoji)}
             />
           ))}
-
-          {canReact ? (
-            <AddReactionChip
-              anchorRef={addReactionRef}
-              open={pickerOpen}
-              onToggle={() => setPickerOpen((open) => !open)}
-            />
-          ) : null}
         </span>
+
       </button>
+
+      <div className="thread-row__actions">
+        {canReact ? (
+          <AddReactionChip
+            anchorRef={addReactionRef}
+            open={pickerOpen}
+            onToggle={() => setPickerOpen((open) => !open)}
+          />
+        ) : null}
+
+        <button
+          aria-haspopup="menu"
+          aria-label="Open thread actions"
+          className="thread-row__overflow-button"
+          title={`Open thread actions for ${props.thread.title}`}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            props.onOpenContextMenu(props.thread, {
+              x: rect.left,
+              y: rect.bottom + 4,
+              anchorTop: rect.top,
+            });
+          }}
+        >
+          ...
+        </button>
+      </div>
 
       {canReact ? (
         <ReactionPicker
@@ -253,25 +276,6 @@ export function ThreadRow(props: ThreadRowProps) {
           onDismiss={() => setPickerOpen(false)}
         />
       ) : null}
-
-      <button
-        aria-haspopup="menu"
-        aria-label="Open thread actions"
-        className="thread-row__overflow-button"
-        title={`Open thread actions for ${props.thread.title}`}
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          props.onOpenContextMenu(props.thread, {
-            x: rect.left,
-            y: rect.bottom + 4,
-            anchorTop: rect.top,
-          });
-        }}
-      >
-        ...
-      </button>
     </div>
   );
 }

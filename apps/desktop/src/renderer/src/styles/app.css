@@ -1205,11 +1205,19 @@ textarea,
   pointer-events: none;
 }
 
-.thread-row__overflow-button {
+.thread-row__actions {
   position: absolute;
   top: 9px;
   right: 9px;
-  z-index: 1;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.thread-row__overflow-button {
+  position: static;
   display: grid;
   width: 30px;
   height: 26px;
@@ -1232,7 +1240,9 @@ textarea,
 }
 
 .thread-row-shell:hover .thread-row__time,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time {
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row__time,
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row__time {
   opacity: 0;
 }
 
@@ -1249,10 +1259,10 @@ textarea,
   color: var(--accent-bright);
 }
 
-/* Reaction + add-reaction chips share the .thread-row__chip primitive
+/* Reaction + add-reaction controls share the .thread-row__chip primitive
    below; only their content (emoji glyph) differs from a meta chip.
-   These rules layer the per-variant tweaks (slightly larger glyph
-   font-size, hover-only visibility for the add chip) on top. */
+   The add control is a hover-only row affordance, positioned outside the
+   wrapping chip flow so it does not reserve hidden layout space. */
 
 .thread-row__chip--reaction,
 .thread-row__chip--add-reaction {
@@ -1267,19 +1277,25 @@ textarea,
 }
 
 .thread-row__chip--reaction:hover,
-.thread-row__chip--reaction:focus-visible,
-.thread-row__chip--add-reaction:hover,
-.thread-row__chip--add-reaction:focus-visible,
-.thread-row__chip--add-reaction.is-open {
+.thread-row__chip--reaction:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
   outline: none;
 }
 
+.thread-row__chip--add-reaction:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .thread-row__chip--add-reaction {
+  position: static;
   /* Mute the add affordance until the user is interacting with the
      row; revealed on hover, focus, or while the picker is open. */
   opacity: 0;
+  pointer-events: none;
   /* SVG glyph uses --text-secondary so it reads as a soft gray —
      matches the design and avoids competing with the actual reaction
      chips next to it. The reaction chips above still use
@@ -1289,8 +1305,7 @@ textarea,
   transition:
     background 120ms ease,
     border-color 120ms ease,
-    color 120ms ease,
-    opacity 120ms ease;
+    color 120ms ease;
 }
 
 .thread-row__chip--add-reaction:hover,
@@ -1306,6 +1321,7 @@ textarea,
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .reaction-picker {
@@ -1527,11 +1543,10 @@ textarea,
   line-height: 1.45;
 }
 
-/* Single ordered chip flow per thread row. All chip types — meta
-   (agent/mode/dir/branch/drift), PR chips, messaging binding chips,
-   reactions, add-reaction — render as siblings in this one wrapping
-   flex container. flex-wrap handles overflow naturally; no per-type
-   container, no absolute positioning. */
+/* Single ordered content chip flow per thread row. Meta
+   (agent/mode/dir/branch/drift), PR chips, messaging binding chips, and
+   reactions render as siblings in this one wrapping flex container.
+   flex-wrap handles overflow naturally; no per-type containers. */
 .thread-row__chips {
   display: flex;
   flex-wrap: wrap;
@@ -1563,6 +1578,18 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-row__chip.thread-row__chip--add-reaction {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.thread-row__chip.thread-row__chip--add-reaction:hover,
+.thread-row__chip.thread-row__chip--add-reaction:focus-visible,
+.thread-row__chip.thread-row__chip--add-reaction.is-open {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
 }
 
 .thread-row__chip--backend {
