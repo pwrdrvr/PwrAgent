@@ -4935,15 +4935,19 @@ export class MessagingController {
         snippetsByThreadKey,
       }),
       allowedActorIds: subscription.authorizedActorIds,
-      audit: buildMessagingAuditContext({
-        action: "monitor.deliver",
-        actor: event?.actor ?? {
-          platformUserId: subscription.authorizedActorIds[0] ?? "unknown",
-        },
-        bindingId: subscription.id,
-        channel: subscription.channel,
-        now,
-      }),
+      ...(event
+        ? {}
+        : {
+            audit: buildMessagingAuditContext({
+              action: "monitor.deliver",
+              actor: {
+                platformUserId: subscription.authorizedActorIds[0] ?? "unknown",
+              },
+              bindingId: subscription.id,
+              channel: subscription.channel,
+              now,
+            }),
+          }),
     };
     const result = await this.deliver(intent, undefined, event);
     if (isPermanentMessagingTargetFailure(result)) {

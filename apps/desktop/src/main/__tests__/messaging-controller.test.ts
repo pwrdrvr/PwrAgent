@@ -2088,6 +2088,41 @@ describe("MessagingController", () => {
     });
   });
 
+  it("preserves command routing state for the initial Monitor render", async () => {
+    const harness = await createHarness();
+    const event = {
+      ...buildCommandEvent("/monitor"),
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "channel-1",
+          kind: "channel",
+          parentId: "guild-1",
+        },
+      },
+      routingState: {
+        opaque: {
+          applicationId: "app-1",
+          interactionToken: "interaction-token-1",
+        },
+      },
+    } satisfies MessagingInboundEvent & { kind: "command" };
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      audit: expect.objectContaining({
+        channel: event.channel,
+      }),
+      targetSurface: {
+        channel: "discord",
+        id: event.id,
+        state: event.routingState,
+      },
+    });
+  });
+
   it("starts Monitor for a bound conversation without changing the thread binding", async () => {
     const harness = await createHarness();
     await bindThread(harness);
