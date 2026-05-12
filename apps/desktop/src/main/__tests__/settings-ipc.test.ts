@@ -8,6 +8,9 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
+const childProcessMocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
+}));
 const providerMocks = vi.hoisted(() => ({
   resolveTelegramContact: vi.fn(),
   resolveDiscordContact: vi.fn(),
@@ -38,6 +41,10 @@ vi.mock("electron", () => ({
     decryptString: vi.fn(),
     isEncryptionAvailable: vi.fn(() => false),
   },
+}));
+
+vi.mock("node:child_process", () => ({
+  execFile: childProcessMocks.execFile,
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -97,6 +104,19 @@ describe("settings ipc", () => {
     runtimeMock.getPlatformCredentialMetadata.mockReset();
     runtimeMock.isEnabled.mockClear();
     runtimeMock.requestCredentialValidation.mockReset();
+    childProcessMocks.execFile.mockReset();
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: NodeJS.ErrnoException) => void,
+      ) => {
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        callback(error);
+      },
+    );
   });
 
   it("registers redacted read and write handlers", async () => {
@@ -239,6 +259,60 @@ describe("settings ipc", () => {
     );
 
     expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not run the saved Codex path when discovery rejected it", async () => {
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: undefined,
+              candidates: [
+                {
+                  command: "/opt/homebrew/bin/codex",
+                  executable: false,
+                  failureReason: "codex_too_old",
+                  selected: false,
+                  source: "path",
+                  version: "0.94.0",
+                },
+              ],
+            },
+            path: {
+              value: "/opt/homebrew/bin/codex",
+            },
+          },
+        },
+      })),
+      resolveTelegramBotTokenSync: vi.fn(),
+      resolveDiscordBotTokenSync: vi.fn(),
+      resolveMattermostBotTokenSync: vi.fn(),
+      resolveMattermostServerUrlSync: vi.fn(),
+      resolveSlackBotTokenSync: vi.fn(),
+      resolveLineChannelAccessTokenSync: vi.fn(),
+      resolveGrokApiKey: vi.fn(),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_TEST_CREDENTIALS_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_TEST_CREDENTIALS_CHANNEL)?.(
+        {},
+        { kind: "codex" },
+      ),
+    ).resolves.toMatchObject({
+      kind: "codex",
+      status: "unset",
+    });
+    expect(childProcessMocks.execFile).not.toHaveBeenCalled();
+
+    disposeSettingsIpcHandlers();
   });
 
   it("hot-applies messaging config writes without defeating a launch disable override", async () => {

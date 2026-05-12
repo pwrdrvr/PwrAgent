@@ -270,6 +270,21 @@ describe("CredentialTester", () => {
       expect(result.detail).toBe("0.128.0-alpha.1");
     });
 
+    it("returns failed when the parsed Codex version is too old", async () => {
+      const { tester } = buildTester({
+        runCodexVersion: async () => ({
+          stdout: "codex 0.94.0\n",
+          stderr: "",
+        }),
+      });
+      const result = await tester.test("codex");
+      expect(result.status).toBe("failed");
+      expect(result.account).toBe("/usr/local/bin/codex");
+      expect(result.errorMessage).toBe(
+        "Codex CLI 0.94.0 is older than the minimum supported version 0.125.0",
+      );
+    });
+
     it("returns failed when the binary spawns but doesn't print a version", async () => {
       const { tester } = buildTester({
         runCodexVersion: async () => ({ stdout: "no version here\n", stderr: "" }),
