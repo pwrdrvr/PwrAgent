@@ -20,6 +20,7 @@ const TERMINAL_TURN_METHODS = new Set([
   "turn/failed",
   "turn/cancelled",
 ]);
+const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -70,8 +71,54 @@ function readNotificationThreadId(event: AgentEvent): string | undefined {
     : undefined;
 }
 
+function isIdleStatusNotification(event: AgentEvent): boolean {
+  if (event.notification.method !== "thread/status/changed") {
+    return false;
+  }
+
+  const status = event.notification.params.status;
+  return (
+    typeof status === "object" &&
+    status !== null &&
+    "type" in status &&
+    status.type === "idle"
+  );
+}
+
 function getThreadScopeKey(thread: Pick<NavigationThreadSummary, "id" | "source">): string {
   return `thread:${thread.source}:${thread.id}`;
+}
+
+function isThreadSelected(
+  current: { selectedThread?: NavigationThreadSummary },
+  thread: Pick<NavigationThreadSummary, "id" | "source">,
+): boolean {
+  return (
+    current.selectedThread?.source === thread.source &&
+    current.selectedThread.id === thread.id
+  );
+}
+
+function isRetainedBranchDrift(
+  thread: NavigationThreadSummary,
+  expectedBranch?: string,
+  observedBranch?: string,
+): boolean {
+  // Match ThreadView / registry retention semantics: the first named
+  // branch after detached HEAD is always a fresh context decision.
+  if (expectedBranch === "HEAD") {
+    return false;
+  }
+
+  if (!expectedBranch || !observedBranch) {
+    return false;
+  }
+
+  return (thread.retainedBranchDriftPairs ?? []).some(
+    (pair) =>
+      pair.expectedBranch === expectedBranch &&
+      pair.observedBranch === observedBranch,
+  );
 }
 
 export function useQueuedTurnRelease(params: {
@@ -85,142 +132,209 @@ export function useQueuedTurnRelease(params: {
   const inFlightScopeKeysRef = useRef(new Set<string>());
   paramsRef.current = params;
 
-  useEffect(() => {
-    const desktopApi = params.desktopApi;
-    const startTurn = desktopApi?.startTurn;
-    const startReview = desktopApi?.startReview;
-    if (!desktopApi?.onAgentEvent || (!startTurn && !startReview)) {
+  const releaseQueuedTurnForThread = async (
+    thread: NavigationThreadSummary,
+    options: { verifyIdle: boolean },
+  ): Promise<void> => {
+    const current = paramsRef.current;
+    const scopeKey = getThreadScopeKey(thread);
+    if (inFlightScopeKeysRef.current.has(scopeKey)) {
       return;
     }
 
-    const releaseQueuedTurn = async (
-      current: typeof params,
-      thread: NavigationThreadSummary,
-      queuedTurn: ComposerQueuedTurnSnapshot,
-      scopeKey: string,
-    ): Promise<void> => {
-      inFlightScopeKeysRef.current.add(scopeKey);
-      try {
-        let releaseState = current;
-        let releaseThread = thread;
-        let releaseQueuedSnapshot = queuedTurn;
+    const queuedTurn = current.composerDraftStore.getQueuedTurn(scopeKey);
+    if (!queuedTurn || isThreadSelected(current, thread)) {
+      return;
+    }
+    const queuedTurnId = queuedTurn.id;
 
-        if (thread.gitBranch && current.desktopApi?.checkThreadBranchDrift) {
-          const drift = await current.desktopApi.checkThreadBranchDrift({
-            backend: thread.source,
-            expectedBranch: thread.gitBranch,
-            threadId: thread.id,
-          });
-          if (drift.drifted) {
-            return;
-          }
+    const readReleaseCandidate = (candidateThread: NavigationThreadSummary) => {
+      const releaseState = paramsRef.current;
+      if (isThreadSelected(releaseState, candidateThread)) {
+        return undefined;
+      }
+
+      const releaseQueuedSnapshot =
+        releaseState.composerDraftStore.getQueuedTurn(scopeKey);
+      if (!releaseQueuedSnapshot || releaseQueuedSnapshot.id !== queuedTurnId) {
+        return undefined;
+      }
+
+      const releaseThread = releaseState.threads.find(
+        (candidate) =>
+          candidate.source === candidateThread.source &&
+          candidate.id === candidateThread.id,
+      );
+      if (!releaseThread) {
+        return undefined;
+      }
+
+      const backend = releaseState.backends.find(
+        (candidate) => candidate.kind === releaseThread.source,
+      );
+      if (!backend?.available) {
+        return undefined;
+      }
+
+      return {
+        backend,
+        desktopApi: releaseState.desktopApi,
+        releaseQueuedSnapshot,
+        releaseState,
+        releaseThread,
+      };
+    };
+
+    let releaseCandidate = readReleaseCandidate(thread);
+    if (!releaseCandidate) {
+      return;
+    }
+
+    inFlightScopeKeysRef.current.add(scopeKey);
+    try {
+      if (options.verifyIdle) {
+        const readThread = paramsRef.current.desktopApi?.readThread;
+        if (!readThread) {
+          return;
         }
 
-        releaseState = paramsRef.current;
+        const response = await readThread({
+          backend: thread.source,
+          threadId: thread.id,
+          limit: 1,
+        });
+        if (response.threadStatus !== "idle") {
+          return;
+        }
+      }
+
+      releaseCandidate = readReleaseCandidate(thread);
+      if (!releaseCandidate) {
+        return;
+      }
+
+      if (
+        releaseCandidate.releaseThread.gitBranch &&
+        releaseCandidate.desktopApi?.checkThreadBranchDrift
+      ) {
+        const drift = await releaseCandidate.desktopApi.checkThreadBranchDrift({
+          backend: releaseCandidate.releaseThread.source,
+          expectedBranch: releaseCandidate.releaseThread.gitBranch,
+          threadId: releaseCandidate.releaseThread.id,
+        });
         if (
-          releaseState.selectedThread?.source === thread.source &&
-          releaseState.selectedThread.id === thread.id
+          drift.drifted &&
+          !isRetainedBranchDrift(
+            releaseCandidate.releaseThread,
+            drift.expectedBranch,
+            drift.observedBranch,
+          )
         ) {
           return;
         }
+      }
 
-        const latestQueuedTurn = releaseState.composerDraftStore.getQueuedTurn(scopeKey);
-        if (!latestQueuedTurn || latestQueuedTurn.id !== queuedTurn.id) {
-          return;
-        }
-        releaseQueuedSnapshot = latestQueuedTurn;
+      releaseCandidate = readReleaseCandidate(thread);
+      if (!releaseCandidate) {
+        return;
+      }
 
-        const latestThread = releaseState.threads.find(
-          (candidate) =>
-            candidate.source === thread.source && candidate.id === thread.id,
-        );
-        if (!latestThread) {
-          return;
-        }
-        releaseThread = latestThread;
+      const {
+        backend,
+        desktopApi,
+        releaseQueuedSnapshot,
+        releaseState,
+        releaseThread,
+      } = releaseCandidate;
 
-        const backend = releaseState.backends.find(
-          (candidate) => candidate.kind === releaseThread.source,
-        );
-        if (!backend?.available) {
-          return;
-        }
-
-        if (releaseQueuedSnapshot.reviewCommand) {
-          const startReview = releaseState.desktopApi?.startReview;
-          if (!startReview || !backend.capabilities.startReview) {
-            return;
-          }
-
-          await startReview({
-            backend: releaseThread.source,
-            threadId: releaseThread.id,
-            target: releaseQueuedSnapshot.reviewCommand.target,
-            delivery: "inline",
-          });
-          releaseState.composerDraftStore.removeQueuedTurnById(
-            scopeKey,
-            releaseQueuedSnapshot.id,
-          );
+      if (releaseQueuedSnapshot.reviewCommand) {
+        const startReview = desktopApi?.startReview;
+        if (!startReview || !backend.capabilities.startReview) {
           return;
         }
 
-        const input = buildQueuedTurnInput(releaseQueuedSnapshot);
-        if (input.length === 0) {
-          releaseState.composerDraftStore.removeQueuedTurnById(
-            scopeKey,
-            releaseQueuedSnapshot.id,
-          );
-          return;
-        }
-
-        if (!startTurn || !backend.capabilities.startTurn) {
-          return;
-        }
-
-        const selectedModelOption =
-          backend.launchpadOptions?.models?.find(
-            (option) => option.id === releaseThread.model,
-          ) ??
-          getDefaultModelOption(backend);
-        const supportsReasoning =
-          selectedModelOption?.supportsReasoning ??
-          Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-        const supportsFast =
-          backend.kind === "codex"
-            ? selectedModelOption?.supportsFast ??
-              backend.launchpadOptions?.supportsFastMode ??
-              false
-            : false;
-
-        await startTurn({
+        await startReview({
           backend: releaseThread.source,
           threadId: releaseThread.id,
-          input,
-          executionMode: releaseThread.executionMode,
-          model: selectedModelOption?.id,
-          reasoningEffort: supportsReasoning
-            ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
-            : undefined,
-          serviceTier:
-            releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
-          fastMode:
-            releaseThread.source === "codex" && supportsFast
-              ? Boolean(releaseThread.fastMode)
-              : undefined,
+          target: releaseQueuedSnapshot.reviewCommand.target,
+          delivery: "inline",
         });
         releaseState.composerDraftStore.removeQueuedTurnById(
           scopeKey,
           releaseQueuedSnapshot.id,
         );
-      } finally {
-        inFlightScopeKeysRef.current.delete(scopeKey);
+        return;
       }
-    };
+
+      const input = buildQueuedTurnInput(releaseQueuedSnapshot);
+      if (input.length === 0) {
+        releaseState.composerDraftStore.removeQueuedTurnById(
+          scopeKey,
+          releaseQueuedSnapshot.id,
+        );
+        return;
+      }
+
+      const startTurn = desktopApi?.startTurn;
+      if (!startTurn || !backend.capabilities.startTurn) {
+        return;
+      }
+
+      const selectedModelOption =
+        backend.launchpadOptions?.models?.find(
+          (option) => option.id === releaseThread.model,
+        ) ??
+        getDefaultModelOption(backend);
+      const supportsReasoning =
+        selectedModelOption?.supportsReasoning ??
+        Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+      const supportsFast =
+        backend.kind === "codex"
+          ? selectedModelOption?.supportsFast ??
+            backend.launchpadOptions?.supportsFastMode ??
+            false
+          : false;
+
+      await startTurn({
+        backend: releaseThread.source,
+        threadId: releaseThread.id,
+        input,
+        executionMode: releaseThread.executionMode,
+        model: selectedModelOption?.id,
+        reasoningEffort: supportsReasoning
+          ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
+          : undefined,
+        serviceTier:
+          releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
+        fastMode:
+          releaseThread.source === "codex" && supportsFast
+            ? Boolean(releaseThread.fastMode)
+            : undefined,
+      });
+      releaseState.composerDraftStore.removeQueuedTurnById(
+        scopeKey,
+        releaseQueuedSnapshot.id,
+      );
+    } catch {
+      // Keep the queued entry. The next terminal/idle notification or
+      // periodic idle probe will retry without losing the user's request.
+    } finally {
+      inFlightScopeKeysRef.current.delete(scopeKey);
+    }
+  };
+
+  useEffect(() => {
+    const desktopApi = params.desktopApi;
+    if (!desktopApi?.onAgentEvent) {
+      return;
+    }
 
     return desktopApi.onAgentEvent((event) => {
       const current = paramsRef.current;
-      if (!TERMINAL_TURN_METHODS.has(event.notification.method)) {
+      if (
+        !TERMINAL_TURN_METHODS.has(event.notification.method) &&
+        !isIdleStatusNotification(event)
+      ) {
         return;
       }
 
@@ -244,19 +358,27 @@ export function useQueuedTurnRelease(params: {
         return;
       }
 
-      const scopeKey = getThreadScopeKey(thread);
-      if (inFlightScopeKeysRef.current.has(scopeKey)) {
-        return;
-      }
-
-      const queuedTurn = current.composerDraftStore.getQueuedTurn(scopeKey);
-      if (!queuedTurn) {
-        return;
-      }
-
-      void releaseQueuedTurn(current, thread, queuedTurn, scopeKey).catch(() => {
-        inFlightScopeKeysRef.current.delete(scopeKey);
-      });
+      void releaseQueuedTurnForThread(thread, { verifyIdle: false });
     });
   }, [params.desktopApi]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = paramsRef.current;
+      for (const thread of current.threads) {
+        if (
+          current.selectedThread?.source === thread.source &&
+          current.selectedThread.id === thread.id
+        ) {
+          continue;
+        }
+
+        void releaseQueuedTurnForThread(thread, { verifyIdle: true });
+      }
+    }, BACKGROUND_QUEUE_RELEASE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 }

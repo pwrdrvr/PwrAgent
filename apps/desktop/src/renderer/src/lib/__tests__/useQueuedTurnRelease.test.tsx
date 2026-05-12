@@ -80,7 +80,7 @@ function backendSummary(): BackendSummary {
     kind: "codex",
     label: "Codex",
     available: true,
-    methods: ["turn/start"],
+    methods: ["turn/start", "review/start"],
     capabilities: {
       listThreads: true,
       createThread: true,
@@ -88,6 +88,7 @@ function backendSummary(): BackendSummary {
       renameThread: false,
       readThread: true,
       startTurn: true,
+      startReview: true,
       interruptTurn: true,
       steerTurn: false,
       transcriptPagination: true,
@@ -124,6 +125,7 @@ function thread(
 
 describe("useQueuedTurnRelease", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -201,6 +203,67 @@ describe("useQueuedTurnRelease", () => {
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Second background reply");
+  });
+
+  it("releases a queued message for a non-focused thread when its status becomes idle", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-next",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-idle",
+      text: "Idle status reply",
+      imageAttachments: [],
+      input: [{ type: "text", text: "Idle status reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-a",
+              status: { type: "idle" },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-a",
+          input: [{ type: "text", text: "Idle status reply" }],
+        })
+      );
+    });
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
   });
 
   it("releases a queued review with review/start for a non-focused thread", async () => {
@@ -282,6 +345,73 @@ describe("useQueuedTurnRelease", () => {
     });
     expect(startTurn).not.toHaveBeenCalled();
     expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+  });
+
+  it("keeps a queued review when review/start rejects", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async () => {
+      throw new Error("review unavailable");
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalled();
+    });
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
+    ).toBe("queued-review");
   });
 
   it("does not remove the next background queued message when the started item changed while in flight", async () => {
@@ -453,6 +583,420 @@ describe("useQueuedTurnRelease", () => {
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Guarded background reply");
+  });
+
+  it("releases a queued review for a non-focused thread when its turn completes", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-a",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+    ).toBeUndefined();
+  });
+
+  it("releases a branch-tracked queued review after a clean drift check", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "feature/review",
+      observedBranch: "feature/review",
+      drifted: false,
+      checkedAt: Date.now(),
+    }));
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", { gitBranch: "feature/review" }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalledWith({
+        backend: "codex",
+        expectedBranch: "feature/review",
+        threadId: "thread-a",
+      });
+      expect(startReview).toHaveBeenCalled();
+    });
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+    ).toBeUndefined();
+  });
+
+  it("keeps a branch-tracked queued review when the drift check blocks background release", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn();
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "feature/review",
+      observedBranch: "main",
+      drifted: true,
+      checkedAt: Date.now(),
+    }));
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", { gitBranch: "feature/review" }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalled();
+    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("/review main");
+  });
+
+  it("releases a queued review when non-HEAD branch drift was retained", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "feature/review",
+      observedBranch: "main",
+      drifted: true,
+      checkedAt: Date.now(),
+    }));
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", {
+            gitBranch: "feature/review",
+            retainedBranchDriftPairs: [
+              {
+                expectedBranch: "feature/review",
+                observedBranch: "main",
+                retainedAt: 1,
+              },
+            ],
+          }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-a",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+    ).toBeUndefined();
+  });
+
+  it("keeps a queued review when a stale retained HEAD drift pair exists", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn();
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      expectedBranch: "HEAD",
+      observedBranch: "fix/review",
+      drifted: true,
+      checkedAt: Date.now(),
+    }));
+    const desktopApi: DesktopApi = {
+      checkThreadBranchDrift,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", {
+            gitBranch: "HEAD",
+            retainedBranchDriftPairs: [
+              {
+                expectedBranch: "HEAD",
+                observedBranch: "fix/review",
+                retainedAt: 1,
+              },
+            ],
+          }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalledWith({
+        backend: "codex",
+        expectedBranch: "HEAD",
+        threadId: "thread-a",
+      });
+    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("/review main");
   });
 
   it("background-releases a branch-tracked thread when the drift guard passes", async () => {
@@ -762,5 +1306,217 @@ describe("useQueuedTurnRelease", () => {
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Focused reply");
+  });
+
+  it("leaves the focused thread queue to the mounted composer during the idle probe", async () => {
+    vi.useFakeTimers();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const readThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-a",
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          hasPreviousPage: false,
+          supportsPagination: true,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-a"),
+        threads: [thread("thread-a")],
+      })
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(readThread).not.toHaveBeenCalled();
+    expect(startReview).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
+    ).toBe("/review main");
+  });
+
+  it("does not release from the idle probe when the thread becomes focused mid-check", async () => {
+    vi.useFakeTimers();
+    let resolveReadThread:
+      | ((response: Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>) => void)
+      | undefined;
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const readThread = vi.fn(
+      () =>
+        new Promise<
+          Awaited<ReturnType<NonNullable<DesktopApi["readThread"]>>>
+        >((resolve) => {
+          resolveReadThread = resolve;
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    const { rerender } = renderHook(
+      ({ selectedThread }: { selectedThread: NavigationThreadSummary }) =>
+        useQueuedTurnRelease({
+          backends: [backendSummary()],
+          composerDraftStore,
+          desktopApi,
+          selectedThread,
+          threads: [thread("thread-a"), thread("thread-b")],
+        }),
+      { initialProps: { selectedThread: thread("thread-b") } },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-a",
+      limit: 1,
+    });
+
+    rerender({ selectedThread: thread("thread-a") });
+
+    await act(async () => {
+      resolveReadThread?.({
+        backend: "codex",
+        fetchedAt: Date.now(),
+        threadId: "thread-a",
+        threadStatus: "idle",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            hasPreviousPage: false,
+            supportsPagination: true,
+          },
+        },
+      });
+    });
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.id
+    ).toBe("queued-review");
+  });
+
+  it("periodically releases a non-focused queued review after verifying the thread is idle", async () => {
+    vi.useFakeTimers();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "turn-review",
+    }));
+    const readThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-a",
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          hasPreviousPage: false,
+          supportsPagination: true,
+        },
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+      },
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-a",
+      limit: 1,
+    });
+    expect(startReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-a",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")
+    ).toBeUndefined();
   });
 });
