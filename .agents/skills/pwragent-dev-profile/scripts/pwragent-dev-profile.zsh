@@ -187,6 +187,12 @@ remove_launch_job() {
   launchctl remove "$(launch_job_label)" >/dev/null 2>&1
 }
 
+cleanup_exited_launch_job() {
+  launch_job_exists || return 1
+  [[ -n "$(launch_job_pid)" ]] && return 1
+  remove_launch_job
+}
+
 runtime_tables_ready() {
   [[ -f "$state_db" ]] || return 1
   sqlite3 -readonly "$state_db" "SELECT cwd_hash FROM app_runtime_instances LIMIT 0;" >/dev/null 2>&1
@@ -314,12 +320,14 @@ write_status() {
   rows="$(query_root_instances 2>/dev/null || true)"
   if [[ -z "$rows" ]]; then
     say "no lease-backed $profile profile app instances found for $root"
+    cleanup_exited_launch_job >/dev/null 2>&1 || true
     describe_active_lease >/dev/null || true
     return 1
   fi
 
   if ! has_live_root_instance; then
     say "only stale lease-backed $profile profile app instances found for $root"
+    cleanup_exited_launch_job >/dev/null 2>&1 || true
     describe_root_instances
     describe_active_lease || true
     return 1
@@ -432,6 +440,7 @@ verify_app() {
 
     if [[ -n "$managed_pid" ]] && ! is_live_pid "$managed_pid"; then
       say "managed process exited before lease-backed verification completed (pid=$managed_pid)"
+      cleanup_exited_launch_job >/dev/null 2>&1 || true
       tail_log
       return 1
     fi
@@ -441,6 +450,7 @@ verify_app() {
   done
 
   say "timed out waiting ${timeout}s for lease-backed $profile profile app record"
+  cleanup_exited_launch_job >/dev/null 2>&1 || true
   tail_log
   return 1
 }
