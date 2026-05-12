@@ -248,14 +248,15 @@ export function ThreadRow(props: ThreadRowProps) {
           ))}
         </span>
 
-        {canReact ? (
-          <AddReactionChip
-            anchorRef={addReactionRef}
-            open={pickerOpen}
-            onToggle={() => setPickerOpen((open) => !open)}
-          />
-        ) : null}
       </button>
+
+      {canReact ? (
+        <AddReactionChip
+          anchorRef={addReactionRef}
+          open={pickerOpen}
+          onToggle={() => setPickerOpen((open) => !open)}
+        />
+      ) : null}
 
       {canReact ? (
         <ReactionPicker

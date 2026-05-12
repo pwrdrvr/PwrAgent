@@ -92,13 +92,13 @@ describe("ThreadRow chip flow", () => {
 
   it("positions the add-reaction trigger outside the wrapping chip flow", () => {
     const { container } = renderRow();
-    const row = container.querySelector(".thread-row");
+    const shell = container.querySelector(".thread-row-shell");
     const flow = container.querySelector(".thread-row__chips");
     const addReaction = container.querySelector(".thread-row__chip--add-reaction");
-    expect(row).not.toBeNull();
+    expect(shell).not.toBeNull();
     expect(flow).not.toBeNull();
     expect(addReaction).not.toBeNull();
-    expect(addReaction?.parentElement).toBe(row);
+    expect(addReaction?.parentElement).toBe(shell);
     expect(flow?.contains(addReaction)).toBe(false);
   });
 
