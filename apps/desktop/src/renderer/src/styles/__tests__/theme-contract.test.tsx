@@ -185,6 +185,36 @@ describe("Tangerine Terminal theme contract", () => {
     expect(compactTitleRule).not.toContain("line-height: 1;");
   });
 
+  it("keeps messaging indicators ahead of thread header title overflow", () => {
+    const headerMainRule = extractRuleBody(css, ".thread-header__main");
+    const statusBarRule = extractRuleBody(css, ".messaging-status-bar");
+    const eyebrowRowRule = extractRuleBody(css, ".thread-header__eyebrow-row");
+    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
+
+    expect(headerMainRule).toContain("flex: 1 1 0;");
+    expect(statusBarRule).toContain("flex: 0 0 auto;");
+    expect(statusBarRule).toContain("min-width: max-content;");
+    expect(eyebrowRowRule).toContain("min-width: 0;");
+    expect(compactTitleRule).toContain("flex: 1 1 auto;");
+    expect(compactTitleRule).toContain("overflow: hidden;");
+    expect(css).toMatch(
+      /\.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
+    );
+  });
+
+  it("reserves opened context rail width for the thread header status area", () => {
+    expect(css).toMatch(
+      /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 12px\);[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.thread-view:has\(\.context-rail\.is-pinned\) \.thread-header,\s*\.thread-view:has\(\.thread-view__layout\.has-pinned-context-rail\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), 42vw\) \+ 12px\);[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 1100px\)\s*\{[\s\S]*?\.thread-view:has\(\.context-rail\.is-open\) \.thread-header,[\s\S]*?padding-right:\s*56px;[\s\S]*?\}/
+    );
+    expect(css).not.toContain("the header reclaims the space");
+  });
+
   it("keeps composer autocomplete visually separated from transcript surfaces", () => {
     const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
 

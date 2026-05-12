@@ -1549,7 +1549,14 @@ export function ThreadView(props: ThreadViewProps) {
   }
 
   return (
-    <section className="thread-view">
+    <section
+      className="thread-view"
+      style={
+        {
+          "--context-rail-width": `${contextRailWidth}px`,
+        } as CSSProperties
+      }
+    >
       <ThreadHeader
         desktopApi={props.desktopApi}
         thread={selectedThread!}
@@ -1560,11 +1567,6 @@ export function ThreadView(props: ThreadViewProps) {
         className={`thread-view__layout${
           contextRailEffectivePinned ? " has-pinned-context-rail" : ""
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
-        style={
-          {
-            "--context-rail-width": `${contextRailWidth}px`,
-          } as CSSProperties
-        }
       >
         <div className="thread-view__primary">
           <section className="transcript-panel" aria-label="Transcript">
