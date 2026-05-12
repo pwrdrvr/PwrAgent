@@ -79,6 +79,7 @@ describe("Codex discovery", () => {
       resolveCodexCommand({
         command: "codex",
         env: { PATH: "/opt/homebrew/bin" },
+        platform: "darwin",
       }),
     ).rejects.toThrow("older than the minimum supported version 0.125.0");
     expect(execFileMock).not.toHaveBeenCalled();

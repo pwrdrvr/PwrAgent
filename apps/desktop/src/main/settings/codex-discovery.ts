@@ -265,6 +265,7 @@ export async function discoverCodexCommands(params?: {
 export async function resolveCodexCommand(params: {
   command: string;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): Promise<ResolvedCommandCandidate<DesktopCodexCandidateSource>> {
   const configuredCommand =
     params.command.trim() && params.command.trim() !== "codex"
@@ -273,6 +274,7 @@ export async function resolveCodexCommand(params: {
   const discovery = await discoverCodexCommands({
     configuredCommand,
     env: params.env,
+    platform: params.platform,
   });
   const selected = discovery.candidates.find((candidate) => candidate.selected);
   const rejectedOldCodex = discovery.candidates.find(
