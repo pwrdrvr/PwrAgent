@@ -161,6 +161,10 @@ describe("TelegramAdapter callback persistence", () => {
         description: "Resume or start a PwrAgent thread",
       },
       {
+        command: "new",
+        description: "Start a new PwrAgent thread",
+      },
+      {
         command: "status",
         description: "Show the current PwrAgent binding",
       },
