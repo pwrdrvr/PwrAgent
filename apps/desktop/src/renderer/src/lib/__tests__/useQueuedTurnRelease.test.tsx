@@ -203,6 +203,87 @@ describe("useQueuedTurnRelease", () => {
     ).toBe("Second background reply");
   });
 
+  it("releases a queued review with review/start for a non-focused thread", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn();
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      reviewThreadId: "thread-a",
+      turnId: "review-turn",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+      },
+    });
+
+    const backend = backendSummary();
+    backend.capabilities.startReview = true;
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backend],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-a",
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+        delivery: "inline",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+  });
+
   it("does not remove the next background queued message when the started item changed while in flight", async () => {
     let resolveStartTurn: (() => void) | undefined;
     const listeners = new Set<(event: AgentEvent) => void>();

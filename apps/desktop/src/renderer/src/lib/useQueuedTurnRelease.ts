@@ -88,7 +88,8 @@ export function useQueuedTurnRelease(params: {
   useEffect(() => {
     const desktopApi = params.desktopApi;
     const startTurn = desktopApi?.startTurn;
-    if (!desktopApi?.onAgentEvent || !startTurn) {
+    const startReview = desktopApi?.startReview;
+    if (!desktopApi?.onAgentEvent || (!startTurn && !startReview)) {
       return;
     }
 
@@ -138,6 +139,32 @@ export function useQueuedTurnRelease(params: {
         }
         releaseThread = latestThread;
 
+        const backend = releaseState.backends.find(
+          (candidate) => candidate.kind === releaseThread.source,
+        );
+        if (!backend?.available) {
+          return;
+        }
+
+        if (releaseQueuedSnapshot.reviewCommand) {
+          const startReview = releaseState.desktopApi?.startReview;
+          if (!startReview || !backend.capabilities.startReview) {
+            return;
+          }
+
+          await startReview({
+            backend: releaseThread.source,
+            threadId: releaseThread.id,
+            target: releaseQueuedSnapshot.reviewCommand.target,
+            delivery: "inline",
+          });
+          releaseState.composerDraftStore.removeQueuedTurnById(
+            scopeKey,
+            releaseQueuedSnapshot.id,
+          );
+          return;
+        }
+
         const input = buildQueuedTurnInput(releaseQueuedSnapshot);
         if (input.length === 0) {
           releaseState.composerDraftStore.removeQueuedTurnById(
@@ -147,10 +174,7 @@ export function useQueuedTurnRelease(params: {
           return;
         }
 
-        const backend = releaseState.backends.find(
-          (candidate) => candidate.kind === releaseThread.source,
-        );
-        if (!backend?.available || !backend.capabilities.startTurn) {
+        if (!startTurn || !backend.capabilities.startTurn) {
           return;
         }
 
