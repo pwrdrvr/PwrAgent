@@ -19,10 +19,9 @@ The supported command surface is:
 
 - `/resume` opens the recents browser, with Projects and New-thread navigation.
 - `/new` opens the new-thread project browser directly.
-- `/threads` is an alias for choosing a thread.
-- `/bind` is an alias for choosing a thread.
 - `/status` refreshes the pinned binding/status card.
 - `/detach` detaches the conversation and unpins the status card where the platform supports it.
+- `/monitor` posts a monitor card for recent PwrAgent threads.
 - `/help` shows the canonical command menu.
 
 Telegram registers its native command menu at startup with `setMyCommands`.
@@ -485,7 +484,7 @@ Run the desktop app with the desired environment variables configured.
 Telegram:
 
 1. Start PwrAgent with `pnpm dev:op`; if the bot has a webhook configured, PwrAgent clears it before long polling.
-2. Confirm `/resume`, `/new`, `/status`, and `/detach` are registered in the Telegram command menu.
+2. Confirm `/resume`, `/new`, `/status`, `/detach`, `/monitor`, and `/help` are registered in the Telegram command menu.
 3. Send `/resume` from an allowlisted Telegram user.
    - Repeat using a text mention (`@` + your bot's username + ` resume`) instead of the slash command — the same thread picker should render. Send a bare mention (`@` + your bot's username) and confirm the help menu renders with Resume and New actions.
    - Send `/new` or tap New from the help menu and confirm the new-thread project picker renders.
@@ -800,8 +799,8 @@ should succeed before moving to the next:
 
 2. Open a Direct Message to the bot in Mattermost. Send a naked
    message: `You there?`
-3. The bot replies with a `Choose a thread` post containing a `Resume`
-   button.
+3. The bot replies with the canonical command menu, including `Resume`
+   and `New` buttons.
 4. Click `Resume`. The bot replies with the navigator: a thread picker
    with `Next`, `Projects`, `New`, `Cancel` buttons. The console shows
    `mattermost callback HMAC verification failed` only if the env-var
@@ -842,9 +841,8 @@ should succeed before moving to the next:
 15. Click `Detach` on the status card. The bot posts `Thread detached`
     and removes the status card's buttons. The desktop app's binding
     chip disappears for that thread.
-16. Send another message in the DM. The bot does not respond
-    (binding gone), but the offered `Resume` button on the
-    `Choose a thread` reply still works to re-bind.
+16. Send another message in the DM. The bot shows the command menu
+    again; the offered `Resume` button still works to re-bind.
 
 **Cross-restart persistence (with env-var HMAC pinned):**
 

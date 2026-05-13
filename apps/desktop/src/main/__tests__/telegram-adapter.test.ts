@@ -522,6 +522,49 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("renders the generic help menu for unbound Telegram text without Markdown artifacts", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        text: "hi",
+      },
+    });
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
+    expect(request).toMatchObject({
+      chat_id: 777,
+      parse_mode: "HTML",
+      text: expect.stringContaining("PwrAgent commands"),
+    });
+    expect(request?.text).toContain("/resume - choose a thread");
+    expect(request?.text).toContain("@bot new");
+    expect(request?.text).not.toContain("`");
+    const buttonRows = request?.reply_markup?.inline_keyboard.map(
+      (row: Array<{ text: string }>) => row.map((button) => button.text),
+    );
+    expect(buttonRows).toEqual([
+      ["Resume", "New"],
+      ["Status", "Detach"],
+      ["Monitor", "Help"],
+    ]);
+  });
+
   it("signals typing activity without rendering a visible Telegram message", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
