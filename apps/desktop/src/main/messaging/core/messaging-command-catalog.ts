@@ -253,10 +253,10 @@ export function paginateHelpCatalog(params: {
 /**
  * Build the action array for the help surface — one command button
  * per verb on the current page, plus navigation buttons (Prev /
- * Next / Cancel) when the catalog overflows a single page. The
- * navigation row is omitted entirely when everything fits in one
- * page, so the help surface renders as a tight verb-button row in
- * the steady state of today's small catalog.
+ * Next) when the catalog overflows a single page, and Cancel. Cancel
+ * is always present because text-mode help is a pending prompt; users
+ * need a deterministic way to leave that prompt before sending a
+ * normal message.
  *
  * Action id conventions:
  *   - `command:<verb>` — invoke the verb. Routes through
@@ -297,8 +297,7 @@ export function buildHelpActions(params: {
       fallbackText: `/${spec.verb}`,
     });
   }
-  // Nav row only when there's more than one page. Single-page
-  // rendering keeps the help surface compact.
+  // Prev/Next only when there's more than one page.
   if (page.totalPages > 1) {
     if (page.pageIndex > 0) {
       actions.push({
@@ -318,13 +317,13 @@ export function buildHelpActions(params: {
         value: { pageIndex: page.pageIndex + 1 },
       });
     }
-    actions.push({
-      id: "help:cancel",
-      label: "Cancel",
-      style: "secondary",
-      fallbackText: "cancel",
-    });
   }
+  actions.push({
+    id: "help:cancel",
+    label: "Cancel",
+    style: "secondary",
+    fallbackText: "cancel",
+  });
   return actions;
 }
 
