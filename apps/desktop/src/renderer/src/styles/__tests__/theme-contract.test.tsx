@@ -250,6 +250,12 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps thread context menu hover states visible", () => {
+    expect(css).toMatch(
+      /\.thread-context-menu button:hover,\s*\.thread-context-menu button:focus-visible\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
+    );
+  });
+
   it("keeps composer autocomplete visually separated from transcript surfaces", () => {
     const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
 

@@ -2311,7 +2311,9 @@ textarea,
 
 .thread-context-menu button:hover,
 .thread-context-menu button:focus-visible {
-  background: var(--bg-panel-hover);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
 }
 
 .thread-context-menu__separator {
