@@ -3552,6 +3552,79 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("stores file inputs as local file references before sending Codex turns", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const pdfBytes = Buffer.from("%PDF-1.7\n/image data\n");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-3",
+      input: [
+        { type: "text", text: "What's in this?" },
+        {
+          type: "file",
+          name: "Bullstrap-2024-10-05.pdf",
+          mimeType: "application/pdf",
+          data: pdfBytes.toString("base64"),
+          sizeBytes: pdfBytes.byteLength,
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const turnStart = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown[] } })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStart?.params?.input).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Files attached from the messaging platform"),
+      }),
+      {
+        type: "text",
+        text: "What's in this?",
+        text_elements: [],
+      },
+      expect.objectContaining({
+        type: "mention",
+        name: "Bullstrap-2024-10-05.pdf",
+        path: expect.any(String),
+      }),
+    ]);
+    expect(turnStart?.params?.input).not.toContainEqual(
+      expect.objectContaining({ type: "file" }),
+    );
+
+    const mention = turnStart?.params?.input?.find(
+      (item): item is { type: "mention"; path: string } =>
+        typeof item === "object" &&
+        item !== null &&
+        (item as { type?: unknown }).type === "mention" &&
+        typeof (item as { path?: unknown }).path === "string",
+    );
+    expect(mention).toBeDefined();
+    expect(await fs.readFile(mention!.path)).toEqual(pdfBytes);
+
+    await fs.rm(path.dirname(path.dirname(mention!.path)), {
+      force: true,
+      recursive: true,
+    });
+    await client.close();
+  });
+
   it("resumes a created thread again after the first turn has started", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {
