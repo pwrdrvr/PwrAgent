@@ -11,6 +11,7 @@ vi.mock("../log", () => ({
 
 class MockTransport implements JsonRpcTransport {
   readonly sentMessages: string[] = [];
+  sendError: Error | undefined;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
 
@@ -27,6 +28,9 @@ class MockTransport implements JsonRpcTransport {
   }
 
   send(message: string): void {
+    if (this.sendError) {
+      throw this.sendError;
+    }
     this.sentMessages.push(message);
   }
 
@@ -127,5 +131,32 @@ describe("JsonRpcConnection", () => {
     expect(jsonRpcLogError).toHaveBeenCalled();
 
     await connection.close();
+  });
+
+  it("clears pending requests when the transport send fails", async () => {
+    const transport = new MockTransport();
+    const connection = new JsonRpcConnection(transport, 1_000);
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason);
+    };
+
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await connection.connect();
+      transport.sendError = new Error("codex app server stdio not connected");
+
+      await expect(connection.request("thread/list", {})).rejects.toThrow(
+        "codex app server stdio not connected",
+      );
+
+      await connection.close();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 });
