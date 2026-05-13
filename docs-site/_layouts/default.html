@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% if page.title and page.url != "/" %}{{ page.title }} — {% endif %}{{ site.title }}</title>
+  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+  <link rel="preconnect" href="https://rsms.me/">
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+  <link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="site-brand" href="{{ '/' | relative_url }}" aria-label="PwrAgent docs home">
+        <span class="site-brand__mark">Pwr<span class="site-brand__accent">Agent</span></span>
+        <span class="site-brand__tagline">docs</span>
+      </a>
+      <nav class="site-nav" aria-label="Top navigation">
+        <a href="{{ '/messaging/overview/' | relative_url }}">Messaging</a>
+        <a href="{{ '/messaging/streaming/' | relative_url }}">Streaming</a>
+        <a href="{{ '/messaging/webhook-dangers/' | relative_url }}">Webhooks</a>
+        <a class="site-nav__github" href="https://github.com/pwrdrvr/PwrAgent" rel="noopener">GitHub →</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="site-main">
+    <article class="page">
+      {{ content }}
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <span class="site-footer__brand">Pwr<span class="site-footer__accent">Agent</span></span>
+      <span class="site-footer__meta">MIT licensed · operator docs · <a href="https://github.com/pwrdrvr/PwrAgent">github.com/pwrdrvr/PwrAgent</a></span>
+    </div>
+  </footer>
+</body>
+</html>

@@ -3,6 +3,11 @@ layout: home
 title: PwrAgent docs
 ---
 
+<div class="wordmark-hero">
+  <div class="wordmark-hero__mark">Pwr<span class="wordmark-hero__accent">Agent</span></div>
+  <div class="wordmark-hero__tagline">threads / transcripts</div>
+</div>
+
 # PwrAgent
 
 PwrAgent is a beta desktop coding agent that you drive from the chat
