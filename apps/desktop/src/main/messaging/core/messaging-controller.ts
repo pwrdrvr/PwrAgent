@@ -114,6 +114,7 @@ import {
   formatSkillInputPrefix,
   isSkillSelectionNoticeIntent,
   isSkillsSearchIntent,
+  isSkillsWorkflowIntent,
   skillSelectionFromValue,
   skillsBrowserPageFromValue,
 } from "./messaging-skills-browser.js";
@@ -920,6 +921,7 @@ export class MessagingController {
         if (binding && !binding.revokedAt) {
           await this.presentSkillsBrowser(binding, event, {
             pageIndex: 0,
+            presentNew: true,
             query: event.text,
           });
           return;
@@ -3911,7 +3913,7 @@ export class MessagingController {
   private async presentSkillsBrowser(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
-    options: { pageIndex?: number; query?: string } = {},
+    options: { pageIndex?: number; presentNew?: boolean; query?: string } = {},
   ): Promise<void> {
     if (!this.options.backend.listSkills) {
       await this.deliver(
@@ -3938,7 +3940,10 @@ export class MessagingController {
         backend: binding.backend,
         ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
       });
-      await this.deliverAndStoreStatusSubmode(
+      const targetSurface = options.presentNew
+        ? undefined
+        : await this.findActiveSkillsWorkflowSurface(binding, event);
+      await this.deliverAndStoreSkillsWorkflow(
         buildSkillsBrowserIntent({
           id: this.newIntentId("skills-browser"),
           binding,
@@ -3947,6 +3952,7 @@ export class MessagingController {
           entries: flattenSkillEntries(response.data),
           pageIndex: options.pageIndex,
           query: options.query,
+          targetSurface,
         }),
         binding,
         event,
@@ -3970,12 +3976,14 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    await this.deliverAndStoreStatusSubmode(
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
       buildSkillsSearchPromptIntent({
         id: this.newIntentId("skills-search"),
         binding,
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
+        targetSurface,
       }),
       binding,
       event,
@@ -4001,13 +4009,15 @@ export class MessagingController {
       pendingSkillSelection: selection,
       updatedAt: this.now(),
     });
-    await this.deliverAndStoreStatusSubmode(
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
       buildSkillSelectedIntent({
         id: this.newIntentId("skill-selected"),
         binding: updatedBinding,
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         selection,
+        targetSurface,
       }),
       updatedBinding,
       event,
@@ -4020,12 +4030,14 @@ export class MessagingController {
   ): Promise<void> {
     const { pendingSkillSelection } = binding;
     const updatedBinding = await this.clearPendingSkillSelection(binding);
-    await this.deliverAndStoreStatusSubmode(
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
       buildSkillRemovedIntent({
         id: this.newIntentId("skill-removed"),
         binding: updatedBinding,
         createdAt: this.now(),
         removed: pendingSkillSelection,
+        targetSurface,
       }),
       updatedBinding,
       event,
@@ -4058,6 +4070,25 @@ export class MessagingController {
     ) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
+  }
+
+  private async findActiveSkillsWorkflowSurface(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<MessagingSurfaceRef | undefined> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      pendingIntent?.bindingId === binding.id &&
+      pendingIntent.surface &&
+      isSkillsWorkflowIntent(pendingIntent.intent)
+    ) {
+      return pendingIntent.surface;
+    }
+    return undefined;
   }
 
   private async presentHandoffOverview(
@@ -4335,6 +4366,35 @@ export class MessagingController {
       ...binding,
       statusSurface: result.surface,
       updatedAt: this.now(),
+    });
+  }
+
+  private async deliverAndStoreSkillsWorkflow(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      activeIntent &&
+      activeIntent.id !== intent.id &&
+      activeIntent.bindingId === binding.id &&
+      !activeIntent.intent.requestContext
+    ) {
+      await this.options.store.deletePendingIntent(activeIntent.id);
+    }
+    const pendingIntent = await this.storePendingIntent(intent, binding, event);
+    const result = await this.deliver(intent, binding, event);
+    if (!result.surface) {
+      return;
+    }
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      surface: result.surface,
     });
   }
 

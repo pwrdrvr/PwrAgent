@@ -5186,6 +5186,77 @@ describe("MessagingController", () => {
     ).resolves.not.toHaveProperty("pendingSkillSelection");
   });
 
+  it("presents the skills browser as a current chat message instead of editing the status card", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+    if (!binding) throw new Error("Expected an active binding");
+    await harness.store.upsertBinding({
+      ...binding,
+      statusSurface: {
+        channel: "telegram",
+        id: "status-surface",
+        state: { opaque: { messageId: "status-message" } },
+      },
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    const skillsBrowser = harness.delivered.at(-1);
+    expect(skillsBrowser).toMatchObject({
+      kind: "single_select",
+      delivery: {
+        mode: "present",
+      },
+    });
+    expect(skillsBrowser).not.toHaveProperty("targetSurface");
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      statusSurface: {
+        id: "status-surface",
+      },
+    });
+  });
+
+  it("updates button-driven skills navigation but posts typed search results as latest messages", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      delivery: {
+        mode: "update",
+      },
+      targetSurface: {
+        id: expect.stringContaining("surface:skills-browser"),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("work"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      delivery: {
+        mode: "present",
+      },
+      prompt: expect.stringContaining('Skills matching "work"'),
+    });
+    expect(harness.delivered.at(-1)).not.toHaveProperty("targetSurface");
+  });
+
   it("lists skills from every linked directory on the bound thread", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

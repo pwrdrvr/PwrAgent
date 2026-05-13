@@ -67,6 +67,34 @@ describe("messaging skills browser", () => {
       fallbackText: "1",
       label: "1. $ce:work",
     });
+    expect(intent.delivery).toMatchObject({
+      mode: "present",
+      fallback: "present_new",
+    });
+    expect(intent).not.toHaveProperty("targetSurface");
+  });
+
+  it("updates the active skills workflow surface when one is provided", () => {
+    const intent = buildSkillsBrowserIntent({
+      binding,
+      createdAt: 1000,
+      entries: [],
+      id: "skills-browser-1",
+      targetSurface: {
+        channel: "telegram",
+        id: "skills-surface",
+        state: { opaque: { messageId: "123" } },
+      },
+    });
+
+    expect(intent.delivery).toMatchObject({
+      mode: "update",
+      fallback: "present_new",
+      replaceMarkup: true,
+    });
+    expect(intent.targetSurface).toMatchObject({
+      id: "skills-surface",
+    });
   });
 
   it("keeps fallback text to choices and reply instructions", () => {

@@ -9,6 +9,8 @@ import type {
   MessagingJsonValue,
   MessagingPendingSkillSelection,
   MessagingSingleSelectIntent,
+  MessagingSurfaceDeliveryPolicy,
+  MessagingSurfaceRef,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -80,6 +82,7 @@ export function buildSkillsBrowserIntent(params: {
   id: string;
   pageIndex?: number;
   query?: string;
+  targetSurface?: MessagingSurfaceRef;
 }): MessagingSingleSelectIntent {
   const filtered = filterSkillEntries(params.entries, params.query);
   const navActionCount = filtered.length > SKILLS_BROWSER_PAGE_SIZE ? 5 : 3;
@@ -167,8 +170,8 @@ export function buildSkillsBrowserIntent(params: {
     kind: "single_select",
     bindingId: params.binding.id,
     createdAt: params.createdAt,
-    delivery: statusSubmodeDelivery(params.binding),
-    targetSurface: params.binding.statusSurface,
+    delivery: skillWorkflowDelivery(params.targetSurface),
+    ...(params.targetSurface ? { targetSurface: params.targetSurface } : {}),
     fallbackText: skillsBrowserFallbackText({
       filteredCount: filtered.length,
       pageEntries,
@@ -192,14 +195,15 @@ export function buildSkillsSearchPromptIntent(params: {
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
+  targetSurface?: MessagingSurfaceRef;
 }): MessagingConfirmationIntent {
   return {
     id: params.id,
     kind: "confirmation",
     bindingId: params.binding.id,
     createdAt: params.createdAt,
-    delivery: statusSubmodeDelivery(params.binding),
-    targetSurface: params.binding.statusSurface,
+    delivery: skillWorkflowDelivery(params.targetSurface),
+    ...(params.targetSurface ? { targetSurface: params.targetSurface } : {}),
     title: "Search Skills",
     body: "Reply with search text. PwrAgent will search skill names, descriptions, paths, and workspaces.",
     fallbackText: "Reply with search text, Back, or Cancel.",
@@ -231,14 +235,15 @@ export function buildSkillSelectedIntent(params: {
   createdAt: number;
   id: string;
   selection: MessagingPendingSkillSelection;
+  targetSurface?: MessagingSurfaceRef;
 }): MessagingConfirmationIntent {
   return {
     id: params.id,
     kind: "confirmation",
     bindingId: params.binding.id,
     createdAt: params.createdAt,
-    delivery: statusSubmodeDelivery(params.binding),
-    targetSurface: params.binding.statusSurface,
+    delivery: skillWorkflowDelivery(params.targetSurface),
+    ...(params.targetSurface ? { targetSurface: params.targetSurface } : {}),
     title: "Skill Selected",
     body: formatSkillSelectionHelp(params.selection),
     fallbackText: "Reply Remove to clear this skill, or send your next request.",
@@ -269,14 +274,15 @@ export function buildSkillRemovedIntent(params: {
   createdAt: number;
   id: string;
   removed?: MessagingPendingSkillSelection;
+  targetSurface?: MessagingSurfaceRef;
 }): MessagingConfirmationIntent {
   return {
     id: params.id,
     kind: "confirmation",
     bindingId: params.binding.id,
     createdAt: params.createdAt,
-    delivery: statusSubmodeDelivery(params.binding),
-    targetSurface: params.binding.statusSurface,
+    delivery: skillWorkflowDelivery(params.targetSurface),
+    ...(params.targetSurface ? { targetSurface: params.targetSurface } : {}),
     title: "Skill Removed",
     body: params.removed
       ? `$${params.removed.name} will no longer be prepended to your next request.`
@@ -342,6 +348,16 @@ export function isSkillSelectionNoticeIntent(
   );
 }
 
+export function isSkillsWorkflowIntent(
+  intent: MessagingSurfaceIntent,
+): boolean {
+  return intent.bindingId !== undefined && (
+    intent.id.includes("skills-browser") ||
+    isSkillsSearchIntent(intent) ||
+    isSkillSelectionNoticeIntent(intent)
+  );
+}
+
 export function formatSkillSelectionHelp(
   selection: MessagingPendingSkillSelection,
 ): string {
@@ -366,11 +382,12 @@ export function formatSkillInputPrefix(
     : `Use $${selection.name}`;
 }
 
-function statusSubmodeDelivery(
-  binding: MessagingBindingRecord,
-): MessagingSingleSelectIntent["delivery"] {
+function skillWorkflowDelivery(
+  targetSurface?: MessagingSurfaceRef,
+): MessagingSurfaceDeliveryPolicy {
   return {
-    mode: binding.statusSurface ? "update" : "present",
+    mode: targetSurface ? "update" : "present",
+    replaceMarkup: Boolean(targetSurface),
     fallback: "present_new",
   };
 }
