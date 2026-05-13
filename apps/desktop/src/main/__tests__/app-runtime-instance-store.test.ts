@@ -343,4 +343,37 @@ describe("AppRuntimeInstanceStore", () => {
       cwdHash: "c976f17804e892f9",
     });
   });
+
+  it("removes exited runtime instance rows after one hour", () => {
+    const now = 2 * 60 * 60 * 1000;
+    store.recordInstanceStart({
+      instanceId: "recent-exited",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      startedAt: now - 59 * 60 * 1000,
+      desiredMessagingEnabled: true,
+    });
+    store.markInstanceExited({
+      instanceId: "recent-exited",
+      now: now - 59 * 60 * 1000,
+    });
+    store.recordInstanceStart({
+      instanceId: "old-exited",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt",
+      startedAt: now - 61 * 60 * 1000,
+      desiredMessagingEnabled: true,
+    });
+    store.markInstanceExited({
+      instanceId: "old-exited",
+      now: now - 61 * 60 * 1000,
+    });
+
+    stateDb.cleanupExpired(now);
+
+    expect(store.getInstance("recent-exited")).toBeDefined();
+    expect(store.getInstance("old-exited")).toBeUndefined();
+  });
 });

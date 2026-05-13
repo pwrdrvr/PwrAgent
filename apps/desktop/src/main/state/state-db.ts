@@ -187,7 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_messaging_runtime_lease_status_expires
 
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-const APP_RUNTIME_INSTANCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
