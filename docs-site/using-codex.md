@@ -165,6 +165,16 @@ instead. Both paths dispatch to the same handler.
 
 ## At-mention commands {#at-mention-commands}
 
+> **Naming convention used in this guide.** Throughout this page,
+> **`@PwrAgent`** is a stand-in for whatever handle you actually gave
+> the bot on the platform you're using. On Telegram, that's the
+> `@username` you set in BotFather (e.g., `@my_codex_bot`); on
+> Discord and Slack, it's the bot's display name (your client renders
+> the mention as a rich `@<name>` tag once you select it from the
+> autocomplete); on Mattermost, it's the bot account username. Read
+> every `@PwrAgent` below as "the at-mention syntax for your bot on
+> your platform."
+
 Anywhere the bot can read messages, you can invoke the same verbs by
 mentioning the bot followed by the verb:
 
