@@ -1666,8 +1666,27 @@ function parseFeishuMessageContent(content: string | undefined): Record<string, 
 
 function extractFeishuText(content: Record<string, unknown>): string {
   if (typeof content.text === "string") return content.text;
+  const postText = extractFeishuPostText(content.content);
+  if (postText.trim()) return postText;
   if (typeof content.title === "string") return content.title;
   return "";
+}
+
+function extractFeishuPostText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const separator = value.every(Array.isArray) ? "\n" : "";
+    return value
+      .map((item) => extractFeishuPostText(item))
+      .filter(Boolean)
+      .join(separator);
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  if (typeof record.content === "string") return record.content;
+  if (record.tag === "at") return "";
+  return record.content === undefined ? "" : extractFeishuPostText(record.content);
 }
 
 function feishuAttachmentsFromMessage(params: {
