@@ -149,6 +149,8 @@ const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
+
+type PreparedInputStartResult = "failed" | "queued" | "started";
 // Provider adapters own stricter platform pacing; the generic layer only
 // coalesces noisy token deltas into human-visible refreshes.
 const STREAM_UPDATE_REFRESH_MS = 1_000;
@@ -890,10 +892,28 @@ export class MessagingController {
     });
     if (pendingIntent) {
       if (isSkillsSearchIntent(pendingIntent.intent)) {
-        await this.options.store.deletePendingIntent(pendingIntent.id);
+        const mapped = await this.interactionMapper.mapText({
+          intent: pendingIntent.intent,
+          text: event.text,
+        });
+        if (mapped.kind === "matched") {
+          await this.handleCallback({
+            ...event,
+            kind: "callback",
+            interaction: {
+              channel: event.channel.channel,
+              id: mapped.action.id,
+            },
+            actionId: mapped.action.id,
+            value: mapped.action.value,
+          });
+          return;
+        }
+
         const binding = pendingIntent.bindingId
           ? await this.options.store.getBinding(pendingIntent.bindingId)
           : undefined;
+        await this.options.store.deletePendingIntent(pendingIntent.id);
         if (binding && !binding.revokedAt) {
           await this.presentSkillsBrowser(binding, event, {
             pageIndex: 0,
@@ -1041,14 +1061,14 @@ export class MessagingController {
       return;
     }
 
-    const started = await this.startPreparedInput({
+    const startResult = await this.startPreparedInput({
       binding: currentBinding,
       input: preparedWithSkill.input,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
     });
-    if (started && currentBinding.pendingSkillSelection) {
+    if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
       await this.renderBindingStatus(updatedBinding, bundle.events[0]);
     }
@@ -1298,7 +1318,7 @@ export class MessagingController {
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
-  }): Promise<boolean> {
+  }): Promise<PreparedInputStartResult> {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
 
@@ -1356,14 +1376,14 @@ export class MessagingController {
         force: true,
       });
       await this.renderBindingStatus(params.binding, undefined, navigation);
-      return true;
+      return "started";
     } catch (error) {
       if (turnStarted) {
         this.logger.debug?.("messaging post-start update failed", {
           error: error instanceof Error ? error.message : String(error),
           threadId: params.binding.threadId,
         });
-        return true;
+        return "started";
       }
       if (isTurnInProgressStartError(error)) {
         if (params.queueOnConcurrentStart !== false) {
@@ -1373,8 +1393,9 @@ export class MessagingController {
             preview: params.preview,
             threadKey: params.threadKey,
           });
+          return "queued";
         }
-        return false;
+        return "failed";
       }
       await this.deliver(
         buildErrorIntent({
@@ -1387,7 +1408,7 @@ export class MessagingController {
         params.binding,
         params.event,
       );
-      return false;
+      return "failed";
     } finally {
       this.turnAdmission.clearStarting(params.threadKey);
     }
@@ -1598,14 +1619,14 @@ export class MessagingController {
       return;
     }
 
-    const started = await this.startPreparedInput({
+    const startResult = await this.startPreparedInput({
       binding: entry.binding,
       input: entry.input,
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
     });
-    if (!started) {
+    if (startResult !== "started") {
       return;
     }
 

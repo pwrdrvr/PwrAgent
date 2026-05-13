@@ -3055,6 +3055,41 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clears a staged skill when backend concurrent-start rejection queues the prefixed request", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const planChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: planChoice.value,
+      }),
+    );
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("thread already has an active turn in progress"),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.not.stringContaining("Pending skill: $ce:plan"),
+    });
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    expect(queuedNotice).toMatchObject({
+      body: expect.stringContaining("> Use [$ce:plan](/skills/ce-plan/SKILL.md)"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+  });
+
   it("clears starting state when navigation lookup fails before retrying", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -5163,6 +5198,36 @@ describe("MessagingController", () => {
       kind: "error",
       title: "Skills unavailable",
     });
+  });
+
+  it("honors Back and Cancel text fallbacks from the skills search prompt", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("back"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Skills",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("cancel"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Thread:"),
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("clears the skills browser pending intent when returning to status", async () => {
