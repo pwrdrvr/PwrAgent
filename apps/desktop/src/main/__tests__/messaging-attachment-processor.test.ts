@@ -111,7 +111,7 @@ describe("processMessagingAttachments", () => {
     });
   });
 
-  it("extracts simple text-bearing PDFs and rejects PDFs without text", async () => {
+  it("passes PDFs through as file input without text extraction", async () => {
     const adapter = createAdapter({
       "readable.pdf": bytes("%PDF-1.7\n(hello pdf) Tj\n"),
       "scan.pdf": bytes("%PDF-1.7\n/image data\n"),
@@ -142,13 +142,23 @@ describe("processMessagingAttachments", () => {
       ],
     });
 
-    expect(readable.input[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("hello pdf"),
-    });
-    expect(scanned.rejections[0]).toMatchObject({
-      name: "scan.pdf",
-      reason: "PDF text could not be extracted.",
-    });
+    expect(readable.rejections).toEqual([]);
+    expect(readable.input).toEqual([
+      {
+        type: "file",
+        name: "readable.pdf",
+        mimeType: "application/pdf",
+        data: Buffer.from("%PDF-1.7\n(hello pdf) Tj\n").toString("base64"),
+        sizeBytes: 24,
+      },
+    ]);
+    expect(scanned.rejections).toEqual([]);
+    expect(scanned.input).toEqual([
+      expect.objectContaining({
+        type: "file",
+        name: "scan.pdf",
+        mimeType: "application/pdf",
+      }),
+    ]);
   });
 });

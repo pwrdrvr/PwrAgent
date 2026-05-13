@@ -2,9 +2,11 @@ import { memo, type ReactNode } from "react";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
+  AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
+  AppServerThreadTextPart,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptImage } from "./TranscriptImage";
@@ -74,8 +76,9 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
 TranscriptMessage.displayName = "TranscriptMessage";
 
 type MessagePartSegment =
-  | { type: "text"; part: Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> }
+  | { type: "text"; part: AppServerThreadTextPart }
   | { type: "table"; text: string; wide: boolean }
+  | { type: "files"; parts: AppServerThreadFilePart[]; startIndex: number }
   | { type: "images"; parts: AppServerThreadImagePart[]; startIndex: number };
 
 function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegment[] {
@@ -92,6 +95,20 @@ function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegm
 
       segments.push({
         type: "images",
+        parts: [part],
+        startIndex: index
+      });
+      continue;
+    }
+    if (part.type === "file") {
+      const existingSegment = segments[segments.length - 1];
+      if (existingSegment?.type === "files") {
+        existingSegment.parts.push(part);
+        continue;
+      }
+
+      segments.push({
+        type: "files",
         parts: [part],
         startIndex: index
       });
@@ -321,6 +338,28 @@ function renderMessageSegment(params: {
     );
   }
 
+  if (params.segment.type === "files") {
+    const fileSegment = params.segment;
+    return (
+      <div key={`files:${params.index}`} className="transcript-message__file-list">
+        {fileSegment.parts.map((filePart, fileIndex) => (
+          <div
+            key={`file:${fileSegment.startIndex + fileIndex}`}
+            className="transcript-message__file-chip"
+          >
+            <span className="transcript-message__file-badge" aria-hidden="true">
+              {fileBadge(filePart)}
+            </span>
+            <span className="transcript-message__file-copy">
+              <span className="transcript-message__file-name">{filePart.name}</span>
+              <span className="transcript-message__file-meta">{fileMeta(filePart)}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <ThreadMarkdown
       key={`text:${params.index}`}
@@ -331,6 +370,31 @@ function renderMessageSegment(params: {
       text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
     />
   );
+}
+
+function fileBadge(filePart: AppServerThreadFilePart): string {
+  return filePart.mimeType === "application/pdf" || filePart.name.toLowerCase().endsWith(".pdf")
+    ? "PDF"
+    : "FILE";
+}
+
+function fileMeta(filePart: AppServerThreadFilePart): string {
+  return [filePart.mimeType, formatByteSize(filePart.sizeBytes)].filter(Boolean).join(" | ");
+}
+
+function formatByteSize(bytes: number | undefined): string | undefined {
+  if (bytes === undefined) {
+    return undefined;
+  }
+  if (bytes < 1024) {
+    return `${bytes} bytes`;
+  }
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
+  }
+  const mib = kib / 1024;
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
 }
 
 function renderMessageHeader(

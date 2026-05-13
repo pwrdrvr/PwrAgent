@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ImagePart, ModelMessage, TextPart, UserModelMessage } from "ai";
+import type { FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from "ai";
 import type { AppServerTurnInputItem } from "../app-server/internal-contract.js";
 
 export type AiSdkMessageHistoryEntry = {
@@ -24,7 +24,7 @@ export async function buildAiSdkMessages(params: {
     });
   }
 
-  const content: Array<TextPart | ImagePart> = [];
+  const content: Array<TextPart | ImagePart | FilePart> = [];
   for (const item of params.input) {
     if (item.type === "text") {
       content.push({ type: "text", text: item.text });
@@ -32,6 +32,10 @@ export async function buildAiSdkMessages(params: {
     }
     if (item.type === "image") {
       content.push(parseImageUrl(item.url));
+      continue;
+    }
+    if (item.type === "file") {
+      content.push(parseFileInput(item));
       continue;
     }
     content.push(await readLocalImage(item.path));
@@ -45,6 +49,17 @@ export async function buildAiSdkMessages(params: {
     content,
   } satisfies UserModelMessage);
   return messages;
+}
+
+function parseFileInput(
+  item: Extract<AppServerTurnInputItem, { type: "file" }>,
+): FilePart {
+  return {
+    type: "file",
+    data: Buffer.from(item.data, "base64"),
+    mediaType: item.mimeType,
+    filename: item.name,
+  };
 }
 
 function parseImageUrl(url: string): ImagePart {

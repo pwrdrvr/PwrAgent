@@ -13,6 +13,7 @@ import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadReviewEntry,
@@ -415,6 +416,24 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
       type: "image",
       url: imageUrl,
     };
+    return [part];
+  }
+
+  if (normalizedType === "file") {
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!name) {
+      return [];
+    }
+    const part: AppServerThreadFilePart = {
+      type: "file",
+      name,
+    };
+    if (typeof record.mimeType === "string" && record.mimeType.trim()) {
+      part.mimeType = record.mimeType.trim();
+    }
+    if (typeof record.sizeBytes === "number" && Number.isFinite(record.sizeBytes)) {
+      part.sizeBytes = record.sizeBytes;
+    }
     return [part];
   }
 

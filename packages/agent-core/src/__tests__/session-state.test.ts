@@ -188,6 +188,58 @@ describe("AppServerSessionState", () => {
     );
   });
 
+  it("preserves file metadata in replay messages without persisting bytes", () => {
+    const state = new AppServerSessionState();
+
+    state.createThread({ threadId: "thread-1" });
+    state.appendInput("thread-1", [
+      { type: "text", text: "What's in this?" },
+      {
+        type: "file",
+        name: "sample.pdf",
+        mimeType: "application/pdf",
+        data: Buffer.from("%PDF-1.7\n").toString("base64"),
+        sizeBytes: 9,
+      },
+    ]);
+
+    expect(state.readThread("thread-1")).toEqual(
+      expect.objectContaining({
+        messages: [
+          {
+            role: "user",
+            text: "What's in this?",
+            parts: [
+              { type: "text", text: "What's in this?" },
+              {
+                type: "file",
+                name: "sample.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 9,
+              },
+            ],
+          },
+        ],
+        items: [
+          expect.objectContaining({
+            type: "userMessage",
+            role: "user",
+            text: "What's in this?",
+            parts: [
+              { type: "text", text: "What's in this?" },
+              {
+                type: "file",
+                name: "sample.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 9,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+  });
+
   it("hydrates persisted threads from the rollout store on startup", async () => {
     const temp = await createTemporaryTestDirectory();
 

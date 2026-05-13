@@ -2983,6 +2983,63 @@ describe("MessagingController", () => {
     );
   });
 
+  it("routes inbound PDFs into bound thread turns as file input", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/image data\n");
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("What's in this?"),
+      id: "event-pdf",
+      kind: "media",
+      text: "What's in this?",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "Bullstrap-2024-10-05.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "What's in this?",
+          },
+          {
+            type: "file",
+            name: "Bullstrap-2024-10-05.pdf",
+            mimeType: "application/pdf",
+            data: Buffer.from(pdfData).toString("base64"),
+            sizeBytes: pdfData.byteLength,
+          },
+        ],
+      }),
+    );
+  });
+
   it("debounces split text messages into one agent turn", async () => {
     vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 500 });

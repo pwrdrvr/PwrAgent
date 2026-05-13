@@ -5746,6 +5746,61 @@ textarea,
   gap: 10px;
 }
 
+.transcript-message__file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transcript-message__file-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-message__file-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.transcript-message__file-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.transcript-message__file-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-message__file-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .transcript-message__text-block > * {
   margin: 0;
 }

@@ -1,6 +1,5 @@
-import type {
-  AppServerTurnInputItem,
-} from "@pwragent/shared";
+import { Buffer } from "node:buffer";
+import type { AppServerTurnInputItem } from "@pwragent/shared";
 import type {
   MessagingAttachmentDescriptor,
 } from "@pwragent/messaging-interface";
@@ -127,23 +126,13 @@ export async function processMessagingAttachments(params: {
       }
 
       if (classification.kind === "pdf") {
-        const extracted = extractBasicPdfText(downloaded.data);
-        if (!extracted) {
-          rejections.push({
-            name: attachment.name,
-            reason: "PDF text could not be extracted.",
-          });
-          continue;
-        }
-        textInput.push(
-          formatAttachmentText({
-            content: truncateText(extracted, policy.maxExtractedTextCharacters),
-            fileName: downloaded.fileName,
-            mimeType: classification.mimeType,
-            sizeBytes: downloaded.sizeBytes,
-            truncated: extracted.length > policy.maxExtractedTextCharacters,
-          }),
-        );
+        mediaInput.push({
+          type: "file",
+          name: downloaded.fileName,
+          mimeType: classification.mimeType,
+          data: Buffer.from(downloaded.data).toString("base64"),
+          sizeBytes: downloaded.sizeBytes,
+        });
         continue;
       }
 
@@ -266,12 +255,4 @@ function truncateText(text: string, maxCharacters: number): string {
     return text;
   }
   return `${text.slice(0, maxCharacters)}\n[attachment truncated]`;
-}
-
-function extractBasicPdfText(data: Uint8Array): string | undefined {
-  const decoded = new TextDecoder("latin1", { fatal: false }).decode(data);
-  const matches = [...decoded.matchAll(/\(([^()]*)\)\s*Tj/g)]
-    .map((match) => match[1]?.replace(/\\([()\\])/g, "$1").trim())
-    .filter((value): value is string => Boolean(value));
-  return matches.length > 0 ? matches.join("\n") : undefined;
 }

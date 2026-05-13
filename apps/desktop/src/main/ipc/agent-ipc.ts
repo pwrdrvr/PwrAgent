@@ -80,12 +80,15 @@ function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, un
       item.type === "text"
     )
     .reduce((count, item) => count + item.text.length, 0);
-  const imageCount = input.filter((item) => item.type !== "text").length;
+  const imageCount = input.filter((item) => item.type === "image" || item.type === "localImage")
+    .length;
+  const fileCount = input.filter((item) => item.type === "file").length;
 
   return {
     inputCount: input.length,
     textChars,
     imageCount,
+    fileCount,
   };
 }
 

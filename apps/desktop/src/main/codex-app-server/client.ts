@@ -4,6 +4,7 @@ import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
+  AppServerFileInputItem,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadCommandDetail,
@@ -11,6 +12,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
+  AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
@@ -110,6 +112,8 @@ type CodexClientOptions = {
   requestTimeoutMs?: number;
   clientVersion?: string;
 };
+
+type CodexPassThroughUserInput = CodexUserInput | AppServerFileInputItem;
 
 type InitializeResult = {
   serverInfo?: {
@@ -1229,6 +1233,26 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
     const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
     if (alt) {
       part.alt = alt;
+    }
+    return [part];
+  }
+
+  if (normalizedType === "file" || normalizedType === "input_file") {
+    const name = pickString(record, ["name", "filename", "fileName", "file_name"]);
+    if (!name) {
+      return [];
+    }
+    const part: AppServerThreadFilePart = {
+      type: "file",
+      name,
+    };
+    const mimeType = pickString(record, ["mimeType", "mime_type", "mediaType", "media_type"]);
+    if (mimeType) {
+      part.mimeType = mimeType;
+    }
+    const sizeBytes = pickNumber(record, ["sizeBytes", "size_bytes", "bytes"]);
+    if (sizeBytes !== undefined) {
+      part.sizeBytes = sizeBytes;
     }
     return [part];
   }
@@ -3410,7 +3434,7 @@ function buildCollaborationModeOverrides(params: {
   };
 }
 
-function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
+function toCodexUserInput(input: AppServerTurnInputItem): CodexPassThroughUserInput {
   if (input.type === "text") {
     return {
       type: "text",
@@ -3438,7 +3462,7 @@ function buildTurnStartPayload(params: {
 }): CodexTurnStartParams {
   const base: CodexTurnStartParams = {
     threadId: params.threadId,
-    input: params.input.map(toCodexUserInput),
+    input: params.input.map(toCodexUserInput) as CodexTurnStartParams["input"],
   };
 
   if (params.cwd?.trim()) {
@@ -4669,7 +4693,7 @@ export class CodexAppServerClient {
 
     const payload: CodexTurnSteerParams = {
       threadId: params.threadId,
-      input: params.input.map(toCodexUserInput),
+      input: params.input.map(toCodexUserInput) as CodexTurnSteerParams["input"],
       expectedTurnId: params.expectedTurnId,
     };
     const result = await requestWithFallbacks({

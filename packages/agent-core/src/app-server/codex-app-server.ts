@@ -522,6 +522,18 @@ function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {
         path: asRequiredString(record.path, "localImage input requires path"),
       };
     }
+    if (type === "file") {
+      const sizeBytes = record.sizeBytes;
+      return {
+        type: "file",
+        name: asRequiredString(record.name, "file input requires name"),
+        mimeType: asRequiredString(record.mimeType, "file input requires mimeType"),
+        data: asRequiredString(record.data, "file input requires data"),
+        ...(typeof sizeBytes === "number" && Number.isFinite(sizeBytes)
+          ? { sizeBytes }
+          : {}),
+      };
+    }
     throw new AppServerProtocolError(`Unsupported input type: ${type}`);
   });
 }

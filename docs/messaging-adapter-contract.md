@@ -111,10 +111,11 @@ Providers expose metadata and transport:
 
 Desktop messaging core owns ingestion policy. It enforces attachment count and
 byte caps, sniffs content instead of trusting MIME alone, converts supported
-text-like files into bounded text input, normalizes images/GIF stills into
-model-safe JPEG/PNG data URLs, and returns user-visible rejection reasons for
-unsupported or oversized files. Downloaded bytes and extracted file contents are
-not persisted in messaging state.
+text-like files into bounded text input, passes PDFs through as native file
+input, normalizes images/GIF stills into model-safe JPEG/PNG data URLs, and
+returns user-visible rejection reasons for unsupported or oversized files.
+Downloaded bytes and extracted file contents are not persisted in messaging
+state.
 
 ## Typing Activity
 

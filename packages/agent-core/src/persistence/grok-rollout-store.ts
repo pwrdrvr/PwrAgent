@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   AppServerRole,
-  AppServerTurnInputItem,
+  AppServerThreadMessagePart,
   ThreadReplayItem,
   ThreadState,
 } from "../app-server/internal-contract.js";
@@ -11,7 +11,7 @@ import { parseFlatToml, stringifyFlatToml } from "../config/simple-toml.js";
 export type StoredMessage = {
   role: AppServerRole;
   text: string;
-  parts?: AppServerTurnInputItem[];
+  parts?: AppServerThreadMessagePart[];
 };
 
 export type HydratedSessionState = {
@@ -53,7 +53,7 @@ type RolloutRecord =
       type: "message";
       role: AppServerRole;
       text: string;
-      parts?: AppServerTurnInputItem[];
+      parts?: AppServerThreadMessagePart[];
     }
   | {
       type: "item";
