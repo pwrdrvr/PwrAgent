@@ -1,44 +1,55 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
-import { readAppLogSnapshot, readFileTail } from "../app-logs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetAppLogsForTests,
+  appendAppLogEntry,
+  readAppLogSnapshot,
+  subscribeAppLogEntries,
+} from "../app-logs";
 
 describe("app log snapshots", () => {
-  it("reads the whole file when it fits under the tail cap", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pwragent-logs-"));
-    const filePath = join(dir, "main.log");
-    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
-
-    await expect(readFileTail(filePath, 1024)).resolves.toMatchObject({
-      content: "one\ntwo\nthree\n",
-      sizeBytes: 14,
-      truncated: false,
-    });
+  beforeEach(() => {
+    _resetAppLogsForTests();
   });
 
-  it("keeps the last complete lines when the log is larger than the cap", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pwragent-logs-"));
-    const filePath = join(dir, "main.log");
-    await writeFile(filePath, "first line\nsecond line\nthird line\n", "utf8");
-
-    await expect(readFileTail(filePath, 18)).resolves.toMatchObject({
-      content: "third line\n",
-      truncated: true,
-    });
-  });
-
-  it("returns an unavailable snapshot when the log path cannot be read", async () => {
-    const snapshot = await readAppLogSnapshot({
-      filePath: "/no/such/pwragent.log",
+  it("returns buffered in-memory log entries", () => {
+    appendAppLogEntry({
+      timestamp: 1778616000000,
+      level: "info",
+      scope: "pwragent:test",
+      line: "[2026-05-12 20:00:00.000] [info] (pwragent:test) ready",
     });
 
-    expect(snapshot).toMatchObject({
+    expect(readAppLogSnapshot()).toMatchObject({
       kind: "log-snapshot",
-      path: "/no/such/pwragent.log",
-      content: "",
+      entries: [
+        {
+          sequence: 1,
+          timestamp: 1778616000000,
+          level: "info",
+          scope: "pwragent:test",
+        },
+      ],
       truncated: false,
     });
-    expect(snapshot.unavailableReason).toBeTruthy();
+  });
+
+  it("notifies subscribers as entries are appended", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAppLogEntries(listener);
+
+    const entry = appendAppLogEntry({
+      timestamp: 1778616000000,
+      level: "warn",
+      line: "[2026-05-12 20:00:00.000] [warn] warning",
+    });
+
+    expect(listener).toHaveBeenCalledWith(entry);
+    unsubscribe();
+    appendAppLogEntry({
+      timestamp: 1778616000001,
+      level: "info",
+      line: "[2026-05-12 20:00:00.001] [info] ready",
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

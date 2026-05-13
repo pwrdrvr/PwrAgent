@@ -1,9 +1,13 @@
 import electronLog from "electron-log/main.js";
+import { appendAppLogEntry } from "./app-logs";
 
 let initialized = false;
 const MAX_COMPACT_STRING_LENGTH = 320;
 const MAX_COMPACT_FIELDS = 24;
 const MAX_COMPACT_DEPTH = 2;
+
+type ElectronLogHook = (typeof electronLog.hooks)[number];
+type ElectronLogMessage = Parameters<ElectronLogHook>[0];
 
 export function initializeMainLogger(): void {
   if (initialized) {
@@ -13,30 +17,65 @@ export function initializeMainLogger(): void {
   initialized = true;
   electronLog.initialize();
   electronLog.scope.labelPadding = false;
-  electronLog.hooks.push((message) => ({
-    ...message,
-    data: compactStructuredLogData(message.data),
-  }));
+  electronLog.hooks.push((
+    message: ElectronLogMessage,
+    _transport: Parameters<ElectronLogHook>[1],
+    transportName: Parameters<ElectronLogHook>[2],
+  ) => {
+    const compacted: ElectronLogMessage = {
+      ...message,
+      data: compactStructuredLogData(message.data),
+    };
+    if (transportName === "file") {
+      appendAppLogEntry({
+        timestamp: message.date.getTime(),
+        level: String(message.level),
+        scope: message.scope,
+        line: formatAppLogLine(compacted),
+      });
+    }
+    return compacted;
+  });
 }
 
 export function getMainLogger(scope: string) {
   return electronLog.scope(scope);
 }
 
-export function getMainLogFilePath(): string | undefined {
-  const transport = electronLog.transports.file as {
-    getFile?: () => { path?: unknown };
-  };
-  const filePath = transport.getFile?.().path;
-  return typeof filePath === "string" && filePath.length > 0
-    ? filePath
-    : undefined;
-}
-
 type CompactField = {
   key: string;
   value: string;
 };
+
+export function formatAppLogLine(message: ElectronLogMessage): string {
+  const timestamp = formatLogTimestamp(message.date);
+  const level = String(message.level).padEnd(5, " ");
+  const scope = message.scope ? ` (${message.scope})` : "";
+  const text = message.data.map(formatLogTextPart).join(" ");
+  return `[${timestamp}] [${level}]${scope} ${text}`.trimEnd();
+}
+
+function formatLogTimestamp(date: Date): string {
+  const pad = (value: number, width = 2): string =>
+    String(value).padStart(width, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+}
+
+function formatLogTextPart(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return String(value);
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+  return JSON.stringify(value) ?? String(value);
+}
 
 export function compactStructuredLogData(data: unknown[]): unknown[] {
   if (data.length < 2 || typeof data[0] !== "string") {

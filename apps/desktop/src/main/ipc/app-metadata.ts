@@ -5,6 +5,7 @@ import { app, ipcMain } from "electron";
 import {
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+  APP_LOG_ENTRY_EVENT_CHANNEL,
   APP_LOG_SNAPSHOT_READ_CHANNEL,
   APP_LOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
@@ -17,12 +18,15 @@ import type {
   AppLicenseDocumentKind,
   AppMetadata,
 } from "../../shared/app-metadata";
-import { readAppLogSnapshot } from "../app-logs";
+import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
 import { showChangelogWindow } from "../changelog-window";
+import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 const APP_HOMEPAGE = "https://pwrdrvr.com";
+
+let unsubscribeAppLogEntries: (() => void) | undefined;
 
 export function resolveAppMetadata(): AppMetadata {
   return {
@@ -80,6 +84,15 @@ export async function readAppChangelogDocument(): Promise<AppChangelogDocument> 
 }
 
 export function registerAppMetadataIpcHandlers(): void {
+  unsubscribeAppLogEntries?.();
+  unsubscribeAppLogEntries = subscribeAppLogEntries((entry) => {
+    for (const webContents of subscribersForChannel(APP_LOG_ENTRY_EVENT_CHANNEL)) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(APP_LOG_ENTRY_EVENT_CHANNEL, entry);
+      }
+    }
+  });
+
   ipcMain.removeHandler(APP_METADATA_READ_CHANNEL);
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
@@ -113,6 +126,8 @@ export function registerAppMetadataIpcHandlers(): void {
 }
 
 export function disposeAppMetadataIpcHandlers(): void {
+  unsubscribeAppLogEntries?.();
+  unsubscribeAppLogEntries = undefined;
   ipcMain.removeHandler(APP_METADATA_READ_CHANNEL);
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);

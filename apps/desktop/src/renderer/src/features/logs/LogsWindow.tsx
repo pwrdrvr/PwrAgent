@@ -7,10 +7,9 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import type { AppLogSnapshot } from "../../../../shared/app-metadata";
+import type { AppLogEntry } from "../../../../shared/app-metadata";
 import { useDesktopApi } from "../../lib/desktop-api";
 
-const POLL_INTERVAL_MS = 1000;
 const BOTTOM_THRESHOLD_PX = 32;
 
 type LogLinePart = {
@@ -39,7 +38,9 @@ export function LogsWindow() {
   const desktopApi = useDesktopApi();
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const activeMatchRef = useRef<HTMLElement | null>(null);
-  const [snapshot, setSnapshot] = useState<AppLogSnapshot | undefined>();
+  const followingRef = useRef(true);
+  const [entries, setEntries] = useState<AppLogEntry[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -59,7 +60,8 @@ export function LogsWindow() {
     setLoading(true);
     try {
       const value = await reader();
-      setSnapshot(value);
+      setEntries(value.entries);
+      setTruncated(value.truncated);
       setError(undefined);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -73,16 +75,20 @@ export function LogsWindow() {
   }, [loadSnapshot]);
 
   useEffect(() => {
-    if (!following) {
+    followingRef.current = following;
+  }, [following]);
+
+  useEffect(() => {
+    if (!desktopApi?.onAppLogEntry) {
       return;
     }
-    const interval = window.setInterval(() => {
-      void loadSnapshot();
-    }, POLL_INTERVAL_MS);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [following, loadSnapshot]);
+    return desktopApi.onAppLogEntry((entry) => {
+      if (!followingRef.current) {
+        return;
+      }
+      setEntries((current) => [...current, entry]);
+    });
+  }, [desktopApi]);
 
   useEffect(() => {
     const handleSelectionChange = (): void => {
@@ -107,11 +113,11 @@ export function LogsWindow() {
       return;
     }
     element.scrollTop = element.scrollHeight;
-  }, [following, snapshot?.content]);
+  }, [following, entries]);
 
   const rendered = useMemo(() => {
-    return buildRenderedLogLines(snapshot?.content ?? "", query);
-  }, [query, snapshot?.content]);
+    return buildRenderedLogLines(entries.map((entry) => entry.line).join("\n"), query);
+  }, [entries, query]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -129,13 +135,6 @@ export function LogsWindow() {
       inline: "nearest",
     });
   }, [activeMatchIndex]);
-
-  const copyPath = useCallback(() => {
-    if (!snapshot?.path) {
-      return;
-    }
-    void desktopApi?.copyText?.(snapshot.path);
-  }, [desktopApi, snapshot?.path]);
 
   const jumpToEnd = useCallback(() => {
     setFollowing(true);
@@ -244,30 +243,15 @@ export function LogsWindow() {
             >
               Follow
             </button>
-            <button
-              className="log-window__button"
-              disabled={loading || !desktopApi?.readAppLogSnapshot}
-              type="button"
-              onClick={() => void loadSnapshot()}
-            >
-              Refresh
-            </button>
           </div>
 
           <div className="log-window__status">
             <span className="log-window__status-text">
-              {snapshot?.path ?? snapshot?.unavailableReason ?? "Log file pending"}
+              {following
+                ? "Live app log stream"
+                : "Paused app log stream"}
             </span>
-            {snapshot?.path ? (
-              <button
-                className="log-window__link-button"
-                type="button"
-                onClick={copyPath}
-              >
-                Copy path
-              </button>
-            ) : null}
-            {snapshot?.truncated ? (
+            {truncated ? (
               <span className="log-window__status-note">Showing tail</span>
             ) : null}
           </div>
@@ -280,13 +264,12 @@ export function LogsWindow() {
 
           <div
             ref={logViewportRef}
+            aria-label="Log viewport"
             className="log-window__viewport"
             onPointerDown={pauseFollowingForInteraction}
             onScroll={handleScroll}
           >
-            {snapshot?.unavailableReason ? (
-              <p className="document-window__empty">{snapshot.unavailableReason}</p>
-            ) : rendered.lines.length > 0 ? (
+            {rendered.lines.length > 0 ? (
               <pre className="log-window__lines" aria-label="Log output">
                 {rendered.lines.map((line) => (
                   <LogLine

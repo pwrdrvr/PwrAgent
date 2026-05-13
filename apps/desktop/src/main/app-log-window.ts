@@ -9,6 +9,7 @@ import {
   WINDOW_KIND_APP_LOGS,
   registerWindowChannels,
 } from "./window-channels";
+import { APP_LOG_ENTRY_EVENT_CHANNEL } from "../shared/ipc";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
@@ -44,7 +45,7 @@ export function showAppLogWindow(): void {
   });
 
   applyWindowSecurityHardening(window);
-  registerWindowChannels(window, WINDOW_KIND_APP_LOGS, []);
+  registerWindowChannels(window, WINDOW_KIND_APP_LOGS, [APP_LOG_ENTRY_EVENT_CHANNEL]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

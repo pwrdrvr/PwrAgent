@@ -25,13 +25,18 @@ export type AppChangelogDocument = {
 export type AppLogSnapshot = {
   kind: "log-snapshot";
   title: string;
-  path?: string;
-  content: string;
-  sizeBytes: number;
-  modifiedAt?: number;
+  entries: AppLogEntry[];
   readAt: number;
   truncated: boolean;
   unavailableReason?: string;
+};
+
+export type AppLogEntry = {
+  sequence: number;
+  timestamp: number;
+  level: string;
+  scope?: string;
+  line: string;
 };
 
 export type AppUpdateCheckResult =

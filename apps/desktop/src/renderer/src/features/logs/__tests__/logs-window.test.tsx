@@ -79,13 +79,24 @@ describe("LogsWindow", () => {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
-        path: "/Users/huntharo/Library/Logs/PwrAgent/main.log",
-        content: "INFO booted\nWARN retry\n",
-        sizeBytes: 24,
+        entries: [
+          {
+            sequence: 1,
+            timestamp: Date.now(),
+            level: "info",
+            line: "INFO booted",
+          },
+          {
+            sequence: 2,
+            timestamp: Date.now(),
+            level: "warn",
+            line: "WARN retry",
+          },
+        ],
         readAt: Date.now(),
         truncated: false,
       })),
-      copyText: vi.fn(async () => undefined),
+      onAppLogEntry: vi.fn(() => () => undefined),
     } as unknown as DesktopApi;
     (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
 
@@ -93,41 +104,82 @@ describe("LogsWindow", () => {
 
     expect(await screen.findByLabelText("Search logs")).toBeInTheDocument();
     expect(await screen.findByText("INFO booted")).toBeInTheDocument();
-    expect(screen.getByText("/Users/huntharo/Library/Logs/PwrAgent/main.log"))
-      .toBeInTheDocument();
+    expect(screen.getByText("Live app log stream")).toBeInTheDocument();
     await waitFor(() => {
       expect(desktopApi.readAppLogSnapshot).toHaveBeenCalled();
     });
   });
 
-  it("pauses tail polling while the log output is being selected", async () => {
-    vi.useFakeTimers();
+  it("appends streamed log entries while following", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
     const desktopApi = {
       readAppLogSnapshot: vi.fn(async () => ({
         kind: "log-snapshot",
         title: "Logs",
-        path: "/Users/huntharo/Library/Logs/PwrAgent/main.log",
-        content: "[2026-05-12 20:06:28.722] [info] (pwragent:main) stable line\n",
-        sizeBytes: 72,
+        entries: [],
         readAt: Date.now(),
         truncated: false,
       })),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
     } as unknown as DesktopApi;
     (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
 
     render(<LogsWindow />);
 
-    await act(async () => {
-      await Promise.resolve();
+    await screen.findByLabelText("Log viewport");
+    act(() => {
+      listener?.({
+        sequence: 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) streamed line",
+      });
     });
-    expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(1);
 
-    fireEvent.pointerDown(screen.getByLabelText("Log output"));
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-      await Promise.resolve();
+    expect(await screen.findByText(/streamed line/)).toBeInTheDocument();
+  });
+
+  it("ignores streamed log entries while the log output is being selected", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        entries: [
+          {
+            sequence: 1,
+            timestamp: Date.now(),
+            level: "info",
+            line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) stable line",
+          },
+        ],
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    await screen.findByText(/stable line/);
+    fireEvent.pointerDown(screen.getByLabelText("Log viewport"));
+    act(() => {
+      listener?.({
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:29.000] [info] (pwragent:main) moving line",
+      });
     });
 
-    expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/moving line/)).not.toBeInTheDocument();
+    expect(screen.getByText("Paused app log stream")).toBeInTheDocument();
   });
 });
