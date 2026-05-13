@@ -978,6 +978,46 @@ function resolveCodexEnvironmentSelection(
   };
 }
 
+async function resetLaunchpadAfterMaterialize(params: {
+  defaults: NavigationLaunchpadDefaults;
+  launchpad: NavigationLaunchpadDraft;
+  overlayStore: OverlayStoreLike;
+}): Promise<void> {
+  const { defaults, launchpad, overlayStore } = params;
+  await overlayStore.resetDirectoryLaunchpad({
+    directoryKey: launchpad.directoryKey,
+  });
+
+  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+    return;
+  }
+
+  const now = Date.now();
+  await overlayStore.upsertDirectoryLaunchpad({
+    directoryKey: launchpad.directoryKey,
+    directoryKind: launchpad.directoryKind,
+    directoryLabel: launchpad.directoryLabel,
+    directoryPath: launchpad.directoryPath,
+    backend: "codex",
+    executionMode: defaults.executionMode,
+    model: defaults.model,
+    reasoningEffort: defaults.reasoningEffort,
+    serviceTier: defaults.serviceTier,
+    fastMode: defaults.fastMode,
+    prompt: "",
+    workMode: defaultLaunchpadWorkMode(launchpad, defaults),
+    branchName: launchpad.branchName,
+    codexEnvironmentId: launchpad.codexEnvironmentId,
+    codexEnvironmentExecutionTarget:
+      launchpad.codexEnvironmentExecutionTarget ?? "local",
+    codexEnvironmentSetupEnabled:
+      launchpad.codexEnvironmentSetupEnabled ?? false,
+    codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
   const text = input
     .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
@@ -3302,8 +3342,13 @@ export class DesktopBackendRegistry {
       turnId = turnResponse.turnId;
     }
 
-    await this.overlayStore.resetDirectoryLaunchpad({
-      directoryKey: request.directoryKey,
+    await resetLaunchpadAfterMaterialize({
+      defaults: await this.resolveLaunchpadDefaults(
+        await this.overlayStore.getLaunchpadDefaults(),
+        launchpad.backend,
+      ),
+      launchpad,
+      overlayStore: this.overlayStore,
     });
 
     return {

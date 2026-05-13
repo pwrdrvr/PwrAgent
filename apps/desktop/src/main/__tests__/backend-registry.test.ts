@@ -1776,6 +1776,65 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps selected Codex environments sticky after materializing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        launchpad: {
+          directoryKey: `directory:${root}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: root,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "hello",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      await expect(
+        overlayStore.getDirectoryLaunchpad({ directoryKey: `directory:${root}` }),
+      ).resolves.toMatchObject({
+        prompt: "",
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("updates Codex git metadata when materializing a git-backed launchpad", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
     const repo = path.join(root, "app");

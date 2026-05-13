@@ -73,9 +73,7 @@ export async function listCodexEnvironmentOptions(
       sourcePath,
       setupScript: normalizeScript(parsed.setup?.script),
       cleanupScript: normalizeScript(parsed.cleanup?.script),
-      actions: parsed.actions
-        .map((action, index) => normalizeAction(action, index))
-        .filter((action): action is NonNullable<typeof action> => Boolean(action)),
+      actions: normalizeActions(parsed.actions),
     });
   }
 
@@ -261,6 +259,7 @@ function normalizeScript(script?: string): string | undefined {
 function normalizeAction(
   action: RawAction,
   index: number,
+  existingIds: Set<string>,
 ): CodexEnvironmentOption["actions"][number] | undefined {
   const command = action.command?.trim();
   if (!command) {
@@ -268,12 +267,39 @@ function normalizeAction(
   }
 
   const name = action.name?.trim() || `Action ${index + 1}`;
+  const fallbackId = `action-${index + 1}`;
+  const id = makeUniqueActionId(slugify(name) || fallbackId, existingIds);
   return {
-    id: slugify(name) || `action-${index + 1}`,
+    id,
     name,
     icon: action.icon?.trim() || undefined,
     command,
   };
+}
+
+function normalizeActions(
+  actions: RawAction[],
+): CodexEnvironmentOption["actions"] {
+  const existingIds = new Set<string>();
+  const normalized: CodexEnvironmentOption["actions"] = [];
+  actions.forEach((action, index) => {
+    const next = normalizeAction(action, index, existingIds);
+    if (next) {
+      normalized.push(next);
+    }
+  });
+  return normalized;
+}
+
+function makeUniqueActionId(id: string, existingIds: Set<string>): string {
+  let candidate = id;
+  let counter = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${id}-${counter}`;
+    counter += 1;
+  }
+  existingIds.add(candidate);
+  return candidate;
 }
 
 function makeUniqueEnvironmentId(

@@ -82,4 +82,38 @@ command = "pnpm dev"
       },
     ]);
   });
+
+  it("dedupes action ids when action names collide", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+
+[[actions]]
+name = "Start dev"
+command = "pnpm dev"
+
+[[actions]]
+name = "Start Dev"
+command = "pnpm dev:alt"
+`,
+      "utf8",
+    );
+
+    const options = await listCodexEnvironmentOptions(root);
+    expect(options[0]?.actions).toMatchObject([
+      {
+        id: "start-dev",
+        command: "pnpm dev",
+      },
+      {
+        id: "start-dev-2",
+        command: "pnpm dev:alt",
+      },
+    ]);
+  });
 });
