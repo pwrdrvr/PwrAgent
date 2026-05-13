@@ -50,6 +50,20 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
   return selectionKey.slice("launchpad:".length);
 }
 
+function compareNavigationDirectoriesByLabel(
+  left: NavigationDirectorySummary,
+  right: NavigationDirectorySummary
+): number {
+  const labelDelta = left.label.localeCompare(right.label);
+  return labelDelta !== 0 ? labelDelta : left.key.localeCompare(right.key);
+}
+
+function sortNavigationDirectories(
+  directories: NavigationSnapshot["directories"]
+): NavigationSnapshot["directories"] {
+  return [...directories].sort(compareNavigationDirectoriesByLabel);
+}
+
 function formatArchiveCleanupFailure(
   cleanup: ArchiveThreadCleanupResult[]
 ): string | undefined {
@@ -814,20 +828,22 @@ function applyLaunchpadUpdate(
 
   return {
     ...snapshot,
-    directories: foundDirectory
-      ? directories
-      : [
-          {
-            key: launchpad.directoryKey,
-            kind: launchpad.directoryKind,
-            label: launchpad.directoryLabel,
-            path: launchpad.directoryPath,
-            threadKeys: [],
-            needsAttentionCount: 0,
-            launchpad,
-          },
-          ...directories,
-        ],
+    directories: sortNavigationDirectories(
+      foundDirectory
+        ? directories
+        : [
+            ...directories,
+            {
+              key: launchpad.directoryKey,
+              kind: launchpad.directoryKind,
+              label: launchpad.directoryLabel,
+              path: launchpad.directoryPath,
+              threadKeys: [],
+              needsAttentionCount: 0,
+              launchpad,
+            },
+          ],
+    ),
     launchpadDefaults: defaults,
   };
 }
@@ -907,7 +923,7 @@ function projectOptimisticThreadIntoDirectories(
     changed = true;
   }
 
-  return changed ? nextDirectories : directories;
+  return changed ? sortNavigationDirectories(nextDirectories) : directories;
 }
 
 function hasSelectionKey(

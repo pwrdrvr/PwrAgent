@@ -360,6 +360,10 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof launchpadRecord.settingsTouchedAt === "number"
                 ? launchpadRecord.settingsTouchedAt
                 : undefined,
+            registeredAt:
+              typeof launchpadRecord.registeredAt === "number"
+                ? launchpadRecord.registeredAt
+                : undefined,
             createdAt:
               typeof launchpadRecord.createdAt === "number"
                 ? launchpadRecord.createdAt

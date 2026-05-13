@@ -2033,6 +2033,87 @@ describe("useThreadNavigation", () => {
       };
     }
 
+    it("keeps newly registered directories sorted by label", async () => {
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/kube-manifests",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/kube-manifests",
+        directoryKey: "directory:/Users/me/repos/kube-manifests",
+        directoryLabel: "kube-manifests",
+        currentBranch: "main",
+        launchpad: {
+          directoryKey: "directory:/Users/me/repos/kube-manifests",
+          directoryKind: "directory" as const,
+          directoryLabel: "kube-manifests",
+          directoryPath: "/Users/me/repos/kube-manifests",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }));
+      const getNavigationSnapshot = vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [
+          {
+            key: "directory:/Users/me/repos/web-app",
+            kind: "directory" as const,
+            label: "web-app",
+            path: "/Users/me/repos/web-app",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
+          {
+            key: "directory:/Users/me/repos/infra",
+            kind: "directory" as const,
+            label: "infra",
+            path: "/Users/me/repos/infra",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }));
+
+      const desktopApi = buildBaseDesktopApi({
+        getNavigationSnapshot,
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.pickAndRegisterDirectory();
+      });
+
+      expect(result.current.directories.map((directory) => directory.label)).toEqual([
+        "infra",
+        "kube-manifests",
+        "web-app",
+      ]);
+      expect(result.current.selectedItemKey).toBe(
+        "launchpad:directory:/Users/me/repos/kube-manifests",
+      );
+    });
+
     it("seeds the launchpad and focuses it on a successful pick", async () => {
       const pickDirectoryFromDisk = vi.fn(async () => ({
         canceled: false as const,

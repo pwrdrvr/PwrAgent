@@ -338,6 +338,7 @@ export function buildNavigationSnapshotHash(params: {
             })),
             workMode: directory.launchpad.workMode,
             branchName: directory.launchpad.branchName ?? null,
+            registeredAt: directory.launchpad.registeredAt ?? null,
             settingsTouchedAt: directory.launchpad.settingsTouchedAt ?? null,
             updatedAt: directory.launchpad.updatedAt,
           }

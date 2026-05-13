@@ -1429,6 +1429,38 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("marks picked project directories as registered launchpads", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const opened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      registeredAt: 12_345,
+    });
+
+    expect(opened.launchpad.registeredAt).toBe(12_345);
+    await expect(
+      overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }),
+    ).resolves.toMatchObject({
+      directoryKey: "directory:/repo-a",
+      registeredAt: 12_345,
+      prompt: "",
+    });
+
+    await registry.close();
+  });
+
   it("keeps launchpad directory metadata when the first draft update arrives", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({

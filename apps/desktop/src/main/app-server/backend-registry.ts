@@ -2946,6 +2946,7 @@ export class DesktopBackendRegistry {
       request.preferredBackend,
     );
     if (existing) {
+      const registeredAt = existing.registeredAt ?? request.registeredAt;
       const backend = await this.resolveLaunchpadBackend(existing.backend);
       const modelSettings = await this.resolveLaunchpadModelSettings(
         backend,
@@ -2980,6 +2981,7 @@ export class DesktopBackendRegistry {
           fastMode: defaults.fastMode,
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
+          registeredAt,
           updatedAt: Date.now(),
         };
         return {
@@ -2995,7 +2997,8 @@ export class DesktopBackendRegistry {
         normalizedExisting.model !== existing.model ||
         normalizedExisting.reasoningEffort !== existing.reasoningEffort ||
         normalizedExisting.serviceTier !== existing.serviceTier ||
-        normalizedExisting.fastMode !== existing.fastMode
+        normalizedExisting.fastMode !== existing.fastMode ||
+        registeredAt !== existing.registeredAt
       ) {
         return {
           launchpad: await this.overlayStore.upsertDirectoryLaunchpad({
@@ -3003,6 +3006,7 @@ export class DesktopBackendRegistry {
             directoryKind: request.directoryKind,
             directoryLabel: request.directoryLabel,
             directoryPath: request.directoryPath,
+            registeredAt,
             updatedAt: Date.now(),
           }),
           defaults,
@@ -3027,6 +3031,7 @@ export class DesktopBackendRegistry {
       serviceTier: defaults.serviceTier,
       fastMode: defaults.fastMode,
       prompt: "",
+      registeredAt: request.registeredAt,
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
       createdAt: Date.now(),

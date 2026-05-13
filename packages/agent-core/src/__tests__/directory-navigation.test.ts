@@ -244,6 +244,39 @@ describe("buildDirectorySummaries", () => {
     expect(directories).toEqual([]);
   });
 
+  it("keeps explicitly registered directories even when their launchpad is empty", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "directory:/Users/huntharo/pwrdrvr/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          registeredAt: 1_500,
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        launchpad: expect.objectContaining({
+          prompt: "",
+          registeredAt: 1_500,
+        }),
+      }),
+    ]);
+  });
+
   it("keeps launchpads with user-touched settings even when the prompt is empty", () => {
     const directories = buildDirectorySummaries({
       threads: [],

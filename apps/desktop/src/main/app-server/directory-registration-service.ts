@@ -40,6 +40,7 @@ export type DirectoryRegistrationDeps = {
     directoryPath: string;
     currentBranch?: string;
     preferredBackend?: AppServerBackendKind;
+    registeredAt?: number;
   }) => Promise<EnsureDirectoryLaunchpadResponse>;
   /** Test seam — defaults to a real `git` execFile invocation. */
   runGit?: (cwd: string, args: string[]) => Promise<string>;
@@ -169,6 +170,7 @@ export async function registerDirectoryFromDisk(
     directoryPath: repoRoot,
     currentBranch,
     preferredBackend: request.preferredBackend,
+    registeredAt: Date.now(),
   });
 
   return {
