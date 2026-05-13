@@ -7012,6 +7012,14 @@ textarea,
   white-space: nowrap;
 }
 
+.composer-dropdown__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
 .composer-dropdown__chevron {
   color: var(--text-muted);
   font-size: 14px;

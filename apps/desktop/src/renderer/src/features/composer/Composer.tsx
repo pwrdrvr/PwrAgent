@@ -30,7 +30,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { EditorIcon, TerminalIcon } from "../../icons";
+import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -166,6 +166,8 @@ type ComposerDropdownOption = {
   label: string;
   value: string;
 };
+
+type ComposerDropdownIcon = (props: { size?: number }) => ReactNode;
 
 type QueuedTurnDraft = {
   id: string;
@@ -757,6 +759,7 @@ function ComposerDropdown(props: {
   ariaLabel: string;
   compact?: boolean;
   disabled?: boolean;
+  icon?: ComposerDropdownIcon;
   id?: string;
   kind?: "branch";
   onChange: (value: string) => void;
@@ -768,6 +771,7 @@ function ComposerDropdown(props: {
   const selectedOption =
     props.options.find((option) => option.value === props.value) ?? props.options[0];
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const Icon = props.icon;
 
   return (
     <div
@@ -793,6 +797,11 @@ function ComposerDropdown(props: {
         value={props.value}
         onClick={() => setOpen((current) => !current)}
       >
+        {Icon ? (
+          <span aria-hidden="true" className="composer-dropdown__icon">
+            <Icon size={13} />
+          </span>
+        ) : null}
         <span className="composer-dropdown__label">
           {selectedOption?.label ?? props.value}
         </span>
@@ -3643,6 +3652,7 @@ export function Composer(props: ComposerProps) {
               ariaLabel="Codex environment"
               compact
               disabled={launchpadSubmitting}
+              icon={FileCodeIcon}
               value={props.launchpad.codexEnvironmentId ?? ""}
               options={[
                 { label: "No environment", value: "" },

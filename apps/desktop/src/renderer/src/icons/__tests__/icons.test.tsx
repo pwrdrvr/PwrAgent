@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BranchIcon,
   DiscordIcon,
+  FileCodeIcon,
   FolderIcon,
   MattermostIcon,
   NewThreadIcon,
@@ -21,6 +22,7 @@ afterEach(() => {
 
 const ALL_ICONS = [
   ["FolderIcon", FolderIcon],
+  ["FileCodeIcon", FileCodeIcon],
   ["BranchIcon", BranchIcon],
   ["WorkspaceIcon", WorkspaceIcon],
   ["WorktreeIcon", WorktreeIcon],

@@ -2,6 +2,7 @@ export { BranchIcon } from "./BranchIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
 export { FeishuIcon } from "./FeishuIcon";
+export { FileCodeIcon } from "./FileCodeIcon";
 export { FolderIcon } from "./FolderIcon";
 export { MattermostIcon } from "./MattermostIcon";
 export { LineIcon } from "./LineIcon";
