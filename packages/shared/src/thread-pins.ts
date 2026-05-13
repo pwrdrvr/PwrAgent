@@ -40,11 +40,10 @@ export function compareThreadsByCreatedAtDesc<T extends CreationSortableThread>(
   left: T,
   right: T,
 ): number {
-  if (left.createdAt === undefined || right.createdAt === undefined) {
-    return 0;
-  }
+  const createdComparison = (right.createdAt ?? 0) - (left.createdAt ?? 0);
+  if (createdComparison !== 0) return createdComparison;
 
-  return right.createdAt - left.createdAt;
+  return right.id.localeCompare(left.id);
 }
 
 export function buildAppendPinRank(existingRanks: Array<string | undefined>): string {
