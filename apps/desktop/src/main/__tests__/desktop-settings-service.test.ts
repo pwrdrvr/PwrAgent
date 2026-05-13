@@ -30,6 +30,9 @@ describe("DesktopSettingsService", () => {
         'chat_reply_composer = "tiptap-chips"',
         "",
         "[messaging]",
+        "allow_full_access_thread_resume = false",
+        "allow_full_access_escalation = false",
+        'full_access_warning = "always"',
         "input_debounce_ms = 750",
         'tool_update_mode = "show_more"',
         "",
@@ -80,6 +83,18 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.inputDebounceMs).toEqual({
       value: 750,
+      source: "config",
+    });
+    expect(snapshot.messaging.allowFullAccessThreadResume).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(snapshot.messaging.allowFullAccessEscalation).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(snapshot.messaging.fullAccessWarning).toEqual({
+      value: "always",
       source: "config",
     });
     expect(snapshot.messaging.telegram.enabled).toEqual({
@@ -183,6 +198,8 @@ describe("DesktopSettingsService", () => {
         "[[messaging.telegram.authorized_users]]",
         'id = "111111111"',
         'display_name = "Harold"',
+        'full_access_warning = "always"',
+        "full_access_warning_dismissed = true",
         "",
         "[[messaging.telegram.authorized_supergroups]]",
         'id = "-1003841603622"',
@@ -200,7 +217,12 @@ describe("DesktopSettingsService", () => {
     const snapshot = await service.readSettings();
 
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
-      { id: "111111111", displayName: "Harold" },
+      {
+        id: "111111111",
+        displayName: "Harold",
+        fullAccessWarningOverride: "always",
+        fullAccessWarningDismissed: true,
+      },
     ]);
     expect(snapshot.messaging.telegram.authorizedSupergroups.value).toEqual([
       { id: "-1003841603622", displayName: "PwrAgent ops" },

@@ -3160,8 +3160,18 @@ textarea,
   align-items: center;
 }
 
+.settings-authorized-list__row--with-warning {
+  grid-template-columns:
+    minmax(140px, 1fr)
+    minmax(140px, 1fr)
+    minmax(128px, 0.7fr)
+    auto
+    auto;
+}
+
 .settings-authorized-list__id,
-.settings-authorized-list__name {
+.settings-authorized-list__name,
+.settings-authorized-list__warning {
   min-width: 0;
 }
 

@@ -61,6 +61,7 @@ describe("desktop messaging config", () => {
       "discord",
       "enabled",
       "feishu",
+      "fullAccessControls",
       "inputDebounceMs",
       "line",
       "mattermost",
@@ -225,6 +226,12 @@ describe("desktop messaging config", () => {
 
     expect(config).toEqual({
       enabled: true,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {},
+      },
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
       telegram: {
@@ -449,6 +456,21 @@ describe("desktop messaging config", () => {
         maxAttachmentBytes: 10485760,
         maxAttachmentCount: 4,
       },
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "111111111", displayName: "" }],
+          discord: [{ id: "222222222", displayName: "" }],
+          mattermost: [],
+          slack: [],
+          feishu: [],
+          line: [],
+        },
+        dismissWarning: expect.any(Function),
+        canDismissWarning: expect.any(Function),
+      },
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -545,6 +567,134 @@ describe("desktop messaging config", () => {
     expect(messagingLog.error).not.toHaveBeenCalledWith(
       expect.stringContaining("no authorized user IDs configured"),
       expect.anything(),
+    );
+  });
+
+  it("persists messaging Full Access warning dismissal for one authorized user", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        "",
+        "[[messaging.telegram.authorized_users]]",
+        'id = "111111111"',
+        'display_name = "Harold"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+    await config.fullAccessControls?.dismissWarning?.({
+      actorId: "111111111",
+      channel: "telegram",
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
+      {
+        id: "111111111",
+        displayName: "Harold",
+        fullAccessWarningDismissed: true,
+      },
+    ]);
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "full_access_warning_dismissed = true",
+    );
+  });
+
+  it("refuses to insert an authorized user while dismissing a Full Access warning", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        "",
+        "[[messaging.telegram.authorized_users]]",
+        'id = "111111111"',
+        'display_name = "Harold"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+    expect(
+      await config.fullAccessControls?.canDismissWarning?.({
+        actorId: "222222222",
+        channel: "telegram",
+      }),
+    ).toBe(false);
+    await config.fullAccessControls?.dismissWarning?.({
+      actorId: "222222222",
+      channel: "telegram",
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
+      {
+        id: "111111111",
+        displayName: "Harold",
+      },
+    ]);
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("222222222");
+    expect(messagingLog.error).toHaveBeenCalledWith(
+      "refusing to insert authorized user while dismissing Full Access warning",
+      {
+        actorId: "222222222",
+        channel: "telegram",
+        insertNewUser: false,
+      },
+    );
+  });
+
+  it("does not offer persistent Full Access warning dismissal for env-sourced contacts", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "[messaging.telegram]\nenabled = true\n", "utf8");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {
+        [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "111111111",
+      },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+    expect(
+      await config.fullAccessControls?.canDismissWarning?.({
+        actorId: "111111111",
+        channel: "telegram",
+      }),
+    ).toBe(false);
+    await config.fullAccessControls?.dismissWarning?.({
+      actorId: "111111111",
+      channel: "telegram",
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain(
+      "full_access_warning_dismissed",
+    );
+    expect(messagingLog.error).toHaveBeenCalledWith(
+      "refusing to dismiss Full Access warning for non-config authorized user",
+      {
+        actorId: "111111111",
+        channel: "telegram",
+        source: "env",
+      },
     );
   });
 
@@ -674,6 +824,12 @@ describe("desktop messaging config", () => {
 
   it("redacts bot tokens while preserving useful diagnostics", () => {
     const redacted = redactDesktopMessagingConfig({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {},
+      },
       telegram: {
         channel: "telegram",
         botToken: "secret-token",
@@ -695,6 +851,11 @@ describe("desktop messaging config", () => {
     expect(JSON.stringify(redacted)).not.toContain("secret");
     expect(redacted).toEqual({
       enabled: true,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+      },
       telegram: {
         channel: "telegram",
         enabled: true,

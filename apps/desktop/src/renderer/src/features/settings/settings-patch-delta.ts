@@ -315,7 +315,12 @@ function authorizedContactArrayEqual(
 ): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (a[i]?.id !== b[i]?.id || a[i]?.displayName !== b[i]?.displayName) {
+    if (
+      a[i]?.id !== b[i]?.id ||
+      a[i]?.displayName !== b[i]?.displayName ||
+      a[i]?.fullAccessWarningOverride !== b[i]?.fullAccessWarningOverride ||
+      a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed
+    ) {
       return false;
     }
   }

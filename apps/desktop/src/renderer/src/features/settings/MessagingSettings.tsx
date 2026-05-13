@@ -27,6 +27,8 @@ import {
   type IdentifierValidationResult,
   type DesktopSettingsSecretName,
   type DesktopSettingsSnapshot,
+  type DesktopMessagingFullAccessWarningGlobalPolicy,
+  type DesktopMessagingFullAccessWarningUserPolicy,
   type MessagingChannelKind,
   type MessagingPairingEntry,
   type MessagingPairingScope,
@@ -63,6 +65,11 @@ export function MessagingSettings(props: {
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
+  onFullAccessEscalationChange: (enabled: boolean) => Promise<void>;
+  onFullAccessThreadResumeChange: (enabled: boolean) => Promise<void>;
+  onFullAccessWarningPolicyChange: (
+    policy: DesktopMessagingFullAccessWarningGlobalPolicy,
+  ) => Promise<void>;
   onPairingSettingsChanged?: () => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
@@ -90,6 +97,11 @@ export function MessagingSettings(props: {
   const feishu = props.snapshot.messaging.feishu;
   const line = props.snapshot.messaging.line;
   const messagingEnabled = props.snapshot.messaging.enabled;
+  const allowFullAccessEscalation =
+    props.snapshot.messaging.allowFullAccessEscalation;
+  const allowFullAccessThreadResume =
+    props.snapshot.messaging.allowFullAccessThreadResume;
+  const fullAccessWarning = props.snapshot.messaging.fullAccessWarning;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const runtimeMessaging = props.snapshot.runtime.messaging;
@@ -185,6 +197,37 @@ export function MessagingSettings(props: {
             value={inputDebounceMs.value}
             onSave={props.onInputDebounceMsChange}
           />
+          <ToggleField
+            checked={allowFullAccessThreadResume.value}
+            disabled={props.saving}
+            label="Resume Full Access threads"
+            sub="Allow messaging users to see and resume threads that are already in Full Access."
+            source={sourceBadge(allowFullAccessThreadResume)}
+            onChange={(enabled) => {
+              void props.onFullAccessThreadResumeChange(enabled);
+            }}
+          />
+          <ToggleField
+            checked={allowFullAccessEscalation.value}
+            disabled={props.saving}
+            label="Escalate to Full Access"
+            sub="Allow messaging users to switch Default Access threads or new threads into Full Access."
+            source={sourceBadge(allowFullAccessEscalation)}
+            onChange={(enabled) => {
+              void props.onFullAccessEscalationChange(enabled);
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving}
+            label="Full Access warning"
+            sub="Controls whether messaging users see the Full Access risk warning before escalation."
+            options={FULL_ACCESS_WARNING_POLICY_OPTIONS}
+            source={sourceBadge(fullAccessWarning)}
+            value={fullAccessWarning.value}
+            onChange={(policy) => {
+              void props.onFullAccessWarningPolicyChange(policy);
+            }}
+          />
         </div>
       </SettingsSection>
 
@@ -268,6 +311,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(telegram.authorizedUserIds)}
             validateEntry={validateTelegramUserIdEntry}
             value={telegram.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveTelegram({
                 ...telegram,
@@ -399,6 +443,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(discord.authorizedUserIds)}
             validateEntry={validateDiscordUserIdEntry}
             value={discord.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveDiscord({
                 ...discord,
@@ -613,6 +658,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(mattermost.authorizedUserIds)}
             validateEntry={validateMattermostUserIdEntry}
             value={mattermost.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveMattermost({
                 ...mattermost,
@@ -819,6 +865,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(slack.authorizedUserIds)}
             validateEntry={validateSlackUserIdEntry}
             value={slack.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveSlack({
                 ...slack,
@@ -1055,6 +1102,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(feishu.authorizedUserIds)}
             validateEntry={validateFeishuOpenIdEntry}
             value={feishu.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveFeishu({
                 ...feishu,
@@ -1236,6 +1284,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(line.authorizedUserIds)}
             validateEntry={validateLineUserIdEntry}
             value={line.authorizedUserIds.value}
+            fullAccessWarningPolicy
             onSave={(authorizedUserIds) => {
               void props.onSaveLine({
                 ...line,
@@ -1299,6 +1348,25 @@ const TOOL_UPDATE_MODE_OPTIONS: Array<{
   { label: "Show Some", value: "show_some" },
   { label: "Show More", value: "show_more" },
   { label: "Show All", value: "show_all" },
+];
+
+const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingFullAccessWarningGlobalPolicy;
+}> = [
+  { label: "Dismissable", value: "dismissable" },
+  { label: "Always", value: "always" },
+  { label: "Off", value: "never" },
+];
+
+const FULL_ACCESS_WARNING_USER_POLICY_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingFullAccessWarningUserPolicy;
+}> = [
+  { label: "Default", value: "default" },
+  { label: "Yes - Always", value: "always" },
+  { label: "Yes - Dismissable", value: "dismissable" },
+  { label: "No", value: "never" },
 ];
 
 const SLACK_INBOUND_MODE_OPTIONS: Array<{
@@ -1790,6 +1858,7 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
 
 function AuthorizedListField(props: {
   disabled?: boolean;
+  fullAccessWarningPolicy?: boolean;
   help?: ReactNode;
   label: string;
   lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
@@ -1918,7 +1987,11 @@ function AuthorizedListField(props: {
 
       const nextRows = latestRows.map((current, rowIndex) =>
         rowIndex === indexToLookup
-          ? { id: row.id, displayName: result.displayName ?? "" }
+          ? {
+              ...current,
+              id: row.id,
+              displayName: result.displayName ?? "",
+            }
           : current,
       );
       setRows(nextRows);
@@ -1970,7 +2043,11 @@ function AuthorizedListField(props: {
               return (
                 <div
                   key={index}
-                  className="settings-authorized-list__row"
+                  className={`settings-authorized-list__row${
+                    props.fullAccessWarningPolicy
+                      ? " settings-authorized-list__row--with-warning"
+                      : ""
+                  }`}
                 >
                   <input
                     aria-describedby={invalid ? descriptionId : undefined}
@@ -2016,6 +2093,39 @@ function AuthorizedListField(props: {
                       })
                     }
                   />
+                  {props.fullAccessWarningPolicy ? (
+                    <select
+                      aria-label={`${props.label} Full Access warning ${index + 1}`}
+                      className="settings-input settings-authorized-list__warning"
+                      disabled={props.disabled}
+                      value={row.fullAccessWarningOverride ?? "default"}
+                      onBlur={() => {
+                        const nextRows = rows.map((current, rowIndex) =>
+                          rowIndex === index
+                            ? normalizeAuthorizedContactRow(current)
+                            : current,
+                        );
+                        setRows(nextRows);
+                        saveIfValid(nextRows);
+                      }}
+                      onChange={(event) =>
+                        updateRow(index, {
+                          fullAccessWarningOverride: event.currentTarget
+                            .value as DesktopMessagingFullAccessWarningUserPolicy,
+                          fullAccessWarningDismissed:
+                            event.currentTarget.value === "default"
+                              ? row.fullAccessWarningDismissed
+                              : false,
+                        })
+                      }
+                    >
+                      {FULL_ACCESS_WARNING_USER_POLICY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
                   <button
                     aria-label={`Lookup ${props.label} row ${index + 1}`}
                     className="button button--ghost settings-authorized-list__lookup"
@@ -2046,7 +2156,13 @@ function AuthorizedListField(props: {
               onClick={() =>
                 setRows((current) => [
                   ...current,
-                  { id: "", displayName: "" },
+                  {
+                    id: "",
+                    displayName: "",
+                    ...(props.fullAccessWarningPolicy
+                      ? { fullAccessWarningOverride: "default" as const }
+                      : {}),
+                  },
                 ])
               }
             >
@@ -2143,6 +2259,13 @@ function normalizeAuthorizedContactRow(
   return {
     id: contact.id.trim(),
     displayName: sanitizeMessagingContactLabel(contact.displayName),
+    ...(contact.fullAccessWarningOverride &&
+    contact.fullAccessWarningOverride !== "default"
+      ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
+      : {}),
+    ...(contact.fullAccessWarningDismissed === true
+      ? { fullAccessWarningDismissed: true }
+      : {}),
   };
 }
 

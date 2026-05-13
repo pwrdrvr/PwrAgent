@@ -46,6 +46,7 @@ export const BRANCH_PICKER_PAGE_SIZE = 8;
 export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
 export function buildBindingStatusIntent(params: {
+  allowFullAccessEscalation?: boolean;
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
@@ -135,6 +136,7 @@ export function buildBindingStatusIntent(params: {
       .join("\n"),
     actions: buildStatusActions({
       capabilityProfile: params.capabilityProfile,
+      allowFullAccessEscalation: params.allowFullAccessEscalation,
       fastMode,
       handoff: params.handoff,
       permissionsMode,
@@ -162,6 +164,7 @@ function mentionRequiredLine(
 }
 
 function buildStatusActions(params: {
+  allowFullAccessEscalation?: boolean;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
@@ -177,6 +180,21 @@ function buildStatusActions(params: {
     return [];
   }
 
+  const permissionsAction:
+    | MessagingSurfaceAction
+    | undefined =
+    params.permissionsMode === "full-access" || params.allowFullAccessEscalation !== false
+      ? {
+          id: "status:permissions",
+          label: formatPermissionsActionLabel(
+            params.permissionsMode,
+            params.queuedExecutionMode,
+          ),
+          style: "secondary",
+          fallbackText: "permissions",
+          priority: 7,
+        }
+      : undefined;
   const allActions: MessagingSurfaceAction[] = [
     {
       id: "status:model",
@@ -199,16 +217,7 @@ function buildStatusActions(params: {
       fallbackText: "fast",
       priority: 6,
     },
-    {
-      id: "status:permissions",
-      label: formatPermissionsActionLabel(
-        params.permissionsMode,
-        params.queuedExecutionMode,
-      ),
-      style: "secondary",
-      fallbackText: "permissions",
-      priority: 7,
-    },
+    ...(permissionsAction ? [permissionsAction] : []),
     ...(params.handoff
       ? [
           {

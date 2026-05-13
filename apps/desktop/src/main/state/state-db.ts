@@ -385,7 +385,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     }
   })();
 
-  if (!columnExists(db, "app_runtime_instances", "cwd_hash")) {
+  if (!appRuntimeInstancesColumnExists(db, "cwd_hash")) {
     db.exec("ALTER TABLE app_runtime_instances ADD COLUMN cwd_hash TEXT");
   }
   db.exec(`
@@ -394,12 +394,11 @@ CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
 `);
 }
 
-function columnExists(
+function appRuntimeInstancesColumnExists(
   db: BetterSqlite3.Database,
-  tableName: string,
   columnName: string,
 ): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+  const rows = db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
     name: string;
   }>;
   return rows.some((row) => row.name === columnName);

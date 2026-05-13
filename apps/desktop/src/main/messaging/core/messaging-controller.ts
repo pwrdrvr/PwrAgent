@@ -6,6 +6,8 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
+  DesktopAuthorizedContact,
+  DesktopMessagingFullAccessWarningGlobalPolicy,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
@@ -278,6 +280,75 @@ type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
   | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
+type MessagingFullAccessControls = {
+  allowEscalation: boolean;
+  allowThreadResume: boolean;
+  warningPolicy: DesktopMessagingFullAccessWarningGlobalPolicy;
+  authorizedUsers?: Partial<Record<MessagingChannelKind, DesktopAuthorizedContact[]>>;
+  dismissWarning?: (params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }) => Promise<void>;
+  canDismissWarning?: (params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }) => boolean | Promise<boolean>;
+};
+
+type MessagingFullAccessControlsResolverFn = () =>
+  | MessagingFullAccessControls
+  | undefined
+  | Promise<MessagingFullAccessControls | undefined>;
+
+type MessagingFullAccessControlsResolver =
+  | MessagingFullAccessControls
+  | MessagingFullAccessControlsResolverFn;
+
+type FullAccessEscalationContext =
+  | {
+      backend: AppServerBackendKind;
+      binding?: MessagingBindingRecord;
+      kind: "thread";
+      threadId: ThreadIdentifier;
+    }
+  | {
+      kind: "new-thread";
+      session: MessagingBrowseSessionRecord;
+    }
+  | {
+      backend: AppServerBackendKind;
+      kind: "resume-thread";
+      session: MessagingBrowseSessionRecord;
+      threadId: ThreadIdentifier;
+    };
+
+type FullAccessRiskWarningContext =
+  | {
+      bindingId: string;
+      kind: "thread";
+      threadId: ThreadIdentifier;
+    }
+  | {
+      kind: "new-thread";
+      sessionId: string;
+    }
+  | {
+      backend: AppServerBackendKind;
+      kind: "resume-thread";
+      sessionId: string;
+      threadId: ThreadIdentifier;
+    };
+
+type FullAccessRiskPresentation = {
+  binding?: MessagingBindingRecord;
+  surface?: MessagingSurfaceRef;
+};
+
+type FullAccessWarningResolution = {
+  canDismiss: boolean;
+  shouldWarn: boolean;
+};
+
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
   backend?: AppServerBackendKind;
@@ -319,6 +390,7 @@ type PendingQueueAuditMessage = {
 };
 
 const PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX = "permissions:queue:cancel:";
+const FULL_ACCESS_RISK_ACTION_PREFIX = "full-access-risk:";
 
 type PendingNewThreadPromptWindow = {
   events: MessagingTurnInputEvent[];
@@ -345,8 +417,18 @@ export type MessagingControllerOptions = {
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
+  fullAccessControls?: MessagingFullAccessControlsResolver;
   deliveryBudget?: MessagingDeliveryBudget;
   onDeliveryBudgetEvent?: (event: MessagingControllerDeliveryBudgetEvent) => void;
+  onFullAccessPolicyViolation?: (event: {
+    actorId: string;
+    actorDisplayName?: string;
+    backend?: AppServerBackendKind;
+    bindingId?: string;
+    channel: MessagingChannelRef;
+    requestedAction: string;
+    threadId?: ThreadIdentifier;
+  }) => void | Promise<void>;
   /**
    * Notification hook invoked after any binding mutation the
    * controller performs (create, conversation-metadata refresh,
@@ -1339,6 +1421,17 @@ export class MessagingController {
         params.binding,
         navigation,
       );
+      if (
+        turnSettings.executionMode === "full-access" &&
+        !(await this.canUseFullAccessThread(params.binding, navigation))
+      ) {
+        await this.deliverFullAccessPolicyError(
+          params.binding,
+          params.event,
+          "Full Access threads cannot be resumed from messaging with the current settings.",
+        );
+        return "failed";
+      }
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -1688,6 +1781,12 @@ export class MessagingController {
       return;
     }
 
+    const fullAccessRiskAction = readFullAccessRiskAction(event);
+    if (fullAccessRiskAction) {
+      await this.handleFullAccessRiskCallback(event, fullAccessRiskAction);
+      return;
+    }
+
     const statusAction = readStatusAction(event);
     if (statusAction) {
       await this.handleStatusCallback(event, statusAction);
@@ -1702,6 +1801,25 @@ export class MessagingController {
 
     const bindingTarget = readBindingTarget(event);
     if (bindingTarget) {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      const targetThread = navigation.threads.find(
+        (thread) =>
+          thread.source === bindingTarget.backend &&
+          thread.id === bindingTarget.threadId,
+      );
+      if (
+        targetThread?.executionMode === "full-access" &&
+        !(await this.canResumeFullAccessThreads())
+      ) {
+        await this.deliverFullAccessPolicyError(
+          undefined,
+          event,
+          "Full Access threads cannot be resumed from messaging with the current settings.",
+        );
+        return;
+      }
       const binding = await this.bindChannelToThread(event, bindingTarget);
       await this.deliver(
         buildConfirmationIntent({
@@ -2757,6 +2875,15 @@ export class MessagingController {
         nextSession.preferences?.executionMode ??
         navigation.launchpadDefaults.executionMode;
       const executionMode = currentMode === "full-access" ? "default" : "full-access";
+      if (executionMode === "full-access") {
+        const allowed = await this.ensureFullAccessEscalationAllowed(
+          { kind: "new-thread", session: nextSession },
+          event,
+        );
+        if (!allowed) {
+          return;
+        }
+      }
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -2873,10 +3000,49 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
+      const targetThread = navigation.threads.find(
+        (thread) => thread.source === target.backend && thread.id === target.threadId,
+      );
+      if (
+        targetThread?.executionMode === "full-access" &&
+        !(await this.canResumeFullAccessThreads())
+      ) {
+        await this.deliverFullAccessPolicyError(
+          undefined,
+          event,
+          "Full Access threads cannot be resumed from messaging with the current settings.",
+        );
+        return;
+      }
+      const requestedExecutionMode = session.preferences?.executionMode;
+      const shouldEscalateTarget =
+        requestedExecutionMode === "full-access" &&
+        targetThread?.executionMode !== "full-access";
+      if (shouldEscalateTarget) {
+        const allowed = await this.ensureFullAccessEscalationAllowed(
+          {
+            backend: target.backend,
+            kind: "resume-thread",
+            session,
+            threadId: target.threadId,
+          },
+          event,
+        );
+        if (!allowed) {
+          return;
+        }
+      }
       const binding = await this.bindChannelToThread(event, target);
       const updatedBinding = session.preferences
         ? await this.updateBindingPreferences(binding, session.preferences)
         : binding;
+      if (shouldEscalateTarget) {
+        await this.options.backend.setThreadExecutionMode?.({
+          backend: target.backend,
+          threadId: target.threadId,
+          executionMode: "full-access",
+        });
+      }
       await this.options.store.deleteBrowseSession(session.id);
       await this.deliver(
         buildConfirmationIntent({
@@ -2972,10 +3138,11 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     await this.options.store.upsertBrowseSession(session);
+    const browseNavigation = await this.navigationForResumeBrowser(session, navigation);
     const intent = buildResumeIntent({
       id: this.newIntentId("resume"),
       createdAt: this.now(),
-      navigation,
+      navigation: browseNavigation,
       session,
     });
     await this.storePendingIntent(intent, undefined, event);
@@ -3064,6 +3231,7 @@ export class MessagingController {
       this.streamingResponsesDefault,
     );
     const canCreateWorktree = canCreateNewThreadWorktree(directory);
+    const fullAccessControls = await this.resolveFullAccessControls();
     await this.options.store.upsertBrowseSession(session);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -3073,8 +3241,8 @@ export class MessagingController {
       delivery: session.surface
         ? {
             mode: "update",
-          replaceMarkup: true,
-        }
+            replaceMarkup: true,
+          }
         : undefined,
       title: "Ready to start",
       body: newThreadPromptGateBody(session, options),
@@ -3111,12 +3279,17 @@ export class MessagingController {
               },
             ]
           : []),
-        {
-          id: "browse:new:permissions",
-          label: `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
-          style: "secondary",
-          fallbackText: "permissions",
-        },
+        ...(options.executionMode === "full-access" ||
+        fullAccessControls.allowEscalation
+          ? [
+              {
+                id: "browse:new:permissions",
+                label: `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
+                style: "secondary" as const,
+                fallbackText: "permissions",
+              },
+            ]
+          : []),
         {
           id: "browse:new:fast",
           label: options.fastMode ? "Fast: on" : "Fast: off",
@@ -3414,6 +3587,16 @@ export class MessagingController {
       directory,
       this.streamingResponsesDefault,
     );
+    if (
+      options.executionMode === "full-access" &&
+      !(await this.isFullAccessRiskAcceptedForSession(bundle.session, event))
+    ) {
+      await this.presentFullAccessRiskWarning(
+        { kind: "new-thread", session: bundle.session },
+        event,
+      );
+      return;
+    }
     const materialized = this.options.backend.materializeDirectoryLaunchpad
       ? await this.options.backend.materializeDirectoryLaunchpad({
           directoryKey: messagingLaunchpadMaterializationKey(bundle.session),
@@ -3480,6 +3663,37 @@ export class MessagingController {
       event,
       navigation: optimisticNavigation,
     });
+  }
+
+  private async navigationForResumeBrowser(
+    session: MessagingBrowseSessionRecord,
+    navigation: NavigationSnapshot,
+  ): Promise<NavigationSnapshot> {
+    if (session.launchAction !== "resume_thread") {
+      return navigation;
+    }
+    if (await this.canResumeFullAccessThreads()) {
+      return navigation;
+    }
+    const threads = navigation.threads.filter(
+      (thread) => thread.executionMode !== "full-access",
+    );
+    const allowedThreadKeys = new Set(
+      threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+    );
+    return {
+      ...navigation,
+      threads,
+      directories: navigation.directories.map((directory) => ({
+        ...directory,
+        threadKeys: directory.threadKeys.filter((threadKey) =>
+          allowedThreadKeys.has(threadKey)
+        ),
+      })),
+      inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
+        allowedThreadKeys.has(threadKey)
+      ),
+    };
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -4730,6 +4944,20 @@ export class MessagingController {
       "default";
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
+    if (executionMode === "full-access") {
+      const allowed = await this.ensureFullAccessEscalationAllowed(
+        {
+          backend: binding.backend,
+          binding,
+          kind: "thread",
+          threadId: binding.threadId,
+        },
+        event,
+      );
+      if (!allowed) {
+        return;
+      }
+    }
     // Update local binding prefs first so the bus-path render — which
     // fetches the binding fresh from the store — sees the new values
     // even if navigation snapshot hasn't reloaded yet. The registry
@@ -4750,6 +4978,455 @@ export class MessagingController {
     });
     // Refresh handled by the thread-state update bus on
     // thread/executionMode/updated — see refreshStatusSurfacesForThread.
+  }
+
+  private async ensureFullAccessEscalationAllowed(
+    context: FullAccessEscalationContext,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const controls = await this.resolveFullAccessControls();
+    if (!controls.allowEscalation) {
+      await this.recordFullAccessPolicyViolation(context, event);
+      await this.deliverFullAccessPolicyError(
+        context.kind === "thread" ? context.binding : undefined,
+        event,
+        "Escalating to Full Access from messaging is disabled in Settings.",
+      );
+      return false;
+    }
+
+    const warning = await this.resolveFullAccessWarning(controls, event);
+    if (!warning.shouldWarn) {
+      return true;
+    }
+
+    await this.presentFullAccessRiskWarning(context, event);
+    return false;
+  }
+
+  private async presentFullAccessRiskWarning(
+    context: FullAccessEscalationContext,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const controls = await this.resolveFullAccessControls();
+    const warning = await this.resolveFullAccessWarning(controls, event);
+    const actionContext: FullAccessRiskWarningContext =
+      context.kind === "thread"
+        ? {
+            kind: "thread",
+            bindingId: context.binding?.id ?? "",
+            threadId: context.threadId,
+          }
+        : context.kind === "new-thread"
+          ? {
+            kind: "new-thread",
+            sessionId: context.session.id,
+          }
+          : {
+              backend: context.backend,
+              kind: "resume-thread",
+              sessionId: context.session.id,
+              threadId: context.threadId,
+            };
+    const presentation = fullAccessRiskPresentationForContext(context);
+    const actions: MessagingConfirmationIntent["actions"] = [
+      {
+        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}accept`,
+        label: "Yes",
+        style: "primary",
+        fallbackText: "yes",
+        value: actionContext,
+      },
+      ...(warning.canDismiss
+        ? [
+            {
+              id: `${FULL_ACCESS_RISK_ACTION_PREFIX}dismiss`,
+              label: "Yes - and stop warning me",
+              style: "primary" as const,
+              fallbackText: "yes and stop warning me",
+              value: actionContext,
+            },
+          ]
+        : []),
+      {
+        id: `${FULL_ACCESS_RISK_ACTION_PREFIX}cancel`,
+        label: "Cancel",
+        style: "secondary",
+        fallbackText: "cancel",
+        value: actionContext,
+      },
+    ];
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("full-access-risk"),
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      delivery: presentation.surface
+        ? {
+            mode: "update",
+            replaceMarkup: true,
+          }
+        : undefined,
+      title: "Enable Full Access?",
+      body: [
+        "Full Access allows network access and read/write access to almost all files on this machine.",
+        "That means data can be exfiltrated unintentionally, or by malicious code the agent downloads and executes through a supply chain attack on npm, PyPI, Rust crates, Go modules, or a similar dependency source.",
+      ].join("\n\n"),
+      fallbackText: warning.canDismiss
+        ? "Reply Yes, Yes - and stop warning me, or Cancel."
+        : "Reply Yes or Cancel.",
+      actions,
+      targetSurface: presentation.surface,
+    });
+    const pending = await this.storePendingIntent(intent, presentation.binding, event);
+    const result = await this.deliver(intent, presentation.binding, event);
+    if (result.surface) {
+      await this.options.store.upsertPendingIntent({
+        ...pending,
+        surface: result.surface,
+      });
+    }
+  }
+
+  private async handleFullAccessRiskCallback(
+    event: MessagingInboundCallbackEvent,
+    action: "accept" | "dismiss" | "cancel",
+  ): Promise<void> {
+    const context = readFullAccessRiskContext(event.value);
+    if (!context) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+    if (action === "cancel") {
+      if (context.kind === "new-thread" || context.kind === "resume-thread") {
+        const session = await this.options.store.getBrowseSession(context.sessionId, {
+          now: this.now(),
+        });
+        if (!session) {
+          await this.deliverInvalidBrowseSelection(event);
+          return;
+        }
+        const navigation = await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+          filter: session.query,
+        });
+        if (context.kind === "new-thread") {
+          await this.presentNewThreadPromptGate(session, event, navigation);
+        } else {
+          await this.renderResumeBrowser(session, navigation, event);
+        }
+        return;
+      }
+      const binding = await this.options.store.getBinding(context.bindingId);
+      if (!binding) {
+        await this.deliverInvalidStatusSelection(event);
+        return;
+      }
+      if (binding.statusSurface || binding.pinnedStatusSurface) {
+        await this.renderBindingStatus(binding, event);
+        return;
+      }
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("full-access-risk-cancelled"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Full Access cancelled",
+          body: "No Full Access change was made.",
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const escalationContext =
+      await this.resolveFullAccessRiskCallbackContext(context, event);
+    if (!escalationContext) {
+      return;
+    }
+    if (!(await this.ensureFullAccessRiskCallbackAllowed(escalationContext, event))) {
+      return;
+    }
+
+    if (action === "dismiss") {
+      const controls = await this.resolveFullAccessControls();
+      const warning = await this.resolveFullAccessWarning(controls, event);
+      if (warning.canDismiss) {
+        await controls.dismissWarning?.({
+          actorId: event.actor.platformUserId,
+          channel: event.channel.channel,
+        });
+      }
+    }
+
+    if (escalationContext.kind === "new-thread") {
+      const { session } = escalationContext;
+      await this.presentNewThreadPromptGate(
+        {
+          ...session,
+          fullAccessRiskAcceptedAt: this.now(),
+          preferences: {
+            ...session.preferences,
+            executionMode: "full-access",
+            permissionsMode: "full-access",
+            updatedAt: this.now(),
+          },
+        },
+        event,
+      );
+      return;
+    }
+
+    if (escalationContext.kind === "resume-thread") {
+      const { session } = escalationContext;
+      const target = {
+        backend: escalationContext.backend,
+        threadId: escalationContext.threadId,
+      };
+      const binding = await this.bindChannelToThread(event, target);
+      const preferences = {
+        ...session.preferences,
+        executionMode: "full-access" as const,
+        permissionsMode: "full-access" as const,
+        updatedAt: this.now(),
+      };
+      const updatedBinding = await this.updateBindingPreferences(binding, preferences);
+      await this.options.backend.setThreadExecutionMode?.({
+        backend: escalationContext.backend,
+        threadId: escalationContext.threadId,
+        executionMode: "full-access",
+      });
+      await this.options.store.deleteBrowseSession(session.id);
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("bound"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          delivery: session.surface
+            ? {
+                mode: "update",
+                replaceMarkup: true,
+              }
+            : undefined,
+          title: "Thread bound",
+          body: "Messages in this conversation will route to the selected thread.",
+          fallbackText: "Send a message to continue the thread.",
+          targetSurface: session.surface,
+        }),
+        undefined,
+        event,
+      );
+      await this.renderBindingStatus(updatedBinding, event);
+      return;
+    }
+
+    const { binding } = escalationContext;
+    if (!binding) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+    await this.updateBindingPreferences(binding, {
+      executionMode: "full-access",
+      permissionsMode: "full-access",
+    });
+    await this.options.backend.setThreadExecutionMode?.({
+      backend: binding.backend,
+      threadId: escalationContext.threadId,
+      executionMode: "full-access",
+    });
+  }
+
+  private async resolveFullAccessRiskCallbackContext(
+    context: FullAccessRiskWarningContext,
+    event: MessagingInboundEvent,
+  ): Promise<FullAccessEscalationContext | undefined> {
+    if (context.kind === "new-thread") {
+      const session = await this.options.store.getBrowseSession(context.sessionId, {
+        now: this.now(),
+      });
+      if (!session) {
+        await this.deliverInvalidBrowseSelection(event);
+        return undefined;
+      }
+      return { kind: "new-thread", session };
+    }
+
+    if (context.kind === "resume-thread") {
+      const session = await this.options.store.getBrowseSession(context.sessionId, {
+        now: this.now(),
+      });
+      if (!session) {
+        await this.deliverInvalidBrowseSelection(event);
+        return undefined;
+      }
+      return {
+        backend: context.backend,
+        kind: "resume-thread",
+        session,
+        threadId: context.threadId,
+      };
+    }
+
+    const binding = await this.options.store.getBinding(context.bindingId);
+    if (!binding) {
+      await this.deliverInvalidStatusSelection(event);
+      return undefined;
+    }
+    return {
+      backend: binding.backend,
+      binding,
+      kind: "thread",
+      threadId: context.threadId,
+    };
+  }
+
+  private async ensureFullAccessRiskCallbackAllowed(
+    context: FullAccessEscalationContext,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const controls = await this.resolveFullAccessControls();
+    if (!controls.allowEscalation) {
+      await this.recordFullAccessPolicyViolation(context, event);
+      await this.deliverFullAccessPolicyError(
+        context.kind === "thread" ? context.binding : undefined,
+        event,
+        "Escalating to Full Access from messaging is disabled in Settings.",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  private async canResumeFullAccessThreads(): Promise<boolean> {
+    return (await this.resolveFullAccessControls()).allowThreadResume;
+  }
+
+  private async canUseFullAccessThread(
+    binding: MessagingBindingRecord,
+    navigation: NavigationSnapshot,
+  ): Promise<boolean> {
+    const thread = findThreadForBinding(navigation, binding);
+    if (thread?.executionMode !== "full-access") {
+      return true;
+    }
+    return await this.canResumeFullAccessThreads();
+  }
+
+  private async isFullAccessRiskAcceptedForSession(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    if (session.fullAccessRiskAcceptedAt) {
+      return true;
+    }
+    const controls = await this.resolveFullAccessControls();
+    if (!controls.allowEscalation) {
+      await this.recordFullAccessPolicyViolation(
+        { kind: "new-thread", session },
+        event,
+      );
+      await this.deliverFullAccessPolicyError(
+        undefined,
+        event,
+        "Starting a Full Access thread from messaging is disabled in Settings.",
+      );
+      return false;
+    }
+    const warning = await this.resolveFullAccessWarning(controls, event);
+    return !warning.shouldWarn;
+  }
+
+  private async resolveFullAccessControls(): Promise<MessagingFullAccessControls> {
+    const controls = this.options.fullAccessControls;
+    const resolved =
+      typeof controls === "function" ? await controls() : controls;
+    return {
+      allowEscalation: resolved?.allowEscalation ?? true,
+      allowThreadResume: resolved?.allowThreadResume ?? true,
+      warningPolicy: resolved?.warningPolicy ?? "dismissable",
+      authorizedUsers: resolved?.authorizedUsers ?? {},
+      dismissWarning: resolved?.dismissWarning,
+      canDismissWarning: resolved?.canDismissWarning,
+    };
+  }
+
+  private async resolveFullAccessWarning(
+    controls: MessagingFullAccessControls,
+    event: MessagingInboundEvent,
+  ): Promise<FullAccessWarningResolution> {
+    const contact = controls.authorizedUsers?.[event.channel.channel]?.find(
+      (candidate) => candidate.id === event.actor.platformUserId,
+    );
+    const policy = contact?.fullAccessWarningOverride ?? "default";
+    const effectivePolicy =
+      policy === "default" ? controls.warningPolicy : policy;
+    if (effectivePolicy === "never") {
+      return { canDismiss: false, shouldWarn: false };
+    }
+    if (effectivePolicy === "always") {
+      return { canDismiss: false, shouldWarn: true };
+    }
+    const canPersistDismissal =
+      controls.canDismissWarning
+        ? await controls.canDismissWarning({
+            actorId: event.actor.platformUserId,
+            channel: event.channel.channel,
+          })
+        : Boolean(controls.dismissWarning);
+    return {
+      canDismiss: Boolean(controls.dismissWarning) && canPersistDismissal,
+      shouldWarn: contact?.fullAccessWarningDismissed !== true,
+    };
+  }
+
+  private async deliverFullAccessPolicyError(
+    binding: MessagingBindingRecord | undefined,
+    event: MessagingInboundEvent | undefined,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("full-access-policy"),
+        createdAt: this.now(),
+        title: "Full Access blocked",
+        body,
+        recoverable: true,
+      }),
+      binding,
+      event,
+    );
+  }
+
+  private async recordFullAccessPolicyViolation(
+    context: FullAccessEscalationContext,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    try {
+      await this.options.onFullAccessPolicyViolation?.({
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        backend:
+          context.kind === "thread" || context.kind === "resume-thread"
+            ? context.backend
+            : undefined,
+        bindingId: context.kind === "thread" ? context.binding?.id : undefined,
+        channel: event.channel,
+        requestedAction:
+          context.kind === "thread"
+            ? "messaging.full_access.escalate_thread"
+            : context.kind === "resume-thread"
+              ? "messaging.full_access.resume_with_escalation"
+              : "messaging.full_access.start_new_thread",
+        threadId:
+          context.kind === "thread" || context.kind === "resume-thread"
+            ? context.threadId
+            : undefined,
+      });
+    } catch (error) {
+      this.logger.debug?.("messaging full-access policy log failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -5310,6 +5987,8 @@ export class MessagingController {
     );
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
+      allowFullAccessEscalation: (await this.resolveFullAccessControls())
+        .allowEscalation,
       binding,
       capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
@@ -6810,6 +7489,70 @@ function readPermissionsQueueCancelAction(
     return undefined;
   }
   return { queueId };
+}
+
+function readFullAccessRiskAction(
+  event: MessagingInboundCallbackEvent,
+): "accept" | "dismiss" | "cancel" | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  if (!actionId.startsWith(FULL_ACCESS_RISK_ACTION_PREFIX)) {
+    return undefined;
+  }
+  const action = actionId.slice(FULL_ACCESS_RISK_ACTION_PREFIX.length);
+  return action === "accept" || action === "dismiss" || action === "cancel"
+    ? action
+    : undefined;
+}
+
+function readFullAccessRiskContext(
+  value: MessagingJsonValue | undefined,
+): FullAccessRiskWarningContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  if (value.kind === "new-thread" && typeof value.sessionId === "string") {
+    return {
+      kind: "new-thread",
+      sessionId: value.sessionId,
+    };
+  }
+  if (
+    value.kind === "resume-thread" &&
+    (value.backend === "codex" || value.backend === "grok") &&
+    typeof value.sessionId === "string" &&
+    typeof value.threadId === "string"
+  ) {
+    return {
+      backend: value.backend,
+      kind: "resume-thread",
+      sessionId: value.sessionId,
+      threadId: value.threadId,
+    };
+  }
+  if (
+    value.kind === "thread" &&
+    typeof value.bindingId === "string" &&
+    typeof value.threadId === "string"
+  ) {
+    return {
+      bindingId: value.bindingId,
+      kind: "thread",
+      threadId: value.threadId,
+    };
+  }
+  return undefined;
+}
+
+function fullAccessRiskPresentationForContext(
+  context: FullAccessEscalationContext,
+): FullAccessRiskPresentation {
+  if (context.kind === "thread") {
+    return {
+      binding: context.binding,
+      surface: context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
+    };
+  }
+  return { surface: context.session.surface };
 }
 
 function readQueuedTurnAction(

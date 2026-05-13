@@ -836,8 +836,12 @@ export class DesktopMessagingRuntime {
       ),
       toolUpdateDefaultMode: async () =>
         (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
+      fullAccessControls: async () =>
+        (await this.loadConfig()).fullAccessControls,
       onBindingChanged: () => this.broadcastBindingsChanged(),
       onDeliveryBudgetEvent: (event) => this.handleDeliveryBudgetEvent(event),
+      onFullAccessPolicyViolation: (event) =>
+        this.recordFullAccessPolicyViolation(adapter.channel, event),
     });
 
     let unsubscribeDiagnostic: (() => void) | undefined;
@@ -1847,6 +1851,47 @@ export class DesktopMessagingRuntime {
           kind: event.kind,
         });
       }
+    }
+  }
+
+  private recordFullAccessPolicyViolation(
+    platform: MessagingChannelKind,
+    event: {
+      actorId: string;
+      actorDisplayName?: string;
+      backend?: MessagingBindingRecord["backend"];
+      bindingId?: string;
+      channel: MessagingInboundEvent["channel"];
+      requestedAction: string;
+      threadId?: MessagingBindingRecord["threadId"];
+    },
+  ): void {
+    try {
+      const conversation = event.channel.conversation;
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: "inbound-rejected",
+        backend: event.backend,
+        threadId: event.threadId,
+        bindingId: event.bindingId,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: event.actorId,
+        actorDisplayName: event.actorDisplayName,
+        summary: "Rejected Full Access escalation request from messaging",
+        payload: {
+          conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
+          policyViolation: true,
+          requestedAction: event.requestedAction,
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging full-access policy activity write failed", {
+        actorId: event.actorId,
+        error: error instanceof Error ? error.message : String(error),
+        platform,
+      });
     }
   }
 

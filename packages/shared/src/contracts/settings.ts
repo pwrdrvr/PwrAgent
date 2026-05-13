@@ -37,7 +37,20 @@ export type DesktopSettingsValue<T> = {
 export type DesktopAuthorizedContact = {
   id: string;
   displayName: string;
+  fullAccessWarningDismissed?: boolean;
+  fullAccessWarningOverride?: DesktopMessagingFullAccessWarningUserPolicy;
 };
+
+export type DesktopMessagingFullAccessWarningGlobalPolicy =
+  | "always"
+  | "dismissable"
+  | "never";
+
+export type DesktopMessagingFullAccessWarningUserPolicy =
+  | "default"
+  | "always"
+  | "dismissable"
+  | "never";
 
 export type DesktopMessagingContactLookupPlatform =
   | "telegram"
@@ -288,6 +301,9 @@ export type DesktopSettingsSnapshot = {
   };
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
+    allowFullAccessEscalation: DesktopSettingsValue<boolean>;
+    allowFullAccessThreadResume: DesktopSettingsValue<boolean>;
+    fullAccessWarning: DesktopSettingsValue<DesktopMessagingFullAccessWarningGlobalPolicy>;
     inputDebounceMs: DesktopSettingsValue<number>;
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
@@ -391,6 +407,9 @@ export type DesktopSettingsConfigPatch = {
   };
   messaging?: {
     enabled?: boolean;
+    allowFullAccessEscalation?: boolean;
+    allowFullAccessThreadResume?: boolean;
+    fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {

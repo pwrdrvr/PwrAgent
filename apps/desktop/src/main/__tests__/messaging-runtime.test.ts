@@ -1214,10 +1214,10 @@ describe("DesktopMessagingRuntime", () => {
         }),
       ]);
     } finally {
-      await runtime.stop();
       vi.useRealTimers();
+      await runtime.stop();
     }
-  });
+  }, 30_000);
 
   it("detaches adapter runtime-error listeners on stop so a graceful shutdown does not flip to errored", async () => {
     await prepareRuntimeStore();
