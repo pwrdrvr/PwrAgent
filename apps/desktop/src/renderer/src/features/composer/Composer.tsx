@@ -3660,7 +3660,9 @@ export function Composer(props: ComposerProps) {
                   codexEnvironmentExecutionTarget: environment
                     ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
                     : undefined,
-                  codexEnvironmentSetupEnabled: false,
+                  codexEnvironmentSetupEnabled: Boolean(
+                    environment?.setupScript,
+                  ),
                   codexEnvironmentActionId: undefined,
                 });
               }}

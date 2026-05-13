@@ -948,7 +948,8 @@ function withCodexEnvironmentOptions(
     codexEnvironmentExecutionTarget:
       launchpad.codexEnvironmentExecutionTarget ?? "local",
     codexEnvironmentSetupEnabled:
-      launchpad.codexEnvironmentSetupEnabled ?? false,
+      launchpad.codexEnvironmentSetupEnabled ??
+      Boolean(selectedEnvironment?.setupScript),
     codexEnvironmentActionId: selectedAction?.id,
     codexEnvironmentOptions: options,
   };
@@ -1014,7 +1015,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     codexEnvironmentExecutionTarget:
       launchpad.codexEnvironmentExecutionTarget ?? "local",
     codexEnvironmentSetupEnabled:
-      launchpad.codexEnvironmentSetupEnabled ?? false,
+      launchpad.codexEnvironmentSetupEnabled ?? true,
     codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
     createdAt: now,
     updatedAt: now,

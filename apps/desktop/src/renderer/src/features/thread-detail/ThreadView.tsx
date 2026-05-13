@@ -1425,6 +1425,10 @@ export function ThreadView(props: ThreadViewProps) {
       props.selectedDirectory.kind === "workspace"
         ? "New thread"
         : selectedLaunchpad.directoryLabel;
+    const launchpadRunningCodexEnvironmentSetup = Boolean(
+      selectedLaunchpad.codexEnvironmentId &&
+        selectedLaunchpad.codexEnvironmentSetupEnabled,
+    );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
     > = async (directoryKey, input, collaborationMode, reviewTarget) => {
@@ -1538,8 +1542,16 @@ export function ThreadView(props: ThreadViewProps) {
             >
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
-                <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
+                <h3>
+                  {launchpadRunningCodexEnvironmentSetup
+                    ? "Running environment setup"
+                    : `Starting ${selectedLaunchpad.directoryLabel}`}
+                </h3>
+                <p>
+                  {launchpadRunningCodexEnvironmentSetup
+                    ? "Your prompt was sent. Setup output will appear in the transcript when the thread is ready."
+                    : "Your prompt was sent. The transcript will appear here when the thread is ready."}
+                </p>
               </div>
             </section>
           ) : (
