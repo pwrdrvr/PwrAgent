@@ -421,15 +421,20 @@ function extractThreadIdFromNotification(
   );
 }
 
-function extractGeneratedTitleObject(value: unknown): unknown | undefined {
+type HelperObjectPredicate = (value: unknown) => boolean;
+
+function extractGeneratedHelperObject(
+  value: unknown,
+  predicate: HelperObjectPredicate,
+): unknown | undefined {
   if (typeof value === "string") {
     const parsed = parseStructuredValue(value);
-    return isThreadTitleObject(parsed) ? parsed : undefined;
+    return predicate(parsed) ? parsed : undefined;
   }
 
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const object = extractGeneratedTitleObject(entry);
+      const object = extractGeneratedHelperObject(entry, predicate);
       if (object) {
         return object;
       }
@@ -441,8 +446,8 @@ function extractGeneratedTitleObject(value: unknown): unknown | undefined {
   if (!record) {
     return undefined;
   }
-  if (isThreadTitleObject(record)) {
-    return { title: record.title };
+  if (predicate(record)) {
+    return record;
   }
 
   for (const key of [
@@ -457,7 +462,7 @@ function extractGeneratedTitleObject(value: unknown): unknown | undefined {
     "result",
     "data",
   ]) {
-    const object = extractGeneratedTitleObject(record[key]);
+    const object = extractGeneratedHelperObject(record[key], predicate);
     if (object) {
       return object;
     }
@@ -466,9 +471,53 @@ function extractGeneratedTitleObject(value: unknown): unknown | undefined {
   return undefined;
 }
 
+function extractGeneratedTitleObject(value: unknown): unknown | undefined {
+  const object = extractGeneratedHelperObject(value, isThreadTitleObject);
+  const record = asRecord(object);
+  return record ? { title: record.title } : undefined;
+}
+
 function isThreadTitleObject(value: unknown): value is { title: string } {
   const record = asRecord(value);
   return typeof record?.title === "string" && record.title.trim().length > 0;
+}
+
+function buildSchemaObjectPredicate(schema: Record<string, unknown>): HelperObjectPredicate {
+  const schemaRecord = asRecord(schema);
+  const required = Array.isArray(schemaRecord?.required)
+    ? schemaRecord.required.filter((key): key is string => typeof key === "string")
+    : [];
+  const properties = asRecord(schemaRecord?.properties);
+  return (value: unknown): boolean => {
+    const record = asRecord(value);
+    if (!record) {
+      return false;
+    }
+    if (required.length > 0) {
+      return required.every((key) => record[key] !== undefined);
+    }
+    if (properties) {
+      return Object.keys(properties).some((key) => record[key] !== undefined);
+    }
+    return false;
+  };
+}
+
+function normalizeHelperObjectForSchema(
+  object: unknown,
+  schema: Record<string, unknown>,
+): unknown {
+  const record = asRecord(object);
+  const properties = asRecord(asRecord(schema)?.properties);
+  if (!record || !properties) {
+    return object;
+  }
+
+  return Object.fromEntries(
+    Object.keys(properties)
+      .filter((key) => record[key] !== undefined)
+      .map((key) => [key, record[key]]),
+  );
 }
 
 function pickRawString(
@@ -4703,7 +4752,8 @@ export class CodexAppServerClient {
     }
   >();
   private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
-  private readonly helperTurnTitleObjects = new Map<string, unknown>();
+  private readonly helperTurnObjects = new Map<string, unknown>();
+  private readonly helperTurnObjectPredicates = new Map<string, HelperObjectPredicate>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -4810,7 +4860,8 @@ export class CodexAppServerClient {
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
-    this.helperTurnTitleObjects.clear();
+    this.helperTurnObjects.clear();
+    this.helperTurnObjectPredicates.clear();
     await this.connection.close();
   }
 
@@ -4958,10 +5009,12 @@ export class CodexAppServerClient {
     }
 
     const key = buildHelperTurnKey(threadId, turnId);
+    const predicate =
+      this.helperTurnObjectPredicates.get(key) ?? isThreadTitleObject;
     if (method === "item/completed") {
-      const object = extractGeneratedTitleObject(notification.params);
+      const object = extractGeneratedHelperObject(notification.params, predicate);
       if (object) {
-        this.helperTurnTitleObjects.set(key, object);
+        this.helperTurnObjects.set(key, object);
       }
       return;
     }
@@ -4969,7 +5022,8 @@ export class CodexAppServerClient {
     const waiter = this.helperTurnWaiters.get(key);
     if (method === "turn/failed") {
       const error = new Error("codex_title_turn_failed");
-      this.helperTurnTitleObjects.delete(key);
+      this.helperTurnObjects.delete(key);
+      this.helperTurnObjectPredicates.delete(key);
       if (!waiter) {
         this.completedHelperTurnResults.set(key, {
           status: "failed",
@@ -4984,9 +5038,10 @@ export class CodexAppServerClient {
     }
 
     const object =
-      extractGeneratedTitleObject(notification.params) ??
-      this.helperTurnTitleObjects.get(key);
-    this.helperTurnTitleObjects.delete(key);
+      extractGeneratedHelperObject(notification.params, predicate) ??
+      this.helperTurnObjects.get(key);
+    this.helperTurnObjects.delete(key);
+    this.helperTurnObjectPredicates.delete(key);
     if (!object) {
       const error = new Error("codex_title_turn_completed_without_title");
       if (!waiter) {
@@ -5033,6 +5088,7 @@ export class CodexAppServerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helperTurnWaiters.delete(key);
+        this.helperTurnObjectPredicates.delete(key);
         reject(new Error("codex_title_turn_timeout"));
       }, Math.max(100, params.timeoutMs));
       this.helperTurnWaiters.set(key, {
@@ -5532,10 +5588,17 @@ export class CodexAppServerClient {
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    return await this.generateHelperObject(params);
+  }
+
+  async generateHelperObject(
+    params: ThreadTitleAdapterParams,
+  ): Promise<ThreadTitleAdapterResult> {
     await this.ensureInitialized();
 
     let helperThreadId: string | undefined;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    const objectPredicate = buildSchemaObjectPredicate(params.schema);
     try {
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,
@@ -5586,11 +5649,14 @@ export class CodexAppServerClient {
         ],
         timeoutMs,
       });
-      const immediateObject = extractGeneratedTitleObject(turnStartResult);
+      const immediateObject = extractGeneratedHelperObject(
+        turnStartResult,
+        objectPredicate,
+      );
       if (immediateObject) {
         return {
           status: "ok",
-          object: immediateObject,
+          object: normalizeHelperObjectForSchema(immediateObject, params.schema),
         };
       }
 
@@ -5602,13 +5668,20 @@ export class CodexAppServerClient {
         };
       }
 
+      this.helperTurnObjectPredicates.set(
+        buildHelperTurnKey(helperThreadId, turnId),
+        objectPredicate,
+      );
       return {
         status: "ok",
-        object: await this.waitForHelperTurnTitle({
-          threadId: helperThreadId,
-          turnId,
-          timeoutMs,
-        }),
+        object: normalizeHelperObjectForSchema(
+          await this.waitForHelperTurnTitle({
+            threadId: helperThreadId,
+            turnId,
+            timeoutMs,
+          }),
+          params.schema,
+        ),
       };
     } catch (error) {
       return {

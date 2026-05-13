@@ -171,6 +171,8 @@ import {
 import {
   ThreadTitleGenerationService,
   GrokThreadTitleGenerator,
+  type ThreadTitleAdapterParams,
+  type ThreadTitleAdapterResult,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
@@ -312,6 +314,7 @@ type BackendClient = {
     } | null;
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
+  generateHelperObject?: ThreadTitleGenerator["generateTitle"];
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -2906,6 +2909,21 @@ export class DesktopBackendRegistry {
     return () => {
       this.eventListeners.delete(listener);
     };
+  }
+
+  async generateHelperObject(
+    params: ThreadTitleAdapterParams,
+  ): Promise<ThreadTitleAdapterResult> {
+    const generator =
+      this.codexClient.generateHelperObject ?? this.codexClient.generateTitle;
+    if (!generator) {
+      return {
+        status: "unavailable",
+        reason: "codex_helper_object_generator_unavailable",
+      };
+    }
+
+    return await generator(params);
   }
 
   setMessagingArchiveCleaner(

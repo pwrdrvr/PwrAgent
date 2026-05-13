@@ -40,6 +40,8 @@ import type {
 } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
+  MessagingHelperObjectRequest,
+  MessagingHelperObjectResult,
   MessagingLastAssistantReply,
 } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -229,6 +231,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     transition: ThreadMessagingBindingTransition;
   }): Promise<void> {
     await getDesktopOverlayStore().appendMessagingBindingTransition(request);
+  }
+
+  async generateHelperObject(
+    request: MessagingHelperObjectRequest,
+  ): Promise<MessagingHelperObjectResult> {
+    return await this.registry.generateHelperObject(request);
   }
 
   async submitServerRequest(

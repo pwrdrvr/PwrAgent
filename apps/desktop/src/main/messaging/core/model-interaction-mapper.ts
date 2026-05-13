@@ -11,7 +11,15 @@ import type {
   MessagingInteractionMapper,
   MessagingInteractionMapperResult,
 } from "./interaction-mapper.js";
+import type {
+  MessagingHelperObjectRequest,
+  MessagingHelperObjectResult,
+} from "./messaging-adapter.js";
 import modelInteractionMapperSystemPrompt from "./model-interaction-mapper-prompt.md?raw";
+
+const MODEL_INTERACTION_MAPPER_PROMPT_VERSION =
+  "messaging-interaction-mapper-v1";
+const MODEL_INTERACTION_MAPPER_TIMEOUT_MS = 4_000;
 
 export type ModelInteractionMapperClient = {
   classify(params: {
@@ -73,6 +81,15 @@ export type XaiModelInteractionMapperClientOptions = {
   baseUrl?: string;
   client?: XaiObjectClientLike;
   model?: string;
+  timeoutMs?: number;
+};
+
+export type CodexModelInteractionMapperClientOptions = {
+  helper: {
+    generateHelperObject(
+      request: MessagingHelperObjectRequest,
+    ): Promise<MessagingHelperObjectResult>;
+  };
   timeoutMs?: number;
 };
 
@@ -138,6 +155,63 @@ export class ModelInteractionMapper implements MessagingInteractionMapper {
   }
 }
 
+export class FallbackModelInteractionMapperClient
+  implements ModelInteractionMapperClient
+{
+  constructor(private readonly clients: ModelInteractionMapperClient[]) {}
+
+  async classify(params: {
+    actions: ModelInteractionMapperAction[];
+    intent: ModelInteractionMapperIntentSummary;
+    text: string;
+  }): Promise<ModelInteractionMapperClientResult> {
+    let lastResult: ModelInteractionMapperClientResult | undefined;
+    for (const client of this.clients) {
+      const result = await client.classify(params);
+      if (result.status === "ok") {
+        return result;
+      }
+      lastResult = result;
+    }
+
+    return (
+      lastResult ?? {
+        status: "unavailable",
+        reason: "no_interaction_mapper_clients",
+      }
+    );
+  }
+}
+
+export class CodexModelInteractionMapperClient
+  implements ModelInteractionMapperClient
+{
+  private readonly timeoutMs: number;
+
+  constructor(private readonly options: CodexModelInteractionMapperClientOptions) {
+    this.timeoutMs = options.timeoutMs ?? MODEL_INTERACTION_MAPPER_TIMEOUT_MS;
+  }
+
+  async classify(params: {
+    actions: ModelInteractionMapperAction[];
+    intent: ModelInteractionMapperIntentSummary;
+    text: string;
+  }): Promise<ModelInteractionMapperClientResult> {
+    const result = await this.options.helper.generateHelperObject({
+      prompt: buildCodexModelInteractionMapperPrompt(params),
+      promptVersion: MODEL_INTERACTION_MAPPER_PROMPT_VERSION,
+      schema: MODEL_INTERACTION_MAPPER_RESPONSE_SCHEMA,
+      schemaName: "messaging_interaction_mapping",
+      timeoutMs: this.timeoutMs,
+    });
+    if (result.status !== "ok") {
+      return result;
+    }
+
+    return normalizeModelResponse(result.object, params.actions);
+  }
+}
+
 export class XaiModelInteractionMapperClient implements ModelInteractionMapperClient {
   private readonly caller: XaiEphemeralObjectCaller;
   private readonly model: string;
@@ -145,7 +219,7 @@ export class XaiModelInteractionMapperClient implements ModelInteractionMapperCl
 
   constructor(options: XaiModelInteractionMapperClientOptions = {}) {
     this.model = options.model?.trim() || "grok-4-1-fast-non-reasoning";
-    this.timeoutMs = options.timeoutMs ?? 4_000;
+    this.timeoutMs = options.timeoutMs ?? MODEL_INTERACTION_MAPPER_TIMEOUT_MS;
     this.caller = new XaiEphemeralObjectCaller({
       apiKey: options.apiKey,
       baseUrl: options.baseUrl,
@@ -161,19 +235,15 @@ export class XaiModelInteractionMapperClient implements ModelInteractionMapperCl
   }): Promise<ModelInteractionMapperClientResult> {
     const result = await this.caller.generateObject({
       model: this.model,
-      promptCacheKey: "messaging-interaction-mapper-v1",
+      promptCacheKey: MODEL_INTERACTION_MAPPER_PROMPT_VERSION,
       headers: {
-        "x-grok-conv-id": "messaging-interaction-mapper-v1",
+        "x-grok-conv-id": MODEL_INTERACTION_MAPPER_PROMPT_VERSION,
       },
       timeoutMs: this.timeoutMs,
       schema: MODEL_INTERACTION_MAPPER_RESPONSE_SCHEMA,
       schemaName: "messaging_interaction_mapping",
       system: modelInteractionMapperSystemPrompt,
-      prompt: JSON.stringify({
-        intent: params.intent,
-        actions: params.actions,
-        userReply: params.text,
-      }),
+      prompt: JSON.stringify(buildModelInteractionMapperPayload(params)),
     });
     if (result.status !== "ok") {
       return result;
@@ -218,6 +288,37 @@ function summarizeActions(intent: MessagingSurfaceIntent): ModelInteractionMappe
       ...(action.fallbackText ? { fallbackText: action.fallbackText } : {}),
       index: index + 1,
     }));
+}
+
+function buildModelInteractionMapperPayload(params: {
+  actions: ModelInteractionMapperAction[];
+  intent: ModelInteractionMapperIntentSummary;
+  text: string;
+}): {
+  actions: ModelInteractionMapperAction[];
+  intent: ModelInteractionMapperIntentSummary;
+  userReply: string;
+} {
+  return {
+    intent: params.intent,
+    actions: params.actions,
+    userReply: params.text,
+  };
+}
+
+function buildCodexModelInteractionMapperPrompt(params: {
+  actions: ModelInteractionMapperAction[];
+  intent: ModelInteractionMapperIntentSummary;
+  text: string;
+}): string {
+  return [
+    modelInteractionMapperSystemPrompt.trim(),
+    "",
+    "Return only JSON matching the provided output schema.",
+    "",
+    "Context:",
+    JSON.stringify(buildModelInteractionMapperPayload(params), null, 2),
+  ].join("\n");
 }
 
 function summarizeIntent(intent: MessagingSurfaceIntent): ModelInteractionMapperIntentSummary {

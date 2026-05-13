@@ -7,6 +7,8 @@ import type {
 } from "@pwragent/messaging-interface";
 import { DeterministicInteractionMapper } from "../messaging/core/deterministic-interaction-mapper";
 import {
+  CodexModelInteractionMapperClient,
+  FallbackModelInteractionMapperClient,
   ModelInteractionMapper,
   type ModelInteractionMapperClient,
   XaiModelInteractionMapperClient,
@@ -265,6 +267,129 @@ describe("ModelInteractionMapper", () => {
       action: { id: "command:status" },
     });
     expect(client.classify).not.toHaveBeenCalled();
+  });
+});
+
+describe("FallbackModelInteractionMapperClient", () => {
+  it("uses the first available model client", async () => {
+    const codex: ModelInteractionMapperClient = {
+      classify: vi.fn(async () => ({
+        status: "ok" as const,
+        disposition: "action" as const,
+        actionId: "command:status",
+        confidence: 0.8,
+      })),
+    };
+    const grok: ModelInteractionMapperClient = {
+      classify: vi.fn(async () => ({
+        status: "ok" as const,
+        disposition: "action" as const,
+        actionId: "command:monitor",
+        confidence: 0.8,
+      })),
+    };
+    const client = new FallbackModelInteractionMapperClient([codex, grok]);
+
+    await expect(
+      client.classify({
+        intent: { kind: "confirmation" },
+        actions: [
+          { id: "command:status", label: "Status", index: 1 },
+          { id: "command:monitor", label: "Monitor", index: 2 },
+        ],
+        text: "show state",
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      actionId: "command:status",
+    });
+    expect(grok.classify).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the preferred model client is unavailable", async () => {
+    const codex: ModelInteractionMapperClient = {
+      classify: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "codex_unavailable",
+      })),
+    };
+    const grok: ModelInteractionMapperClient = {
+      classify: vi.fn(async () => ({
+        status: "ok" as const,
+        disposition: "pass_through" as const,
+        confidence: 0.77,
+      })),
+    };
+    const client = new FallbackModelInteractionMapperClient([codex, grok]);
+
+    await expect(
+      client.classify({
+        intent: { kind: "confirmation" },
+        actions: [{ id: "command:status", label: "Status", index: 1 }],
+        text: "compact",
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      disposition: "pass_through",
+    });
+    expect(codex.classify).toHaveBeenCalledOnce();
+    expect(grok.classify).toHaveBeenCalledOnce();
+  });
+});
+
+describe("CodexModelInteractionMapperClient", () => {
+  it("uses the Codex helper object path with the mapper prompt and schema", async () => {
+    const helper = {
+      generateHelperObject: vi.fn(async () => ({
+        status: "ok" as const,
+        object: {
+          disposition: "action",
+          actionId: "command:monitor",
+          confidence: 0.83,
+        },
+      })),
+    };
+    const client = new CodexModelInteractionMapperClient({
+      helper,
+      timeoutMs: 4321,
+    });
+
+    await expect(
+      client.classify({
+        intent: {
+          kind: "confirmation",
+          title: "PwrAgent commands",
+          body: "Choose a command.",
+        },
+        actions: [
+          {
+            id: "command:monitor",
+            label: "Monitor",
+            fallbackText: "/monitor",
+            index: 1,
+          },
+        ],
+        text: "start watching this",
+      }),
+    ).resolves.toEqual({
+      status: "ok",
+      disposition: "action",
+      actionId: "command:monitor",
+      confidence: 0.83,
+    });
+    expect(helper.generateHelperObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptVersion: "messaging-interaction-mapper-v1",
+        schemaName: "messaging_interaction_mapping",
+        timeoutMs: 4321,
+        prompt: expect.stringContaining("start watching this"),
+      }),
+    );
+    expect(helper.generateHelperObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("map a dictated or typed messaging reply"),
+      }),
+    );
   });
 });
 
