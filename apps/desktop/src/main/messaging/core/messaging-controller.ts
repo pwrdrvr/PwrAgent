@@ -7630,13 +7630,14 @@ function handoffContextForBinding(
     []
   ).filter(
     (candidate, index, branches) =>
-      candidate !== branch && branches.indexOf(candidate) === index,
+      candidate !== "HEAD" && candidate !== branch && branches.indexOf(candidate) === index,
   );
+  const leaveLocalBranchChoices = ["HEAD", ...leaveLocalBranches];
 
   return {
     backend: binding.backend,
     branch,
-    leaveLocalBranches,
+    leaveLocalBranches: leaveLocalBranchChoices,
     projectLabel: localDirectory.label,
     repositoryPath: localDirectory.path,
     threadId: binding.threadId,

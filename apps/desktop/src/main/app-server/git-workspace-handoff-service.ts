@@ -18,6 +18,7 @@ import { computeWorktreePath } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
+const DETACHED_HEAD_LEAVE_LOCAL_BRANCH = "HEAD";
 
 type GitResult = {
   stdout: string;
@@ -324,11 +325,15 @@ export class GitWorkspaceHandoffService {
       worktrees: context.worktrees,
     });
 
-    const leaveLocalBranch = sanitizeBranchName(params.leaveLocalBranch ?? "");
+    const rawLeaveLocalBranch = params.leaveLocalBranch?.trim() ?? "";
+    const leaveLocalDetached = rawLeaveLocalBranch === DETACHED_HEAD_LEAVE_LOCAL_BRANCH;
+    const leaveLocalBranch = leaveLocalDetached
+      ? DETACHED_HEAD_LEAVE_LOCAL_BRANCH
+      : sanitizeBranchName(rawLeaveLocalBranch);
     if (!leaveLocalBranch) {
       throw new Error("Choose a branch to leave in Local before handoff.");
     }
-    if (leaveLocalBranch && leaveLocalBranch === context.branch) {
+    if (!leaveLocalDetached && leaveLocalBranch === context.branch) {
       throw new Error("Local cannot be left on the same branch being moved.");
     }
 
@@ -342,11 +347,19 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
+    if (leaveLocalDetached) {
+      warnings.push("Local was left on a detached HEAD at the moved branch commit.");
+    }
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
+    await runGit(
+      context.sourcePath,
+      leaveLocalDetached
+        ? ["switch", "--detach", context.headSha]
+        : ["switch", leaveLocalBranch],
+    );
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     await runGit(context.repositoryPath, ["worktree", "add", targetPath, context.branch]);

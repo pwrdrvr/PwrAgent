@@ -2738,7 +2738,6 @@ export function Composer(props: ComposerProps) {
     currentBranch: sourceBranch,
     directory: props.directory,
   });
-  const handoffBaseBranch = props.directory?.gitStatus?.defaultBranch;
   const canHandoffThreadWorkspace = Boolean(
     props.thread &&
       threadWorkspace &&
@@ -2764,11 +2763,7 @@ export function Composer(props: ComposerProps) {
     setHandoffDialog(direction);
     if (direction === "local-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
-      setLeaveLocalBranch(
-        handoffBaseBranch && branchOptions.includes(handoffBaseBranch)
-          ? handoffBaseBranch
-          : branchOptions[0] ?? ""
-      );
+      setLeaveLocalBranch(branchOptions[0] ?? "");
       setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
     }
   };
@@ -3236,7 +3231,7 @@ export function Composer(props: ComposerProps) {
                       >
                         {branchOptions.map((branch) => (
                           <option key={branch} value={branch}>
-                            {branch}
+                            {formatLeaveLocalBranchOption(branch)}
                           </option>
                         ))}
                       </select>
@@ -4713,7 +4708,9 @@ function getLeaveLocalBranchOptions(params: {
   const currentBranch = params.currentBranch?.trim();
   const explicitHandoffBranches = params.directory?.gitStatus?.handoffBranches;
   const branches = explicitHandoffBranches ?? params.directory?.gitStatus?.branches ?? [];
-  const candidates = branches.filter((branch) => branch && branch !== currentBranch);
+  const candidates = branches.filter(
+    (branch) => branch && branch !== "HEAD" && branch !== currentBranch
+  );
   const defaultBranch = params.directory?.gitStatus?.defaultBranch;
   const preferred =
     defaultBranch && candidates.includes(defaultBranch)
@@ -4725,5 +4722,9 @@ function getLeaveLocalBranchOptions(params: {
     ? [preferred, ...candidates.filter((branch) => branch !== preferred)]
     : candidates;
 
-  return [...new Set(ordered)];
+  return ["HEAD", ...new Set(ordered)];
+}
+
+function formatLeaveLocalBranchOption(branch: string): string {
+  return branch === "HEAD" ? "Detached HEAD" : branch;
 }

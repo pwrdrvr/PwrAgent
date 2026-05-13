@@ -6613,22 +6613,22 @@ describe("MessagingController", () => {
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "handoff:select-leave-branch",
-          label: "1. main",
+          label: "1. Detached HEAD",
         }),
       ]),
     });
 
-    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    const leaveDetached = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
-        actionId: leaveMain.id,
-        value: leaveMain.value,
+        actionId: leaveDetached.id,
+        value: leaveDetached.value,
       }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      body: expect.stringContaining("Leave Local on: main"),
+      body: expect.stringContaining("Leave Local on: Detached HEAD"),
     });
 
     const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
@@ -6646,7 +6646,7 @@ describe("MessagingController", () => {
     expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
       backend: "codex",
       direction: "local-to-worktree",
-      leaveLocalBranch: "main",
+      leaveLocalBranch: "HEAD",
       repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
       sourcePath: "/repo/pwragent",
@@ -6717,7 +6717,7 @@ describe("MessagingController", () => {
     expect(secondPage.prompt).toContain("Page 2/3.");
     expect(secondPage.choices[0]).toMatchObject({
       id: "handoff:select-leave-branch",
-      label: "9. branch-9",
+      label: "9. branch-8",
     });
     expect(secondPage.choices).toContainEqual(
       expect.objectContaining({
@@ -6772,7 +6772,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("offers detached-head handoff for a local checkout with no alternate branches", async () => {
+  it("offers move-branch handoff for a local checkout with no alternate branches", async () => {
     const harness = await createHarness();
     const navigation = buildLocalHandoffNavigationSnapshot();
     navigation.directories[0] = {
@@ -6795,13 +6795,16 @@ describe("MessagingController", () => {
     if (!overview || !("choices" in overview)) {
       throw new Error("Expected handoff overview");
     }
-    expect(overview.choices).not.toContainEqual(
-      expect.objectContaining({ id: "handoff:move-branch" }),
+    expect(overview.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:move-branch",
+        fallbackText: "1",
+      }),
     );
     expect(overview.choices).toContainEqual(
       expect.objectContaining({
         id: "handoff:create-detached",
-        fallbackText: "1",
+        fallbackText: "2",
       }),
     );
   });

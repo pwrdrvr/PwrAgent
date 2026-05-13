@@ -3090,7 +3090,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
-    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("main");
+    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("HEAD");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -3100,7 +3100,7 @@ describe("Composer", () => {
         repositoryPath: "/repo",
         sourcePath: "/repo",
         sourceBranch: "feature/handoff",
-        leaveLocalBranch: "main",
+        leaveLocalBranch: "HEAD",
       });
     });
   });

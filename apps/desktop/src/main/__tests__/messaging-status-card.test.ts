@@ -476,9 +476,9 @@ describe("buildBindingStatusIntent", () => {
     });
     expect(branchPicker.choices[0]).toMatchObject({
       id: "handoff:select-leave-branch",
-      label: "1. main",
+      label: "1. Detached HEAD",
       value: expect.objectContaining({
-        leaveLocalBranch: "main",
+        leaveLocalBranch: "HEAD",
       }),
     });
 
@@ -632,7 +632,7 @@ function buildHandoffContext(): MessagingWorkspaceHandoffContext {
   return {
     backend: "codex",
     branch: "feature/handoff",
-    leaveLocalBranches: ["main", "develop"],
+    leaveLocalBranches: ["HEAD", "main", "develop"],
     projectLabel: "PwrAgent",
     repositoryPath: "/repo/pwragent",
     threadId: "thread-1",

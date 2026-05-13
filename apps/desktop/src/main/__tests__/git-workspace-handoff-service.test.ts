@@ -97,6 +97,40 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("moves a dirty local branch to a new worktree and leaves local detached", async () => {
+    const repoPath = await createRepo();
+    const headSha = await git(repoPath, ["rev-parse", "HEAD"]);
+    await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      leaveLocalBranch: "HEAD",
+      now: 1250,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.branch).toBe("feature/handoff");
+    expect(result.warnings).toContain(
+      "Local was left on a detached HEAD at the moved branch commit.",
+    );
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(repoPath, ["rev-parse", "HEAD"])).toBe(headSha);
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe(
+      "feature/handoff",
+    );
+    await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty local\n",
+    );
+  });
+
   it("moves dirty local changes to a detached worktree and leaves local on the current branch", async () => {
     const repoPath = await createRepo();
     await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
