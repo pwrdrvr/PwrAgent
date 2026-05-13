@@ -185,7 +185,7 @@ type FeishuReceiveMessageEvent = {
     chat_type?: "group" | "p2p";
     content?: string;
     create_time?: string;
-    mentions?: Array<{ id?: { open_id?: string }; key?: string; name?: string; tenant_key?: string }>;
+    mentions?: FeishuMessageMention[];
     message_id?: string;
     message_type?: string;
   };
@@ -198,6 +198,13 @@ type FeishuReceiveMessageEvent = {
     sender_type?: string;
     tenant_key?: string;
   };
+};
+
+type FeishuMessageMention = {
+  id?: { open_id?: string };
+  key?: string;
+  name?: string;
+  tenant_key?: string;
 };
 
 type FeishuCardActionEvent = {
@@ -305,6 +312,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private authorizedActorIdsValue: string[];
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
+  private botOpenId: string | undefined;
   private listener: FeishuInboundListener | undefined;
   private started = false;
   private webhookListening = false;
@@ -408,6 +416,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const botInfo = await this.api.getBotInfo();
     this.botAccount = botInfo.appName ?? botInfo.openId;
     this.botAccountDetail = botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
+    this.botOpenId = botInfo.openId;
     if (this.config.inboundMode === "webhook") {
       await this.listenForCallbacks();
     } else {
@@ -724,8 +733,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     };
 
     const content = parseFeishuMessageContent(message.content);
-    const text = extractFeishuText(content);
-    const messageText = stripBotMentions(text, message.mentions);
+    const text = extractFeishuText({
+      botOpenId: this.botOpenId,
+      content,
+      mentions: message.mentions,
+    });
+    const messageText = stripBotMentions({
+      botName: this.botAccount,
+      botOpenId: this.botOpenId,
+      mentions: message.mentions,
+      text,
+    });
     const attachments = feishuAttachmentsFromMessage({
       content,
       message,
@@ -1664,10 +1682,37 @@ function parseFeishuMessageContent(content: string | undefined): Record<string, 
   }
 }
 
-function extractFeishuText(content: Record<string, unknown>): string {
+function extractFeishuText(params: {
+  botOpenId?: string;
+  content: Record<string, unknown>;
+  mentions?: FeishuMessageMention[];
+}): string {
+  const { content } = params;
   if (typeof content.text === "string") return content.text;
+  const postText = extractFeishuPostText(content.content, params);
+  if (postText.trim()) return postText;
   if (typeof content.title === "string") return content.title;
   return "";
+}
+
+function extractFeishuPostText(
+  value: unknown,
+  context: { botOpenId?: string; mentions?: FeishuMessageMention[] },
+): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const separator = value.every(Array.isArray) ? "\n" : "";
+    return value
+      .map((item) => extractFeishuPostText(item, context))
+      .filter(Boolean)
+      .join(separator);
+  }
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  if (typeof record.content === "string") return record.content;
+  if (record.tag === "at") return feishuPostMentionText(record, context);
+  return record.content === undefined ? "" : extractFeishuPostText(record.content, context);
 }
 
 function feishuAttachmentsFromMessage(params: {
@@ -1695,6 +1740,12 @@ function feishuAttachmentsFromMessage(params: {
         },
       },
     ];
+  }
+  if (messageType === "post") {
+    return feishuPostAttachments({
+      messageId: params.messageId,
+      value: params.content.content,
+    });
   }
   if (messageType === "file") {
     const fileKey = stringField(params.content.file_key);
@@ -1737,6 +1788,69 @@ function feishuAttachmentsFromMessage(params: {
     ];
   }
   return [];
+}
+
+function feishuPostAttachments(params: {
+  messageId: string;
+  value: unknown;
+}): MessagingAttachmentDescriptor[] {
+  const attachments: MessagingAttachmentDescriptor[] = [];
+  collectFeishuPostAttachments(params.value, params.messageId, attachments);
+  return attachments;
+}
+
+function collectFeishuPostAttachments(
+  value: unknown,
+  messageId: string,
+  attachments: MessagingAttachmentDescriptor[],
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFeishuPostAttachments(item, messageId, attachments);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  const tag = stringField(record.tag);
+  if (tag === "img") {
+    const imageKey = stringField(record.image_key) ?? stringField(record.file_key);
+    if (imageKey) {
+      attachments.push({
+        id: `feishu:image:${imageKey}`,
+        kind: "image",
+        name: "lark-image",
+        disposition: "available",
+        state: {
+          opaque: {
+            fileKey: imageKey,
+            messageId,
+            provider: "feishu",
+            resourceType: "image",
+          },
+        },
+      });
+    }
+  } else if (tag === "media" || tag === "video" || tag === "audio" || tag === "file") {
+    const fileKey = stringField(record.file_key);
+    attachments.push({
+      id: `feishu:${tag}:${fileKey ?? messageId}`,
+      kind: tag === "audio" ? "audio" : tag === "file" ? "file" : "video",
+      name: stringField(record.file_name) ?? `lark-${tag}`,
+      disposition: "unsupported",
+      reason: `${tag} attachments are not supported`,
+      state: {
+        opaque: {
+          ...(fileKey ? { fileKey } : {}),
+          messageId,
+          provider: "feishu",
+          resourceType: "file",
+        },
+      },
+    });
+  }
+  collectFeishuPostAttachments(record.content, messageId, attachments);
+  collectFeishuPostAttachments(record.elements, messageId, attachments);
 }
 
 function readAttachmentResourceType(
@@ -1788,15 +1902,46 @@ function isMarkdownTableSeparator(line: string): boolean {
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
-function stripBotMentions(
-  text: string,
-  mentions: FeishuReceiveMessageEvent["message"] extends infer M
-    ? M extends { mentions?: infer T } ? T | undefined : never
-    : never,
+function feishuPostMentionText(
+  record: Record<string, unknown>,
+  context: { botOpenId?: string; mentions?: FeishuMessageMention[] },
 ): string {
-  let stripped = text;
-  for (const mention of mentions ?? []) {
+  const userId = stringField(record.user_id);
+  const matchingMention = context.mentions?.find((mention) => mention.id?.open_id === userId);
+  if (userId && context.botOpenId && userId === context.botOpenId) {
+    return matchingMention?.key ?? "";
+  }
+  return mentionDisplayName(record, matchingMention);
+}
+
+function mentionDisplayName(
+  record: Record<string, unknown>,
+  mention: FeishuMessageMention | undefined,
+): string {
+  const name =
+    stringField(record.user_name)
+    ?? mention?.name
+    ?? stringField(record.name)
+    ?? stringField(record.key)
+    ?? stringField(record.user_id);
+  if (!name) return "";
+  return name.startsWith("@") ? name : `@${name}`;
+}
+
+function stripBotMentions(params: {
+  botName?: string;
+  botOpenId?: string;
+  mentions?: FeishuMessageMention[];
+  text: string;
+}): string {
+  let stripped = params.text;
+  for (const mention of params.mentions ?? []) {
+    const isBotMention = params.botOpenId
+      ? mention.id?.open_id === params.botOpenId
+      : Boolean(params.botName && mention.name === params.botName);
+    if (!isBotMention) continue;
     if (mention.key) stripped = stripped.replaceAll(mention.key, "");
+    if (mention.name) stripped = stripped.replaceAll(`@${mention.name}`, "");
   }
   return stripped.trim();
 }
