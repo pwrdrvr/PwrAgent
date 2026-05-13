@@ -11,6 +11,10 @@ pnpm codex:generate-app-server-protocol
 # equivalent: pnpm --filter @pwragent/codex-app-server-protocol generate
 ```
 
+PwrAgent intentionally generates the experimental surface so desktop code can
+opt into newer App Server fields such as thread environments and command
+permission profiles as they become useful.
+
 By default the package script uses Codex Desktop's bundled binary:
 
 ```text
@@ -29,7 +33,7 @@ The generated files are committed so PwrAgent builds cleanly without a Codex ins
 - A new Codex protocol surface lands that PwrAgent wants to consume.
 - The committed generated files drift from the generator version noted below.
 
-Current generated source: `codex-cli 0.128.0-alpha.1` from Codex Desktop's bundled binary (509 generated `.ts` files; v1 surface in `src/`, v2 surface in `src/v2/`).
+Current generated source: `codex-cli 0.130.0-alpha.5` from Codex Desktop's bundled binary, generated with `--experimental`.
 
 ## Why a separate package
 

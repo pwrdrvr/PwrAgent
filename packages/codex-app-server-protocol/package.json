@@ -11,7 +11,7 @@
     "./v2": "./src/v2/index.ts"
   },
   "scripts": {
-    "generate": "${PWRAGENT_CODEX_BIN:-/Applications/Codex.app/Contents/Resources/codex} app-server generate-ts --out ./src",
+    "generate": "${PWRAGENT_CODEX_BIN:-/Applications/Codex.app/Contents/Resources/codex} app-server generate-ts --out ./src --experimental",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }
