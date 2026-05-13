@@ -1015,6 +1015,19 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/turnQueue/updated";
+      params: {
+        threadId: string;
+        queueEntryId: string;
+        origin: "manual" | "automation" | "messaging";
+        status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+        position?: number;
+        turnId?: string;
+        automationRunId?: string;
+        errorMessage?: string;
+      };
+    }
+  | {
       method: "thread/pin/added";
       params: {
         threadId: string;

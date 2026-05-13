@@ -399,7 +399,7 @@ history in `state.db` with restart reconciliation rules.
   across database reopen, and closed-app ticks are not replayed during startup
   reconciliation.
 
-- [ ] **Unit 3: Introduce Registry-Level Per-Thread Turn FIFO**
+- [x] **Unit 3: Introduce Registry-Level Per-Thread Turn FIFO**
 
 **Goal:** Provide one main-process admission queue for desktop manual turns,
 scheduled automation turns, and messaging queued follow-up submissions.
