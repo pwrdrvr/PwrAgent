@@ -913,7 +913,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         // existing parser strips the leading `/` and produces a
         // standard `MessagingInboundCommandEvent` — the controller
         // sees the same shape regardless of slash-vs-mention origin.
-        rawText: `/${stripped}`,
+        rawText: stripped.length === 0 ? "/help" : `/${stripped}`,
       });
       return;
     }
@@ -2481,7 +2481,9 @@ function hostFromUrl(serverUrl: string): string {
  * Returns `undefined` when:
  *   - `botUsername` is unset (adapter hasn't `start()`'d yet)
  *   - the message doesn't begin with the mention
- *   - the mention is the entire message (no command verb following)
+ *
+ * Returns an empty string when the mention is the entire message.
+ * Callers treat that as the default help command.
  */
 export function stripBotMention(
   text: string,
@@ -2508,9 +2510,6 @@ export function stripBotMention(
     return undefined;
   }
   const remainder = trimmedStart.slice(mention.length).trim();
-  if (remainder.length === 0) {
-    return undefined;
-  }
   return remainder;
 }
 

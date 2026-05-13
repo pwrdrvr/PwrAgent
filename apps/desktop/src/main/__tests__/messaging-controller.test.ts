@@ -577,7 +577,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "Choose a thread",
+      title: "PwrAgent commands",
     });
     expect(harness.delivered.at(-1)).not.toMatchObject({
       title: "Choose an option",
@@ -1890,7 +1890,7 @@ describe("MessagingController", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("asks unbound conversations to choose a thread before routing text", async () => {
+  it("shows the help menu for unbound text before routing text", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildTextEvent("hello"));
@@ -1898,7 +1898,7 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "Choose a thread",
+      title: "PwrAgent commands",
     });
   });
 
@@ -1948,15 +1948,17 @@ describe("MessagingController", () => {
 
     const last = harness.delivered.at(-1) as { body?: string } | undefined;
     expect(last?.body).toBeDefined();
-    expect(last?.body).toContain("`resume`");
-    expect(last?.body).toContain("`status`");
-    expect(last?.body).toContain("`detach`");
-    expect(last?.body).toContain("`monitor`");
-    expect(last?.body).toContain("`help`");
-    // Both invocation styles must be discoverable from the help text
-    // — the whole reason we ship a catalog-derived body.
-    expect(last?.body).toContain("/<cmd>");
-    expect(last?.body).toContain("@<bot>");
+    expect(last?.body).toContain("/resume");
+    expect(last?.body).toContain("/new");
+    expect(last?.body).toContain("/status");
+    expect(last?.body).toContain("/detach");
+    expect(last?.body).toContain("/monitor");
+    expect(last?.body).toContain("/help");
+    expect(last?.body).not.toContain("`");
+    // Both tap and mention styles must be discoverable from the help
+    // text — the whole reason we ship a catalog-derived body.
+    expect(last?.body).toContain("Send a command or tap a button.");
+    expect(last?.body).toContain("@bot new");
   });
 
   it("help surface renders one button per canonical verb with Resume styled primary", async () => {
@@ -1968,12 +1970,13 @@ describe("MessagingController", () => {
       | { actions?: Array<{ id?: string; label?: string; style?: string }> }
       | undefined;
     expect(last?.actions).toBeDefined();
-    // One button per canonical verb (today: 5). Catalog fits a
+    // One button per canonical verb. Catalog fits a
     // single page on every reasonable provider profile, so no nav
     // buttons are rendered.
     const ids = (last?.actions ?? []).map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:new",
       "command:status",
       "command:detach",
       "command:monitor",
@@ -1983,6 +1986,8 @@ describe("MessagingController", () => {
     // single-button shape for users who tap rather than read.
     const resume = last?.actions?.find((a) => a.id === "command:resume");
     expect(resume?.style).toBe("primary");
+    const newThread = last?.actions?.find((a) => a.id === "command:new");
+    expect(newThread?.style).toBeUndefined();
   });
 
   it("help surface omits nav buttons when the catalog fits in one page", async () => {
@@ -1996,9 +2001,9 @@ describe("MessagingController", () => {
     const navIds = (last?.actions ?? [])
       .map((a) => a.id ?? "")
       .filter((id) => id.startsWith("help:"));
-    // Today's catalog is 4 verbs and the test capability profile
-    // grants well over 4 + 3 (nav) action slots — single page,
-    // no navigation needed.
+    // The test capability profile grants well over the catalog count
+    // plus the worst-case nav buttons — single page, no navigation
+    // needed.
     expect(navIds).toEqual([]);
   });
 
@@ -2013,6 +2018,33 @@ describe("MessagingController", () => {
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
+    });
+  });
+
+  it("routes /new to the new-thread project picker", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("new PwrAgent thread"),
+      prompt: expect.stringContaining("Choose a project"),
+    });
+  });
+
+  it("clicking the New button on the help surface dispatches the new command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:new",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("new PwrAgent thread"),
     });
   });
 

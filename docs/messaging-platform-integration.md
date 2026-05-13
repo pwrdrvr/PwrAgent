@@ -18,23 +18,25 @@ console behavior is still being validated.
 The supported command surface is:
 
 - `/resume` opens the recents browser, with Projects and New-thread navigation.
-- `/threads` is an alias for choosing a thread.
-- `/bind` is an alias for choosing a thread.
+- `/new` opens the new-thread project browser directly.
 - `/status` refreshes the pinned binding/status card.
 - `/detach` detaches the conversation and unpins the status card where the platform supports it.
+- `/monitor` posts a monitor card for recent PwrAgent threads.
+- `/help` shows the canonical command menu.
 
-Telegram registers these commands at startup with `setMyCommands`. Telegram
-clients can cache command menus, so if old OpenClaw commands still appear,
-restart or reopen the bot menu after starting PwrAgent.
+Telegram registers its native command menu at startup with `setMyCommands`.
+Telegram clients can cache command menus, so if old OpenClaw commands still
+appear, restart or reopen the bot menu after starting PwrAgent.
 
-### `@<bot> <verb>` text-mention alternative
+### `@<bot>` and `@<bot> <verb>` text-mention alternatives
 
-On Telegram and Discord, the same verbs can be invoked by mentioning the bot
-followed by the verb — for example `@PwrAgent resume` or `@PwrAgent help`.
-The mention path is recognized before the slash-prefix path and dispatches the
-identical `MessagingInboundCommandEvent` the slash form produces, so workflow
-behavior is the same regardless of invocation style. This is useful from
-keyboards or topics where the slash menu isn't readily accessible. Notes:
+On Telegram, Discord, Mattermost, and Slack, a bare leading mention shows help.
+The same verbs can also be invoked by mentioning the bot followed by the verb —
+for example `@PwrAgent resume`, `@PwrAgent new`, or `@PwrAgent help`. The mention
+path is recognized before the slash-prefix path and dispatches the identical
+`MessagingInboundCommandEvent` the slash form produces, so workflow behavior is
+the same regardless of invocation style. This is useful from keyboards or topics
+where the slash menu isn't readily accessible. Notes:
 
 - Telegram requires the bot's `@username` and matches it case-insensitively
   (Telegram usernames are case-insensitive); the adapter captures the
@@ -488,9 +490,10 @@ Run the desktop app with the desired environment variables configured.
 Telegram:
 
 1. Start PwrAgent with `pnpm dev:op`; if the bot has a webhook configured, PwrAgent clears it before long polling.
-2. Confirm `/resume`, `/threads`, `/status`, `/detach`, and `/bind` are registered in the Telegram command menu.
+2. Confirm `/resume`, `/new`, `/status`, `/detach`, `/monitor`, and `/help` are registered in the Telegram command menu.
 3. Send `/resume` from an allowlisted Telegram user.
-   - Repeat using a text mention (`@` + your bot's username + ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command.
+   - Repeat using a text mention (`@` + your bot's username + ` resume`) instead of the slash command — the same thread picker should render. Send a bare mention (`@` + your bot's username) and confirm the help menu renders with Resume and New actions.
+   - Send `/new` or tap New from the help menu and confirm the new-thread project picker renders.
 4. Use Projects, select a project, then select a thread.
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
@@ -530,7 +533,8 @@ Discord:
 
 1. In the Discord Developer Portal, confirm the bot has Gateway access, the privileged Message Content Intent enabled, and the bot was installed with the `applications.commands` scope.
 2. Send `/resume` from an allowlisted Discord user.
-   - Repeat using a text mention (type `@` and pick the bot from the autocomplete, then ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command. Mention parsing requires `applicationId` to be configured.
+   - Repeat using a text mention (type `@` and pick the bot from the autocomplete, then ` resume`) instead of the slash command — the same thread picker should render. Send a bare bot mention and confirm the help menu renders with Resume and New actions. Mention parsing requires `applicationId` to be configured.
+   - Send `/new` or tap New from the help menu and confirm the new-thread project picker renders.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
 5. For a bound Local thread with handoff branch metadata, choose Handoff from
@@ -583,7 +587,7 @@ In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Acco
 - Permissions: needs to post in target channels, read posts, upload/download
   files, edit its own posts, and update channel headers if you want
   conversation-title updates. **Also grant `manage_slash_commands`** if you
-  want PwrAgent to register `/resume`, `/status`, `/detach` as native
+  want PwrAgent to register `/resume`, `/new`, `/status`, `/detach`, and `/help` as native
   Mattermost slash commands with autocomplete (recommended). Without it,
   the adapter will log a permission warning at startup and fall back to
   text-mention parsing (`@pwragent resume`).
@@ -599,7 +603,7 @@ Without explicit channel membership, Mattermost does not deliver `posted`
 events to the bot — outgoing posts will fail with `403`.
 
 Slash commands are scoped per-team in Mattermost. PwrAgent reconciles its
-canonical command set (`/resume`, `/status`, `/detach`) against every team
+canonical command set (`/resume`, `/new`, `/status`, `/detach`, `/help`) against every team
 the bot is a member of on adapter startup — newly-joined teams are picked
 up by restarting the adapter (a team-membership webhook listener that
 re-reconciles mid-session is a future improvement). Reconciliation is
@@ -693,7 +697,7 @@ The local HTTP listener binds to the port embedded in `CALLBACK_BASE_URL` if one
 
 `registerSlashCommands` is **off by default**. Mattermost 10.x and earlier omit `root_id` from the slash-command request body, so a slash response cannot be threaded — it lands in the parent channel even when the user invoked the command from inside a thread. The recommended primary entry point is `@<bot> help` text-mention parsing, which works on every Mattermost version and preserves thread context.
 
-If you operate Mattermost 11.0+ (which adds `root_id` to slash-command bodies) or you accept the v10.x channel-reply tradeoff, opt in via the Settings UI toggle or `PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true`. With the toggle on, PwrAgent reconciles its canonical command set against every team the bot is a member of on adapter startup. The `slashCommandPrefix` field controls the namespace (default `pwragent_` → `/pwragent_help`, `/pwragent_status`, `/pwragent_resume`, `/pwragent_detach`); set it blank to register bare triggers and accept the collision risk with built-in commands like `/status`, `/away`, `/leave`.
+If you operate Mattermost 11.0+ (which adds `root_id` to slash-command bodies) or you accept the v10.x channel-reply tradeoff, opt in via the Settings UI toggle or `PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true`. With the toggle on, PwrAgent reconciles its canonical command set against every team the bot is a member of on adapter startup. The `slashCommandPrefix` field controls the namespace (default `pwragent_` → `/pwragent_resume`, `/pwragent_new`, `/pwragent_status`, `/pwragent_detach`, `/pwragent_help`); set it blank to register bare triggers and accept the collision risk with built-in commands like `/status`, `/away`, `/leave`.
 
 Authorize on stable Mattermost user IDs (UUIDs visible via Settings →
 Profile → Account Settings → Display → Username, then
@@ -702,8 +706,8 @@ are not authorization-safe.
 
 `PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX` controls the
 namespace prepended to every registered slash-command trigger.
-Default: `pwragent_`, which gives `/pwragent_resume`, `/pwragent_status`,
-`/pwragent_detach` — chosen to avoid collisions with built-in
+Default: `pwragent_`, which gives `/pwragent_resume`, `/pwragent_new`,
+`/pwragent_status`, `/pwragent_detach`, `/pwragent_help` — chosen to avoid collisions with built-in
 Mattermost commands (`/status`, `/away`, `/leave`). Set to an empty
 string to register bare triggers and accept the collision risk.
 Allowed chars: `[A-Za-z0-9_./-]`; full trigger length 1–128 chars per
@@ -751,8 +755,8 @@ should succeed before moving to the next:
 
 1b. In any channel the bot belongs to, type `/pwragent` in the
     message composer (or whatever prefix you've configured). The
-    namespaced commands (`/pwragent_resume`, `/pwragent_status`,
-    `/pwragent_detach` by default) should appear in the autocomplete
+    namespaced commands (`/pwragent_resume`, `/pwragent_new`,
+    `/pwragent_status`, `/pwragent_detach`, `/pwragent_help` by default) should appear in the autocomplete
     menu with their descriptions and hints. Note the namespacing —
     unprefixed `/status` would collide with Mattermost's built-in
     user-status command, which is why we register under a namespace
@@ -785,9 +789,11 @@ should succeed before moving to the next:
     typically the more discoverable invocation in threads where
     the slash menu may be cluttered.
 
-1c-help. Send `@pwragent help` (or `/pwragent_help`) anywhere the
+1c-help. Send `@pwragent` or `@pwragent help` (or `/pwragent_help`) anywhere the
     bot can see. The bot replies with the canonical command list
     and notes both invocation styles.
+1c-new. Send `@pwragent new` (or `/pwragent_new`) anywhere the bot
+    can see. The bot replies with the new-thread project picker.
 1d. From a separate browser/account that is NOT in
     `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run
     `/pwragent_resume`. The command executes (Mattermost has no
@@ -799,8 +805,8 @@ should succeed before moving to the next:
 
 2. Open a Direct Message to the bot in Mattermost. Send a naked
    message: `You there?`
-3. The bot replies with a `Choose a thread` post containing a `Resume`
-   button.
+3. The bot replies with the canonical command menu, including `Resume`
+   and `New` buttons.
 4. Click `Resume`. The bot replies with the navigator: a thread picker
    with `Next`, `Projects`, `New`, `Cancel` buttons. The console shows
    `mattermost callback HMAC verification failed` only if the env-var
@@ -841,9 +847,8 @@ should succeed before moving to the next:
 15. Click `Detach` on the status card. The bot posts `Thread detached`
     and removes the status card's buttons. The desktop app's binding
     chip disappears for that thread.
-16. Send another message in the DM. The bot does not respond
-    (binding gone), but the offered `Resume` button on the
-    `Choose a thread` reply still works to re-bind.
+16. Send another message in the DM. The bot shows the command menu
+    again; the offered `Resume` button still works to re-bind.
 
 **Cross-restart persistence (with env-var HMAC pinned):**
 
@@ -923,7 +928,9 @@ Minimum bot scopes for the current adapter shape:
   PwrAgent can call `users.info` and label DM bindings / Messaging Activity with
   the person's Slack profile name. Without it, authorization still works, but
   the UI falls back to user IDs or generic DM labels.
-- `commands` only if you configure Slack slash commands for the app.
+- `commands` only if you configure Slack slash commands for the app. If you do,
+  configure `/pwragent_resume`, `/pwragent_new`, `/pwragent_status`, and other
+  desired prefixed commands consistently with the PwrAgent command prefix.
 
 ### 2. Configure PwrAgent
 

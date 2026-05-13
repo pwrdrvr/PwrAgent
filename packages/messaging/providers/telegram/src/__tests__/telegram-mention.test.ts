@@ -27,9 +27,9 @@ describe("stripTelegramBotMention", () => {
     expect(stripTelegramBotMention(`   @${USERNAME} help`, USERNAME)).toBe("help");
   });
 
-  it("returns undefined when the mention is the entire message", () => {
-    expect(stripTelegramBotMention(`@${USERNAME}`, USERNAME)).toBeUndefined();
-    expect(stripTelegramBotMention(`@${USERNAME}   `, USERNAME)).toBeUndefined();
+  it("returns an empty string when the mention is the entire message", () => {
+    expect(stripTelegramBotMention(`@${USERNAME}`, USERNAME)).toBe("");
+    expect(stripTelegramBotMention(`@${USERNAME}   `, USERNAME)).toBe("");
   });
 
   it("returns undefined when the message doesn't start with the mention", () => {

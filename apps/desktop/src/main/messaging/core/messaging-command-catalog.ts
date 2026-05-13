@@ -45,7 +45,13 @@ import {
  *
  * Keep this in sync with `MESSAGING_COMMAND_CATALOG` below.
  */
-export type MessagingCommandVerb = "resume" | "status" | "detach" | "monitor" | "help";
+export type MessagingCommandVerb =
+  | "resume"
+  | "new"
+  | "status"
+  | "detach"
+  | "monitor"
+  | "help";
 
 export type MessagingCommandSpec = {
   verb: MessagingCommandVerb;
@@ -70,6 +76,10 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
     description: "choose a thread to control from this conversation",
   },
   {
+    verb: "new",
+    description: "start a new thread from a project",
+  },
+  {
     verb: "status",
     description: "show the current binding and controls",
   },
@@ -92,16 +102,17 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
  * `MESSAGING_COMMAND_CATALOG` so adding a new verb keeps the help
  * surface in sync automatically.
  *
- * The `invocationFooter` is appended verbatim; callers pass a
- * provider-aware string that documents BOTH invocation styles
- * (slash menu and bot mention). The default is provider-neutral
- * (works on every messaging platform that accepts at least one of
- * the two styles).
+ * The `invocationFooter` is appended verbatim. Keep the generated
+ * body plain text: confirmation surfaces intentionally render without
+ * Markdown on several providers, and raw Markdown markers make the
+ * default menu noisy on Telegram.
  *
  * Output format:
  *
- *   • `verb` — description
- *   • `verb` — description
+ *   Send a command or tap a button.
+ *
+ *   /verb - description
+ *   /verb - description
  *
  *   <invocation footer>
  */
@@ -112,11 +123,11 @@ export function formatMessagingCommandHelpBody(options?: {
   const catalog = options?.catalog ?? MESSAGING_COMMAND_CATALOG;
   const footer =
     options?.invocationFooter
-    ?? "Invoke via the slash menu (`/<cmd>`) or by mentioning the bot (`@<bot> <cmd>`).";
+    ?? "You can also mention the bot with a command, like @bot new.";
   const lines = catalog.map(
-    (spec) => `• \`${spec.verb}\` — ${spec.description}`,
+    (spec) => `/${spec.verb} - ${spec.description}`,
   );
-  return [...lines, "", footer].join("\n");
+  return ["Send a command or tap a button.", "", ...lines, "", footer].join("\n");
 }
 
 /**
@@ -271,10 +282,14 @@ export function buildHelpActions(params: {
     return [];
   }
   const actions: MessagingSurfaceAction[] = [];
-  for (const spec of page.commands) {
+  for (const [index, spec] of page.commands.entries()) {
     actions.push({
       id: `command:${spec.verb}`,
       label: capitalize(spec.verb),
+      layout: {
+        column: index % 2,
+        row: Math.floor(index / 2),
+      },
       // `resume` stays primary so the button hierarchy matches the
       // existing single-button help surface (where Resume is also
       // the primary). Other verbs use the default neutral style.

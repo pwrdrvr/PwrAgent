@@ -18,6 +18,7 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
     // this order; if you reorder, the help text reorders too.
     expect(MESSAGING_COMMAND_CATALOG.map((spec) => spec.verb)).toEqual([
       "resume",
+      "new",
       "status",
       "detach",
       "monitor",
@@ -47,6 +48,7 @@ describe("matchMessagingCommandVerb", () => {
 
   it("strips a leading slash before matching", () => {
     expect(matchMessagingCommandVerb("/resume")).toBe("resume");
+    expect(matchMessagingCommandVerb("/new")).toBe("new");
     expect(matchMessagingCommandVerb("/status")).toBe("status");
     expect(matchMessagingCommandVerb("/monitor")).toBe("monitor");
   });
@@ -78,23 +80,25 @@ describe("matchMessagingCommandVerb", () => {
 });
 
 describe("formatMessagingCommandHelpBody", () => {
-  it("renders one bullet per catalog entry, in catalog order", () => {
+  it("renders one plain command line per catalog entry, in catalog order", () => {
     const body = formatMessagingCommandHelpBody();
-    const expectedBullets = MESSAGING_COMMAND_CATALOG.map(
-      (spec) => `• \`${spec.verb}\` — ${spec.description}`,
+    const expectedLines = MESSAGING_COMMAND_CATALOG.map(
+      (spec) => `/${spec.verb} - ${spec.description}`,
     );
-    for (const expected of expectedBullets) {
+    for (const expected of expectedLines) {
       expect(body).toContain(expected);
     }
     // Order check: resume must come before status, status before
     // detach, etc. — catalog order is the contract.
-    const resumeIdx = body.indexOf("`resume`");
-    const statusIdx = body.indexOf("`status`");
-    const detachIdx = body.indexOf("`detach`");
-    const monitorIdx = body.indexOf("`monitor`");
-    const helpIdx = body.indexOf("`help`");
+    const resumeIdx = body.indexOf("/resume");
+    const newIdx = body.indexOf("/new");
+    const statusIdx = body.indexOf("/status");
+    const detachIdx = body.indexOf("/detach");
+    const monitorIdx = body.indexOf("/monitor");
+    const helpIdx = body.indexOf("/help");
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
-    expect(statusIdx).toBeGreaterThan(resumeIdx);
+    expect(newIdx).toBeGreaterThan(resumeIdx);
+    expect(statusIdx).toBeGreaterThan(newIdx);
     expect(detachIdx).toBeGreaterThan(statusIdx);
     expect(monitorIdx).toBeGreaterThan(detachIdx);
     expect(helpIdx).toBeGreaterThan(monitorIdx);
@@ -102,17 +106,17 @@ describe("formatMessagingCommandHelpBody", () => {
 
   it("appends the default invocation footer with both styles", () => {
     const body = formatMessagingCommandHelpBody();
-    expect(body).toContain("/<cmd>");
-    expect(body).toContain("@<bot>");
+    expect(body).toContain("Send a command or tap a button.");
+    expect(body).toContain("@bot new");
   });
 
   it("accepts a custom invocation footer (provider-specific overrides)", () => {
     const body = formatMessagingCommandHelpBody({
-      invocationFooter: "Type `/pwragent_resume` or `@pwragent resume`.",
+      invocationFooter: "Type /pwragent_resume or @pwragent resume.",
     });
-    expect(body).toContain("Type `/pwragent_resume`");
+    expect(body).toContain("Type /pwragent_resume");
     // Default footer should NOT appear when caller supplied one.
-    expect(body).not.toContain("/<cmd>");
+    expect(body).not.toContain("@bot new");
   });
 
   it("accepts a custom catalog (e.g., a subset for a constrained surface)", () => {
@@ -120,20 +124,20 @@ describe("formatMessagingCommandHelpBody", () => {
       (spec) => spec.verb === "resume" || spec.verb === "help",
     );
     const body = formatMessagingCommandHelpBody({ catalog: subset });
-    expect(body).toContain("`resume`");
-    expect(body).toContain("`help`");
-    expect(body).not.toContain("`status`");
-    expect(body).not.toContain("`detach`");
+    expect(body).toContain("/resume");
+    expect(body).toContain("/help");
+    expect(body).not.toContain("/new");
+    expect(body).not.toContain("/status");
+    expect(body).not.toContain("/detach");
   });
 
-  it("separates the bullet list from the footer with a blank line", () => {
+  it("separates the command list from the footer with a blank line", () => {
     const body = formatMessagingCommandHelpBody();
-    // Last bullet should be followed by an empty line, then the footer.
-    const lastBulletIdx = body.lastIndexOf("•");
-    const footerIdx = body.indexOf("Invoke");
-    expect(footerIdx).toBeGreaterThan(lastBulletIdx);
+    const lastCommandIdx = body.lastIndexOf("/help");
+    const footerIdx = body.indexOf("You can also");
+    expect(footerIdx).toBeGreaterThan(lastCommandIdx);
     // Between them: at least one blank line.
-    const between = body.slice(lastBulletIdx, footerIdx);
+    const between = body.slice(lastCommandIdx, footerIdx);
     expect(between).toMatch(/\n\n/);
   });
 });
@@ -197,6 +201,7 @@ describe("paginateHelpCatalog", () => {
     expect(page.pageIndex).toBe(0);
     expect(page.commands.map((c) => c.verb)).toEqual([
       "resume",
+      "new",
       "status",
       "detach",
       "monitor",
@@ -266,6 +271,7 @@ describe("buildHelpActions", () => {
     const ids = actions.map((a) => a.id);
     expect(ids).toEqual([
       "command:resume",
+      "command:new",
       "command:status",
       "command:detach",
       "command:monitor",
@@ -280,8 +286,26 @@ describe("buildHelpActions", () => {
     const actions = buildHelpActions({ page });
     const resume = actions.find((a) => a.id === "command:resume");
     expect(resume?.style).toBe("primary");
+    const newThread = actions.find((a) => a.id === "command:new");
+    expect(newThread?.style).toBeUndefined();
     const status = actions.find((a) => a.id === "command:status");
     expect(status?.style).toBeUndefined();
+  });
+
+  it("gives command buttons a two-column row layout hint", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(25),
+    });
+    const actions = buildHelpActions({ page });
+
+    expect(actions.map((a) => a.layout)).toEqual([
+      { row: 0, column: 0 },
+      { row: 0, column: 1 },
+      { row: 1, column: 0 },
+      { row: 1, column: 1 },
+      { row: 2, column: 0 },
+      { row: 2, column: 1 },
+    ]);
   });
 
   it("renders Next + Cancel on the first page of a multi-page catalog (no Prev)", () => {

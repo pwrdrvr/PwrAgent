@@ -101,7 +101,7 @@ function fakeClient4(spies: {
     setUrl: () => {},
     setToken: () => {},
     setUserAgent: () => {},
-    getMe: async () => ({ id: "bot-user-id" }),
+    getMe: async () => ({ id: "bot-user-id", username: "pwragent" }),
     createPost: async (post: CreatedPost) => {
       spies.createdPosts.push(post);
       return { id: `post-${spies.createdPosts.length}` };
@@ -187,7 +187,12 @@ describe("MattermostAdapter — capability profile", () => {
         createdPosts: [],
         patchedPosts: [],
       }),
-      config: baseConfig,
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          { id: "haroldabcdefghijklmnopqr12", displayName: "" },
+        ],
+      },
       logger: silentLogger,
       websocketClient: fakeWebSocketClient(undefined, wsHooks),
       callbackServer: {
@@ -229,6 +234,66 @@ describe("MattermostAdapter — capability profile", () => {
         }),
         kind: "command",
         reason: "unauthorized-actor",
+      }),
+    ]);
+  });
+
+  it("dispatches a bare leading bot mention as the help command", async () => {
+    const wsHooks: WebSocketHooks = {
+      fireMessage: () => {},
+      fireClose: () => {},
+    };
+    const events: Array<{ kind: string; command?: string; rawText?: string }> = [];
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({
+        createdPosts: [],
+        patchedPosts: [],
+      }),
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          { id: "haroldabcdefghijklmnopqr12", displayName: "" },
+        ],
+      },
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(undefined, wsHooks),
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+        signContext: () => ({ hmac: "x", issuedAt: 0 }),
+      } as never,
+      now: () => 1_700_000_000_000,
+    });
+    await adapter.start(async (event) => {
+      events.push({
+        kind: event.kind,
+        command: event.kind === "command" ? event.command : undefined,
+        rawText: event.kind === "command" ? event.rawText : undefined,
+      });
+    });
+
+    wsHooks.fireMessage({
+      event: "posted",
+      data: {
+        channel_type: "D",
+        channel_display_name: "PwrAgent",
+        sender_name: "harold",
+        post: JSON.stringify({
+          id: "postpostabcdefghijklmn1234",
+          channel_id: "channelabcdefghijklmn12345",
+          user_id: "haroldabcdefghijklmnopqr12",
+          message: "@pwragent",
+        }),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "help",
+        rawText: "/help",
       }),
     ]);
   });
@@ -813,9 +878,9 @@ describe("stripBotMention", () => {
     expect(stripBotMention("@pwragent2 resume", "pwragent")).toBeUndefined();
   });
 
-  it("returns undefined when only the mention appears (no verb)", () => {
-    expect(stripBotMention("@pwragent", "pwragent")).toBeUndefined();
-    expect(stripBotMention("@pwragent   ", "pwragent")).toBeUndefined();
+  it("returns an empty string when only the mention appears", () => {
+    expect(stripBotMention("@pwragent", "pwragent")).toBe("");
+    expect(stripBotMention("@pwragent   ", "pwragent")).toBe("");
   });
 
   it("returns undefined when botUsername is not yet set", () => {

@@ -34,6 +34,7 @@ describe("discord adapter", () => {
   it("declares Monitor as a desired Discord application command", () => {
     expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
       "resume",
+      "new",
       "status",
       "detach",
       "monitor",
@@ -802,9 +803,9 @@ describe("discord adapter", () => {
       expect(stripDiscordBotMention(`   <@${BOT_ID}> help`, BOT_ID)).toBe("help");
     });
 
-    it("returns undefined when the mention is the entire message", () => {
-      expect(stripDiscordBotMention(`<@${BOT_ID}>`, BOT_ID)).toBeUndefined();
-      expect(stripDiscordBotMention(`<@${BOT_ID}>   `, BOT_ID)).toBeUndefined();
+    it("returns an empty string when the mention is the entire message", () => {
+      expect(stripDiscordBotMention(`<@${BOT_ID}>`, BOT_ID)).toBe("");
+      expect(stripDiscordBotMention(`<@${BOT_ID}>   `, BOT_ID)).toBe("");
     });
 
     it("returns undefined when the message doesn't start with the mention", () => {
@@ -1350,6 +1351,46 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
+    it("dispatches a bare `<@bot>` mention as the help command", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: `<@${BOT_ID}>`,
+          id: "msg-bare-mention",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "command",
+        command: "help",
+        args: [],
+        rawText: "/help",
+      });
+      await adapter.stop();
+    });
+
     it("routes a caption like `<@bot> resume` on an attachment to a command, not media", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
@@ -1393,6 +1434,58 @@ describe("discord adapter", () => {
         kind: "command",
         command: "resume",
         rawText: "/resume",
+      });
+      await adapter.stop();
+    });
+
+    it("preserves media dispatch when an attachment caption is only a bare bot mention", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          attachments: [
+            {
+              filename: "screenshot.png",
+              id: "att-bare-mention",
+              size: 100,
+              url: "https://cdn.discordapp.com/.../screenshot.png",
+            },
+          ],
+          authorBot: false,
+          content: `<@${BOT_ID}>`,
+          id: "msg-cap-bare-mention",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "media",
+        text: `<@${BOT_ID}>`,
+        attachments: [
+          expect.objectContaining({
+            kind: "file",
+            name: "screenshot.png",
+          }),
+        ],
       });
       await adapter.stop();
     });

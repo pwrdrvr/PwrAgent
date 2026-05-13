@@ -64,6 +64,17 @@ describe("DiscordAdapter", () => {
           description: "Show the current PwrAgent thread binding and controls.",
           name: "status",
         }),
+        createApplicationCommand("cmd-new", {
+          description: "Start a new PwrAgent thread from a project.",
+          name: "new",
+          options: [
+            {
+              description: "Optional new-thread flags, such as --fast or --model.",
+              name: "args",
+              type: 3,
+            },
+          ],
+        }),
         createApplicationCommand("cmd-detach", {
           description: "Detach this conversation from its current PwrAgent thread.",
           name: "detach",
@@ -133,7 +144,13 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(2);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(3);
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      DISCORD_APP_ID,
+      expect.objectContaining({
+        name: "new",
+      }),
+    );
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -165,11 +182,17 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(4);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(5);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
         name: "resume",
+      }),
+    );
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      DISCORD_APP_ID,
+      expect.objectContaining({
+        name: "new",
       }),
     );
     expect(api.updateApplicationCommand).not.toHaveBeenCalled();

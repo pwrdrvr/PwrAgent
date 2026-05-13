@@ -790,6 +790,15 @@ export class MessagingController {
       await this.presentResumeBrowser(event);
       return;
     }
+    if (verb === "new") {
+      await this.presentResumeBrowser({
+        ...event,
+        command: "resume",
+        args: ["--new", ...event.args],
+        rawText: ["/resume", "--new", ...event.args].join(" "),
+      });
+      return;
+    }
     // `verb === "help"` and any unrecognized command both fall
     // through to the help surface. For unknown commands this serves
     // as a "did you mean?" prompt with the canonical list.
@@ -913,26 +922,7 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("needs-binding"),
-          capabilityProfile: this.capabilityProfile,
-          createdAt: this.now(),
-          title: "Choose a thread",
-          body: "Bind this conversation to a PwrAgent thread before sending instructions.",
-          fallbackText: "Reply /resume to choose a thread.",
-          actions: [
-            {
-              id: "command:resume",
-              label: "Resume",
-              style: "primary",
-              fallbackText: "/resume",
-            },
-          ],
-        }),
-        undefined,
-        event,
-      );
+      await this.presentHelp(event);
       return;
     }
 

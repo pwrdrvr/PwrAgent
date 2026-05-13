@@ -572,6 +572,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           description: "Resume or start a PwrAgent thread",
         },
         {
+          command: "new",
+          description: "Start a new PwrAgent thread",
+        },
+        {
           command: "status",
           description: "Show the current PwrAgent binding",
         },
@@ -1144,24 +1148,33 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const mentionRemainder = mentionCandidate
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
+    const attachments = this.attachmentsFromMessage(message);
     if (
       !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
         actionable:
           isPairingMessage
-          || Boolean(mentionRemainder)
+          || mentionRemainder !== undefined
           || Boolean(message.text?.startsWith("/")),
       })
     ) {
       return;
     }
-    if (mentionRemainder !== undefined && mentionCandidate !== undefined) {
+    if (
+      mentionRemainder !== undefined &&
+      mentionCandidate !== undefined &&
+      // A bare mention caption has no command verb. Let the media
+      // branch handle the upload so bound conversations can send it
+      // to the thread; unbound conversations will get the
+      // controller's normal "bind before attachments" response.
+      !(mentionRemainder.length === 0 && attachments.length > 0)
+    ) {
       // If the remainder after the mention doesn't form a valid verb
       // (e.g. a second mention, or a digit-leading token), we
       // deliberately fall through to the attachment / slash / text
       // paths below so the user's original message is dispatched as
       // media or plain text rather than a half-recognized command.
-      const synthRaw = `/${mentionRemainder}`;
+      const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
       const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
       if (mentionCommandMatch) {
         this.options.logger?.debug(
@@ -1182,7 +1195,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     }
 
-    const attachments = this.attachmentsFromMessage(message);
     if (attachments.length > 0) {
       await listener({
         id: `telegram:update:${updateId}:message:${message.message_id}`,
@@ -2533,7 +2545,9 @@ function telegramCallbackRecordId(
  *   - the message doesn't begin with the mention
  *   - a longer username token follows `@<botUsername>` (so
  *     `@pwragent2` doesn't match `@pwragent`)
- *   - the mention is the entire message (no command verb following)
+ *
+ * Returns an empty string when the mention is the entire message.
+ * Callers treat that as the default help command.
  */
 export function stripTelegramBotMention(
   text: string,
@@ -2559,9 +2573,6 @@ export function stripTelegramBotMention(
     return undefined;
   }
   const remainder = trimmedStart.slice(mention.length).trim();
-  if (remainder.length === 0) {
-    return undefined;
-  }
   return remainder;
 }
 

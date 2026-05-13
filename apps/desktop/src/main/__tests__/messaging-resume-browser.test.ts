@@ -36,6 +36,13 @@ describe("messaging resume browser", () => {
     });
   });
 
+  it("parses --new as new-thread project browsing", () => {
+    expect(parseResumeCommandArgs(["--new"])).toEqual({
+      launchAction: "start_new_thread",
+      mode: "new_project",
+    });
+  });
+
   it("renders recent threads with Projects, New, and Cancel navigation", () => {
     const intent = buildResumeIntent({
       id: "intent-1",
