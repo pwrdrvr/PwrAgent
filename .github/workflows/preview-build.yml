@@ -19,6 +19,8 @@ jobs:
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        with:
+          node-version: 24.x
 
       - name: Compute preview version
         id: version
