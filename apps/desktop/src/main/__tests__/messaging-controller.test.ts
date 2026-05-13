@@ -5757,6 +5757,68 @@ describe("MessagingController", () => {
     });
   });
 
+  it("shows the new-thread Full Access warning on the existing picker surface", async () => {
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    const readyIntent = harness.delivered.at(-1);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+
+    const warning = harness.delivered.at(-1);
+    expect(warning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: {
+        id: `surface:${readyIntent?.id}`,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full"),
+      delivery: expect.objectContaining({
+        mode: "update",
+      }),
+      targetSurface: {
+        id: `surface:${readyIntent?.id}`,
+      },
+    });
+  });
+
   it("posts a permissions-queue audit message with a Cancel button on thread/executionMode/queued", async () => {
     const harness = await createHarness();
     await bindThread(harness);

@@ -335,6 +335,11 @@ type FullAccessRiskWarningContext =
       threadId: ThreadIdentifier;
     };
 
+type FullAccessRiskPresentation = {
+  binding?: MessagingBindingRecord;
+  surface?: MessagingSurfaceRef;
+};
+
 type FullAccessWarningResolution = {
   canDismiss: boolean;
   shouldWarn: boolean;
@@ -3232,8 +3237,8 @@ export class MessagingController {
       delivery: session.surface
         ? {
             mode: "update",
-          replaceMarkup: true,
-        }
+            replaceMarkup: true,
+          }
         : undefined,
       title: "Ready to start",
       body: newThreadPromptGateBody(session, options),
@@ -4970,6 +4975,7 @@ export class MessagingController {
               sessionId: context.session.id,
               threadId: context.threadId,
             };
+    const presentation = fullAccessRiskPresentationForContext(context);
     const actions: MessagingConfirmationIntent["actions"] = [
       {
         id: `${FULL_ACCESS_RISK_ACTION_PREFIX}accept`,
@@ -5001,6 +5007,12 @@ export class MessagingController {
       id: this.newIntentId("full-access-risk"),
       capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
+      delivery: presentation.surface
+        ? {
+            mode: "update",
+            replaceMarkup: true,
+          }
+        : undefined,
       title: "Enable Full Access?",
       body: [
         "Full Access allows network access and read/write access to almost all files on this machine.",
@@ -5010,17 +5022,16 @@ export class MessagingController {
         ? "Reply Yes, Yes - and stop warning me, or Cancel."
         : "Reply Yes or Cancel.",
       actions,
+      targetSurface: presentation.surface,
     });
-    await this.storePendingIntent(
-      intent,
-      context.kind === "thread" ? context.binding : undefined,
-      event,
-    );
-    await this.deliver(
-      intent,
-      context.kind === "thread" ? context.binding : undefined,
-      event,
-    );
+    const pending = await this.storePendingIntent(intent, presentation.binding, event);
+    const result = await this.deliver(intent, presentation.binding, event);
+    if (result.surface) {
+      await this.options.store.upsertPendingIntent({
+        ...pending,
+        surface: result.surface,
+      });
+    }
   }
 
   private async handleFullAccessRiskCallback(
@@ -5033,6 +5044,25 @@ export class MessagingController {
       return;
     }
     if (action === "cancel") {
+      if (context.kind === "new-thread" || context.kind === "resume-thread") {
+        const session = await this.options.store.getBrowseSession(context.sessionId, {
+          now: this.now(),
+        });
+        if (!session) {
+          await this.deliverInvalidBrowseSelection(event);
+          return;
+        }
+        const navigation = await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+          filter: session.query,
+        });
+        if (context.kind === "new-thread") {
+          await this.presentNewThreadPromptGate(session, event, navigation);
+        } else {
+          await this.renderResumeBrowser(session, navigation, event);
+        }
+        return;
+      }
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("full-access-risk-cancelled"),
@@ -7340,6 +7370,15 @@ function readFullAccessRiskContext(
     };
   }
   return undefined;
+}
+
+function fullAccessRiskPresentationForContext(
+  context: FullAccessEscalationContext,
+): FullAccessRiskPresentation {
+  if (context.kind === "thread") {
+    return { binding: context.binding };
+  }
+  return { surface: context.session.surface };
 }
 
 function readQueuedTurnAction(
