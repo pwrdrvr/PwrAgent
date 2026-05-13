@@ -3781,6 +3781,12 @@ export class MessagingController {
     }
 
     if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
+      if (
+        actionId === "status:refresh" &&
+        await this.dismissActiveSkillsWorkflow(binding, event)
+      ) {
+        return;
+      }
       // "Back" buttons from handoff sub-flows resolve to a status card
       // refresh, same as an explicit Refresh tap.
       await this.clearActiveBindingSubmodeIntent(event, binding);
@@ -3800,9 +3806,10 @@ export class MessagingController {
       await this.presentSkillsSearchPrompt(binding, event);
       return;
     }
-    if (actionId === "skills:search:cancel") {
-      await this.clearActiveBindingSubmodeIntent(event, binding);
-      await this.renderBindingStatus(binding, event);
+    if (actionId === "skills:cancel" || actionId === "skills:search:cancel") {
+      await this.dismissActiveSkillsWorkflow(binding, event, {
+        allowCallbackFallback: true,
+      });
       return;
     }
     if (actionId === "skills:select") {
@@ -4073,6 +4080,58 @@ export class MessagingController {
     ) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
+  }
+
+  private async dismissActiveSkillsWorkflow(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    options: { allowCallbackFallback?: boolean } = {},
+  ): Promise<boolean> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    const activeSkillsIntent = pendingIntent &&
+      pendingIntent.bindingId === binding.id &&
+      isSkillsWorkflowIntent(pendingIntent.intent)
+      ? pendingIntent
+      : undefined;
+    const targetSurface = activeSkillsIntent?.surface ??
+      (event.kind === "callback" && (activeSkillsIntent || options.allowCallbackFallback)
+        ? event.interaction
+        : undefined);
+
+    if (activeSkillsIntent && !activeSkillsIntent.intent.requestContext) {
+      await this.options.store.deletePendingIntent(activeSkillsIntent.id);
+    }
+
+    if (!activeSkillsIntent && !targetSurface) {
+      return false;
+    }
+
+    if (targetSurface) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("skills-dismissed"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Skills dismissed",
+          body: "Use Skills from the status menu to choose a skill again.",
+          actions: [],
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "present_new",
+          },
+          targetSurface,
+        }),
+        binding,
+        event,
+      );
+    }
+
+    return true;
   }
 
   private async findActiveSkillsWorkflowSurface(

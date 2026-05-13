@@ -5348,13 +5348,53 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildTextEvent("cancel"));
 
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "status",
-      text: expect.stringContaining("Thread:"),
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
     });
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
-  it("clears the skills browser pending intent when returning to status", async () => {
+  it("dismisses the skills browser and clears the pending intent on Cancel", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:cancel" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("dismisses older skills browser Cancel buttons that still send status refresh", async () => {
     const harness = await createHarness();
     await bindThread(harness);
 
@@ -5364,6 +5404,17 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:refresh" }),
     );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+
     await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
 
     expect(harness.startTurn).toHaveBeenCalledWith(

@@ -155,7 +155,7 @@ export function buildSkillsBrowserIntent(params: {
           ]
         : []),
       {
-        id: "status:refresh",
+        id: "skills:cancel",
         label: "Cancel",
         fallbackText: "cancel",
         style: "secondary" as const,

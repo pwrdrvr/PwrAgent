@@ -61,7 +61,7 @@ describe("messaging skills browser", () => {
     expect(intent.choices.map((choice) => choice.id)).toEqual([
       "skills:select",
       "skills:search",
-      "status:refresh",
+      "skills:cancel",
     ]);
     expect(intent.choices[0]).toMatchObject({
       fallbackText: "1",
