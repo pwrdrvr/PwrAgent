@@ -99,6 +99,7 @@ import {
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
+import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -529,11 +530,14 @@ class DesktopAppServerService {
     const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const bindingsDurationMs = Date.now() - bindingsStartedAt;
+    const automationsByThreadKey = getDesktopAutomationService()
+      .buildThreadSummaries();
     const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
     const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
+      automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadId,

@@ -80,6 +80,14 @@ export const MESSAGING_APPROVE_PAIRING_CHANNEL = "messaging:approve-pairing";
 export const MESSAGING_REJECT_PAIRING_CHANNEL = "messaging:reject-pairing";
 export const MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL =
   "messaging:pairing-changed";
+export const AUTOMATIONS_LIST_CHANNEL = "automations:list";
+export const AUTOMATIONS_CREATE_CHANNEL = "automations:create";
+export const AUTOMATIONS_UPDATE_CHANNEL = "automations:update";
+export const AUTOMATIONS_DELETE_CHANNEL = "automations:delete";
+export const AUTOMATIONS_PAUSE_CHANNEL = "automations:pause";
+export const AUTOMATIONS_RESUME_CHANNEL = "automations:resume";
+export const AUTOMATIONS_RUN_NOW_CHANNEL = "automations:run-now";
+export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate

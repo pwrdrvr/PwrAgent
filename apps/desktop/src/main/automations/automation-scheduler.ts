@@ -79,12 +79,13 @@ export class AutomationScheduler {
 
   handleTurnQueueUpdate(params: {
     automationRunId?: string;
-    status: "started" | "failed" | "cancelled" | "terminal";
+    status: "queued" | "started" | "failed" | "cancelled" | "terminal";
     turnId?: string;
     errorMessage?: string;
     now?: number;
   }): void {
     if (!params.automationRunId) return;
+    if (params.status === "queued") return;
     const now = params.now ?? this.now();
     if (params.status === "started" && params.turnId) {
       this.options.store.markRunStarted({

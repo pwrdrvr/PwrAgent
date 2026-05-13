@@ -27,6 +27,10 @@ import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
 } from "./ipc/applications";
+import {
+  disposeAutomationIpcHandlers,
+  registerAutomationIpcHandlers,
+} from "./ipc/automation-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
@@ -193,6 +197,7 @@ function disposeMainProcessResourcesSync(): void {
   startupCpuProfilerForNewWindows = undefined;
   disposeAgentIpcHandlers();
   disposeApplicationIpcHandlers();
+  disposeAutomationIpcHandlers();
   disposeAppMetadataIpcHandlers();
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
@@ -463,6 +468,7 @@ export function bootstrapApp(): void {
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
     registerApplicationIpcHandlers();
+    registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
     registerAppUpdateIpcHandlers();
     registerComposerDraftIpcHandlers();

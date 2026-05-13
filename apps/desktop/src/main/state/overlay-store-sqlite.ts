@@ -1,6 +1,7 @@
 import type {
   AppServerBackendScope,
   AppServerThreadSummary,
+  AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
   DirectoryOverlayState,
   LinkedDirectorySummary,
@@ -65,6 +66,7 @@ export class SqliteOverlayStore {
       string,
       MessagingThreadBindingSummary[] | undefined
     >;
+    automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
     /**
      * In-memory permission-mode queue map keyed by `threadId`. The queue
      * lives on the registry (not in sqlite) but must be merged onto the
@@ -157,6 +159,7 @@ export class SqliteOverlayStore {
       launchpadDefaults,
       launchpadsByKey,
       directoryOverlayByKey,
+      automationsByThreadKey: params.automationsByThreadKey,
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
