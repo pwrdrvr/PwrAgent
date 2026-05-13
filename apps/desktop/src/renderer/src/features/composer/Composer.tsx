@@ -2484,8 +2484,10 @@ export function Composer(props: ComposerProps) {
           ? Boolean(currentSettings?.fastMode)
           : undefined,
       });
-      updateActiveTurnId(response.turnId);
-      props.onActiveTurnIdChange?.(response.turnId);
+      if (response.queueStatus !== "queued") {
+        updateActiveTurnId(response.turnId);
+        props.onActiveTurnIdChange?.(response.turnId);
+      }
       if (queued) {
         if (!options?.queueClaimed) {
           removeQueuedTurn(queued);

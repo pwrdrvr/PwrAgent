@@ -1521,6 +1521,15 @@ export class MessagingController {
         input: params.input,
         ...turnSettings,
       });
+      if (started.queueStatus === "queued") {
+        this.logger.info?.("messaging turn queued in shared thread FIFO", {
+          bindingId: params.binding.id,
+          threadId: params.binding.threadId,
+          queueEntryId: started.queueEntryId ?? started.turnId,
+          requestedExecutionMode: turnSettings.executionMode ?? "unset",
+        });
+        return true;
+      }
       turnStarted = true;
       this.logger.info?.("messaging turn started", {
         bindingId: params.binding.id,

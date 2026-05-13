@@ -150,7 +150,25 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
-    return await this.registry.startTurn(request);
+    const submitted = await this.registry.submitTurn({
+      ...request,
+      origin: "messaging",
+    });
+    return submitted.status === "started"
+      ? {
+          backend: submitted.entry.backend,
+          threadId: submitted.entry.threadId,
+          turnId: submitted.turnId,
+          queueStatus: "started",
+          queueEntryId: submitted.entry.id,
+        }
+      : {
+          backend: submitted.entry.backend,
+          threadId: submitted.entry.threadId,
+          turnId: submitted.entry.id,
+          queueStatus: "queued",
+          queueEntryId: submitted.entry.id,
+        };
   }
 
   async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {

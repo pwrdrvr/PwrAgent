@@ -690,7 +690,7 @@ and scanning automations without making Automations a primary thread lens.
   existing shell hierarchy, and give users enough history to ask "what
   happened?" from the thread context.
 
-- [ ] **Unit 7: Converge Existing Composer and Messaging Queue Paths**
+- [x] **Unit 7: Converge Existing Composer and Messaging Queue Paths**
 
 **Goal:** Move manual desktop turn queue release and messaging queued follow-up
 submission onto the shared turn FIFO while preserving their existing UX.

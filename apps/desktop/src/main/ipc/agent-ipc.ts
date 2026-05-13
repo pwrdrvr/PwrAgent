@@ -236,11 +236,31 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
-        const response = await registry.startTurn(request);
+        const submitted = await registry.submitTurn({
+          ...request,
+          origin: "manual",
+        });
+        const response: StartTurnResponse =
+          submitted.status === "started"
+            ? {
+                backend: submitted.entry.backend,
+                threadId: submitted.entry.threadId,
+                turnId: submitted.turnId,
+                queueStatus: "started",
+                queueEntryId: submitted.entry.id,
+              }
+            : {
+                backend: submitted.entry.backend,
+                threadId: submitted.entry.threadId,
+                turnId: submitted.entry.id,
+                queueStatus: "queued",
+                queueEntryId: submitted.entry.id,
+              };
         logDebug("startTurnResult", {
           backend: response.backend,
           threadId: response.threadId,
           turnId: response.turnId,
+          queueStatus: response.queueStatus ?? "started",
         });
         return response;
       } catch (error) {
