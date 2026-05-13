@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
+import type { NavigationSnapshot } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -1672,7 +1673,7 @@ describe("useThreadNavigation", () => {
 
   it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {
     const listeners = new Set<(event: any) => void>();
-    const getNavigationSnapshot = vi.fn(async () => ({
+    let navigationSnapshot: NavigationSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -1694,7 +1695,8 @@ describe("useThreadNavigation", () => {
         backend: "codex" as const,
         executionMode: "default" as const,
       },
-    }));
+    };
+    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
 
     const desktopApi: DesktopApi = {
       getNavigationSnapshot,
@@ -1711,6 +1713,27 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.executionMode).toBe("default");
     });
+
+    navigationSnapshot = {
+      ...navigationSnapshot,
+      threads: [
+        {
+          ...navigationSnapshot.threads[0]!,
+          queuedExecutionMode: "full-access" as const,
+          queuedExecutionModeAt: 5_000,
+          permissionTransitionLog: [
+            {
+              id: "permission-transition-1",
+              fromExecutionMode: "default" as const,
+              toExecutionMode: "full-access" as const,
+              status: "queued" as const,
+              occurredAt: 5_000,
+              queueId: "queue-1",
+            },
+          ],
+        },
+      ],
+    };
 
     await act(async () => {
       for (const listener of listeners) {
@@ -1736,6 +1759,30 @@ describe("useThreadNavigation", () => {
       // Applied mode is unchanged while queued.
       expect(result.current.selectedThread?.executionMode).toBe("default");
     });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.permissionTransitionLog).toEqual([
+        {
+          id: "permission-transition-1",
+          fromExecutionMode: "default",
+          toExecutionMode: "full-access",
+          status: "queued",
+          occurredAt: 5_000,
+          queueId: "queue-1",
+        },
+      ]);
+    });
+
+    navigationSnapshot = {
+      ...navigationSnapshot,
+      threads: [
+        {
+          ...navigationSnapshot.threads[0]!,
+          queuedExecutionMode: undefined,
+          queuedExecutionModeAt: undefined,
+        },
+      ],
+    };
 
     await act(async () => {
       for (const listener of listeners) {

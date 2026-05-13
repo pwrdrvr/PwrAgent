@@ -209,6 +209,56 @@ function reactionsEqual(
   );
 }
 
+function permissionTransitionLogsEqual(
+  left: NavigationThreadSummary["permissionTransitionLog"],
+  right: NavigationThreadSummary["permissionTransitionLog"]
+): boolean {
+  const leftLog = left ?? [];
+  const rightLog = right ?? [];
+  if (leftLog.length !== rightLog.length) {
+    return false;
+  }
+
+  return leftLog.every((entry, index) => {
+    const candidate = rightLog[index];
+    return (
+      candidate?.id === entry.id &&
+      candidate.fromExecutionMode === entry.fromExecutionMode &&
+      candidate.toExecutionMode === entry.toExecutionMode &&
+      candidate.status === entry.status &&
+      candidate.occurredAt === entry.occurredAt &&
+      candidate.queueId === entry.queueId &&
+      candidate.note === entry.note
+    );
+  });
+}
+
+function messagingBindingTransitionLogsEqual(
+  left: NavigationThreadSummary["messagingBindingTransitionLog"],
+  right: NavigationThreadSummary["messagingBindingTransitionLog"]
+): boolean {
+  const leftLog = left ?? [];
+  const rightLog = right ?? [];
+  if (leftLog.length !== rightLog.length) {
+    return false;
+  }
+
+  return leftLog.every((entry, index) => {
+    const candidate = rightLog[index];
+    return (
+      candidate?.id === entry.id &&
+      candidate.action === entry.action &&
+      candidate.bindingId === entry.bindingId &&
+      candidate.platform === entry.platform &&
+      candidate.conversationKind === entry.conversationKind &&
+      candidate.conversationTitle === entry.conversationTitle &&
+      candidate.parentTitle === entry.parentTitle &&
+      candidate.ancestorTitle === entry.ancestorTitle &&
+      candidate.occurredAt === entry.occurredAt
+    );
+  });
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -225,6 +275,8 @@ function threadSummariesEqual(
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.executionMode === right.executionMode &&
+    left.queuedExecutionMode === right.queuedExecutionMode &&
+    left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
@@ -246,7 +298,15 @@ function threadSummariesEqual(
     // the row stay stale until something else triggers a re-render.
     messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
     prSummariesEqual(left.prs, right.prs) &&
-    reactionsEqual(left.reactions, right.reactions)
+    reactionsEqual(left.reactions, right.reactions) &&
+    permissionTransitionLogsEqual(
+      left.permissionTransitionLog,
+      right.permissionTransitionLog
+    ) &&
+    messagingBindingTransitionLogsEqual(
+      left.messagingBindingTransitionLog,
+      right.messagingBindingTransitionLog
+    )
   );
 }
 
