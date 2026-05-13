@@ -680,7 +680,7 @@ function formatBackendAccountText(
   account: NonNullable<BackendSummary["account"]>
 ): string {
   if (account.type === "chatgpt" && account.email?.trim()) {
-    return formatMaskedEmail(account.email);
+    return account.email.trim();
   }
   if (account.type === "apiKey") {
     return "API key";
@@ -692,16 +692,6 @@ function formatBackendAccountText(
     return "Not signed in";
   }
   return "Unknown";
-}
-
-function formatMaskedEmail(email: string): string {
-  const trimmed = email.trim();
-  const atIndex = trimmed.indexOf("@");
-  if (atIndex <= 1) {
-    return trimmed;
-  }
-  const local = trimmed.slice(0, atIndex);
-  return `${local.slice(0, 2)}...${trimmed.slice(atIndex)}`;
 }
 
 function splitRateLimitName(name: string): {

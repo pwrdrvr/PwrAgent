@@ -218,7 +218,7 @@ describe("ThreadView", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
-    expect(screen.getByText("us...@example.com")).toBeInTheDocument();
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
     expect(screen.getByText("pro")).toBeInTheDocument();
     expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
     expect(screen.getByText(/Weekly limit: 91% left/)).toBeInTheDocument();
