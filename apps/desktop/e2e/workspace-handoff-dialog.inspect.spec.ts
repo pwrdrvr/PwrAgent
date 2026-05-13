@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createWorktreeHandoffFixture } from "./fixtures/workspace-handoff-fixture";
+import { createLocalHandoffFixture } from "./fixtures/workspace-handoff-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 test.skip(
@@ -7,10 +7,10 @@ test.skip(
   "Set PWRAGENT_E2E_INSPECT=1 through the package script to run this manual inspector.",
 );
 
-test("opens the worktree-to-local handoff dialog until Electron is closed manually", async () => {
+test("opens the local-to-worktree handoff dialog until Electron is closed manually", async () => {
   test.setTimeout(0);
 
-  const fixture = await createWorktreeHandoffFixture();
+  const fixture = await createLocalHandoffFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     windowSize: {
@@ -20,23 +20,22 @@ test("opens the worktree-to-local handoff dialog until Electron is closed manual
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: "Worktree handoff thread" })
-      .click();
+    await app.window.getByRole("button", { name: "Local handoff thread" }).click();
 
     const workspaceMode = app.window.getByLabel("Workspace mode");
     await workspaceMode.click();
-    await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
+    await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
 
-    const dialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
+    const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("feature/handoff");
+    await expect(dialog).toContainText("Handoff to Detached HEAD");
+    await expect(dialog).toContainText("main");
     await expect(dialog).toContainText("Ignored files are not moved by handoff.");
 
     console.log(
       [
         "",
-        "Worktree-to-Local handoff inspection is ready.",
+        "Local-to-Worktree handoff inspection is ready.",
         "Take screenshots from the Electron window now.",
         "Close the Electron window or quit the app to finish this command.",
         "",
