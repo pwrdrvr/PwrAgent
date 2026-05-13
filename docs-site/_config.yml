@@ -13,6 +13,8 @@ exclude:
   - "*.swp"
   - .DS_Store
 permalink: pretty
+plugins:
+  - jekyll-redirect-from
 kramdown:
   syntax_highlighter: rouge
   syntax_highlighter_opts:

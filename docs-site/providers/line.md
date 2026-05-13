@@ -1,6 +1,9 @@
 ---
 layout: page
 title: LINE
+redirect_from:
+  - /messaging/line/
+  - /messaging/line
 ---
 
 # LINE
@@ -9,7 +12,7 @@ PwrAgent's LINE adapter is **webhook-only**. LINE does not offer an
 outbound-socket option, so operators have to expose PwrAgent's local
 listener through a public HTTPS URL.
 
-**Read [webhook-dangers.md](webhook-dangers.md) first.** A public HTTP
+**Read [webhook-dangers.md](/webhook-dangers/) first.** A public HTTP
 listener is a meaningfully larger attack surface than an outbound
 socket, even behind Cloudflare Tunnel or Tailscale Funnel. LINE is the
 only adapter in PwrAgent that forces this trade-off — if your usage
@@ -61,7 +64,7 @@ Group IDs start with `C…`; room IDs start with `R…`.
 
 ## Choosing a tunnel
 
-Same options as [Mattermost](mattermost.md#choosing-a-tunnel) — see
+Same options as [Mattermost](/providers/mattermost/#choosing-a-tunnel) — see
 that page for the full Cloudflare Tunnel + Zero Trust and Tailscale
 Funnel walkthroughs. The only difference is the local port (LINE
 defaults to 47822 vs. Mattermost's 47821) so the two adapters can run
@@ -110,12 +113,12 @@ before JSON parsing.
 - **Operating LINE safely requires the same diligence as any other
   webhook platform.** Tunnel, HMAC verification (PwrAgent does this
   via the channel secret), monitoring on the listener. See
-  [webhook-dangers.md](webhook-dangers.md).
+  [webhook-dangers.md](/webhook-dangers/).
 
 ## See also
 
-- [Webhooks: a security note](webhook-dangers.md) — **read this
+- [Webhooks: a security note](/webhook-dangers/) — **read this
   before exposing the listener publicly.**
-- [Messaging concepts overview](overview.md)
-- [Streaming responses: why you probably don't want them](streaming.md)
+- [Using Codex via Messaging](/using-codex/)
+- [Streaming responses: why you probably don't want them](/streaming/)
   — note that the toggle is a no-op on LINE.

@@ -1,6 +1,9 @@
 ---
 layout: page
 title: Slack
+redirect_from:
+  - /messaging/slack/
+  - /messaging/slack
 ---
 
 # Slack
@@ -95,7 +98,7 @@ below.
 | **Signing Secret** | (blank) | Optional in Socket Mode. PwrAgent uses it as a stable local secret for Block Kit button payload validation. | Set it. With a stable signing secret, buttons rendered before an adapter restart still validate after the restart. Without it, button payloads use a per-process random secret and stale buttons silently fail after a restart. Get the value from Basic Information → App Credentials → Signing Secret. |
 | **Workspace ID Allowlist** | (empty) | Comma-separated team IDs (`T…`) the bot will accept events from. Empty = accept from any workspace this app is installed into. | Set when the app might be distributed or installed into more than one workspace and you want to reject events from anywhere else. |
 | **Workspace URL** | (blank) | Display-only metadata for binding chips. | Set to your workspace's URL (e.g. `https://example.slack.com`) for nicer Activity entries. |
-| **Streaming Responses** | Off | Bot edits its reply message in place as the response streams in. | Leave off. See [streaming.md](streaming.md). Slack edits are more permissive than Telegram, but `chat.postMessage` has its own write limit. |
+| **Streaming Responses** | Off | Bot edits its reply message in place as the response streams in. | Leave off. See [streaming.md](/streaming/). Slack edits are more permissive than Telegram, but `chat.postMessage` has its own write limit. |
 | **Tool Usage Notifications** | Show Some | Same as the global Tools setting. | Per-binding override available on the status card. |
 | **Image Upload Profile** | medium | Quality used when forwarding inbound images to the model. | `low`/`high`/`actual` per your bandwidth / fidelity tradeoff. |
 
@@ -116,5 +119,5 @@ below.
 
 ## See also
 
-- [Messaging concepts overview](overview.md)
-- [Streaming responses: why you probably don't want them](streaming.md)
+- [Using Codex via Messaging](/using-codex/)
+- [Streaming responses: why you probably don't want them](/streaming/)

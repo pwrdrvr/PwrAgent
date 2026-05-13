@@ -1,6 +1,9 @@
 ---
 layout: page
 title: Mattermost
+redirect_from:
+  - /messaging/mattermost/
+  - /messaging/mattermost
 ---
 
 # Mattermost
@@ -8,7 +11,7 @@ title: Mattermost
 PwrAgent's Mattermost adapter delivers messages over Mattermost's
 WebSocket, but **button clicks come back through an HTTP callback** the
 adapter has to host. That makes Mattermost an HTTP-callback platform.
-Before you start, read [webhook-dangers.md](webhook-dangers.md) — the
+Before you start, read [webhook-dangers.md](/webhook-dangers/) — the
 short version: a public HTTP listener is more attack surface than an
 outbound socket, even behind a tunnel. If you have a choice of
 platform, prefer one of the non-webhook ones (Telegram, Discord,
@@ -144,7 +147,7 @@ in the environment, or store it in the Settings UI. The HMAC pin is
 | **HMAC Secret** | random per-start | Stable secret for button-payload verification. | **Set it.** Generated via `openssl rand -hex 32`. Without a pinned value, buttons fail silently after every restart. |
 | **Register Slash Commands** | Off | Reconcile native `/pwragent_*` slash commands on adapter startup. | Turn on for nicer slash-menu autocomplete. Requires `manage_slash_commands` on the bot. Threads-from-slash work cleanly on Mattermost 11.0+; v10.x reverts to channel-level reply (see "Mattermost-specific notes"). |
 | **Slash Command Prefix** | pwragent_ | Prefix for registered slash commands. | Empty string registers bare triggers and accepts collisions with built-in commands like `/status`, `/away`, `/leave`. Allowed chars: `[A-Za-z0-9_./-]`. |
-| **Streaming Responses** | Off | Bot edits its reply message in place as text streams in. | Leave off. See [streaming.md](streaming.md). |
+| **Streaming Responses** | Off | Bot edits its reply message in place as text streams in. | Leave off. See [streaming.md](/streaming/). |
 | **Tool Usage Notifications** | Show Some | Same as the global Tools setting. | Per-binding override on the status card. |
 | **Image Upload Profile** | medium | Quality used for inbound images. | Per bandwidth / fidelity tradeoff. |
 
@@ -168,7 +171,7 @@ in the environment, or store it in the Settings UI. The HMAC pin is
 
 ## See also
 
-- [Webhooks: a security note](webhook-dangers.md) — read this before
+- [Webhooks: a security note](/webhook-dangers/) — read this before
   shipping the tunnel.
-- [Messaging concepts overview](overview.md)
-- [Streaming responses: why you probably don't want them](streaming.md)
+- [Using Codex via Messaging](/using-codex/)
+- [Streaming responses: why you probably don't want them](/streaming/)

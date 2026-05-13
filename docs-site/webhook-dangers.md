@@ -1,6 +1,9 @@
 ---
 layout: page
 title: Webhooks — a security note
+redirect_from:
+  - /messaging/webhook-dangers/
+  - /messaging/webhook-dangers
 ---
 
 # Webhooks: a security note
@@ -125,4 +128,4 @@ made, before you made it.
   Funnel options, HMAC-secret pinning.
 - [LINE setup](line.md) — webhook-only platform, channel-secret
   signature verification.
-- [Messaging concepts overview](overview.md).
+- [Using Codex via Messaging](/using-codex/).

@@ -29,22 +29,31 @@ the contributor's path, head to the
 - **Pair a messenger** from **Settings → Messaging**. Pick your platform
   below for the exact flow.
 
+## Using Codex from your messenger
+
+Once you've paired a messenger, the **bound-thread, slash commands,
+buttons, queue-and-steer, monitor card, detach** flow is mostly the
+same across every provider. The [Using Codex via Messaging](using-codex/)
+guide walks through it end to end, with per-provider exceptions
+called out inline.
+
 ## Messaging platforms
 
-| Platform | Inbound transport | Outbound limits | Page |
+| Platform | Inbound transport | Outbound limits | Setup |
 |---|---|---|---|
-| Telegram | Long polling | Tightest of the bunch — supergroup writes and edits share one budget | [telegram](messaging/telegram.md) |
-| Discord | Gateway WebSocket | Edits permissive, route buckets apply | [discord](messaging/discord.md) |
-| Slack | Socket Mode | DM edits permissive; `chat.postMessage` has its own limit | [slack](messaging/slack.md) |
-| Feishu / Lark | Persistent SDK WebSocket | Tenant-scoped | [feishu](messaging/feishu.md) |
-| Mattermost | HTTP callback (your host) | Server-configured | [mattermost](messaging/mattermost.md) |
-| LINE | HTTP webhook (your host) | LINE Bot API limits | [line](messaging/line.md) |
+| Telegram | Long polling | Tightest of the bunch — supergroup writes and edits share one budget | [telegram](providers/telegram/) |
+| Discord | Gateway WebSocket | Edits permissive, route buckets apply | [discord](providers/discord/) |
+| Slack | Socket Mode | DM edits permissive; `chat.postMessage` has its own limit | [slack](providers/slack/) |
+| Feishu / Lark | Persistent SDK WebSocket | Tenant-scoped | [feishu](providers/feishu/) |
+| Mattermost | HTTP callback (your host) | Server-configured | [mattermost](providers/mattermost/) |
+| LINE | HTTP webhook (your host) | LINE Bot API limits | [line](providers/line/) |
 
 ## Read before you toggle
 
-- [Streaming responses: why you probably don't want them](messaging/streaming.md)
-- [Webhooks: a security note](messaging/webhook-dangers.md)
-- [Messaging concepts overview](messaging/overview.md)
+- [Using Codex via Messaging](using-codex/) — the end-to-end usage guide
+- [Streaming responses: why you probably don't want them](streaming/)
+- [Webhooks: a security note](webhook-dangers/)
+- [Rate limits and budgets](rate-limits/) — per-platform measured write budgets
 
 ## License
 

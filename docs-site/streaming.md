@@ -1,6 +1,9 @@
 ---
 layout: page
 title: Streaming responses
+redirect_from:
+  - /messaging/streaming/
+  - /messaging/streaming
 ---
 
 # Streaming responses: why you probably don't want them
@@ -130,7 +133,7 @@ the edits.
 
 ## See also
 
-- [Messaging concepts overview](overview.md) — tool updates, Slow
+- [Using Codex via Messaging](/using-codex/) — tool updates, Slow
   Mode, attachments, the rest of the per-binding state.
 - The per-platform pages cover where exactly the Streaming Responses
   toggle lives in each Settings panel.
