@@ -3028,6 +3028,118 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not report a cleanup failure when an archived thread has no linked worktrees", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive local thread",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      gitBranch: "main",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const archiveWorktree = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(archiveWorktree).not.toHaveBeenCalled();
+    expect(response.cleanup).toEqual([]);
+
+    await registry.close();
+  });
+
+  it("reports failed cleanup when a worktree directory remains after archive", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-sentinel-"));
+    const repoPath = path.join(root, "PwrAgnt");
+    const worktreePath = path.join(root, ".codex", "worktrees", "leaked", "PwrAgnt");
+
+    try {
+      await mkdir(worktreePath, { recursive: true });
+      const thread: AppServerThreadSummary = {
+        id: "thread-1",
+        title: "Archive me",
+        titleSource: "explicit",
+        linkedDirectories: [
+          {
+            id: `directory:${repoPath}`,
+            label: "PwrAgnt",
+            path: repoPath,
+            kind: "worktree",
+            worktreePath,
+          },
+        ],
+        source: "codex",
+        gitBranch: "codex/archive-me",
+        updatedAt: 2,
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: [thread],
+      });
+      const archiveWorktree = vi.fn(async () => ({
+        id: "snapshot-1",
+        backend: "codex" as const,
+        threadId: "thread-1",
+        worktreePath,
+        repositoryPath: repoPath,
+        snapshotRef: "refs/codex/snapshots/snapshot-1",
+        snapshotCommit: "abc123",
+        sourceBranch: "codex/archive-me",
+        sourceHead: "def456",
+        createdAt: 1000,
+        archivedAt: 1000,
+        state: "archived" as const,
+        ignoredFilesExcluded: true,
+      }));
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        overlayStore: createOverlayStoreMock(),
+        worktreeArchiveService: {
+          archive: archiveWorktree,
+        } as unknown as WorktreeArchiveService,
+      });
+
+      const response = await registry.archiveThread({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      expect(response.cleanup).toEqual([
+        {
+          worktreePath,
+          branch: "codex/archive-me",
+          removedWorktree: false,
+          deletedBranch: false,
+          error: "Worktree directory still exists after archive cleanup.",
+        },
+      ]);
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("revokes messaging bindings and clears pending intents when archiving a thread", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

@@ -1,6 +1,7 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -138,6 +139,19 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   }
 
   backendRegistryLog.info(event, payload);
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 function assistantOutputForTurn(
@@ -1458,7 +1472,11 @@ export class DesktopBackendRegistry {
           backend,
           thread,
         })
-      : this.buildArchiveCleanupMetadataSkippedResult(cleanupMetadataError);
+      : this.buildArchiveCleanupMetadataSkippedResult({
+          backend,
+          threadId: result.threadId,
+          error: cleanupMetadataError,
+        });
 
     return {
       backend,
@@ -1468,15 +1486,28 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private buildArchiveCleanupMetadataSkippedResult(
-    error?: string,
-  ): ArchiveThreadCleanupResult[] {
+  private buildArchiveCleanupMetadataSkippedResult(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    error?: string;
+  }): ArchiveThreadCleanupResult[] {
+    backendRegistryLog.warn(
+      "archive thread worktree cleanup skipped: metadata unavailable",
+      {
+        backend: params.backend,
+        threadId: params.threadId,
+        skippedReason: params.error
+          ? `Unable to load thread metadata for archive cleanup: ${params.error}`
+          : "Unable to load thread metadata for archive cleanup.",
+      },
+    );
+
     return [
       {
         removedWorktree: false,
         deletedBranch: false,
-        skippedReason: error
-          ? `Unable to load thread metadata for archive cleanup: ${error}`
+        skippedReason: params.error
+          ? `Unable to load thread metadata for archive cleanup: ${params.error}`
           : "Unable to load thread metadata for archive cleanup.",
       },
     ];
@@ -4116,9 +4147,26 @@ export class DesktopBackendRegistry {
       ).values(),
     ];
 
+    if (uniqueCandidates.length === 0) {
+      backendRegistryLog.warn("archive thread worktree cleanup skipped: no worktree candidates", {
+        backend: params.backend,
+        threadId: params.thread.id,
+        linkedDirectoryCount: params.thread.linkedDirectories.length,
+        projectKey: params.thread.projectKey,
+        gitBranch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+      });
+      return [];
+    }
+
     return await Promise.all(
       uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
         try {
+          backendRegistryLog.info("archive thread worktree cleanup removing worktree", {
+            backend: params.backend,
+            threadId: params.thread.id,
+            repositoryPath: candidate.repositoryPath,
+            worktreePath: candidate.worktreePath,
+          });
           const snapshot = await this.worktreeArchiveService.archive({
             backend: params.backend,
             threadId: params.thread.id,
@@ -4130,6 +4178,49 @@ export class DesktopBackendRegistry {
             threadId: params.thread.id,
             snapshot,
           });
+
+          let worktreeStillExists = false;
+          try {
+            worktreeStillExists = await pathExists(snapshot.worktreePath);
+          } catch (sentinelError) {
+            const error =
+              sentinelError instanceof Error ? sentinelError.message : String(sentinelError);
+            backendRegistryLog.error("archive thread worktree cleanup sentinel failed", {
+              backend: params.backend,
+              threadId: params.thread.id,
+              repositoryPath: snapshot.repositoryPath,
+              worktreePath: snapshot.worktreePath,
+              error,
+            });
+            return {
+              worktreePath: snapshot.worktreePath,
+              branch: snapshot.sourceBranch,
+              removedWorktree: false,
+              deletedBranch: false,
+              error: `Unable to verify worktree removal: ${error}`,
+            };
+          }
+
+          if (worktreeStillExists) {
+            const error = "Worktree directory still exists after archive cleanup.";
+            backendRegistryLog.error("archive thread worktree cleanup left worktree directory", {
+              backend: params.backend,
+              threadId: params.thread.id,
+              repositoryPath: snapshot.repositoryPath,
+              worktreePath: snapshot.worktreePath,
+              branch: snapshot.sourceBranch,
+              snapshotRef: snapshot.snapshotRef,
+              snapshotCommit: snapshot.snapshotCommit,
+              error,
+            });
+            return {
+              worktreePath: snapshot.worktreePath,
+              branch: snapshot.sourceBranch,
+              removedWorktree: false,
+              deletedBranch: false,
+              error,
+            };
+          }
 
           return {
             worktreePath: snapshot.worktreePath,
