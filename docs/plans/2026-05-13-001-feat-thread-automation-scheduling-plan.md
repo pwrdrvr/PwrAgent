@@ -470,7 +470,7 @@ scheduled automation turns, and messaging queued follow-up submissions.
   the same per-thread FIFO and that low-level overlap errors become exceptional
   safety-net paths, not normal control flow.
 
-- [ ] **Unit 4: Implement Scheduler Evaluation and Automation Run Lifecycle**
+- [x] **Unit 4: Implement Scheduler Evaluation and Automation Run Lifecycle**
 
 **Goal:** Evaluate due schedules while the app is running, apply backlog policy,
 enqueue automation runs, and update run history from queue/backend events.

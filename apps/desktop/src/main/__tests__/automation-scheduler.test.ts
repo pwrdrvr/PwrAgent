@@ -1,0 +1,206 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import { AutomationScheduler } from "../automations/automation-scheduler";
+import { AutomationStore } from "../automations/automation-store";
+import { StateDb } from "../state/state-db";
+
+class FakeQueue {
+  active = false;
+  submitted: ThreadTurnQueueEntry[] = [];
+
+  canStartImmediately(): boolean {
+    return !this.active;
+  }
+
+  async submit(
+    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+  ) {
+    const queuedEntry: ThreadTurnQueueEntry = {
+      ...entry,
+      id: entry.id ?? `queue-${this.submitted.length + 1}`,
+      createdAt: entry.createdAt ?? 1_000,
+    };
+    this.submitted.push(queuedEntry);
+    if (this.active) {
+      return {
+        status: "queued" as const,
+        entry: queuedEntry,
+        position: this.submitted.length,
+      };
+    }
+    return {
+      status: "started" as const,
+      entry: queuedEntry,
+      turnId: `turn-${queuedEntry.id}`,
+    };
+  }
+}
+
+let tempDir: string;
+let stateDb: StateDb;
+let store: AutomationStore;
+let queue: FakeQueue;
+let now = 0;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-automation-scheduler-"));
+  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  store = new AutomationStore(stateDb);
+  queue = new FakeQueue();
+  now = 0;
+});
+
+afterEach(() => {
+  stateDb.close();
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+function createIntervalAutomation(
+  overrides: Parameters<AutomationStore["createAutomation"]>[0] = {
+    backend: "codex",
+    threadId: "thread-1",
+    name: "Check email",
+    taskPrompt: "Check mail",
+    schedule: {
+      kind: "interval",
+      every: 5,
+      unit: "minutes",
+      anchorAt: 0,
+    },
+    nextRunAt: 5 * 60 * 1000,
+  },
+) {
+  return store.createAutomation({
+    id: "automation-1",
+    now: 0,
+    ...overrides,
+  });
+}
+
+function buildScheduler(): AutomationScheduler {
+  return new AutomationScheduler({
+    store,
+    queue,
+    now: () => now,
+    setTimer: (() => 0) as unknown as typeof setTimeout,
+    clearTimer: () => undefined,
+  });
+}
+
+describe("AutomationScheduler", () => {
+  it("starts due interval automations on idle threads and advances next run", async () => {
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        status: "running",
+        backendTurnId: "turn-queue-1",
+        scheduledWindows: [{ scheduledFor: 5 * 60 * 1000 }],
+      }),
+    ]);
+    expect(store.getAutomation("automation-1")).toMatchObject({
+      nextRunAt: 10 * 60 * 1000,
+    });
+  });
+
+  it("coalesces due windows into one queued catch-up run by default", async () => {
+    queue.active = true;
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 15 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        status: "queued",
+        scheduledWindows: [
+          { scheduledFor: 5 * 60 * 1000 },
+          { scheduledFor: 10 * 60 * 1000 },
+          { scheduledFor: 15 * 60 * 1000 },
+        ],
+      }),
+    ]);
+  });
+
+  it("merges later due windows into an existing pending coalesced run", async () => {
+    queue.active = true;
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 10 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    now = 15 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        scheduledWindows: [
+          { scheduledFor: 5 * 60 * 1000 },
+          { scheduledFor: 10 * 60 * 1000 },
+          { scheduledFor: 15 * 60 * 1000 },
+        ],
+      }),
+    ]);
+  });
+
+  it("records skipped history for drop_missed while the thread is busy", async () => {
+    queue.active = true;
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      backlogPolicy: "drop_missed",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildScheduler();
+    now = 10 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toEqual([]);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({ status: "skipped", scheduledFor: 10 * 60 * 1000 }),
+      expect.objectContaining({ status: "skipped", scheduledFor: 5 * 60 * 1000 }),
+    ]);
+  });
+
+  it("queues manual run-now without changing the recurring next run", async () => {
+    queue.active = true;
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 2 * 60 * 1000;
+
+    await scheduler.runNow("automation-1");
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        trigger: "manual",
+        status: "queued",
+        scheduledWindows: [],
+      }),
+    ]);
+    expect(store.getAutomation("automation-1")).toMatchObject({
+      nextRunAt: 5 * 60 * 1000,
+    });
+  });
+});

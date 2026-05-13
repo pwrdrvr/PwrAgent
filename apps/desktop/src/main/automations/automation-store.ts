@@ -383,7 +383,7 @@ export class AutomationStore {
   listRunsForAutomation(automationId: string, limit = 50): AutomationRunSummary[] {
     const rows = this.stateDb.raw
       .prepare(
-        "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC LIMIT ?",
+        "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
       )
       .all(automationId, limit) as AutomationRunRow[];
     return rows
@@ -398,7 +398,7 @@ export class AutomationStore {
   }): AutomationRunSummary[] {
     const rows = this.stateDb.raw
       .prepare(
-        "SELECT * FROM automation_runs WHERE backend = ? AND thread_id = ? ORDER BY updated_at DESC LIMIT ?",
+        "SELECT * FROM automation_runs WHERE backend = ? AND thread_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
       )
       .all(params.backend, params.threadId, params.limit ?? 50) as AutomationRunRow[];
     return rows
