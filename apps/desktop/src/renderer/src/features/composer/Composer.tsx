@@ -1689,6 +1689,12 @@ export function Composer(props: ComposerProps) {
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
+      props.onPendingStatusChange?.(
+        props.launchpad.codexEnvironmentId &&
+          props.launchpad.codexEnvironmentSetupEnabled
+          ? "Running environment setup"
+          : "Reviewing",
+      );
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -2142,6 +2148,14 @@ export function Composer(props: ComposerProps) {
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
+      props.onPendingStatusChange?.(
+        props.launchpad.codexEnvironmentId &&
+          props.launchpad.codexEnvironmentSetupEnabled
+          ? "Running environment setup"
+          : collaborationMode
+            ? "Planning"
+            : "Thinking",
+      );
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -2154,6 +2168,7 @@ export function Composer(props: ComposerProps) {
         }
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
+        props.onPendingStatusChange?.(undefined);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -2487,6 +2502,31 @@ export function Composer(props: ComposerProps) {
     }, 0);
   };
 
+  const runThreadCodexEnvironmentAction = async (): Promise<void> => {
+    if (
+      !props.thread ||
+      props.thread.source !== "codex" ||
+      !props.desktopApi?.runCodexEnvironmentAction ||
+      !selectedThreadCodexAction
+    ) {
+      return;
+    }
+
+    setSendError(undefined);
+    props.onPendingStatusChange?.(`Starting ${selectedThreadCodexAction.name}`);
+    try {
+      await props.desktopApi.runCodexEnvironmentAction({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        actionId: selectedThreadCodexAction.id,
+      });
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      props.onPendingStatusChange?.(undefined);
+    }
+  };
+
   const applyExecutionModeSelection = (
     executionMode: ThreadExecutionMode,
   ): void => {
@@ -2606,6 +2646,16 @@ export function Composer(props: ComposerProps) {
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
     (environment) => environment.id === props.launchpad?.codexEnvironmentId,
   );
+  const threadCodexEnvironmentActions =
+    props.thread?.source === "codex"
+      ? props.thread.codexEnvironmentRuntime?.actions ?? []
+      : [];
+  const [selectedThreadCodexActionId, setSelectedThreadCodexActionId] =
+    useState<string>("");
+  const selectedThreadCodexAction =
+    threadCodexEnvironmentActions.find(
+      (action) => action.id === selectedThreadCodexActionId,
+    ) ?? threadCodexEnvironmentActions[0];
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
@@ -3506,6 +3556,37 @@ export function Composer(props: ComposerProps) {
             </span>
           ) : null}
 
+          {props.thread && threadCodexEnvironmentActions.length > 0 ? (
+            <>
+              <ComposerDropdown
+                ariaLabel="Environment command"
+                compact
+                disabled={!props.desktopApi?.runCodexEnvironmentAction}
+                value={selectedThreadCodexAction?.id ?? ""}
+                options={threadCodexEnvironmentActions.map((action) => ({
+                  label: action.name,
+                  value: action.id,
+                }))}
+                onChange={(value) => {
+                  setSelectedThreadCodexActionId(value);
+                }}
+              />
+              <button
+                className="composer__action-button"
+                disabled={
+                  !selectedThreadCodexAction ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
+                type="button"
+                onClick={() => {
+                  void runThreadCodexEnvironmentAction();
+                }}
+              >
+                Run
+              </button>
+            </>
+          ) : null}
+
           {availableExecutionModes.length > 0 &&
           (props.launchpad || (props.thread?.source === "codex" && props.onSetExecutionMode)) ? (
             <ComposerDropdown
@@ -4009,6 +4090,12 @@ export function Composer(props: ComposerProps) {
       ) : null}
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
+      ) : null}
+      {props.launchpad &&
+      launchpadSubmitting &&
+      props.launchpad.codexEnvironmentId &&
+      props.launchpad.codexEnvironmentSetupEnabled ? (
+        <p className="composer__meta">Running environment setup…</p>
       ) : null}
       {props.updatingExecutionMode ? (
         <p className="composer__meta">

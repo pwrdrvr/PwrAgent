@@ -28,6 +28,8 @@ export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
   "agent:retain-thread-branch-drift";
 export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "agent:materialize-directory-launchpad";
+export const AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL =
+  "agent:run-codex-environment-action";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";

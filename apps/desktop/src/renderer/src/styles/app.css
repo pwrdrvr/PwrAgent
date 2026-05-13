@@ -6948,6 +6948,30 @@ textarea,
   background: var(--border-subtle);
 }
 
+.composer__action-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+
+.composer__action-button:hover,
+.composer__action-button:focus-visible {
+  border-color: var(--accent-border);
+}
+
+.composer__action-button:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
 /* ===========================================================
    Project picker (issue #223)
    ===========================================================

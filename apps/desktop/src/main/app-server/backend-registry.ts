@@ -49,6 +49,8 @@ import {
   type ResetDirectoryLaunchpadResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
+  type RunCodexEnvironmentActionRequest,
+  type RunCodexEnvironmentActionResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -112,6 +114,7 @@ import {
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
+  startLocalCodexEnvironmentAction,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -1018,6 +1021,60 @@ async function resetLaunchpadAfterMaterialize(params: {
   });
 }
 
+function buildCodexEnvironmentSetupActivity(
+  runtime: CodexThreadEnvironmentRuntime | undefined,
+): AppServerThreadReplay["entries"][number] | undefined {
+  if (!runtime?.setupEnabled || !runtime.setupCommand) {
+    return undefined;
+  }
+
+  const completed = runtime.setupStatus === "completed";
+  const failed = runtime.setupStatus === "failed";
+  return {
+    type: "activity",
+    id: `codex-environment-setup-${runtime.environmentId}`,
+    summary: completed
+      ? `Environment setup completed: ${runtime.environmentName}`
+      : failed
+        ? `Environment setup failed: ${runtime.environmentName}`
+        : `Environment setup skipped: ${runtime.environmentName}`,
+    status: failed ? "failed" : "completed",
+    details: [
+      {
+        id: "setup",
+        kind: "command",
+        label: "Setup command",
+        status: failed ? "failed" : "completed",
+        command: {
+          displayCommand: runtime.setupCommand,
+          rawCommand: runtime.setupCommand,
+          cwd: runtime.cwd,
+          output: runtime.setupOutput,
+          exitCode: runtime.setupExitCode,
+          durationMs: runtime.setupDurationMs,
+        },
+      },
+    ],
+  };
+}
+
+function appendCodexEnvironmentSetupActivity(params: {
+  replay: AppServerThreadReplay;
+  runtime?: CodexThreadEnvironmentRuntime;
+}): AppServerThreadReplay {
+  const activity = buildCodexEnvironmentSetupActivity(params.runtime);
+  if (!activity) {
+    return params.replay;
+  }
+  if (params.replay.entries.some((entry) => entry.id === activity.id)) {
+    return params.replay;
+  }
+  return {
+    ...params.replay,
+    entries: [activity, ...params.replay.entries],
+  };
+}
+
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
   const text = input
     .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
@@ -1811,12 +1868,23 @@ export class DesktopBackendRegistry {
             limit: request.limit,
           });
 
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    const replayWithEnvironment = appendCodexEnvironmentSetupActivity({
+      replay,
+      runtime: overlay?.codexEnvironmentRuntime,
+    });
+
     return {
       backend,
       fetchedAt: Date.now(),
       threadId: request.threadId,
-      ...(replay.threadStatus ? { threadStatus: replay.threadStatus } : {}),
-      replay,
+      ...(replayWithEnvironment.threadStatus
+        ? { threadStatus: replayWithEnvironment.threadStatus }
+        : {}),
+      replay: replayWithEnvironment,
     };
   }
 
@@ -3250,6 +3318,40 @@ export class DesktopBackendRegistry {
     return {
       directoryKey: request.directoryKey,
       defaults: await this.overlayStore.getLaunchpadDefaults(),
+    };
+  }
+
+  async runCodexEnvironmentAction(
+    request: RunCodexEnvironmentActionRequest,
+  ): Promise<RunCodexEnvironmentActionResponse> {
+    if (request.backend !== "codex") {
+      throw new Error("Codex environment actions are only available for Codex threads.");
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const runtime = overlay?.codexEnvironmentRuntime;
+    if (!runtime) {
+      throw new Error("This thread does not have a selected Codex environment.");
+    }
+
+    const nextRuntime = await startLocalCodexEnvironmentAction({
+      actionId: request.actionId,
+      runtime,
+    });
+    await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime: nextRuntime,
+    });
+    this.invalidateThreadListCache(request.backend);
+
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime: nextRuntime,
     };
   }
 

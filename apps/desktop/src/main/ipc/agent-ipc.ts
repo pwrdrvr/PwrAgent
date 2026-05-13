@@ -16,6 +16,8 @@ import type {
   QueueThreadExecutionModeResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -42,6 +44,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -413,6 +416,17 @@ export function registerAgentIpcHandlers(): void {
       request: MaterializeDirectoryLaunchpadRequest
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
       return await registry.materializeDirectoryLaunchpad(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.handle(
+    AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+    async (
+      _event,
+      request: RunCodexEnvironmentActionRequest,
+    ): Promise<RunCodexEnvironmentActionResponse> => {
+      return await registry.runCodexEnvironmentAction(request);
     },
   );
 

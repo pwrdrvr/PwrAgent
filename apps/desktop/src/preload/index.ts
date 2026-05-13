@@ -77,6 +77,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
   RestoreThreadRequest,
@@ -125,6 +127,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -412,6 +415,13 @@ const desktopApi = Object.freeze({
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  runCodexEnvironmentAction: async (
+    request: RunCodexEnvironmentActionRequest,
+  ): Promise<RunCodexEnvironmentActionResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+      request,
+    ),
   submitServerRequest: async (
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>

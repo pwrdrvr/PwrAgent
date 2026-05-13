@@ -108,12 +108,25 @@ export type WorktreeSnapshotSummary = {
 
 export type CodexEnvironmentExecutionTarget = "local" | "remote";
 
+export type CodexEnvironmentAction = {
+  id: string;
+  name: string;
+  icon?: string;
+  command: string;
+};
+
 export type CodexThreadEnvironmentRuntime = {
   environmentId: string;
   environmentName: string;
   executionTarget: CodexEnvironmentExecutionTarget;
+  cwd?: string;
   setupEnabled?: boolean;
   setupStatus?: "skipped" | "completed" | "failed";
+  setupCommand?: string;
+  setupOutput?: string;
+  setupExitCode?: number;
+  setupDurationMs?: number;
+  actions?: CodexEnvironmentAction[];
   actionId?: string;
   actionName?: string;
   actionCommand?: string;

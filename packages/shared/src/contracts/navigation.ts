@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadImagePart,
   AppServerThreadSummary,
+  CodexEnvironmentAction,
   CodexEnvironmentExecutionTarget,
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
@@ -135,13 +136,6 @@ export type PrSummary = {
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 export type LaunchpadWorkMode = "local" | "worktree";
-
-export type CodexEnvironmentAction = {
-  id: string;
-  name: string;
-  icon?: string;
-  command: string;
-};
 
 export type CodexEnvironmentOption = {
   id: string;

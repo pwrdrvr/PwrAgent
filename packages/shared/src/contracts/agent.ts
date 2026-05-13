@@ -294,6 +294,18 @@ export type MaterializeDirectoryLaunchpadResponse = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
+export type RunCodexEnvironmentActionRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  actionId: string;
+};
+
+export type RunCodexEnvironmentActionResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  codexEnvironmentRuntime: CodexThreadEnvironmentRuntime;
+};
+
 /**
  * Ask the main process to open the system "choose folder" dialog. The
  * renderer never sees the path until the user confirms — `canceled: true`

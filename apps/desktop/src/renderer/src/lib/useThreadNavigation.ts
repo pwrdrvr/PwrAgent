@@ -995,6 +995,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   threadId: string;
   executionMode: ThreadExecutionMode;
   workMode: NavigationLaunchpadDraft["workMode"];
+  codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
 }): NavigationThreadSummary {
   const titlePrompt =
@@ -1013,6 +1014,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
     linkedDirectories: params.launchpad.directoryPath || params.launchpad.directoryKind === "workspace"
       ? [
@@ -2245,6 +2247,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           threadId: response.threadId,
           executionMode: response.executionMode,
           workMode: response.workMode,
+          codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           optimisticUserMessage: buildOptimisticUserMessage(input),
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);

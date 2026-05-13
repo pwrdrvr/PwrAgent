@@ -27,8 +27,11 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       environmentId: selection.environment.id,
       environmentName: selection.environment.name,
       executionTarget: selection.executionTarget,
+      cwd,
       setupEnabled: selection.setupEnabled,
       setupStatus: selection.setupEnabled ? "skipped" : undefined,
+      setupCommand: selection.environment.setupScript,
+      actions: selection.environment.actions,
       actionId: selection.action?.id,
       actionName: selection.action?.name,
       actionCommand: selection.action?.command,
@@ -40,18 +43,24 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     environmentId: selection.environment.id,
     environmentName: selection.environment.name,
     executionTarget: "local",
+    cwd,
     setupEnabled: selection.setupEnabled,
+    setupCommand: selection.environment.setupScript,
+    actions: selection.environment.actions,
     sourcePath: selection.environment.sourcePath,
   };
 
   if (selection.setupEnabled && selection.environment.setupScript) {
     try {
-      await runShellCommand({
+      const result = await runShellCommand({
         cwd,
         command: selection.environment.setupScript,
         mode: "wait",
       });
       runtime.setupStatus = "completed";
+      runtime.setupOutput = result.output;
+      runtime.setupExitCode = result.exitCode;
+      runtime.setupDurationMs = result.durationMs;
     } catch (error) {
       runtime.setupStatus = "failed";
       throw error;
@@ -65,12 +74,12 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     runtime.actionName = selection.action.name;
     runtime.actionCommand = selection.action.command;
     try {
-      const pid = await runShellCommand({
+      const result = await runShellCommand({
         cwd,
         command: selection.action.command,
         mode: "detach",
       });
-      runtime.actionPid = pid;
+      runtime.actionPid = result.pid;
       runtime.actionStatus = "started";
     } catch (error) {
       runtime.actionStatus = "failed";
@@ -81,13 +90,57 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   return runtime;
 }
 
+export async function startLocalCodexEnvironmentAction(params: {
+  actionId: string;
+  runtime: CodexThreadEnvironmentRuntime;
+}): Promise<CodexThreadEnvironmentRuntime> {
+  if (params.runtime.executionTarget !== "local") {
+    throw new Error("Remote Codex environment actions are not wired yet.");
+  }
+
+  const action = params.runtime.actions?.find(
+    (candidate) => candidate.id === params.actionId,
+  );
+  if (!action) {
+    throw new Error(`Codex environment action '${params.actionId}' is not available.`);
+  }
+
+  const nextRuntime: CodexThreadEnvironmentRuntime = {
+    ...params.runtime,
+    actionId: action.id,
+    actionName: action.name,
+    actionCommand: action.command,
+  };
+
+  try {
+    const result = await runShellCommand({
+      cwd: params.runtime.cwd,
+      command: action.command,
+      mode: "detach",
+    });
+    nextRuntime.actionPid = result.pid;
+    nextRuntime.actionStatus = "started";
+  } catch (error) {
+    nextRuntime.actionStatus = "failed";
+    throw error;
+  }
+
+  return nextRuntime;
+}
+
 function runShellCommand(params: {
   cwd?: string;
   command: string;
   mode: "wait" | "detach";
-}): Promise<number | undefined> {
+}): Promise<{
+  durationMs?: number;
+  exitCode?: number;
+  output?: string;
+  pid?: number;
+}> {
   const shell = process.env.SHELL?.trim() || "/bin/sh";
   const processId = `pwragent-env-${randomUUID()}`;
+  const startedAt = Date.now();
   environmentRuntimeLog.info("codex-environment-command-start", {
     processId,
     cwd: params.cwd,
@@ -103,9 +156,10 @@ function runShellCommand(params: {
       stdio: params.mode === "detach" ? "ignore" : "pipe",
     });
 
+    let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", () => {
-      // Drain stdout so setup scripts with normal progress output cannot block.
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = `${stdout}${chunk.toString("utf8")}`.slice(-32_000);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
@@ -121,7 +175,7 @@ function runShellCommand(params: {
 
     if (params.mode === "detach") {
       child.unref();
-      resolve(child.pid);
+      resolve({ pid: child.pid });
       return;
     }
 
@@ -132,7 +186,12 @@ function runShellCommand(params: {
         signal,
       });
       if (code === 0) {
-        resolve(child.pid);
+        resolve({
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+          pid: child.pid,
+        });
         return;
       }
       const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";

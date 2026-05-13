@@ -149,6 +149,22 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadCodexEnvironmentRuntime: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      codexEnvironmentRuntime?: ThreadOverlayState["codexEnvironmentRuntime"];
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend: settings.backend,
+        threadId: settings.threadId,
+        codexEnvironmentRuntime: settings.codexEnvironmentRuntime,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadExpectedBranch: async ({
       backend,
       threadId,
@@ -1828,6 +1844,78 @@ name = "Repo Environment"
         prompt: "",
         codexEnvironmentId: "environment",
         codexEnvironmentExecutionTarget: "local",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("captures Codex environment setup output in the thread replay", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+
+[setup]
+script = "printf setup-output"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        launchpad: {
+          directoryKey: `directory:${root}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: root,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentSetupEnabled: true,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      const read = await registry.readThread({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(read.replay.entries[0]).toMatchObject({
+        type: "activity",
+        summary: "Environment setup completed: Repo Environment",
+        details: [
+          {
+            command: {
+              output: "setup-output",
+              exitCode: 0,
+            },
+          },
+        ],
       });
     } finally {
       await registry.close();

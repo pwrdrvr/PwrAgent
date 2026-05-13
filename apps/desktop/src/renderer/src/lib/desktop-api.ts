@@ -72,6 +72,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
   RestoreThreadRequest,
@@ -203,6 +205,9 @@ export type DesktopApi = {
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;
+  runCodexEnvironmentAction?: (
+    request: RunCodexEnvironmentActionRequest,
+  ) => Promise<RunCodexEnvironmentActionResponse>;
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;
