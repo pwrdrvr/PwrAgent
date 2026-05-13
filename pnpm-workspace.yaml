@@ -3,6 +3,7 @@ packages:
   - packages/*
   - packages/messaging/*
   - packages/messaging/providers/*
+minimumReleaseAge: 10080
 globalPnpmfile: ''
 ignoreScripts: false
 ignoredBuiltDependencies:
