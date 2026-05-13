@@ -144,6 +144,7 @@ export function buildConfirmationIntent(params: {
   delivery?: MessagingConfirmationIntent["delivery"];
   fallbackText?: string;
   id: string;
+  markdown?: MessagingConfirmationIntent["markdown"];
   targetSurface?: MessagingConfirmationIntent["targetSurface"];
   title: string;
 }): MessagingConfirmationIntent {
@@ -156,6 +157,7 @@ export function buildConfirmationIntent(params: {
     createdAt: params.createdAt,
     delivery: params.delivery,
     fallbackText: params.fallbackText,
+    markdown: params.markdown,
     targetSurface: params.targetSurface,
     title: params.title,
   };

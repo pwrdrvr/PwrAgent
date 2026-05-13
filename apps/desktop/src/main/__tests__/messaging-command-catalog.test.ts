@@ -110,6 +110,14 @@ describe("formatMessagingCommandHelpBody", () => {
     expect(body).toContain("@bot new");
   });
 
+  it("renders markdown command lines when requested", () => {
+    const body = formatMessagingCommandHelpBody({ format: "markdown" });
+
+    expect(body).toContain("- `/resume` - choose a thread");
+    expect(body).toContain("- `/new` - start a new thread");
+    expect(body).toContain("`@bot new`");
+  });
+
   it("accepts a custom invocation footer (provider-specific overrides)", () => {
     const body = formatMessagingCommandHelpBody({
       invocationFooter: "Type /pwragent_resume or @pwragent resume.",

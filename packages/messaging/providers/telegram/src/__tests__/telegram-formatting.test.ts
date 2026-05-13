@@ -46,6 +46,22 @@ describe("telegram formatting", () => {
     );
   });
 
+  it("renders markdown confirmation bodies as Telegram HTML when requested", () => {
+    const rendered = textForTelegramIntent({
+      id: "help-1",
+      kind: "confirmation",
+      createdAt: 1000,
+      title: "PwrAgent commands",
+      body: "- `/resume` - choose a thread\n\nTry `@bot new`.",
+      markdown: "light",
+      actions: [],
+    });
+
+    expect(rendered).toContain("<code>/resume</code> - choose a thread");
+    expect(rendered).toContain("<code>@bot new</code>");
+    expect(rendered).not.toContain("`");
+  });
+
   it("splits long responses under Telegram message limits", () => {
     const chunks = splitTelegramHtml(
       `${"A".repeat(TELEGRAM_MESSAGE_TEXT_LIMIT - 10)}\n${"B".repeat(100)}`,

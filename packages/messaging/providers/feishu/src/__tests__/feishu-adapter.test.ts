@@ -160,6 +160,61 @@ describe("FeishuAdapter", () => {
     });
   });
 
+  it("renders markdown confirmation bodies through Lark markdown cards", async () => {
+    const spies: { sent: Array<{ card?: { elements?: unknown[] }; text?: string }> } = {
+      sent: [],
+    };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "help-1",
+      kind: "confirmation",
+      createdAt: 1,
+      title: "PwrAgent commands",
+      body: [
+        "Send a command or tap a button.",
+        "",
+        "- `/resume` - choose a thread",
+        "",
+        "Try `@bot new`.",
+      ].join("\n"),
+      markdown: "light",
+      actions: [{ id: "command:resume", label: "Resume", value: "resume" }],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({
+      channel: "feishu",
+      outcome: "presented",
+    });
+
+    expect(spies.sent[0]).toMatchObject({
+      text: undefined,
+      card: {
+        elements: [
+          expect.objectContaining({
+            tag: "div",
+            text: {
+              tag: "lark_md",
+              content: expect.stringContaining("- `/resume` - choose a thread"),
+            },
+          }),
+          expect.objectContaining({ tag: "action" }),
+        ],
+      },
+    });
+  });
+
   it("sends markdown table messages as Lark markdown cards", async () => {
     const spies: { sent: Array<{ card?: { elements?: unknown[] }; text?: string }> } = {
       sent: [],
