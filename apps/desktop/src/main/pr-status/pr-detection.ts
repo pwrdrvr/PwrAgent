@@ -8,6 +8,12 @@ import type { GithubPrFetcher } from "./github-pr-fetcher";
 
 const execFileAsync = promisify(execFile);
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
+const FALLBACK_DEFAULT_BRANCHES = [
+  "main",
+  "master",
+  "develop",
+  "trunk",
+] as const;
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths
@@ -69,6 +75,10 @@ async function resolvePrLookupBranches(params: {
   }
 
   const branchesAtHead = await readLocalBranchesPointingAtHead(params.cwd);
+  const defaultBranch = await readDefaultBranch(params.cwd);
+  if (defaultBranch && branchesAtHead.includes(defaultBranch)) {
+    return [defaultBranch];
+  }
   return branchesAtHead.length > 0 ? branchesAtHead : ["HEAD"];
 }
 
@@ -97,6 +107,46 @@ async function readLocalBranchesPointingAtHead(cwd: string): Promise<string[]> {
     );
   } catch {
     return [];
+  }
+}
+
+async function readDefaultBranch(cwd: string): Promise<string | undefined> {
+  const remoteHead = await readGitLine(cwd, [
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "--short",
+  ]);
+  const normalizedRemoteHead = remoteHead?.replace(/^origin\//, "").trim();
+  if (normalizedRemoteHead) {
+    return normalizedRemoteHead;
+  }
+
+  for (const branch of FALLBACK_DEFAULT_BRANCHES) {
+    const localBranch = await readGitLine(cwd, [
+      "for-each-ref",
+      "--format=%(refname:short)",
+      `refs/heads/${branch}`,
+    ]);
+    if (localBranch === branch) {
+      return branch;
+    }
+  }
+  return undefined;
+}
+
+async function readGitLine(
+  cwd: string,
+  args: string[],
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: 64 * 1024,
+      timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
   }
 }
 
