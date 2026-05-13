@@ -3,6 +3,10 @@ import {
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import {
+  ModelInteractionMapper,
+  XaiModelInteractionMapperClient,
+} from "./core/model-interaction-mapper";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
@@ -72,6 +76,7 @@ import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 import { MessagingDeliveryBudget } from "./core/messaging-delivery-budget";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
@@ -850,6 +855,11 @@ export class DesktopMessagingRuntime {
       channel: adapter.channel,
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
+      interactionMapper: new ModelInteractionMapper(
+        new XaiModelInteractionMapperClient({
+          apiKey: resolveGrokApiKeyForMessagingMapper(),
+        }),
+      ),
       interactionModeDefault: async () =>
         interactionModeDefaultForChannel(await this.loadConfig(), adapter.channel),
       store,
@@ -1973,6 +1983,17 @@ export class DesktopMessagingRuntime {
     return typeof this.options.config === "function"
       ? await this.options.config(options)
       : this.options.config;
+  }
+}
+
+function resolveGrokApiKeyForMessagingMapper(): string | undefined {
+  try {
+    return getDesktopSettingsService().resolveGrokApiKeySync();
+  } catch (error) {
+    messagingLog.warn("messaging interaction mapper api key unavailable", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
   }
 }
 

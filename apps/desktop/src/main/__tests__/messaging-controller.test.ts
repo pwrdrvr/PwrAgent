@@ -261,6 +261,27 @@ describe("MessagingController", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("can ask a model-provided clarification for ambiguous text-mode replies", async () => {
+    const harness = await createHarness({
+      interactionMapper: {
+        mapText: vi.fn(async () => ({
+          kind: "clarification" as const,
+          text: "Do you mean Resume or Status?",
+        })),
+      },
+      interactionModeDefault: "text",
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+    await harness.controller.handleInboundEvent(buildTextEvent("the thread one"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Clarify option",
+      body: "Do you mean Resume or Status?",
+    });
+  });
+
   it("shows projects from /resume --projects and filters threads after a project click", async () => {
     const harness = await createHarness();
 
@@ -11297,6 +11318,7 @@ async function createHarness(options?: {
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   handoff?: false;
   inputDebounceMs?: number;
+  interactionMapper?: MessagingControllerOptions["interactionMapper"];
   interactionModeDefault?: MessagingInteractionMode;
   logger?: MessagingControllerOptions["logger"];
   listBackends?: NonNullable<MessagingBackendBridge["listBackends"]>;
@@ -11686,6 +11708,7 @@ async function createHarness(options?: {
     deliveryBudget: options?.deliveryBudget,
     activityLog: options?.activityLog,
     inputDebounceMs: options?.inputDebounceMs ?? 0,
+    interactionMapper: options?.interactionMapper,
     interactionModeDefault: options?.interactionModeDefault,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
