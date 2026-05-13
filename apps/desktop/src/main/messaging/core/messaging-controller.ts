@@ -3762,9 +3762,37 @@ export class MessagingController {
 
   private async disableChannelMonitorSubscription(
     subscription: MessagingMonitorSubscriptionRecord,
+    event?: MessagingInboundEvent,
   ): Promise<MessagingMonitorSubscriptionRecord> {
     this.clearMonitorSubscriptionTimer(subscription.id);
     const now = this.now();
+    if (subscription.monitorSurface) {
+      try {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("monitor-detached"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: now,
+            title: "Monitor detached",
+            body: "Recent thread updates will no longer post to this conversation.",
+            actions: [],
+            delivery: {
+              mode: "update",
+              replaceMarkup: true,
+              fallback: "fail",
+            },
+            targetSurface: subscription.monitorSurface,
+          }),
+          undefined,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging channel monitor detach update failed", {
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id,
+        });
+      }
+    }
     return await this.options.store.upsertMonitorSubscription({
       ...subscription,
       monitor: {
@@ -5049,7 +5077,7 @@ export class MessagingController {
     }
 
     if (channelMonitor && hasChannelMonitor) {
-      await this.disableChannelMonitorSubscription(channelMonitor);
+      await this.disableChannelMonitorSubscription(channelMonitor, event);
     }
     if (binding) {
       await this.runDetachPipeline(binding, event, {

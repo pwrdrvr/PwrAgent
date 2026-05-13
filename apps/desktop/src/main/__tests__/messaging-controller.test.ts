@@ -1910,11 +1910,27 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     try {
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      const monitorIntent = harness.delivered.at(-1);
+      const monitorSurface = monitorIntent?.targetSurface
+        ?? (monitorIntent
+          ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
+          : undefined);
       harness.delivered.splice(0);
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-      expect(harness.delivered).toHaveLength(1);
+      expect(harness.delivered).toHaveLength(2);
+      expect(harness.delivered.at(-2)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor detached",
+        actions: [],
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "fail",
+        },
+        targetSurface: monitorSurface,
+      });
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "confirmation",
         title: "Monitor detached",
@@ -1942,11 +1958,27 @@ describe("MessagingController", () => {
     try {
       await bindThread(harness);
       await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      const monitorIntent = harness.delivered.at(-1);
+      const monitorSurface = monitorIntent?.targetSurface
+        ?? (monitorIntent
+          ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
+          : undefined);
       harness.delivered.splice(0);
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-      expect(harness.delivered).toHaveLength(3);
+      expect(harness.delivered).toHaveLength(4);
+      expect(harness.delivered.at(-4)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor detached",
+        actions: [],
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "fail",
+        },
+        targetSurface: monitorSurface,
+      });
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "confirmation",
         title: "Thread and Monitor detached",
