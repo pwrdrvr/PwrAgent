@@ -18,14 +18,20 @@ it yet, and what's coming soon.
 
 ## What's in the desktop today
 
-### Recents lens
+### Sidebar lenses
 
-![Recents lens populated with realistic threads](assets/screenshots/desktop-recents.png)
+![Sidebar populated with threads](assets/screenshots/desktop-recents.png)
 
-The default browsing surface is the **Recents lens** in the left
-sidebar — a single scrollable list of your recent threads. User-
-curated **Pins** live as a scrollable section at the top of the same
-list. The other lens you can switch to is **Directories**.
+The left sidebar carries three thread lenses you can switch between:
+
+- **Inbox** — the default browsing lens. Shows threads with unread
+  activity at the top, with the rest of your active work below.
+- **Recents** — every active thread in most-recently-touched order.
+- **Directories** — threads grouped by the project / repository
+  they're rooted in.
+
+User-curated **Pins** live as a scrollable section at the top of
+both the Inbox and Recents lenses.
 
 Unread state on a thread shows as an orange cookie marker on the
 row, not a punctuation badge.
