@@ -20,9 +20,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
         with:
           lookup-only: "true"
 
@@ -33,11 +35,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
 
       - name: License metadata
+        timeout-minutes: 10
         run: |
           if ! pnpm licenses:check; then
             echo "License check failed; forcing pnpm to relink dependencies before retrying."
@@ -46,9 +51,11 @@ jobs:
           fi
 
       - name: Type check
+        timeout-minutes: 10
         run: pnpm typecheck
 
       - name: Dependency boundaries
+        timeout-minutes: 10
         run: |
           pnpm exec depcruise --config .dependency-cruiser.cjs \
             --output-type json --output-to cruise-result.json \
@@ -57,6 +64,7 @@ jobs:
 
       - name: Boundary violation summary
         if: failure()
+        timeout-minutes: 10
         run: |
           pnpm exec depcruise-fmt -T markdown cruise-result.json >> "$GITHUB_STEP_SUMMARY"
 
@@ -67,11 +75,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
 
       - name: Build
+        timeout-minutes: 10
         run: pnpm run build
 
   test:
@@ -81,14 +92,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
 
       - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        uses: ./.github/actions/install-ripgrep
+        timeout-minutes: 5
 
       - name: Test
+        timeout-minutes: 10
         run: pnpm run test
 
   desktop-e2e:
@@ -99,16 +114,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
 
       - name: Run desktop replay-backed Electron tests
+        timeout-minutes: 10
         run: xvfb-run --auto-servernum pnpm run test:desktop-e2e
 
       - name: Upload desktop Playwright artifacts
         uses: actions/upload-artifact@v5
         if: ${{ !cancelled() }}
+        timeout-minutes: 10
         with:
           name: desktop-e2e-artifacts
           path: |
@@ -124,12 +143,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        timeout-minutes: 10
         with:
           fetch-depth: 0
 
       - name: Detect live agent-core inputs
         id: changes
         shell: bash
+        timeout-minutes: 10
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -183,13 +204,16 @@ jobs:
       - name: Install Node.js and dependencies
         if: steps.changes.outputs.relevant == 'true'
         uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
 
       - name: Install ripgrep
         if: steps.changes.outputs.relevant == 'true'
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        uses: ./.github/actions/install-ripgrep
+        timeout-minutes: 5
 
       - name: Live agent-core smoke and tool coverage
         if: steps.changes.outputs.relevant == 'true'
+        timeout-minutes: 10
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           XAI_BASE_URL: https://api.x.ai/v1
