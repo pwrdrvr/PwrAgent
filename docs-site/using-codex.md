@@ -502,24 +502,66 @@ prompt until the next terminal event.
 
 ## Sending attachments {#attachments}
 
-Bound conversations can send files, images, and PDFs into the active
-thread. PwrAgent processes the attachment, normalizes it, and feeds
-it into the next turn alongside any accompanying text.
+Bound conversations can send files and images into the active
+thread. PwrAgent normalizes them and feeds them into the next turn
+alongside any accompanying text.
 
 | Accepted | Behavior |
 |---|---|
 | Text-like files (`.txt`, `.md`, `.csv`, `.json`, `.jsonl`, `.toml`, `.yaml`, `.yml`, logs, plain code) | Forwarded as text into the prompt |
-| Images (PNG, JPEG, WebP, GIF) | Forwarded as image input; uploaded through the same upload-profile setting as desktop paste (Low / Medium / High / Actual; default Medium) |
-| GIFs | Sent as a still image — animation is not forwarded to the model |
-| PDFs | Forwarded when text can be extracted; OCR-only PDFs are rejected |
+| Images (PNG, JPEG, WebP) | Forwarded as image input |
+| Animated GIFs | Converted to a **still image** (first frame) and forwarded as image input. Animation is not delivered to the model. |
 
 Rejected — with a short bot message explaining why, not silently:
 
 - Audio and video files
 - Archive files (`.zip`, `.tar`, etc.)
 - Oversized files (above the configured `attachment_max_bytes` cap)
-- OCR-only PDFs (no extractable text)
 - Anything beyond the `attachment_max_count` per-turn cap
+
+### A note on PDFs
+
+PwrAgent attempts a **very basic** PDF text extraction (a regex over
+the raw bytes looking for simple text operators). It works on the
+simplest possible PDFs and fails silently — i.e. **the PDF is
+rejected** — on most real-world documents: anything multi-column,
+anything with font subsetting, anything compressed, anything
+scanned-only.
+
+If you need to send PDF content to the model, the practical workflow
+is one of:
+
+- **Let the model handle it.** Modern Codex models will often try to
+  render the PDF pages to images and analyze the images themselves
+  when given a PDF file. Whether that works depends on the model
+  and on the document's layout. Multi-column PDFs especially tend
+  to confuse the page-render-and-OCR path.
+- **Convert the PDF to images yourself first.** Export the relevant
+  pages from your PDF viewer as PNG or JPEG, and send those as
+  image attachments. You'll get reliable results, you control which
+  pages get sent, and the model sees exactly what you intended.
+
+The second option is the recommended default for any PDF you
+actually care about getting right.
+
+### Image upload profile (TOML / env only)
+
+PwrAgent has a per-config **image upload profile** that controls
+how inbound images are normalized before being forwarded to the
+model: `low`, `medium` *(default — matches desktop paste behavior)*,
+`high`, or `actual`. **The Settings UI does not expose this control
+today** — it can be set only via:
+
+- `attachment_image_profile` under `[messaging]` in your
+  `~/.pwragent/profiles/<name>/config.toml`, or
+- the `PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` environment
+  variable.
+
+Default (`medium`) is appropriate for the vast majority of uses;
+the other values exist for when you specifically need to trade
+bandwidth against fidelity.
+
+### Debounce ordering
 
 Attachments are processed **before** they enter the
 [debounce / queue / steer](#debounce-queue-steer) state machine, so
