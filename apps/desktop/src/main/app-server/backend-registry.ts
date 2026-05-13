@@ -138,6 +138,13 @@ import {
   type CodexEnvironmentDetachedOutput,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
+import {
+  ThreadTurnQueue,
+  type ThreadTurnQueueEntry,
+  type ThreadTurnQueueLifecycleEvent,
+  type ThreadTurnQueueOrigin,
+  type ThreadTurnQueueSubmissionResult,
+} from "./thread-turn-queue";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 
 type InitializeResult = {
@@ -1513,6 +1520,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
+  private readonly threadTurnQueue: ThreadTurnQueue;
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -1711,6 +1719,12 @@ export class DesktopBackendRegistry {
       codex: this.codexClient,
       grok: this.grokClient,
     });
+    this.threadTurnQueue = new ThreadTurnQueue({
+      startTurn: async (entry) => await this.startTurnNow(entry),
+      isThreadActive: ({ backend, threadId }) =>
+        backend === "codex" ? this.threadHasActiveTurn(threadId) : false,
+      onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
+    });
 
     this.isCodexBootstrapDeferredFn =
       options?.isCodexBootstrapDeferred ??
@@ -1876,6 +1890,53 @@ export class DesktopBackendRegistry {
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
     await this.emit(event);
+  }
+
+  private async emitTurnQueueLifecycle(
+    event: ThreadTurnQueueLifecycleEvent,
+  ): Promise<void> {
+    const baseParams = {
+      threadId: event.entry.threadId,
+      queueEntryId: event.entry.id,
+      origin: event.entry.origin,
+      automationRunId: event.entry.automationRunId,
+    };
+
+    await this.emit({
+      backend: event.entry.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params:
+          event.type === "queued"
+            ? {
+                ...baseParams,
+                status: "queued",
+                position: event.position,
+              }
+            : event.type === "started"
+              ? {
+                  ...baseParams,
+                  status: "started",
+                  turnId: event.turnId,
+                }
+              : event.type === "failed"
+                ? {
+                    ...baseParams,
+                    status: "failed",
+                    errorMessage: event.error.message,
+                  }
+                : event.type === "cancelled"
+                  ? {
+                      ...baseParams,
+                      status: "cancelled",
+                    }
+                  : {
+                      ...baseParams,
+                      status: "terminal",
+                      turnId: event.turnId,
+                    },
+      },
+    });
   }
 
   getLatestCodexConfigWarning(): LatestCodexConfigWarningResponse {
@@ -2620,7 +2681,52 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async submitTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    automationRunId?: string;
+  }): Promise<ThreadTurnQueueSubmissionResult> {
+    const { origin = "manual", ...entry } = params;
+    return await this.threadTurnQueue.submit({
+      ...entry,
+      origin,
+    });
+  }
+
+  canStartThreadTurnImmediately(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): boolean {
+    return this.threadTurnQueue.canStartImmediately(params);
+  }
+
   async startTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    return await this.startTurnNow(params);
+  }
+
+  private async startTurnNow(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -6438,6 +6544,12 @@ export class DesktopBackendRegistry {
           });
         }
       }
+      void this.threadTurnQueue.releaseThread({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId,
+        status: event.notification.method,
+      });
       // Turn-end is the resume boundary — flush any queued mode change
       // now. Fire-and-forget; failures are logged + retried inside
       // flushQueuedExecutionModeIfPresent.
@@ -6467,6 +6579,11 @@ export class DesktopBackendRegistry {
           threadId: event.notification.params.threadId,
         });
       }
+      void this.threadTurnQueue.releaseThread({
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+        status: readStatusType(event.notification.params.status),
+      });
       // Same resume-boundary flush, triggered from the
       // `thread/status/changed → idle` path (codex emits both, depending
       // on the protocol shape; we cover both for resilience). Idempotent
