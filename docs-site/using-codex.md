@@ -490,6 +490,16 @@ Intermediate assistant messages and tool-update progress
 not terminal lifecycle events. Typing resumes after you answer a
 prompt until the next terminal event.
 
+<details markdown="1">
+<summary>Per-provider exceptions</summary>
+
+| Provider | Exception |
+|---|---|
+| **Discord** | Discord's API has no "stop typing" call — the typing indicator is fire-and-forget and the platform auto-expires it on its own clock (roughly five seconds after the last typing event the bot sends). When a bound turn ends, the indicator can linger for several seconds before Discord clears it. PwrAgent can't shorten that tail. |
+| **Feishu / Lark** | The Feishu / Lark messaging API does not surface bot typing indicators at all. The bot can't show a "thinking" cue while a turn runs on Feishu — you'll see the bot's reply when it arrives without any preceding activity hint. |
+
+</details>
+
 ## Sending attachments {#attachments}
 
 Bound conversations can send files, images, and PDFs into the active
