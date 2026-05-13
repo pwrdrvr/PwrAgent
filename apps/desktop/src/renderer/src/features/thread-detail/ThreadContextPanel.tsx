@@ -27,6 +27,7 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
+import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
@@ -35,8 +36,9 @@ const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
-  desktopApi?: Pick<DesktopApi, "getWindowPointerSnapshot">;
+  desktopApi?: DesktopApi;
   onPinnedChange?: (pinned: boolean) => void;
+  onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   pinned: boolean;
@@ -588,6 +590,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </p>
             ) : null}
           </section>
+
+          <ThreadAutomationsPanel
+            desktopApi={props.desktopApi}
+            thread={props.thread}
+            onRefreshNavigation={props.onRefreshNavigation}
+          />
 
           {props.thread.worktreeSnapshots?.some(
             (snapshot) => snapshot.state === "archived"

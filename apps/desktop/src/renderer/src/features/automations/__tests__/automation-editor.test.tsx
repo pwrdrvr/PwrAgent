@@ -1,0 +1,86 @@
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AutomationEditor } from "../AutomationEditor";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("AutomationEditor", () => {
+  it("submits a coalescing interval automation for the assigned thread", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Check email" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Check email and summarize anything urgent." },
+    });
+    fireEvent.change(screen.getByLabelText("Every"), {
+      target: { value: "5" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: {
+        backend: "codex",
+        backlogPolicy: "coalesce",
+        enabled: true,
+        name: "Check email",
+        schedule: {
+          every: 5,
+          kind: "interval",
+          unit: "minutes",
+        },
+        taskPrompt: "Check email and summarize anything urgent.",
+        threadId: "thread-1",
+      },
+    });
+  });
+
+  it("shows inline validation instead of submitting an invalid interval", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Bad interval" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Try to run too often." },
+    });
+    fireEvent.change(screen.getByLabelText("Every"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Interval must be a whole number greater than zero.",
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
