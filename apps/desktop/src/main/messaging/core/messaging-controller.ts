@@ -3698,10 +3698,12 @@ export class MessagingController {
   private async stopMonitoringForBinding(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
+    options: { deliverStatus?: boolean } = {},
   ): Promise<MessagingBindingRecord> {
     this.clearMonitorTimer(binding.id);
     const now = this.now();
-    if (binding.monitorSurface) {
+    const deliverStatus = options.deliverStatus ?? true;
+    if (deliverStatus && binding.monitorSurface) {
       try {
         await this.deliver(
           buildConfirmationIntent({
@@ -3728,7 +3730,7 @@ export class MessagingController {
           threadId: binding.threadId,
         });
       }
-    } else if (event) {
+    } else if (deliverStatus && event) {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("monitor-stopped"),
@@ -3751,6 +3753,53 @@ export class MessagingController {
         enabled: false,
         intervalMs: binding.monitor?.intervalMs ?? MESSAGING_MONITOR_INTERVAL_MS,
         lastRenderedAt: binding.monitor?.lastRenderedAt,
+        updatedAt: now,
+      },
+      monitorSurface: undefined,
+      updatedAt: now,
+    });
+  }
+
+  private async disableChannelMonitorSubscription(
+    subscription: MessagingMonitorSubscriptionRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<MessagingMonitorSubscriptionRecord> {
+    this.clearMonitorSubscriptionTimer(subscription.id);
+    const now = this.now();
+    if (subscription.monitorSurface) {
+      try {
+        await this.deliver(
+          buildConfirmationIntent({
+            id: this.newIntentId("monitor-detached"),
+            capabilityProfile: this.capabilityProfile,
+            createdAt: now,
+            title: "Monitor detached",
+            body: "Recent thread updates will no longer post to this conversation.",
+            actions: [],
+            delivery: {
+              mode: "update",
+              replaceMarkup: true,
+              fallback: "fail",
+            },
+            targetSurface: subscription.monitorSurface,
+          }),
+          undefined,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging channel monitor detach update failed", {
+          error: error instanceof Error ? error.message : String(error),
+          subscriptionId: subscription.id,
+        });
+      }
+    }
+    return await this.options.store.upsertMonitorSubscription({
+      ...subscription,
+      monitor: {
+        ...subscription.monitor,
+        enabled: false,
+        intervalMs: subscription.monitor.intervalMs,
+        lastRenderedAt: subscription.monitor.lastRenderedAt,
         updatedAt: now,
       },
       monitorSurface: undefined,
@@ -5006,21 +5055,56 @@ export class MessagingController {
 
   private async detachBinding(event: MessagingInboundEvent): Promise<void> {
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    if (!binding) {
+    const channelMonitor =
+      await this.options.store.findActiveMonitorSubscriptionForChannel(event.channel);
+    const hasThread = Boolean(binding);
+    const hasChannelMonitor = channelMonitor?.monitor.enabled === true;
+    const hasBindingMonitor = binding?.monitor?.enabled === true;
+    const hasMonitor = hasChannelMonitor || hasBindingMonitor;
+    if (!hasThread && !hasMonitor) {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("detach-unbound"),
           capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
-          title: "No thread bound",
-          body: "This conversation is not bound to a PwrAgent thread.",
+          title: "Nothing attached",
+          body: "Neither a thread nor Monitor is attached to this conversation.",
         }),
         undefined,
         event,
       );
       return;
     }
-    await this.runDetachPipeline(binding, event);
+
+    if (channelMonitor && hasChannelMonitor) {
+      await this.disableChannelMonitorSubscription(channelMonitor, event);
+    }
+    if (binding) {
+      await this.runDetachPipeline(binding, event, {
+        deliverConfirmation: false,
+        deliverMonitorStatus: false,
+      });
+    }
+
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("detached"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: hasThread && hasMonitor
+          ? "Thread and Monitor detached"
+          : hasThread
+            ? "Thread detached"
+            : "Monitor detached",
+        body: hasThread && hasMonitor
+          ? "Messages in this conversation will no longer route to PwrAgent, and recent thread updates will no longer post here."
+          : hasThread
+            ? "Messages in this conversation will no longer route to PwrAgent."
+            : "Recent thread updates will no longer post to this conversation.",
+      }),
+      binding,
+      event,
+    );
   }
 
   /**
@@ -5038,6 +5122,10 @@ export class MessagingController {
   private async runDetachPipeline(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
+    options: {
+      deliverConfirmation?: boolean;
+      deliverMonitorStatus?: boolean;
+    } = {},
   ): Promise<void> {
     const activeTurn = this.getActiveTurn(binding);
     if (activeTurn) {
@@ -5052,7 +5140,9 @@ export class MessagingController {
       );
     }
     await this.flushToolUpdatesForBinding(binding, { clear: true });
-    await this.stopMonitoringForBinding(binding, event);
+    await this.stopMonitoringForBinding(binding, event, {
+      deliverStatus: options.deliverMonitorStatus,
+    });
     await this.retireBindingStatus(
       binding,
       event,
@@ -5065,17 +5155,19 @@ export class MessagingController {
     });
     await this.recordBindingTransition("unbound", binding);
     this.notifyBindingChanged("detach");
-    await this.deliver(
-      buildConfirmationIntent({
-        id: this.newIntentId("detached"),
-        capabilityProfile: this.capabilityProfile,
-        createdAt: this.now(),
-        title: "Thread detached",
-        body: "Messages in this conversation will no longer route to PwrAgent.",
-      }),
-      binding,
-      event,
-    );
+    if (options.deliverConfirmation !== false) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("detached"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Thread detached",
+          body: "Messages in this conversation will no longer route to PwrAgent.",
+        }),
+        binding,
+        event,
+      );
+    }
   }
 
   /**

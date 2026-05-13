@@ -1866,9 +1866,11 @@ describe("MessagingController", () => {
     const binding = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/detach").channel,
     );
+    harness.delivered.splice(0);
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
+    expect(harness.delivered).toHaveLength(3);
     expect(harness.delivered.at(-3)).toMatchObject({
       kind: "status",
       actions: [],
@@ -1886,9 +1888,126 @@ describe("MessagingController", () => {
       },
       targetSurface: binding?.pinnedStatusSurface,
     });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Thread detached",
+      body: "Messages in this conversation will no longer route to PwrAgent.",
+    });
+    expect(harness.delivered).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({
+          title: "Monitor stopped",
+        }),
+      ]),
+    );
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
     ).resolves.toBeUndefined();
+  });
+
+  it("uses /detach to stop Monitor when no thread is bound", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      const monitorIntent = harness.delivered.at(-1);
+      const monitorSurface = monitorIntent?.targetSurface
+        ?? (monitorIntent
+          ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
+          : undefined);
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
+
+      expect(harness.delivered).toHaveLength(2);
+      expect(harness.delivered.at(-2)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor detached",
+        actions: [],
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "fail",
+        },
+        targetSurface: monitorSurface,
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor detached",
+        body: "Recent thread updates will no longer post to this conversation.",
+      });
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/detach").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          enabled: false,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses one /detach confirmation when both thread and Monitor are attached", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness();
+    try {
+      await bindThread(harness);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/monitor"));
+      const monitorIntent = harness.delivered.at(-1);
+      const monitorSurface = monitorIntent?.targetSurface
+        ?? (monitorIntent
+          ? { channel: "telegram" as const, id: `surface:${monitorIntent.id}` }
+          : undefined);
+      harness.delivered.splice(0);
+
+      await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
+
+      expect(harness.delivered).toHaveLength(4);
+      expect(harness.delivered.at(-4)).toMatchObject({
+        kind: "confirmation",
+        title: "Monitor detached",
+        actions: [],
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "fail",
+        },
+        targetSurface: monitorSurface,
+      });
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "confirmation",
+        title: "Thread and Monitor detached",
+        body: "Messages in this conversation will no longer route to PwrAgent, and recent thread updates will no longer post here.",
+      });
+      expect(harness.delivered).toEqual(
+        expect.not.arrayContaining([
+          expect.objectContaining({
+            title: "Monitor stopped",
+          }),
+        ]),
+      );
+      await expect(
+        harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
+      ).resolves.toBeUndefined();
+      await expect(
+        harness.store.findActiveMonitorSubscriptionForChannel(
+          buildCommandEvent("/detach").channel,
+        ),
+      ).resolves.toMatchObject({
+        monitor: {
+          enabled: false,
+        },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("shows the help menu for unbound text before routing text", async () => {
