@@ -84,21 +84,44 @@ describe("tokenizeLogLine", () => {
 describe("rendered log entry buffer", () => {
   it("keeps the newest ordered tail without shifting entries on append", () => {
     const buffer = createRenderedLogEntryBuffer();
+    let droppedEntry = false;
 
     for (let index = 1; index <= MAX_RENDERED_LOG_ENTRIES + 2; index += 1) {
-      appendRenderedLogEntry(buffer, {
-        sequence: index,
-        timestamp: Date.now(),
-        level: "info",
-        line: `line ${index}`,
-      });
+      droppedEntry =
+        appendRenderedLogEntry(buffer, {
+          sequence: index,
+          timestamp: Date.now(),
+          level: "info",
+          line: `line ${index}`,
+        }) || droppedEntry;
     }
 
     const entries = orderedRenderedLogEntries(buffer);
 
+    expect(droppedEntry).toBe(true);
     expect(entries).toHaveLength(MAX_RENDERED_LOG_ENTRIES);
     expect(entries[0]?.sequence).toBe(3);
     expect(entries.at(-1)?.sequence).toBe(MAX_RENDERED_LOG_ENTRIES + 2);
+  });
+
+  it("reports when a live append overwrites an old slot", () => {
+    const buffer = createRenderedLogEntryBuffer(
+      Array.from({ length: MAX_RENDERED_LOG_ENTRIES }, (_, index) => ({
+        sequence: index,
+        timestamp: Date.now(),
+        level: "info",
+        line: `line ${index}`,
+      })),
+    );
+
+    expect(
+      appendRenderedLogEntry(buffer, {
+        sequence: MAX_RENDERED_LOG_ENTRIES + 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "wrapped line",
+      }),
+    ).toBe(true);
   });
 
   it("trims oversized snapshots to the newest ordered tail", () => {
@@ -346,5 +369,49 @@ describe("LogsWindow", () => {
     expect(screen.queryByText(/old visible line/)).not.toBeInTheDocument();
     expect(screen.getByText("Showing tail")).toBeInTheDocument();
     expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the view as tail-only when the live renderer buffer wraps", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        entries: Array.from({ length: MAX_RENDERED_LOG_ENTRIES }, (_, index) => ({
+          sequence: index + 1,
+          timestamp: Date.now(),
+          level: "info",
+          line:
+            index === 0
+              ? "[2026-05-12 20:06:28.722] [info] (pwragent:main) oldest visible marker"
+              : `[2026-05-12 20:06:28.722] [info] (pwragent:main) line ${index + 1}`,
+        })),
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    await screen.findByText(/oldest visible marker/);
+    expect(screen.queryByText("Showing tail")).not.toBeInTheDocument();
+
+    act(() => {
+      listener?.({
+        sequence: MAX_RENDERED_LOG_ENTRIES + 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:29.000] [info] (pwragent:main) wrapped line",
+      });
+    });
+
+    expect(screen.getByText("Showing tail")).toBeInTheDocument();
+    expect(screen.queryByText(/oldest visible marker/)).not.toBeInTheDocument();
+    expect(screen.getByText(/wrapped line/)).toBeInTheDocument();
   });
 });

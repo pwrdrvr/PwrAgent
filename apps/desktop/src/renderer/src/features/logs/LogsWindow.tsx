@@ -75,7 +75,7 @@ export function LogsWindow() {
       const value = await reader();
       entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
       setRenderVersion((version) => version + 1);
-      setTruncated(value.truncated);
+      setTruncated(value.truncated || value.entries.length > MAX_RENDERED_LOG_ENTRIES);
       setError(undefined);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -100,7 +100,10 @@ export function LogsWindow() {
       if (!followingRef.current) {
         return;
       }
-      appendRenderedLogEntry(entryBufferRef.current, entry);
+      const droppedEntry = appendRenderedLogEntry(entryBufferRef.current, entry);
+      if (droppedEntry) {
+        setTruncated(true);
+      }
       setRenderVersion((version) => version + 1);
     });
   }, [desktopApi]);
@@ -167,7 +170,7 @@ export function LogsWindow() {
       return;
     }
     if (selectionTouchesElement(element)) {
-      setFollowing(false);
+      setFollowingMode(false);
       return;
     }
     const distanceFromBottom =
@@ -317,17 +320,18 @@ export function LogsWindow() {
 export function appendRenderedLogEntry(
   buffer: RenderedLogEntryBuffer,
   entry: AppLogEntry,
-): void {
+): boolean {
   if (buffer.entryCount < MAX_RENDERED_LOG_ENTRIES) {
     const writeIndex =
       (buffer.oldestEntryIndex + buffer.entryCount) % buffer.slots.length;
     buffer.slots[writeIndex] = entry;
     buffer.entryCount += 1;
-    return;
+    return false;
   }
 
   buffer.slots[buffer.oldestEntryIndex] = entry;
   buffer.oldestEntryIndex = (buffer.oldestEntryIndex + 1) % buffer.slots.length;
+  return true;
 }
 
 export function createRenderedLogEntryBuffer(
