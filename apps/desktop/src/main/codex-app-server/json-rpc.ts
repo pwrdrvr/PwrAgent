@@ -141,12 +141,21 @@ export class JsonRpcConnection {
       this.pending.set(id, { resolve, reject, timer });
     });
 
-    await this.sendEnvelope({
-      jsonrpc: "2.0",
-      id,
-      method,
-      params: params ?? {}
-    }, diagnostics);
+    try {
+      await this.sendEnvelope({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params: params ?? {}
+      }, diagnostics);
+    } catch (error) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+      }
+      throw error;
+    }
 
     return await requestPromise;
   }
