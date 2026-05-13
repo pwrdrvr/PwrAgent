@@ -70,13 +70,33 @@ export function LogsWindow() {
 
   useEffect(() => {
     void loadSnapshot();
+  }, [loadSnapshot]);
+
+  useEffect(() => {
+    if (!following) {
+      return;
+    }
     const interval = window.setInterval(() => {
       void loadSnapshot();
     }, POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
-  }, [loadSnapshot]);
+  }, [following, loadSnapshot]);
+
+  useEffect(() => {
+    const handleSelectionChange = (): void => {
+      const viewport = logViewportRef.current;
+      if (viewport && selectionTouchesElement(viewport)) {
+        setFollowing(false);
+      }
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (!following) {
@@ -123,16 +143,25 @@ export function LogsWindow() {
     if (element) {
       element.scrollTop = element.scrollHeight;
     }
-  }, []);
+    void loadSnapshot();
+  }, [loadSnapshot]);
 
   const handleScroll = useCallback(() => {
     const element = logViewportRef.current;
     if (!element) {
       return;
     }
+    if (selectionTouchesElement(element)) {
+      setFollowing(false);
+      return;
+    }
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
     setFollowing(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+  }, []);
+
+  const pauseFollowingForInteraction = useCallback(() => {
+    setFollowing(false);
   }, []);
 
   const goToMatch = useCallback(
@@ -252,6 +281,7 @@ export function LogsWindow() {
           <div
             ref={logViewportRef}
             className="log-window__viewport"
+            onPointerDown={pauseFollowingForInteraction}
             onScroll={handleScroll}
           >
             {snapshot?.unavailableReason ? (
@@ -340,6 +370,20 @@ function renderLogLinePart(params: {
 
 function classNameForLinePart(part: LogLinePart): string | undefined {
   return part.tone ? `log-window__part log-window__part--${part.tone}` : undefined;
+}
+
+function selectionTouchesElement(element: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.toString().length === 0) {
+    return false;
+  }
+
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  return Boolean(
+    (anchorNode && element.contains(anchorNode)) ||
+      (focusNode && element.contains(focusNode)),
+  );
 }
 
 export function buildRenderedLogLines(

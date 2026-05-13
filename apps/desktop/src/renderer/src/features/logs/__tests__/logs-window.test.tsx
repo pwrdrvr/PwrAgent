@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LogsWindow, buildRenderedLogLines, tokenizeLogLine } from "../LogsWindow";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   delete (window as Window & { pwragent?: unknown }).pwragent;
 });
 
@@ -97,5 +98,36 @@ describe("LogsWindow", () => {
     await waitFor(() => {
       expect(desktopApi.readAppLogSnapshot).toHaveBeenCalled();
     });
+  });
+
+  it("pauses tail polling while the log output is being selected", async () => {
+    vi.useFakeTimers();
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        path: "/Users/huntharo/Library/Logs/PwrAgent/main.log",
+        content: "[2026-05-12 20:06:28.722] [info] (pwragent:main) stable line\n",
+        sizeBytes: 72,
+        readAt: Date.now(),
+        truncated: false,
+      })),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByLabelText("Log output"));
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+
+    expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(1);
   });
 });
