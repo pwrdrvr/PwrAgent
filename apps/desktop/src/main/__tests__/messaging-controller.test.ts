@@ -1946,43 +1946,19 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
 
-    const last = harness.delivered.at(-1) as
-      | { body?: string; markdown?: string }
-      | undefined;
+    const last = harness.delivered.at(-1) as { body?: string } | undefined;
     expect(last?.body).toBeDefined();
-    expect(last?.markdown).toBe("light");
-    expect(last?.body).toContain("`/resume`");
-    expect(last?.body).toContain("`/new`");
-    expect(last?.body).toContain("`/status`");
-    expect(last?.body).toContain("`/detach`");
-    expect(last?.body).toContain("`/monitor`");
-    expect(last?.body).toContain("`/help`");
+    expect(last?.body).toContain("/resume");
+    expect(last?.body).toContain("/new");
+    expect(last?.body).toContain("/status");
+    expect(last?.body).toContain("/detach");
+    expect(last?.body).toContain("/monitor");
+    expect(last?.body).toContain("/help");
+    expect(last?.body).not.toContain("`");
     // Both tap and mention styles must be discoverable from the help
     // text — the whole reason we ship a catalog-derived body.
     expect(last?.body).toContain("Send a command or tap a button.");
-    expect(last?.body).toContain("`@bot new`");
-  });
-
-  it("renders a plain help body for plain-text providers", async () => {
-    const harness = await createHarness({
-      capabilityProfile: {
-        ...PERMISSIVE_CAPABILITY_PROFILE,
-        text: {
-          ...PERMISSIVE_CAPABILITY_PROFILE.text,
-          markdownDialect: "plain",
-        },
-      },
-    });
-
-    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
-
-    const last = harness.delivered.at(-1) as
-      | { body?: string; markdown?: string }
-      | undefined;
-    expect(last?.markdown).toBe("plain");
-    expect(last?.body).toContain("/resume - choose a thread");
     expect(last?.body).toContain("@bot new");
-    expect(last?.body).not.toContain("`");
   });
 
   it("help surface renders one button per canonical verb with Resume styled primary", async () => {

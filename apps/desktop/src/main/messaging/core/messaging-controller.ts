@@ -837,17 +837,13 @@ export class MessagingController {
       = page.totalPages > 1
         ? ` (page ${page.pageIndex + 1}/${page.totalPages})`
         : "";
-    const helpFormat = this.capabilityProfile.text.markdownDialect === "plain"
-      ? "plain"
-      : "markdown";
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("help"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: `PwrAgent commands${titleSuffix}`,
-        body: formatMessagingCommandHelpBody({ format: helpFormat }),
-        markdown: helpFormat === "markdown" ? "light" : "plain",
+        body: formatMessagingCommandHelpBody(),
         actions,
         ...(options?.targetSurface
           ? {

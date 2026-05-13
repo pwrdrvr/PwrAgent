@@ -653,7 +653,6 @@ export type MessagingConfirmationIntent = MessagingBaseSurfaceIntent & {
   browseSessionId?: string;
   title: string;
   body: string;
-  markdown?: MessagingMarkdownPolicy;
   actions: MessagingSurfaceAction[];
 };
 

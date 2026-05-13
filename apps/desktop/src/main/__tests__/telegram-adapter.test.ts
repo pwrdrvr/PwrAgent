@@ -552,10 +552,9 @@ describe("TelegramAdapter", () => {
       parse_mode: "HTML",
       text: expect.stringContaining("PwrAgent commands"),
     });
+    expect(request?.text).toContain("/resume - choose a thread");
     expect(request?.text).toContain("@bot new");
     expect(request?.text).not.toContain("`");
-    expect(request?.text).toContain("<code>/resume</code> - choose a thread");
-    expect(request?.text).toContain("<code>@bot new</code>");
     const buttonRows = request?.reply_markup?.inline_keyboard.map(
       (row: Array<{ text: string }>) => row.map((button) => button.text),
     );

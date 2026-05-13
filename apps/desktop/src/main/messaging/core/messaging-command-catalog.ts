@@ -118,20 +118,15 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
  */
 export function formatMessagingCommandHelpBody(options?: {
   catalog?: readonly MessagingCommandSpec[];
-  format?: "markdown" | "plain";
   invocationFooter?: string;
 }): string {
   const catalog = options?.catalog ?? MESSAGING_COMMAND_CATALOG;
-  const format = options?.format ?? "plain";
   const footer =
     options?.invocationFooter
-    ?? (format === "markdown"
-      ? "You can also mention the bot with a command, like `@bot new`."
-      : "You can also mention the bot with a command, like @bot new.");
-  const lines =
-    format === "markdown"
-      ? catalog.map((spec) => `- \`/${spec.verb}\` - ${spec.description}`)
-      : catalog.map((spec) => `/${spec.verb} - ${spec.description}`);
+    ?? "You can also mention the bot with a command, like @bot new.";
+  const lines = catalog.map(
+    (spec) => `/${spec.verb} - ${spec.description}`,
+  );
   return ["Send a command or tap a button.", "", ...lines, "", footer].join("\n");
 }
 
