@@ -119,4 +119,51 @@ describe("messaging skills browser", () => {
       "alpha",
     ]);
   });
+
+  it("treats a leading dollar sign as skill mention syntax during search", () => {
+    const results = filterSkillEntries(
+      [
+        {
+          name: "ce:plan",
+          description: "Create implementation plans",
+          enabled: true,
+        },
+        {
+          name: "ce:work",
+          description: "Execute implementation plans",
+          enabled: true,
+        },
+        {
+          name: "review-pr",
+          description: "Review pull requests",
+          enabled: true,
+        },
+      ],
+      "$ce:",
+    );
+
+    expect(results.map((entry) => entry.name)).toEqual(["ce:plan", "ce:work"]);
+  });
+
+  it("keeps empty-result fallback from repeating the prompt", () => {
+    const intent = buildSkillsBrowserIntent({
+      binding,
+      createdAt: 1000,
+      entries: [
+        {
+          name: "ce:work",
+          description: "Execute implementation plans",
+          enabled: true,
+        },
+      ],
+      id: "skills-browser-1",
+      query: "missing",
+    });
+
+    expect(intent.prompt).toBe('Skills matching "missing"\nNo skills matched.');
+    expect(intent.fallbackText).toBe([
+      "No skills matched.",
+      "Reply Back, Search, or Cancel.",
+    ].join("\n"));
+  });
 });

@@ -406,6 +406,7 @@ function skillsBrowserFallbackText(params: {
   totalPages: number;
 }): string {
   const lines = [
+    params.filteredCount === 0 ? "No skills matched." : undefined,
     ...params.pageEntries.map((entry, index) => {
       const number = params.pageStart + index + 1;
       const description = skillDescription(entry);
@@ -413,7 +414,7 @@ function skillsBrowserFallbackText(params: {
     }),
     params.filteredCount === 0 ? "Reply Back, Search, or Cancel." : "Reply with a number, Search, Back, Next, Prev, or Cancel.",
   ];
-  return lines.join("\n");
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
 }
 
 function skillDescription(entry: MessagingSkillBrowserEntry): string | undefined {
@@ -458,7 +459,7 @@ function pageValue(pageIndex: number, query?: string): MessagingJsonValue {
 }
 
 function normalizeQuery(query?: string): string {
-  return query?.trim().toLowerCase() ?? "";
+  return query?.trim().replace(/^\$+/, "").toLowerCase() ?? "";
 }
 
 function clampPageIndex(pageIndex: number, totalPages: number): number {
