@@ -406,7 +406,6 @@ function skillsBrowserFallbackText(params: {
   totalPages: number;
 }): string {
   const lines = [
-    skillsBrowserPrompt(params),
     ...params.pageEntries.map((entry, index) => {
       const number = params.pageStart + index + 1;
       const description = skillDescription(entry);

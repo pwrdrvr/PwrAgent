@@ -69,6 +69,28 @@ describe("messaging skills browser", () => {
     });
   });
 
+  it("keeps fallback text to choices and reply instructions", () => {
+    const intent = buildSkillsBrowserIntent({
+      binding,
+      createdAt: 1000,
+      entries: [
+        {
+          name: "ce:work",
+          description: "Execute implementation plans",
+          enabled: true,
+          path: "/skills/ce-work/SKILL.md",
+        },
+      ],
+      id: "skills-browser-1",
+    });
+
+    expect(intent.prompt).toBe("Skills");
+    expect(intent.fallbackText).toBe([
+      "1. $ce:work - Execute implementation plans",
+      "Reply with a number, Search, Back, Next, Prev, or Cancel.",
+    ].join("\n"));
+  });
+
   it("ranks name matches before description matches while preserving source order", () => {
     const results = filterSkillEntries(
       [
