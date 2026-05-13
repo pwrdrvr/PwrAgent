@@ -3116,6 +3116,65 @@ describe("ThreadView", () => {
     });
   });
 
+  it("suppresses the branch drift dialog when another top-level dialog is active", async () => {
+    const driftThread = {
+      id: "thread-branch",
+      title: "Branch drift",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "feature/old",
+      observedGitBranch: "main",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    function Harness({ suppress }: { suppress?: boolean }) {
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{}}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={driftThread}
+          suppressBranchDriftDialog={suppress}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    const { rerender } = render(<Harness />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Thread branch changed" }),
+      ).toBeInTheDocument();
+    });
+
+    rerender(<Harness suppress />);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Thread branch changed" }),
+      ).not.toBeInTheDocument();
+    });
+
+    rerender(<Harness />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Thread branch changed" }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("re-checks branch drift on end-of-turn falling edge", async () => {
     const checkThreadBranchDrift = vi.fn(async () => ({
       backend: "codex" as const,
