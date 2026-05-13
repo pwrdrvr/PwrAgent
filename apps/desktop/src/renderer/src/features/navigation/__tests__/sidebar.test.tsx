@@ -1263,7 +1263,7 @@ describe("Sidebar", () => {
     expect(screen.queryByText("▾")).not.toBeInTheDocument();
   });
 
-  it("copies a linked directory path from the recents chip", () => {
+  it("copies linked directory and branch metadata from recents chips", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -1291,9 +1291,31 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy path for worktree PwrAgent" }));
+    const directoryChip = screen.getByRole("button", {
+      name: "Copy path for worktree PwrAgent",
+    });
+    fireEvent.mouseEnter(directoryChip);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent\nClick to copy to clipboard"
+    );
+    fireEvent.mouseLeave(directoryChip);
 
-    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
+    fireEvent.click(directoryChip);
+    const branchChip = screen.getByRole("button", {
+      name: "Copy branch codex/thread-centric-ui",
+    });
+    fireEvent.mouseEnter(branchChip);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "codex/thread-centric-ui\nClick to copy to clipboard"
+    );
+    fireEvent.mouseLeave(branchChip);
+    fireEvent.click(branchChip);
+
+    expect(copyText).toHaveBeenNthCalledWith(
+      1,
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
+    );
+    expect(copyText).toHaveBeenNthCalledWith(2, "codex/thread-centric-ui");
     expect(
       screen.queryByText("Line up the desktop shell with the app server")
     ).not.toBeInTheDocument();
@@ -1342,7 +1364,10 @@ describe("Sidebar", () => {
     fireEvent.mouseLeave(cwdButton);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-    const branchButton = screen.getByRole("button", { name: "Copy branch name" });
+    const branchButton = within(screen.getByLabelText("Runtime identity")).getByRole(
+      "button",
+      { name: "Copy branch name" }
+    );
     fireEvent.mouseEnter(branchButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "codex/fix-thread-naming-ephemeral\nClick to copy to clipboard"

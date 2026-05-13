@@ -1,8 +1,10 @@
+import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { copyText, formatCopyTooltip } from "../../lib/copy-text";
+import { copyText } from "../../lib/copy-text";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
@@ -27,7 +29,7 @@ export function ThreadMetaChips({
               thread.linkedDirectories.map((directory) => [
                 directory.kind,
                 (
-                  <span
+                  <CopyableThreadChip
                     aria-label={
                       directory.kind === "worktree"
                         ? `Copy path for worktree ${directory.label}`
@@ -35,38 +37,14 @@ export function ThreadMetaChips({
                     }
                     key={`${thread.id}:${directory.kind}:location-kind`}
                     className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
-                    role="button"
-                    tabIndex={0}
-                    data-tooltip={formatCopyTooltip(
+                    value={
                       directory.kind === "worktree"
                         ? directory.worktreePath ?? directory.path
                         : directory.path
-                    )}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void copyText(
-                        directory.kind === "worktree"
-                          ? directory.worktreePath ?? directory.path
-                          : directory.path
-                      );
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") {
-                        return;
-                      }
-
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void copyText(
-                        directory.kind === "worktree"
-                          ? directory.worktreePath ?? directory.path
-                          : directory.path
-                      );
-                    }}
+                    }
                   >
                     {directory.kind}
-                  </span>
+                  </CopyableThreadChip>
                 ),
               ]),
             ).values(),
@@ -77,7 +55,7 @@ export function ThreadMetaChips({
                 ? directory.worktreePath ?? directory.path
                 : directory.path;
             return (
-              <span
+              <CopyableThreadChip
                 aria-label={
                   directory.kind === "worktree"
                     ? `Copy path for worktree ${directory.label}`
@@ -85,29 +63,13 @@ export function ThreadMetaChips({
                 }
                 key={`${thread.id}:${directory.id}:root`}
                 className="thread-row__chip path-copy-target tooltip-target"
-                role="button"
-                tabIndex={0}
-                data-tooltip={formatCopyTooltip(copyPath)}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void copyText(copyPath);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" && event.key !== " ") {
-                    return;
-                  }
-
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void copyText(copyPath);
-                }}
+                value={copyPath}
               >
                 <span aria-hidden="true" className="thread-row__chip-icon">
                   {directory.kind === "worktree" ? <WorktreeIcon size={12} /> : <FolderIcon size={12} />}
                 </span>
                 {directory.label}
-              </span>
+              </CopyableThreadChip>
             );
           })
       : (
@@ -139,28 +101,103 @@ export function ThreadMetaChips({
       {linkedDirectoryChips}
 
       {branchChip ? (
-        <span
-          className="thread-row__chip thread-row__chip--mono"
-          title={thread.gitBranch ? undefined : `Current branch: ${branchChip}`}
+        <CopyableThreadChip
+          aria-label={formatBranchCopyLabel({
+            branch: branchChip,
+            kind: thread.gitBranch ? "expected" : "current",
+          })}
+          className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+          value={branchChip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <BranchIcon size={12} />
           </span>
           {branchChip}
-        </span>
+        </CopyableThreadChip>
       ) : null}
 
-      {branchDrifted ? (
-        <span
-          className="thread-row__chip thread-row__chip--muted thread-row__chip--mono"
-          title={`Current branch: ${thread.observedGitBranch}`}
+      {branchDrifted && thread.observedGitBranch ? (
+        <CopyableThreadChip
+          aria-label={formatBranchCopyLabel({
+            branch: thread.observedGitBranch,
+            kind: "current",
+          })}
+          className="thread-row__chip path-copy-target tooltip-target thread-row__chip--muted thread-row__chip--mono"
+          value={thread.observedGitBranch}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             !
           </span>
           now {thread.observedGitBranch}
-        </span>
+        </CopyableThreadChip>
       ) : null}
+    </>
+  );
+}
+
+function formatBranchCopyLabel(params: {
+  branch: string;
+  kind: "current" | "expected";
+}): string {
+  const branchKind = params.kind === "current" ? "current branch" : "branch";
+  return `Copy ${branchKind} ${params.branch}`;
+}
+
+function CopyableThreadChip(props: {
+  "aria-label": string;
+  children: ReactNode;
+  className: string;
+  value: string;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const [copied, setCopied] = useState(false);
+  const tooltipText = copied ? "Copied" : `${props.value}\nClick to copy to clipboard`;
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timeoutId);
+  }, [copied]);
+
+  const copy = (target: HTMLElement): void => {
+    void copyText(props.value).then(() => {
+      setCopied(true);
+      tooltip.show(target, "Copied");
+    });
+  };
+
+  return (
+    <>
+      <span
+        aria-label={props["aria-label"]}
+        className={props.className}
+        role="button"
+        tabIndex={0}
+        onBlur={tooltip.hide}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          copy(event.currentTarget);
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+          copy(event.currentTarget);
+        }}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseLeave={tooltip.hide}
+      >
+        {props.children}
+      </span>
+      {tooltip.tooltipNode}
     </>
   );
 }
