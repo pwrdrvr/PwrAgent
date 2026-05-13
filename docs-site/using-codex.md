@@ -639,12 +639,32 @@ queue beat. Two distinct queueing surfaces; don't conflate them.
 
 ## Monitor cards {#monitor-card}
 
-`/monitor` (or `@PwrAgent monitor`) posts a **monitor card** to the
-current conversation and subscribes the binding to periodic
-refreshes. The card is a small dashboard of **your pinned and
-recent PwrAgent threads** across the workspace — not items inside
-the bound thread. It lets you see what's running and what's been
-active without being at the desktop.
+`/monitor` (or `@PwrAgent monitor`) **binds the current conversation
+as a monitor surface** and posts a dashboard card that's refreshed
+periodically. The card shows **your pinned and recent PwrAgent
+threads** across the workspace — not items inside any one thread.
+It lets you see what's running and what's been active without being
+at the desktop.
+
+> **A monitor binding is a binding.** A messaging conversation can
+> host **either** a thread binding (typical — the conversation
+> drives that one Codex thread) **or** a monitor binding (the
+> conversation shows the workspace dashboard). Not both at the same
+> time. Running `/monitor` in a conversation that's currently bound
+> to a thread replaces the thread binding with the monitor binding —
+> the thread itself keeps running on the desktop, but that
+> conversation no longer drives it.
+>
+> **Dedicate a separate surface for the monitor** so you can
+> actually see it. Good options:
+>
+> - A **specific topic in a Telegram supergroup** that you don't
+>   use for thread work.
+> - A **dedicated Telegram DM** (e.g., a second bot, or saved
+>   messages with a dedicated bot account).
+> - A **dedicated Discord channel** or DM thread.
+> - Any **quiet, low-traffic surface** where the refresh ticks
+>   won't compete with active conversation.
 
 - **Pinned threads** — your pinned threads. Default 5; can cycle to
   0 (hide the section) or 10.
@@ -667,20 +687,23 @@ desktop.
 | **Recent** | Cycle recent-thread count: `0` → `5` → `10` (default 5) |
 | **Snippet** | Toggle the per-thread response snippet on / off (default on; fixed ~100-character preview when on) |
 | **Refresh** | Re-render right now |
-| **Stop** | Unsubscribe the binding from the monitor |
-| **Status** | Show the underlying thread's status card |
+| **Stop** | Convert the monitor binding back to a regular conversation (no binding) |
 
-Each binding can carry **one monitor card at a time**. Running
-`/monitor` again on a binding that already has one refreshes the
-existing card rather than posting a duplicate. The monitor lives on
-the binding, so multiple bound threads can each have their own
-monitor card in their respective conversations.
+Running `/monitor` in a conversation that already has a monitor
+binding refreshes the existing card rather than posting a duplicate.
+Each monitor-bound conversation hosts exactly one monitor card.
 
-The monitor survives PwrAgent restarts — on startup, every binding
-with an active monitor subscription resumes its refresh ticks
-automatically. **Archiving the bound thread** in the desktop
-automatically [detaches the binding](#archiving-a-thread), which
-stops the monitor.
+The monitor binding survives PwrAgent restarts — on startup, every
+monitor-bound conversation resumes its refresh ticks automatically.
+The set of threads the card shows is derived live from your desktop
+state, so archiving a thread on the desktop simply removes it from
+the pinned/recent rows on the next refresh; archiving doesn't
+detach the monitor binding itself.
+
+To switch a monitor surface back to a regular conversation, click
+**Stop** on the monitor card or send `/detach` from the same
+conversation. From there you can `/resume` to bind it to a thread,
+or leave it unbound.
 
 <details markdown="1">
 <summary>Per-provider exceptions</summary>
