@@ -326,6 +326,7 @@ export function desktopMessagingConfigHasRunnableAdapters(
       || config.discord
       || config.mattermost
       || config.slack
+      || config.feishu
       || config.line,
   );
 }

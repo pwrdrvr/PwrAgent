@@ -50,9 +50,11 @@ function sqliteValue(value) {
 
 function readStartedInstance(options, trackedInstanceId) {
   if (!fs.existsSync(options.stateDb)) return null;
+  const candidatePids = trackedInstanceId ? [] : electronDescendantPids(Number(options.childPid));
+  if (!trackedInstanceId && candidatePids.length === 0) return null;
   const selector = trackedInstanceId
     ? `instance_id = '${sqliteValue(trackedInstanceId)}'`
-    : `profile_name = '${sqliteValue(options.profile)}' AND cwd_hash = '${sqliteValue(options.rootHash)}' AND heartbeat_at >= ${Number(options.startedAfter)} AND exited_at IS NULL`;
+    : `profile_name = '${sqliteValue(options.profile)}' AND cwd_hash = '${sqliteValue(options.rootHash)}' AND heartbeat_at >= ${Number(options.startedAfter)} AND process_id IN (${candidatePids.join(",")}) AND exited_at IS NULL`;
   const sql = `SELECT instance_id, process_id, coalesce(exited_at, '') FROM app_runtime_instances WHERE ${selector} ORDER BY heartbeat_at DESC LIMIT 1;`;
   const result = spawnSync("sqlite3", ["-readonly", "-separator", "\t", options.stateDb, sql], {
     encoding: "utf8",
@@ -62,6 +64,27 @@ function readStartedInstance(options, trackedInstanceId) {
   if (!line) return null;
   const [instanceId, processId, exitedAt] = line.split("\t");
   return { instanceId, processId: Number(processId), exitedAt };
+}
+
+function electronDescendantPids(rootPid) {
+  return descendantPids(rootPid).filter((pid) => {
+    const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+    });
+    return result.status === 0
+      && result.stdout.includes("Electron.app/Contents/MacOS/Electron");
+  });
+}
+
+function descendantPids(rootPid) {
+  if (!rootPid) return [];
+  const result = spawnSync("pgrep", ["-P", String(rootPid)], { encoding: "utf8" });
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((value) => Number(value))
+    .flatMap((pid) => [pid, ...descendantPids(pid)]);
 }
 
 function pidIsLive(pid) {
@@ -102,6 +125,7 @@ async function run(options) {
     },
     stdio: ["ignore", out, out],
   });
+  options.childPid = child.pid;
 
   let stopping = false;
   const stop = (reason) => {

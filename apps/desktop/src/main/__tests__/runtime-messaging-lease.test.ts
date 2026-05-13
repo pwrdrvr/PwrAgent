@@ -153,6 +153,48 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     });
   });
 
+  it("treats Feishu-only config as runnable", async () => {
+    const runtime = createRuntime();
+    const coordinator = new RuntimeMessagingLeaseCoordinator({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      now: () => 1_000,
+      store,
+    });
+
+    await expect(
+      coordinator.applyResolvedConfig(runtime, {
+        enabled: true,
+        inputDebounceMs: 500,
+        toolUpdateDefaultMode: "show_some",
+        feishu: {
+          channel: "feishu" as const,
+          enabled: true,
+          appId: "cli_xxx",
+          appSecret: "secret",
+          inboundMode: "persistent",
+          tenantRegion: "feishu",
+          tenantUrl: "https://open.feishu.cn",
+          callbackBaseUrl: "https://example.test/feishu",
+          streamingResponses: false,
+          authorizedActorIds: [],
+          authorizedChatIds: [],
+          authorizedTenantKeys: [],
+        },
+      }),
+    ).resolves.toMatchObject({ enabled: true });
+
+    expect(runtime.applyConfig).toHaveBeenCalledTimes(1);
+    expect(store.getMessagingLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
+
+    coordinator.shutdownSync();
+  });
+
   it("starts runtime only for the profile lease holder", async () => {
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
