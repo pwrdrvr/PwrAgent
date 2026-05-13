@@ -7,6 +7,8 @@ import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-teleg
 import type {
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
+  DesktopSettingsSnapshot,
+  DesktopSettingsValue,
   MessagingToolUpdateMode,
   MessagingChannelKind,
 } from "@pwragent/shared";
@@ -177,6 +179,10 @@ export type DesktopMessagingFullAccessControls = {
     actorId: string;
     channel: MessagingChannelKind;
   }) => Promise<void>;
+  canDismissWarning?: (params: {
+    actorId: string;
+    channel: MessagingChannelKind;
+  }) => boolean | Promise<boolean>;
 };
 
 export type DesktopMessagingConfigFieldImpact =
@@ -1078,6 +1084,8 @@ export async function loadDesktopMessagingConfigFromSettings(
       dismissWarning: async ({ actorId, channel }) => {
         await dismissMessagingFullAccessWarning(settings, channel, actorId);
       },
+      canDismissWarning: async ({ actorId, channel }) =>
+        await canPersistMessagingFullAccessWarningDismissal(settings, channel, actorId),
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
@@ -1265,13 +1273,28 @@ async function dismissMessagingFullAccessWarning(
   actorId: string,
 ): Promise<void> {
   const snapshot = await settings.readSettings();
-  const contacts = contactsForFullAccessWarningChannel(snapshot, channel);
+  const field = contactsForFullAccessWarningChannel(snapshot, channel);
+  const contacts = field.value;
+  const log = getMainLogger("pwragent:messaging");
+  if (field.source !== "config") {
+    log.error("refusing to dismiss Full Access warning for non-config authorized user", {
+      actorId,
+      channel,
+      source: field.source,
+    });
+    return;
+  }
   const nextContacts = contacts.map((contact) =>
     contact.id === actorId
       ? { ...contact, fullAccessWarningDismissed: true }
       : contact,
   );
   if (!nextContacts.some((contact) => contact.id === actorId)) {
+    log.error("refusing to insert authorized user while dismissing Full Access warning", {
+      actorId,
+      channel,
+      insertNewUser: false,
+    });
     return;
   }
 
@@ -1311,25 +1334,36 @@ async function dismissMessagingFullAccessWarning(
   }
 }
 
-function contactsForFullAccessWarningChannel(
-  snapshot: Awaited<ReturnType<DesktopMessagingSettingsSource["readSettings"]>>,
+async function canPersistMessagingFullAccessWarningDismissal(
+  settings: DesktopMessagingSettingsSource,
   channel: MessagingChannelKind,
-): DesktopAuthorizedContact[] {
+  actorId: string,
+): Promise<boolean> {
+  const snapshot = await settings.readSettings();
+  const field = contactsForFullAccessWarningChannel(snapshot, channel);
+  return field.source === "config"
+    && field.value.some((contact) => contact.id === actorId);
+}
+
+function contactsForFullAccessWarningChannel(
+  snapshot: DesktopSettingsSnapshot,
+  channel: MessagingChannelKind,
+): DesktopSettingsValue<DesktopAuthorizedContact[]> {
   switch (channel) {
     case "telegram":
-      return snapshot.messaging.telegram.authorizedUserIds.value;
+      return snapshot.messaging.telegram.authorizedUserIds;
     case "discord":
-      return snapshot.messaging.discord.authorizedUserIds.value;
+      return snapshot.messaging.discord.authorizedUserIds;
     case "mattermost":
-      return snapshot.messaging.mattermost.authorizedUserIds.value;
+      return snapshot.messaging.mattermost.authorizedUserIds;
     case "slack":
-      return snapshot.messaging.slack.authorizedUserIds.value;
+      return snapshot.messaging.slack.authorizedUserIds;
     case "feishu":
-      return snapshot.messaging.feishu.authorizedUserIds.value;
+      return snapshot.messaging.feishu.authorizedUserIds;
     case "line":
-      return snapshot.messaging.line.authorizedUserIds.value;
+      return snapshot.messaging.line.authorizedUserIds;
     default:
-      return [];
+      return { value: [], source: "default" };
   }
 }
 

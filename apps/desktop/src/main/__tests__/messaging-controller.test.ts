@@ -5721,6 +5721,82 @@ describe("MessagingController", () => {
     });
   });
 
+  it("omits the dismiss action when Full Access warning dismissal cannot persist", async () => {
+    const dismissWarning = vi.fn(async () => undefined);
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+        dismissWarning,
+        canDismissWarning: async () => false,
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    const warning = harness.delivered.at(-1);
+    expect(warning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    expect(warning && "actions" in warning ? warning.actions : []).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "full-access-risk:dismiss" }),
+      ]),
+    );
+  });
+
+  it("rechecks escalation settings before honoring stale Full Access warning callbacks", async () => {
+    const onFullAccessPolicyViolation = vi.fn();
+    let allowEscalation = true;
+    const harness = await createHarness({
+      fullAccessControls: async () => ({
+        allowEscalation,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      }),
+      onFullAccessPolicyViolation,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+    const warning = harness.delivered.at(-1);
+    allowEscalation = false;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(onFullAccessPolicyViolation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user-1",
+        requestedAction: "messaging.full_access.escalate_thread",
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+      body: expect.stringContaining("Escalating to Full Access"),
+    });
+  });
+
   it("restores the status surface after accepting a Full Access warning", async () => {
     const harness = await createHarness({
       fullAccessControls: {
