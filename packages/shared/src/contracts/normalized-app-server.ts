@@ -381,7 +381,8 @@ export type ThreadWorkspaceHandoffDirection =
 
 export type ThreadWorkspaceHandoffStrategy =
   | "move-branch"
-  | "detached-changes";
+  | "detached-changes"
+  | "new-branch";
 
 export type ThreadWorkspaceHandoffStashSummary = {
   ref?: string;
@@ -400,6 +401,7 @@ export type HandoffThreadWorkspaceRequest = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
+  newBranchName?: string;
 };
 
 export type HandoffThreadWorkspaceResponse = {

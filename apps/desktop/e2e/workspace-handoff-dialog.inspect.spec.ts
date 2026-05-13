@@ -30,6 +30,10 @@ test("opens the local-to-worktree handoff dialog until Electron is closed manual
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("Handoff to Detached HEAD");
     await expect(dialog).toContainText("main");
+    await dialog.getByRole("radio", { name: /Handoff to New Branch/ }).click();
+    await expect(dialog.getByLabel("New branch name")).toHaveValue(
+      "pwragent/main-handoff",
+    );
     await expect(dialog).toContainText("Ignored files are not moved by handoff.");
 
     console.log(

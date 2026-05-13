@@ -38,6 +38,7 @@ type HandoffParams = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
+  newBranchName?: string;
   now?: number;
 };
 
@@ -195,6 +196,23 @@ async function dropStashByCommit(cwd: string, commit: string): Promise<void> {
   await runGit(cwd, ["stash", "drop", match]);
 }
 
+async function validateBranchName(cwd: string, branch: string): Promise<void> {
+  try {
+    await runGit(cwd, ["check-ref-format", "--branch", branch]);
+  } catch {
+    throw new Error(`Invalid branch name: ${branch}`);
+  }
+}
+
+async function branchExists(cwd: string, branch: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function applyVerifyAndDropStash(
   cwd: string,
   stash: ThreadWorkspaceHandoffStashSummary | undefined,
@@ -292,6 +310,9 @@ export class GitWorkspaceHandoffService {
     if (strategy === "detached-changes") {
       return await this.handoffLocalChangesToDetachedWorktree(params, context);
     }
+    if (strategy === "new-branch") {
+      return await this.handoffLocalChangesToNewBranchWorktree(params, context);
+    }
 
     if (context.branch === "HEAD") {
       throw new Error("Local-to-worktree handoff requires a named source branch.");
@@ -344,6 +365,78 @@ export class GitWorkspaceHandoffService {
       strategy: "move-branch",
       workMode: "worktree",
       branch: context.branch,
+      repositoryPath: context.repositoryPath,
+      targetPath,
+      linkedDirectory,
+      sourceStash: appliedSourceStash,
+      warnings,
+      completedAt: context.now,
+    };
+  }
+
+  private async handoffLocalChangesToNewBranchWorktree(
+    params: HandoffParams,
+    context: HandoffContext,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const baseSha = context.headSha;
+    const newBranchName = sanitizeBranchName(params.newBranchName ?? "");
+    if (!newBranchName) {
+      throw new Error("Choose a new branch name for handoff.");
+    }
+    if (newBranchName === context.branch) {
+      throw new Error("New branch name must differ from the current branch.");
+    }
+    await validateBranchName(context.repositoryPath, newBranchName);
+    if (await branchExists(context.repositoryPath, newBranchName)) {
+      throw new Error(`Branch ${newBranchName} already exists.`);
+    }
+
+    const storage = await this.resolveStorage();
+    const targetPath = await computeWorktreePath({
+      backend: context.backend,
+      repoRoot: context.repositoryPath,
+      storage,
+      homeDir: this.homeDir,
+      timestamp: context.now,
+    });
+
+    const warnings = [
+      "Ignored files are not preserved by workspace handoff.",
+      `The new worktree starts from ${context.branch} at the current commit.`,
+    ];
+    const sourceStash = await createNamedStashIfDirty({
+      path: context.sourcePath,
+      message: this.buildStashMessage(context, "source"),
+    });
+    if (!sourceStash) {
+      warnings.push("No dirty non-ignored changes were available to move.");
+    }
+
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await runGit(context.repositoryPath, [
+      "worktree",
+      "add",
+      "-b",
+      newBranchName,
+      targetPath,
+      baseSha,
+    ]);
+    const appliedSourceStash = await applyVerifyAndDropStash(targetPath, sourceStash);
+
+    const linkedDirectory = this.buildLinkedDirectory({
+      context,
+      kind: "worktree",
+      targetPath,
+    });
+
+    return {
+      backend: context.backend,
+      threadId: context.threadId,
+      direction: "local-to-worktree",
+      strategy: "new-branch",
+      workMode: "worktree",
+      branch: newBranchName,
+      baseSha,
       repositoryPath: context.repositoryPath,
       targetPath,
       linkedDirectory,

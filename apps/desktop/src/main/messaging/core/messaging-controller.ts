@@ -7696,6 +7696,15 @@ function validateHandoffRequest(
     if (request.strategy === "detached-changes") {
       return { valid: true };
     }
+    if (request.strategy === "new-branch") {
+      if (!request.newBranchName?.trim()) {
+        return {
+          valid: false,
+          reason: "Choose the new branch name before handoff.",
+        };
+      }
+      return { valid: true };
+    }
     if (!request.leaveLocalBranch) {
       return {
         valid: false,

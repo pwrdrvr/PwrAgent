@@ -793,7 +793,9 @@ export function handoffRequestFromValue(
     threadId: value.threadId,
     direction: value.direction,
     strategy:
-      value.strategy === "move-branch" || value.strategy === "detached-changes"
+      value.strategy === "move-branch" ||
+      value.strategy === "detached-changes" ||
+      value.strategy === "new-branch"
         ? value.strategy
         : undefined,
     repositoryPath: value.repositoryPath,
@@ -801,6 +803,8 @@ export function handoffRequestFromValue(
     sourceBranch: typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
     leaveLocalBranch:
       typeof value.leaveLocalBranch === "string" ? value.leaveLocalBranch : undefined,
+    newBranchName:
+      typeof value.newBranchName === "string" ? value.newBranchName : undefined,
   };
 }
 

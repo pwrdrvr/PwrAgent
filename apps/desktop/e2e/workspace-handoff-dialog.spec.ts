@@ -42,6 +42,11 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
     await expect(dialog).toContainText("Handoff to Detached HEAD");
     await expect(dialog).toContainText("main");
 
+    await dialog.getByRole("radio", { name: /Handoff to New Branch/ }).click();
+    await expect(dialog.getByLabel("New branch name")).toHaveValue(
+      "pwragent/main-handoff",
+    );
+
     await expectDialogCentered(dialog);
   } finally {
     await app.close();

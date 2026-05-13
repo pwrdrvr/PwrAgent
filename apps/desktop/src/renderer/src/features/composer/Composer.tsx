@@ -158,7 +158,7 @@ type ComposerProps = {
   threadModelSettingsError?: string;
 };
 
-type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy | "suggested-branch";
+type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
@@ -959,6 +959,7 @@ export function Composer(props: ComposerProps) {
   const [localHandoffStrategy, setLocalHandoffStrategy] =
     useState<LocalHandoffStrategy>("detached-changes");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
+  const [newLocalBranch, setNewLocalBranch] = useState("");
   const [handoffError, setHandoffError] = useState<string | undefined>();
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [sending, setSendingState] = useState(false);
@@ -2768,6 +2769,7 @@ export function Composer(props: ComposerProps) {
           ? handoffBaseBranch
           : branchOptions[0] ?? ""
       );
+      setNewLocalBranch(buildHandoffBranchSuggestion(sourceBranch));
     }
   };
 
@@ -2781,9 +2783,7 @@ export function Composer(props: ComposerProps) {
     try {
       const handoffStrategy =
         handoffDialog === "local-to-worktree"
-          ? localHandoffStrategy === "suggested-branch"
-            ? undefined
-            : localHandoffStrategy
+          ? localHandoffStrategy
           : undefined;
       await props.onHandoffThreadWorkspace({
         direction: handoffDialog!,
@@ -2793,6 +2793,9 @@ export function Composer(props: ComposerProps) {
         sourceBranch,
         ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
+          : {}),
+        ...(handoffDialog === "local-to-worktree" && handoffStrategy === "new-branch"
+          ? { newBranchName: newLocalBranch || undefined }
           : {}),
       });
       setHandoffDialog(undefined);
@@ -2832,7 +2835,7 @@ export function Composer(props: ComposerProps) {
     !sourceBranch ||
     (handoffDialog === "local-to-worktree" &&
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
-        localHandoffStrategy === "suggested-branch"));
+        (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
 
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
@@ -3189,18 +3192,19 @@ export function Composer(props: ComposerProps) {
                       </span>
                     </button>
                     <button
-                      aria-checked={localHandoffStrategy === "suggested-branch"}
+                      aria-checked={localHandoffStrategy === "new-branch"}
                       className="workspace-handoff-dialog__strategy"
-                      disabled
+                      disabled={handoffSubmitting}
                       role="radio"
                       type="button"
+                      onClick={() => setLocalHandoffStrategy("new-branch")}
                     >
                       <span className="workspace-handoff-dialog__strategy-title">
                         Handoff to New Branch
                       </span>
                       <span>
-                        Coming soon: keep Local on this branch and create a suggested
-                        branch in the new worktree.
+                        Keep Local on this branch. Create a named branch in the new
+                        worktree and move dirty non-ignored changes on top.
                       </span>
                     </button>
                     <button
@@ -3238,6 +3242,20 @@ export function Composer(props: ComposerProps) {
                       </select>
                     </label>
                   ) : null}
+                  {localHandoffStrategy === "new-branch" ? (
+                    <label className="workspace-handoff-dialog__field">
+                      New branch name
+                      <input
+                        aria-label="New branch name"
+                        className="workspace-handoff-dialog__text-input"
+                        disabled={handoffSubmitting}
+                        spellCheck={false}
+                        type="text"
+                        value={newLocalBranch}
+                        onChange={(event) => setNewLocalBranch(event.target.value)}
+                      />
+                    </label>
+                  ) : null}
                 </>
               ) : null}
               {handoffDialog === "local-to-worktree" &&
@@ -3253,6 +3271,19 @@ export function Composer(props: ComposerProps) {
                   The new worktree starts at the current tip of{" "}
                   {sourceBranch ?? "this branch"} and receives dirty non-ignored changes on
                   top.
+                </p>
+              ) : null}
+              {handoffDialog === "local-to-worktree" &&
+              localHandoffStrategy === "new-branch" ? (
+                <p className="workspace-handoff-dialog__note">
+                  The new worktree creates{" "}
+                  {newLocalBranch.trim() ? (
+                    <code>{newLocalBranch.trim()}</code>
+                  ) : (
+                    "a named branch"
+                  )}{" "}
+                  at the current tip of {sourceBranch ?? "this branch"} and receives
+                  dirty non-ignored changes on top.
                 </p>
               ) : null}
               <p className="workspace-handoff-dialog__note">
@@ -4661,6 +4692,18 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   return undefined;
+}
+
+function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string {
+  const normalizedSource = sourceBranch
+    ?.replace(/^refs\/heads\//, "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._/-]+/g, "-")
+    .replace(/\/+/g, "/")
+    .replace(/^-+|-+$/g, "");
+  const branchSlug =
+    normalizedSource && normalizedSource !== "HEAD" ? normalizedSource : "detached";
+  return `pwragent/${branchSlug}-handoff`;
 }
 
 function getLeaveLocalBranchOptions(params: {

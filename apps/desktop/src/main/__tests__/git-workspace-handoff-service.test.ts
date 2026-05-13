@@ -143,6 +143,69 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
   });
 
+  it("moves dirty local changes to a new branch worktree and leaves local on the current branch", async () => {
+    const repoPath = await createRepo();
+    const baseSha = await git(repoPath, ["rev-parse", "HEAD"]);
+    await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+    await writeFile(path.join(repoPath, "notes.txt"), "untracked\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "new-branch",
+      newBranchName: "pwragent/feature-handoff",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 1750,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.strategy).toBe("new-branch");
+    expect(result.branch).toBe("pwragent/feature-handoff");
+    expect(result.baseSha).toBe(baseSha);
+    expect(result.sourceStash).toMatchObject({ applied: true, dropped: true });
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe(
+      "pwragent/feature-handoff",
+    );
+    expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(baseSha);
+    await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty local\n",
+    );
+    await expect(readFile(path.join(result.targetPath, "notes.txt"), "utf8")).resolves.toBe(
+      "untracked\n",
+    );
+    expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+  });
+
+  it("rejects new branch handoff when the requested branch already exists", async () => {
+    const repoPath = await createRepo();
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    await expect(
+      service.handoff({
+        backend: "codex",
+        threadId: "thread-1",
+        direction: "local-to-worktree",
+        strategy: "new-branch",
+        newBranchName: "main",
+        repositoryPath: repoPath,
+        sourcePath: repoPath,
+        sourceBranch: "feature/handoff",
+        now: 1800,
+      }),
+    ).rejects.toThrow(/already exists/);
+
+    expect(await git(repoPath, ["stash", "list"])).toBe("");
+  });
+
   it("moves a dirty worktree branch back to local and archives the old worktree", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);
