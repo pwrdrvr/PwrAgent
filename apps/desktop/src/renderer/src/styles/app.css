@@ -3905,7 +3905,7 @@ textarea,
 
 .thread-view--launchpad {
   gap: 12px;
-  padding-right: 24px;
+  padding: 0 24px 16px 24px;
 }
 
 .thread-view__launchpad-composer {
@@ -3914,6 +3914,12 @@ textarea,
   flex-direction: column;
   min-width: 0;
   margin-top: auto;
+}
+
+.thread-view__launchpad-composer:has(.transcript-panel--setup) {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 0;
 }
 
 .thread-view__launchpad-composer > .composer,
@@ -3937,6 +3943,8 @@ textarea,
 
 .thread-header--launchpad {
   align-items: flex-start;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .thread-header__main--launchpad {
@@ -4188,8 +4196,10 @@ textarea,
 }
 
 .transcript-panel--setup {
+  min-height: 0;
   justify-content: flex-start;
-  padding: 36px 32px;
+  overflow: hidden;
+  padding: 18px 8px 0;
 }
 
 .launchpad-pending {
@@ -4201,9 +4211,10 @@ textarea,
 .launchpad-pending--setup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  width: min(100%, 980px);
-  min-height: min(640px, 100%);
+  gap: 14px;
+  width: min(100%, 1040px);
+  height: 100%;
+  min-height: 0;
   padding: 0;
   text-align: left;
 }
@@ -4232,9 +4243,9 @@ textarea,
 }
 
 .launchpad-pending h3 {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: var(--text-primary);
-  font-size: 24px;
+  font-size: 23px;
   line-height: 1.2;
 }
 
@@ -4287,6 +4298,8 @@ textarea,
 
 .launchpad-pending__command {
   padding: 12px;
+  overflow: auto;
+  max-height: min(230px, 36vh);
 }
 
 .launchpad-pending__command pre,
@@ -4304,7 +4317,7 @@ textarea,
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 260px;
+  min-height: 160px;
   overflow: hidden;
 }
 
@@ -4324,7 +4337,7 @@ textarea,
 
 @media (max-width: 760px) {
   .transcript-panel--setup {
-    padding: 20px 16px;
+    padding: 14px 0 0;
   }
 
   .launchpad-pending__header,
