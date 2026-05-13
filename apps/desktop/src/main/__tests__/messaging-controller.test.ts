@@ -5224,13 +5224,14 @@ describe("MessagingController", () => {
     });
   });
 
-  it("updates button-driven skills navigation but posts typed search results as latest messages", async () => {
+  it("updates the active skills message for button-driven navigation and typed search results", async () => {
     const harness = await createHarness();
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:skills" }),
     );
+    const initialSkillsSurface = harness.delivered.at(-1)?.id;
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "skills:search" }),
     );
@@ -5241,20 +5242,28 @@ describe("MessagingController", () => {
         mode: "update",
       },
       targetSurface: {
-        id: expect.stringContaining("surface:skills-browser"),
+        id: `surface:${initialSkillsSurface}`,
       },
     });
+    const searchPromptIntent = await harness.store.findActivePendingIntentForChannel({
+      actorId: buildTextEvent("work").actor.platformUserId,
+      channel: buildTextEvent("work").channel,
+      now: 1000,
+    });
+    expect(searchPromptIntent?.surface).toBeDefined();
 
     await harness.controller.handleInboundEvent(buildTextEvent("work"));
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "single_select",
       delivery: {
-        mode: "present",
+        mode: "update",
       },
       prompt: expect.stringContaining('Skills matching "work"'),
+      targetSurface: {
+        id: searchPromptIntent?.surface?.id,
+      },
     });
-    expect(harness.delivered.at(-1)).not.toHaveProperty("targetSurface");
   });
 
   it("lists skills from every linked directory on the bound thread", async () => {

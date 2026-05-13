@@ -921,8 +921,8 @@ export class MessagingController {
         if (binding && !binding.revokedAt) {
           await this.presentSkillsBrowser(binding, event, {
             pageIndex: 0,
-            presentNew: true,
             query: event.text,
+            targetSurface: pendingIntent.surface,
           });
           return;
         }
@@ -3913,7 +3913,11 @@ export class MessagingController {
   private async presentSkillsBrowser(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
-    options: { pageIndex?: number; presentNew?: boolean; query?: string } = {},
+    options: {
+      pageIndex?: number;
+      query?: string;
+      targetSurface?: MessagingSurfaceRef;
+    } = {},
   ): Promise<void> {
     if (!this.options.backend.listSkills) {
       await this.deliver(
@@ -3940,9 +3944,8 @@ export class MessagingController {
         backend: binding.backend,
         ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
       });
-      const targetSurface = options.presentNew
-        ? undefined
-        : await this.findActiveSkillsWorkflowSurface(binding, event);
+      const targetSurface = options.targetSurface ??
+        await this.findActiveSkillsWorkflowSurface(binding, event);
       await this.deliverAndStoreSkillsWorkflow(
         buildSkillsBrowserIntent({
           id: this.newIntentId("skills-browser"),
