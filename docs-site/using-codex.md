@@ -39,6 +39,13 @@ in sync on every state change.
 - [Start Card buttons](#start-card-buttons)
 - [Sending the first prompt](#first-prompt)
 
+**While the thread is bound**
+
+- [Status card on a bound thread](#status-card-bound)
+- [Tool-update verbosity](#tool-update-verbosity)
+- [Typing indicators](#typing-indicators)
+- [Sending attachments](#attachments)
+
 **During a turn**
 
 - [Debounce, queue, and steer](#debounce-queue-steer)
@@ -324,6 +331,114 @@ safe).
 The binding-confirmation message the bot posts back includes the
 chosen model, reasoning, fast mode, and permissions so you can verify
 the Start Card state was captured correctly.
+
+## Status card on a bound thread {#status-card-bound}
+
+After the binding completes, the **Start Card** evolves into the
+**bound-thread status card**, pinned (or repeatedly posted, where the
+platform doesn't support pinning) to the conversation. It carries the
+same four state buttons as the Start Card plus four runtime controls:
+
+| Button | What it does |
+|---|---|
+| **Model** | Cycle the thread's model |
+| **Reasoning** | Cycle reasoning effort |
+| **Fast: on / off** | Toggle Fast mode |
+| **Permissions** | Cycle Default Access ↔ Full Access (mid-turn cycles queue — see [Start Card buttons](#start-card-buttons)) |
+| **Tools: \<mode\>** | Cycle [tool-update verbosity](#tool-update-verbosity) |
+| **Stream: \<mode\>** | Cycle streaming mode for this binding only — see [Streaming responses](streaming/) |
+| **Refresh** | Re-render the card immediately |
+| **Detach** | [Detach](#detaching-a-thread) this binding |
+
+The card is the **single source of cross-surface state**. Change a
+setting on the messenger and the desktop UI updates within
+milliseconds; change it on the desktop and the card edits in place
+on the messenger. There's no "out of sync" window to worry about.
+
+`/status` from the conversation forces a refresh — useful if the
+card scrolled out of view and your platform doesn't auto-pin (some
+don't), or if you want a fresh card after a long quiet stretch.
+
+## Tool-update verbosity {#tool-update-verbosity}
+
+While the agent works, PwrAgent can post short progress messages
+summarizing each completed tool call — `Read app.tsx`, `Ran build`,
+`Searched src/components/`. These aren't agent-authored output;
+they're machine-generated labels derived from the agent's tool
+metadata. Raw command output, arguments that look secret, and diffs
+are intentionally excluded.
+
+The **`Tools: <mode>` button** on the status card cycles between
+five verbosity modes:
+
+| Mode | Behavior |
+|---|---|
+| **Show None** | Suppress generated tool-update messages entirely |
+| **Show Less** | Batch all updates, flush every 60 seconds and at turn boundaries |
+| **Show Some** *(default)* | Send up to three quiet updates individually, then batch every 30 seconds |
+| **Show More** | Send up to five individually, then batch every 15 seconds |
+| **Show All** | Send each tool update individually |
+
+The default (**Show Some**) balances "you can see something is
+happening" against eating the platform's write budget. Bump to
+**Show More** or **Show All** if you want fine-grained visibility on
+a thread that's doing significant tool work — but watch the
+[rate-limits page](rate-limits/) if you're in a Telegram supergroup
+or other tight-budget scope.
+
+Each binding sets its own mode independently. The global default
+lives in Settings → Messaging on the desktop; the status-card button
+overrides per-binding.
+
+Pending batches flush before assistant messages, approval prompts,
+questionnaire prompts, status replies, and turn completion — so
+tool-progress messages never arrive **after** the response they
+explain.
+
+## Typing indicators {#typing-indicators}
+
+The bot shows a platform-typing indicator (the "…" / "typing" / hand-
+in-message-area cue native to your platform) while a bound turn is
+**actively waiting** on the agent.
+
+The indicator stops when:
+
+- The turn completes successfully.
+- The turn fails or is interrupted.
+- The turn hits an **approval prompt** or **questionnaire prompt** —
+  Codex is waiting on you, so the typing indicator turns off to
+  signal that you're now the bottleneck.
+
+Intermediate assistant messages and tool-update progress
+**don't** turn the indicator off — those are intermediate output,
+not terminal lifecycle events. Typing resumes after you answer a
+prompt until the next terminal event.
+
+## Sending attachments {#attachments}
+
+Bound conversations can send files, images, and PDFs into the active
+thread. PwrAgent processes the attachment, normalizes it, and feeds
+it into the next turn alongside any accompanying text.
+
+| Accepted | Behavior |
+|---|---|
+| Text-like files (`.txt`, `.md`, `.csv`, `.json`, `.jsonl`, `.toml`, `.yaml`, `.yml`, logs, plain code) | Forwarded as text into the prompt |
+| Images (PNG, JPEG, WebP, GIF) | Forwarded as image input; uploaded through the same upload-profile setting as desktop paste (Low / Medium / High / Actual; default Medium) |
+| GIFs | Sent as a still image — animation is not forwarded to the model |
+| PDFs | Forwarded when text can be extracted; OCR-only PDFs are rejected |
+
+Rejected — with a short bot message explaining why, not silently:
+
+- Audio and video files
+- Archive files (`.zip`, `.tar`, etc.)
+- Oversized files (above the configured `attachment_max_bytes` cap)
+- OCR-only PDFs (no extractable text)
+- Anything beyond the `attachment_max_count` per-turn cap
+
+Attachments are processed **before** they enter the
+[debounce / queue / steer](#debounce-queue-steer) state machine, so
+a file plus a follow-up text message inside the debounce window
+land in the same turn as a multi-part prompt.
 
 ## Debounce, queue, and steer {#debounce-queue-steer}
 
