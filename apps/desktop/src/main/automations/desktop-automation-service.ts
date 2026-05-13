@@ -238,10 +238,12 @@ export class DesktopAutomationService {
       turnId?: string;
       automationRunId?: string;
       errorMessage?: string;
+      terminalStatus?: string;
     };
     this.scheduler.handleTurnQueueUpdate({
       automationRunId: params.automationRunId,
       status: params.status,
+      terminalStatus: params.terminalStatus,
       turnId: params.turnId,
       errorMessage: params.errorMessage,
     });

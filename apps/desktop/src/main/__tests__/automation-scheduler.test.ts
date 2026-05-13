@@ -203,4 +203,44 @@ describe("AutomationScheduler", () => {
       nextRunAt: 5 * 60 * 1000,
     });
   });
+
+  it("maps terminal backend failure notifications to failed runs", async () => {
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+    const [run] = store.listRunsForAutomation("automation-1");
+
+    scheduler.handleTurnQueueUpdate({
+      automationRunId: run?.id,
+      status: "terminal",
+      terminalStatus: "turn/failed",
+      now: 6 * 60 * 1000,
+    });
+
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      status: "failed",
+      errorMessage: "turn/failed",
+    });
+  });
+
+  it("maps terminal backend cancellation notifications to cancelled runs", async () => {
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+    const [run] = store.listRunsForAutomation("automation-1");
+
+    scheduler.handleTurnQueueUpdate({
+      automationRunId: run?.id,
+      status: "terminal",
+      terminalStatus: "turn/cancelled",
+      now: 6 * 60 * 1000,
+    });
+
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      status: "cancelled",
+      errorMessage: "turn/cancelled",
+    });
+  });
 });
