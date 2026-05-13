@@ -1715,6 +1715,12 @@ function feishuAttachmentsFromMessage(params: {
       },
     ];
   }
+  if (messageType === "post") {
+    return feishuPostImageAttachments({
+      messageId: params.messageId,
+      value: params.content.content,
+    });
+  }
   if (messageType === "file") {
     const fileKey = stringField(params.content.file_key);
     if (!fileKey) return [];
@@ -1756,6 +1762,47 @@ function feishuAttachmentsFromMessage(params: {
     ];
   }
   return [];
+}
+
+function feishuPostImageAttachments(params: {
+  messageId: string;
+  value: unknown;
+}): MessagingAttachmentDescriptor[] {
+  const imageKeys: string[] = [];
+  collectFeishuPostImageKeys(params.value, imageKeys);
+  return imageKeys.map((imageKey) => ({
+    id: `feishu:image:${imageKey}`,
+    kind: "image",
+    name: "lark-image",
+    disposition: "available",
+    state: {
+      opaque: {
+        fileKey: imageKey,
+        messageId: params.messageId,
+        provider: "feishu",
+        resourceType: "image",
+      },
+    },
+  }));
+}
+
+function collectFeishuPostImageKeys(value: unknown, imageKeys: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectFeishuPostImageKeys(item, imageKeys);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  const imageKey =
+    stringField(record.image_key) ??
+    (record.tag === "img" ? stringField(record.file_key) : undefined);
+  if (imageKey) {
+    imageKeys.push(imageKey);
+  }
+  collectFeishuPostImageKeys(record.content, imageKeys);
+  collectFeishuPostImageKeys(record.elements, imageKeys);
 }
 
 function readAttachmentResourceType(

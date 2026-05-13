@@ -368,6 +368,75 @@ describe("FeishuAdapter", () => {
     ]);
   });
 
+  it("normalizes rich-text post images into downloadable media events", async () => {
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [{ id: "oc_chat", displayName: "Development" }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleWebhookPayload({
+      header: {
+        event_id: "evt_post_image",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "group",
+          content: JSON.stringify({
+            content: [
+              [
+                { tag: "at", user_id: "ou_bot", user_name: "PwrAgent" },
+                { tag: "img", image_key: "img_v3_inline" },
+              ],
+              [{ tag: "text", text: "What's in this image?" }],
+            ],
+          }),
+          message_id: "om_post_image",
+          message_type: "post",
+        },
+      },
+    });
+    await adapter.stop();
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            disposition: "available",
+            id: "feishu:image:img_v3_inline",
+            kind: "image",
+            state: {
+              opaque: {
+                fileKey: "img_v3_inline",
+                messageId: "om_post_image",
+                provider: "feishu",
+                resourceType: "image",
+              },
+            },
+          }),
+        ],
+        kind: "media",
+        text: "What's in this image?",
+      }),
+    ]);
+  });
+
   it("normalizes authorized image messages into downloadable media events", async () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,
