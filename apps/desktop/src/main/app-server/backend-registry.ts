@@ -26,6 +26,7 @@ import {
   type BackendAccountSummary,
   type BackendCapabilities,
   type CodexEnvironmentOption,
+  type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
   type BackendLaunchpadOptions,
   type BackendModelOption,
@@ -3358,6 +3359,11 @@ export class DesktopBackendRegistry {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
+    options?: {
+      onCodexEnvironmentSetupProgress?: (
+        event: CodexEnvironmentSetupProgressEvent,
+      ) => void;
+    },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     const launchpad =
       (await this.overlayStore.getDirectoryLaunchpad({
@@ -3395,6 +3401,14 @@ export class DesktopBackendRegistry {
       launchpad.backend === "codex"
         ? await applyLocalCodexEnvironmentSelection({
             cwd: workspace.cwd,
+            onSetupProgress: options?.onCodexEnvironmentSetupProgress
+              ? (event) => {
+                  options.onCodexEnvironmentSetupProgress?.({
+                    directoryKey: launchpad.directoryKey,
+                    ...event,
+                  });
+                }
+              : undefined,
             selection: codexEnvironmentSelection,
           })
         : undefined;

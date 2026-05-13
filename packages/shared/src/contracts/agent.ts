@@ -294,6 +294,21 @@ export type MaterializeDirectoryLaunchpadResponse = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
+export type CodexEnvironmentSetupProgressEvent = {
+  directoryKey: string;
+  environmentId: string;
+  environmentName: string;
+  command: string;
+  cwd?: string;
+  phase: "started" | "stdout" | "stderr" | "completed" | "failed";
+  chunk?: string;
+  output?: string;
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+  at: number;
+};
+
 export type RunCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

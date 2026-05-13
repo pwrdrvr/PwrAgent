@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import type { CodexEnvironmentSetupProgressEvent } from "@pwragent/shared";
 import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared";
 import type { CodexEnvironmentOption } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -15,6 +16,9 @@ export type CodexEnvironmentSelection = {
 
 export async function applyLocalCodexEnvironmentSelection(params: {
   cwd?: string;
+  onSetupProgress?: (
+    event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
+  ) => void;
   selection?: CodexEnvironmentSelection;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
   const { cwd, selection } = params;
@@ -51,18 +55,52 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   };
 
   if (selection.setupEnabled && selection.environment.setupScript) {
+    const emitSetupProgress = (
+      event: Omit<
+        CodexEnvironmentSetupProgressEvent,
+        "directoryKey" | "environmentId" | "environmentName" | "command" | "cwd"
+      >,
+    ) => {
+      params.onSetupProgress?.({
+        environmentId: selection.environment.id,
+        environmentName: selection.environment.name,
+        command: selection.environment.setupScript!,
+        cwd,
+        ...event,
+      });
+    };
+
     try {
+      emitSetupProgress({
+        phase: "started",
+        at: Date.now(),
+      });
       const result = await runShellCommand({
         cwd,
         command: selection.environment.setupScript,
         mode: "wait",
+        onProgress: (event) => {
+          emitSetupProgress(event);
+        },
       });
       runtime.setupStatus = "completed";
       runtime.setupOutput = result.output;
       runtime.setupExitCode = result.exitCode;
       runtime.setupDurationMs = result.durationMs;
+      emitSetupProgress({
+        phase: "completed",
+        output: result.output,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        at: Date.now(),
+      });
     } catch (error) {
       runtime.setupStatus = "failed";
+      emitSetupProgress({
+        phase: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        at: Date.now(),
+      });
       throw error;
     }
   } else if (selection.setupEnabled) {
@@ -132,6 +170,9 @@ function runShellCommand(params: {
   cwd?: string;
   command: string;
   mode: "wait" | "detach";
+  onProgress?: (
+    event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
+  ) => void;
 }): Promise<{
   durationMs?: number;
   exitCode?: number;
@@ -159,10 +200,22 @@ function runShellCommand(params: {
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = `${stdout}${chunk.toString("utf8")}`.slice(-32_000);
+      const text = chunk.toString("utf8");
+      stdout = `${stdout}${text}`.slice(-32_000);
+      params.onProgress?.({
+        phase: "stdout",
+        chunk: text,
+        at: Date.now(),
+      });
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+      const text = chunk.toString("utf8");
+      stderr = `${stderr}${text}`.slice(-4096);
+      params.onProgress?.({
+        phase: "stderr",
+        chunk: text,
+        at: Date.now(),
+      });
     });
 
     child.once("error", (error) => {

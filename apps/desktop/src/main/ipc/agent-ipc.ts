@@ -54,6 +54,7 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
 
@@ -412,10 +413,14 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: MaterializeDirectoryLaunchpadRequest
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
-      return await registry.materializeDirectoryLaunchpad(request);
+      return await registry.materializeDirectoryLaunchpad(request, {
+        onCodexEnvironmentSetupProgress: (progress) => {
+          event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+        },
+      });
     },
   );
 

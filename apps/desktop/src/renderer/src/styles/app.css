@@ -4187,10 +4187,48 @@ textarea,
   justify-content: center;
 }
 
+.transcript-panel--setup {
+  justify-content: flex-start;
+  padding: 36px 32px;
+}
+
 .launchpad-pending {
   width: min(100%, 520px);
   padding: 24px;
   text-align: center;
+}
+
+.launchpad-pending--setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: min(100%, 980px);
+  min-height: min(640px, 100%);
+  padding: 0;
+  text-align: left;
+}
+
+.launchpad-pending__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.launchpad-pending__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .launchpad-pending h3 {
@@ -4205,6 +4243,98 @@ textarea,
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 1.45;
+}
+
+.launchpad-pending__meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.launchpad-pending__meta div {
+  min-width: 0;
+}
+
+.launchpad-pending__meta dt,
+.launchpad-pending__command-label {
+  margin: 0 0 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.launchpad-pending__meta dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.launchpad-pending__command,
+.launchpad-pending__output {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.launchpad-pending__command {
+  padding: 12px;
+}
+
+.launchpad-pending__command pre,
+.launchpad-pending__output pre {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.launchpad-pending__output {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 260px;
+  overflow: hidden;
+}
+
+.launchpad-pending__output .launchpad-pending__command-label {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.launchpad-pending__output pre {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+
+@media (max-width: 760px) {
+  .transcript-panel--setup {
+    padding: 20px 16px;
+  }
+
+  .launchpad-pending__header,
+  .launchpad-pending__meta {
+    grid-template-columns: 1fr;
+  }
+
+  .launchpad-pending__header {
+    flex-direction: column;
+  }
 }
 
 .transcript-list {

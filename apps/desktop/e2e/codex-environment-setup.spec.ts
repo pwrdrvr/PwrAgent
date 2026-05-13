@@ -207,6 +207,16 @@ test("selected Codex environments run setup and show transcript output", async (
         .getByRole("region", { name: "Preparing transcript" })
         .getByRole("heading", { name: "Running environment setup" }),
     ).toBeVisible();
+    await expect(
+      app.window
+        .locator('[aria-label="Setup command"]')
+        .getByText("$ printf setup-output && sleep 2"),
+    ).toBeVisible();
+    await expect(
+      app.window
+        .locator('[aria-label="Setup output"]')
+        .getByText("setup-output", { exact: true }),
+    ).toBeVisible();
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "hello env" }),

@@ -15,6 +15,7 @@ import type {
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
+  CodexEnvironmentSetupProgressEvent,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
@@ -49,6 +50,148 @@ import {
   mergeActivityDetails,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
+
+type LaunchpadEnvironmentSetupProgress = {
+  command: string;
+  cwd?: string;
+  directoryKey: string;
+  durationMs?: number;
+  environmentId: string;
+  environmentName: string;
+  error?: string;
+  exitCode?: number;
+  output: string;
+  status: "starting" | "running" | "completed" | "failed";
+};
+
+function applyLaunchpadEnvironmentSetupProgress(
+  current: LaunchpadEnvironmentSetupProgress | undefined,
+  event: CodexEnvironmentSetupProgressEvent,
+): LaunchpadEnvironmentSetupProgress {
+  const base =
+    current?.directoryKey === event.directoryKey &&
+    current.environmentId === event.environmentId
+      ? current
+      : {
+          command: event.command,
+          cwd: event.cwd,
+          directoryKey: event.directoryKey,
+          environmentId: event.environmentId,
+          environmentName: event.environmentName,
+          output: "",
+          status: "starting" as const,
+        };
+
+  if (event.phase === "stdout" || event.phase === "stderr") {
+    return {
+      ...base,
+      output: `${base.output}${event.chunk ?? ""}`.slice(-32_000),
+      status: "running",
+    };
+  }
+
+  if (event.phase === "completed") {
+    return {
+      ...base,
+      durationMs: event.durationMs,
+      exitCode: event.exitCode,
+      output: event.output ?? base.output,
+      status: "completed",
+    };
+  }
+
+  if (event.phase === "failed") {
+    return {
+      ...base,
+      error: event.error,
+      status: "failed",
+    };
+  }
+
+  return {
+    ...base,
+    status: "running",
+  };
+}
+
+function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): string {
+  if (!progress || progress.status === "starting" || progress.status === "running") {
+    return "running";
+  }
+  if (progress.status === "completed") {
+    return progress.exitCode === undefined ? "completed" : `exit ${progress.exitCode}`;
+  }
+  return "failed";
+}
+
+function LaunchpadEnvironmentSetupPending(props: {
+  command?: string;
+  cwd?: string;
+  directoryLabel: string;
+  environmentName?: string;
+  progress?: LaunchpadEnvironmentSetupProgress;
+}) {
+  const output = props.progress?.output ?? "";
+  const error = props.progress?.error;
+  const outputRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    const outputNode = outputRef.current;
+    if (!outputNode) {
+      return;
+    }
+    outputNode.scrollTop = outputNode.scrollHeight;
+  }, [error, output]);
+
+  return (
+    <section
+      className="transcript-panel transcript-panel--pending transcript-panel--setup"
+      aria-label="Preparing transcript"
+    >
+      <div className="launchpad-pending launchpad-pending--setup">
+        <div className="launchpad-pending__header">
+          <div>
+            <p className="eyebrow">Preparing transcript</p>
+            <h3>Running environment setup</h3>
+          </div>
+          <span className="launchpad-pending__status">
+            {formatSetupStatus(props.progress)}
+          </span>
+        </div>
+        <dl className="launchpad-pending__meta">
+          <div>
+            <dt>Environment</dt>
+            <dd>{props.environmentName ?? "Selected environment"}</dd>
+          </div>
+          <div>
+            <dt>Workspace</dt>
+            <dd>{props.directoryLabel}</dd>
+          </div>
+          {props.cwd ? (
+            <div>
+              <dt>Path</dt>
+              <dd>{props.cwd}</dd>
+            </div>
+          ) : null}
+        </dl>
+        <div className="launchpad-pending__command" aria-label="Setup command">
+          <div className="launchpad-pending__command-label">Command</div>
+          <pre>
+            <code>{props.command ? `$ ${props.command}` : "$"}</code>
+          </pre>
+        </div>
+        <div className="launchpad-pending__output" aria-label="Setup output">
+          <div className="launchpad-pending__command-label">
+            {error ? "Output and errors" : "Output"}
+          </div>
+          <pre ref={outputRef}>
+            <code>{`${output}${error ? `\n${error}` : ""}` || "Waiting for output..."}</code>
+          </pre>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
@@ -730,6 +873,8 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const [launchpadSetupProgress, setLaunchpadSetupProgress] =
+    useState<LaunchpadEnvironmentSetupProgress>();
   // Auto-pin the context rail on wide displays (issue #240). Same
   // breakpoint as the CSS in `app.css` (`@media (min-width: 1700px)`)
   // so the React state and the visual styles agree about when the
@@ -754,6 +899,7 @@ export function ThreadView(props: ThreadViewProps) {
     setContextRailResizing(false);
     setExpandedImage(undefined);
     setLaunchpadMaterializing(false);
+    setLaunchpadSetupProgress(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
     props.selectedThread?.id,
@@ -762,6 +908,24 @@ export function ThreadView(props: ThreadViewProps) {
 
   const selectedThread = props.selectedThread;
   const selectedLaunchpad = props.selectedLaunchpad;
+
+  useEffect(() => {
+    const directoryKey = selectedLaunchpad?.directoryKey;
+    if (!directoryKey || !props.desktopApi?.onCodexEnvironmentSetupProgress) {
+      return;
+    }
+
+    return props.desktopApi.onCodexEnvironmentSetupProgress((event) => {
+      if (event.directoryKey !== directoryKey) {
+        return;
+      }
+
+      setLaunchpadSetupProgress((current) =>
+        applyLaunchpadEnvironmentSetupProgress(current, event),
+      );
+    });
+  }, [props.desktopApi, selectedLaunchpad?.directoryKey]);
+
   const [branchDriftDialog, setBranchDriftDialog] =
     useState<BranchDriftDialogState>();
   const [branchDriftError, setBranchDriftError] = useState<string>();
@@ -1429,6 +1593,10 @@ export function ThreadView(props: ThreadViewProps) {
       selectedLaunchpad.codexEnvironmentId &&
         selectedLaunchpad.codexEnvironmentSetupEnabled,
     );
+    const selectedLaunchpadCodexEnvironment =
+      selectedLaunchpad.codexEnvironmentOptions?.find(
+        (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
+      );
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
     > = async (directoryKey, input, collaborationMode, reviewTarget) => {
@@ -1535,23 +1703,29 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
 
         <div className="thread-view__launchpad-composer">
-          {launchpadMaterializing ? (
+          {launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
+            <LaunchpadEnvironmentSetupPending
+              command={
+                launchpadSetupProgress?.command ??
+                selectedLaunchpadCodexEnvironment?.setupScript
+              }
+              cwd={launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath}
+              directoryLabel={selectedLaunchpad.directoryLabel}
+              environmentName={
+                launchpadSetupProgress?.environmentName ??
+                selectedLaunchpadCodexEnvironment?.name
+              }
+              progress={launchpadSetupProgress}
+            />
+          ) : launchpadMaterializing ? (
             <section
               className="transcript-panel transcript-panel--pending"
               aria-label="Preparing transcript"
             >
               <div className="launchpad-pending">
                 <p className="eyebrow">Preparing transcript</p>
-                <h3>
-                  {launchpadRunningCodexEnvironmentSetup
-                    ? "Running environment setup"
-                    : `Starting ${selectedLaunchpad.directoryLabel}`}
-                </h3>
-                <p>
-                  {launchpadRunningCodexEnvironmentSetup
-                    ? "Your prompt was sent. Setup output will appear in the transcript when the thread is ready."
-                    : "Your prompt was sent. The transcript will appear here when the thread is ready."}
-                </p>
+                <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
+                <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
               </div>
             </section>
           ) : (

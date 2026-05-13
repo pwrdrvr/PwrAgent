@@ -97,6 +97,7 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
+  CodexEnvironmentSetupProgressEvent,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -298,6 +299,9 @@ export type DesktopApi = {
   logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
+  onCodexEnvironmentSetupProgress?: (
+    callback: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ) => () => void;
   getMessagingPlatformStatuses?: () => Promise<MessagingPlatformStatus[]>;
   setMessagingEnabled?: (
     request: SetMessagingEnabledRequest,
