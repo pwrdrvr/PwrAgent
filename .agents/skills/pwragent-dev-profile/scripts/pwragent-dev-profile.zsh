@@ -2,6 +2,8 @@
 set -u
 
 INSTANCE_ROOT_ENV="PWRAGENT_INSTANCE_ROOT"
+SCRIPT_SOURCE="${(%):-%x}"
+SCRIPT_DIR="${SCRIPT_SOURCE:A:h}"
 
 usage() {
   cat <<'USAGE'
@@ -106,6 +108,7 @@ is_dev_command() {
   local command="$1"
   [[ "$command" == *"pnpm dev"* ]] && return 0
   [[ "$command" == *"pnpm --filter @pwragent/desktop dev"* ]] && return 0
+  [[ "$command" == *"pwragent-dev-profile-daemon.mjs"* ]] && return 0
   [[ "$command" == *"electron-vite"* && "$command" == *"dev"* ]] && return 0
   [[ "$command" == *"scripts/rebuild-native-for-electron.mjs"* ]] && return 0
   [[ "$command" == *"Electron.app"* && "$command" == *"apps/desktop"* ]] && return 0
@@ -456,30 +459,23 @@ verify_app() {
 }
 
 start_app() {
-  local start_pid command
+  local start_pid helper_path started_after
 
   [[ -f "$root/package.json" ]] || die "root does not look like the PwrAgent repository root: $root"
   mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
+  helper_path="$SCRIPT_DIR/pwragent-dev-profile-daemon.mjs"
+  [[ -f "$helper_path" ]] || die "missing daemon helper: $helper_path"
 
   close_app
 
+  started_after="$(( $(date +%s) * 1000 ))"
   log_line "start root=$root profile=$profile rootHash=$root_hash_value command=PWRAGENT_PROFILE=$profile $INSTANCE_ROOT_ENV=$root pnpm dev" >> "$log_path"
-  command="trap '' HUP TERM; cd $(shell_quote "$root") && exec env PWRAGENT_PROFILE=$(shell_quote "$profile") $INSTANCE_ROOT_ENV=$(shell_quote "$root") pnpm dev"
-
-  if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
-    launchctl submit -l "$(launch_job_label)" -o "$log_path" -e "$log_path" -- /bin/zsh -lc "$command" \
-      || die "failed to submit launchd job: $(launch_job_label)"
-    sleep 1
-    start_pid="$(launch_job_pid)"
-  else
-    nohup /bin/zsh -lc "$command" </dev/null >> "$log_path" 2>&1 &
-    start_pid="$!"
-    disown "$start_pid" 2>/dev/null || true
-  fi
+  start_pid="$(node "$helper_path" --daemonize --root "$root" --profile "$profile" --root-hash "$root_hash_value" --state-db "$state_db" --log "$log_path" --pid-file "$pid_file" --started-after "$started_after")" \
+    || die "failed to start detached daemon helper"
 
   print -r -- "$start_pid" > "$pid_file"
 
-  say "started $profile profile dev app supervisor pid=${start_pid:-unknown} label=$(launch_job_label)"
+  say "started $profile profile dev app daemon pid=${start_pid:-unknown}"
   say "log: $log_path"
   verify_app
 }

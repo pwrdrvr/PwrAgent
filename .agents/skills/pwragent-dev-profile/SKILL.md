@@ -51,7 +51,8 @@ Verify that a previously started instance is still up:
 ## Script Notes
 
 - The script defaults to `--profile dev`, `--root "$PWD"`, `.local/pwragent-dev-profile.pid`, and `.local/pwragent-dev-profile.log`.
-- Prefer `restart` over hand-running `PWRAGENT_PROFILE=dev pnpm dev`; the script passes `PWRAGENT_INSTANCE_ROOT`, then uses the app's lease-backed runtime metadata in `~/.pwragent/profiles/dev/state/state.db` to find the Electron owner process.
+- Prefer `restart` over hand-running `PWRAGENT_PROFILE=dev pnpm dev`; the script passes `PWRAGENT_INSTANCE_ROOT`, starts a detached daemon helper, then uses the app's lease-backed runtime metadata in `~/.pwragent/profiles/dev/state/state.db` to find the Electron owner process.
+- The detached daemon helper stops the `pnpm dev` supervisor when the first lease-backed Electron instance it started exits, so closing the spawned app does not leave a dev supervisor relaunching it.
 - The script only targets the app instance whose recorded root hash matches the requested checkout, plus that instance's bounded `pnpm dev` / `electron-vite` parent chain.
 - Use `leases` when debugging which process owns the profile messaging lease.
 - If verification fails, inspect the last log lines printed by the script before retrying.
