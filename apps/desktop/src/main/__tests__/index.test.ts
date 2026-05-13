@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
+const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
@@ -45,6 +46,7 @@ const setAboutPanelOptionsMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
+const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn(() => []);
 const dockSetIconMock = vi.fn();
 const nativeImageMock = {
@@ -73,7 +75,7 @@ vi.mock("electron", () => ({
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
     }),
-    quit: vi.fn(),
+    quit: quitMock,
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
@@ -207,6 +209,13 @@ async function flushMicrotasks(): Promise<void> {
 describe("bootstrapApp", () => {
   beforeEach(() => {
     appEventHandlers.clear();
+    processEventHandlers.clear();
+    vi.spyOn(process, "once").mockImplementation(
+      (event: string | symbol, handler: (...args: unknown[]) => void) => {
+        processEventHandlers.set(String(event), handler);
+        return process;
+      },
+    );
     createMainWindowMock.mockReset();
     registerAppServerIpcHandlersMock.mockReset();
     disposeAppServerIpcHandlersMock.mockReset();
@@ -251,6 +260,7 @@ describe("bootstrapApp", () => {
     nativeImageCreateFromPathMock.mockClear();
     whenReadyMock.mockReset();
     whenReadyMock.mockReturnValue(Promise.resolve());
+    quitMock.mockReset();
     getAllWindowsMock.mockReset();
     getAllWindowsMock.mockReturnValue([]);
     startupProfilerInstance.start.mockReset();
@@ -262,6 +272,7 @@ describe("bootstrapApp", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -382,6 +393,28 @@ describe("bootstrapApp", () => {
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the messaging lease synchronously on SIGTERM", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+
+    expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(quitMock).toHaveBeenCalledTimes(1);
+
+    appEventHandlers.get("before-quit")?.();
+    expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {

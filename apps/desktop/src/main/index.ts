@@ -62,6 +62,43 @@ const APP_WEBSITE = "https://pwrdrvr.com";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
+let mainProcessResourcesDisposed = false;
+
+function disposeMainProcessResourcesSync(): void {
+  if (mainProcessResourcesDisposed) {
+    return;
+  }
+  mainProcessResourcesDisposed = true;
+  disposeAgentIpcHandlers();
+  disposeApplicationIpcHandlers();
+  disposeAppMetadataIpcHandlers();
+  disposeAppUpdateIpcHandlers();
+  disposeImageNormalizationIpcHandlers();
+  disposePreloadLogIpcHandlers();
+  disposeProfilesIpcHandlers();
+  disposeSettingsIpcHandlers();
+  if (isDevelopment) {
+    disposeRuntimeIdentityIpcHandlers();
+  }
+  void disposeMessagingStatusIpcHandlers();
+  getRuntimeMessagingLeaseCoordinator().shutdownSync();
+  void disposeDesktopMessagingRuntime();
+  void disposeAppServerIpcHandlers();
+  disposeAppState();
+}
+
+function installProcessShutdownHandlers(): void {
+  const handleSignal = (signal: NodeJS.Signals): void => {
+    mainLog.info("main process shutdown signal received", { signal });
+    disposeMainProcessResourcesSync();
+    app.quit();
+  };
+  process.once("SIGTERM", handleSignal);
+  process.once("SIGINT", handleSignal);
+  process.once("exit", () => {
+    disposeMainProcessResourcesSync();
+  });
+}
 
 function installDevelopmentDockIcon(): void {
   if (!isMac || !isDevelopment) {
@@ -128,6 +165,7 @@ export function bootstrapApp(): void {
     copyright: APP_COPYRIGHT,
   });
   initializeMainLogger();
+  installProcessShutdownHandlers();
 
   app.whenReady().then(async () => {
     const startupCpuProfiler = new StartupCpuProfiler();
@@ -221,22 +259,7 @@ export function bootstrapApp(): void {
   });
 
   app.on("before-quit", () => {
-    disposeAgentIpcHandlers();
-    disposeApplicationIpcHandlers();
-    disposeAppMetadataIpcHandlers();
-    disposeAppUpdateIpcHandlers();
-    disposeImageNormalizationIpcHandlers();
-    disposePreloadLogIpcHandlers();
-    disposeProfilesIpcHandlers();
-    disposeSettingsIpcHandlers();
-    if (isDevelopment) {
-      disposeRuntimeIdentityIpcHandlers();
-    }
-    void disposeMessagingStatusIpcHandlers();
-    getRuntimeMessagingLeaseCoordinator().shutdownSync();
-    void disposeDesktopMessagingRuntime();
-    void disposeAppServerIpcHandlers();
-    disposeAppState();
+    disposeMainProcessResourcesSync();
   });
 }
 
