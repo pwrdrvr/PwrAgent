@@ -511,6 +511,7 @@ alongside any accompanying text.
 | Text-like files (`.txt`, `.md`, `.csv`, `.json`, `.jsonl`, `.toml`, `.yaml`, `.yml`, logs, plain code) | Forwarded as text into the prompt |
 | Images (PNG, JPEG, WebP) | Forwarded as image input |
 | Animated GIFs | Converted to a **still image** (first frame) and forwarded as image input. Animation is not delivered to the model. |
+| PDFs | Forwarded to the model as-is. PwrAgent does no text extraction or preprocessing — see [A note on PDFs](#a-note-on-pdfs). |
 
 Rejected — with a short bot message explaining why, not silently:
 
@@ -521,28 +522,24 @@ Rejected — with a short bot message explaining why, not silently:
 
 ### A note on PDFs
 
-PwrAgent attempts a **very basic** PDF text extraction (a regex over
-the raw bytes looking for simple text operators). It works on the
-simplest possible PDFs and fails silently — i.e. **the PDF is
-rejected** — on most real-world documents: anything multi-column,
-anything with font subsetting, anything compressed, anything
-scanned-only.
+PwrAgent forwards PDFs to the model **as-is** and lets the model
+decide what to do with them. There's no in-app text extraction, no
+OCR preprocessing, no page-rendering on PwrAgent's side.
 
-If you need to send PDF content to the model, the practical workflow
-is one of:
+What happens then depends on the model running the thread:
 
-- **Let the model handle it.** Modern Codex models will often try to
-  render the PDF pages to images and analyze the images themselves
-  when given a PDF file. Whether that works depends on the model
-  and on the document's layout. Multi-column PDFs especially tend
-  to confuse the page-render-and-OCR path.
-- **Convert the PDF to images yourself first.** Export the relevant
-  pages from your PDF viewer as PNG or JPEG, and send those as
-  image attachments. You'll get reliable results, you control which
-  pages get sent, and the model sees exactly what you intended.
+- **Modern Codex models** will often try to render the PDF pages to
+  images and analyze the images themselves. Whether that works
+  depends on the model and on the document's layout — multi-column
+  layouts especially tend to confuse the model's page-analyze path.
+- **Models without native PDF rendering** will either produce a
+  worse result or refuse to use the document.
 
-The second option is the recommended default for any PDF you
-actually care about getting right.
+For any PDF you actually care about getting right, the most reliable
+workflow is to **convert the relevant pages to PNG or JPEG yourself
+first** and send those as image attachments. You control which
+pages get sent, the result is predictable across models, and the
+model sees exactly what you intended.
 
 ### Image upload profile (TOML / env only)
 
