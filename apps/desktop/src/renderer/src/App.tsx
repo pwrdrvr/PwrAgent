@@ -132,6 +132,8 @@ function DesktopAppShell(props: {
         creatingThread={navigation.creatingThread}
         directories={navigation.directories}
         error={navigation.error}
+        inboxThreads={navigation.inboxThreads}
+        recentThreads={navigation.recentThreads}
         archiveThreadError={navigation.archiveThreadError}
         renameThreadError={navigation.renameThreadError}
         runtimeIdentity={runtimeIdentity}

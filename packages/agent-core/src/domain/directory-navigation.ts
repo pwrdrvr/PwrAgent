@@ -5,7 +5,10 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  compareThreadsByCreatedAtDesc,
+} from "@pwragent/shared";
 
 type DirectoryDescriptor = Pick<
   NavigationDirectorySummary,
@@ -230,12 +233,7 @@ function collapseWorkspaceSummaries(params: {
   }
 
   const preferred = chooseWorkspaceSummary(workspaces);
-  const threadOrder = new Map(
-    params.threads.map((thread, index) => [
-      buildThreadIdentityKey(thread.source, thread.id),
-      index,
-    ]),
-  );
+  const threadOrder = buildThreadCreationOrder(params.threads);
   const inboxByThreadKey = new Map(
     params.threads.map((thread) => [
       buildThreadIdentityKey(thread.source, thread.id),
@@ -273,6 +271,35 @@ function collapseWorkspaceSummaries(params: {
     },
     ...params.summaries.filter((summary) => summary.kind !== "workspace"),
   ];
+}
+
+function buildThreadCreationOrder(
+  threads: NavigationThreadSummary[],
+): Map<string, number> {
+  return new Map(
+    [...threads]
+      .sort(compareThreadsByCreatedAtDesc)
+      .map((thread, index) => [
+        buildThreadIdentityKey(thread.source, thread.id),
+        index,
+      ]),
+  );
+}
+
+function sortDirectoryThreadKeysByCreation(
+  summaries: NavigationDirectorySummary[],
+  threads: NavigationThreadSummary[],
+): NavigationDirectorySummary[] {
+  const threadOrder = buildThreadCreationOrder(threads);
+
+  return summaries.map((summary) => ({
+    ...summary,
+    threadKeys: [...summary.threadKeys].sort(
+      (left, right) =>
+        (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+    ),
+  }));
 }
 
 export function buildDirectorySummaries(params: {
@@ -373,8 +400,11 @@ export function buildDirectorySummaries(params: {
     }
   }
 
-  return collapseWorkspaceSummaries({
-    summaries: [...summaries.values()],
-    threads: params.threads,
-  }).sort((left, right) => left.label.localeCompare(right.label));
+  return sortDirectoryThreadKeysByCreation(
+    collapseWorkspaceSummaries({
+      summaries: [...summaries.values()],
+      threads: params.threads,
+    }),
+    params.threads,
+  ).sort((left, right) => left.label.localeCompare(right.label));
 }

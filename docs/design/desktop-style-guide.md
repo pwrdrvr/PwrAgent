@@ -175,16 +175,17 @@ The main shell should not look like stacked floating cards on a dark background.
 The sidebar is a structured queue. It should contain:
 
 1. top-level global actions
-2. Recents / Directories thread lens switch
+2. Inbox / Recents / Directories thread lens switch
 3. thread or project lists
 4. utility footer items
 
 Rules:
 
-- Recents is the default thread lens and should include user-curated Pins at
-  the top of its scrollable list
-- unread work is a row-local state shown with the orange cookie marker, not a
-  separate primary lens
+- Inbox is the default thread lens and should include user-curated Pins at the
+  top of its scrollable list
+- Recents keeps the pinned section but sorts unpinned rows by thread creation
+  time
+- unread work is a row-local state shown with the orange cookie marker
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline
 - active row state should be obvious without being loud

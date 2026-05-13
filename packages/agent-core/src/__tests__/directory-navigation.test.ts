@@ -64,6 +64,44 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("orders directory threads by creation time instead of last update time", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "updated-later",
+          createdAt: 1_000,
+          updatedAt: 9_000,
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "created-later",
+          createdAt: 2_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories[0]?.threadKeys).toEqual([
+      "codex:created-later",
+      "codex:updated-later",
+    ]);
+  });
+
   it("includes launchpad-only directories even when no current thread is linked", () => {
     const directories = buildDirectorySummaries({
       threads: [],

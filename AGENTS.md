@@ -95,11 +95,16 @@ accidental.
 ## Current Product Direction
 
 - Threads are first-class and may exist without a directory.
-- Recents and Directories share the thread lens switch.
-- Recents is the default browsing lens and owns user-curated Pins as a
-  scrollable section at the top of the Recents list.
-- Inbox is not a primary lens. Unread state remains available as the orange
-  cookie marker on thread rows wherever they appear.
+- Inbox, Recents, and Directories share the thread lens switch.
+- Inbox is the default browsing lens. Its thread population and ordering match
+  the former Recents behavior: all threads, user-curated Pins at the top, and
+  unpinned threads in recent-activity order.
+- Recents keeps the same pinned section, but unpinned threads sort by thread
+  creation time so active threads do not jump around.
+- Directories keep pinned threads first within each directory, then sort
+  unpinned threads by thread creation time.
+- Unread state remains available as the orange cookie marker on thread rows
+  wherever they appear.
 - A thread may be associated with multiple linked Git directories.
 
 ## Dependency Boundary Enforcement
