@@ -3,14 +3,12 @@ packages:
   - packages/*
   - packages/messaging/*
   - packages/messaging/providers/*
-allowBuilds:
-  b: true
-  better-sqlite3: true
-  d: true
-  e: true
-  electron: true
-  esbuild: true
-  i: true
-  l: true
-  s: true
-  u: true
+globalPnpmfile: ''
+ignoreScripts: false
+ignoredBuiltDependencies:
+  - electron-winstaller
+  - protobufjs
+onlyBuiltDependencies:
+  - better-sqlite3
+  - electron
+  - esbuild

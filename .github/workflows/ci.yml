@@ -26,6 +26,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
+          node-version: 24.x
           lookup-only: "true"
 
   lint:
@@ -40,6 +41,8 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
+        with:
+          node-version: 24.x
 
       - name: License metadata
         timeout-minutes: 10
@@ -80,6 +83,8 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
+        with:
+          node-version: 24.x
 
       - name: Build
         timeout-minutes: 10
@@ -97,6 +102,8 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
+        with:
+          node-version: 24.x
 
       - name: Install ripgrep
         uses: ./.github/actions/install-ripgrep
@@ -119,6 +126,8 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
+        with:
+          node-version: 24.x
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
@@ -205,6 +214,8 @@ jobs:
         if: steps.changes.outputs.relevant == 'true'
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
+        with:
+          node-version: 24.x
 
       - name: Install ripgrep
         if: steps.changes.outputs.relevant == 'true'
