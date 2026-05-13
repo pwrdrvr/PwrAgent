@@ -2231,6 +2231,7 @@ export function ThreadView(props: ThreadViewProps) {
           backends={props.backends}
           desktopApi={props.desktopApi}
           onPinnedChange={setContextRailPinned}
+          onRefreshNavigation={props.onRefreshNavigation}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
           // Auto-pinned when wide (issue #240) — the panel renders

@@ -611,7 +611,7 @@ operations to the renderer while keeping snapshots and secondary windows fresh.
 - Renderer-facing API can manage automations without importing desktop main
   modules, and navigation summaries refresh after automation mutations.
 
-- [ ] **Unit 6: Build Thread-First and Secondary Global Automation UI**
+- [x] **Unit 6: Build Thread-First and Secondary Global Automation UI**
 
 **Goal:** Add UI for creating, inspecting, pausing/resuming, running, deleting,
 and scanning automations without making Automations a primary thread lens.

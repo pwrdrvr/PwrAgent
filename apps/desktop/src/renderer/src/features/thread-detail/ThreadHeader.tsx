@@ -8,6 +8,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { formatAccessModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatAutomationRelative } from "../automations/automation-format";
 
 type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
@@ -80,6 +81,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               props.backends?.find((backend) => backend.kind === props.thread.source),
             )}
           </span>
+          {props.thread.automationSummary?.totalCount ? (
+            <span
+              className="thread-row__chip thread-row__chip--automation"
+              title={formatThreadAutomationTitle(props.thread)}
+            >
+              {formatThreadAutomationChip(props.thread)}
+            </span>
+          ) : null}
         </div>
         {missingPath ? (
           <p className="thread-header__warning" role="alert">
@@ -100,4 +109,33 @@ export function ThreadHeader(props: ThreadHeaderProps) {
       />
     </header>
   );
+}
+
+function formatThreadAutomationChip(thread: NavigationThreadSummary): string {
+  const summary = thread.automationSummary;
+  if (!summary) {
+    return "";
+  }
+  if (summary.pendingRunCount > 0) {
+    return `${summary.pendingRunCount} queued automation${
+      summary.pendingRunCount === 1 ? "" : "s"
+    }`;
+  }
+  if (summary.nextRunAt) {
+    return `${summary.enabledCount} automation${
+      summary.enabledCount === 1 ? "" : "s"
+    } - next ${formatAutomationRelative(summary.nextRunAt)}`;
+  }
+  return `${summary.totalCount} automation${summary.totalCount === 1 ? "" : "s"}`;
+}
+
+function formatThreadAutomationTitle(thread: NavigationThreadSummary): string {
+  const summary = thread.automationSummary;
+  if (!summary) {
+    return "";
+  }
+  const coalesced = summary.coalescedWindowCount
+    ? `, ${summary.coalescedWindowCount} coalesced`
+    : "";
+  return `${summary.enabledCount} enabled, ${summary.pausedCount} paused${coalesced}`;
 }
