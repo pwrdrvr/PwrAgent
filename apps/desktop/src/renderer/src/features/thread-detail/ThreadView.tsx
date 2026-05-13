@@ -878,15 +878,9 @@ export function ThreadView(props: ThreadViewProps) {
       if (selectedThreadKeyRef.current !== startedThreadKey) {
         return false;
       }
-      if (suppressBranchDriftDialogRef.current) {
-        return false;
-      }
       if (result.observedBranch !== thread.observedGitBranch) {
         await props.onRefreshNavigation?.();
         if (selectedThreadKeyRef.current !== startedThreadKey) {
-          return false;
-        }
-        if (suppressBranchDriftDialogRef.current) {
           return false;
         }
       }

@@ -3175,6 +3175,76 @@ describe("ThreadView", () => {
     });
   });
 
+  it("refreshes branch drift state while the branch drift dialog is suppressed", async () => {
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      checkedAt: Date.now(),
+      expectedBranch: "feature/old",
+      observedBranch: "main",
+      drifted: true,
+    }));
+    const refreshNavigation = vi.fn(async () => undefined);
+
+    const baseThread = {
+      id: "thread-branch",
+      title: "Branch drift",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "feature/old",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    function Harness({
+      observedGitBranch,
+      suppress,
+    }: {
+      observedGitBranch: string;
+      suppress?: boolean;
+    }) {
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{ checkThreadBranchDrift }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={{ ...baseThread, observedGitBranch }}
+          suppressBranchDriftDialog={suppress}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          onRefreshNavigation={refreshNavigation}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    const { rerender } = render(
+      <Harness observedGitBranch="feature/old" suppress />
+    );
+
+    await waitFor(() => {
+      expect(refreshNavigation).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Thread branch changed" }),
+    ).not.toBeInTheDocument();
+
+    rerender(<Harness observedGitBranch="main" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Thread branch changed" }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("re-checks branch drift on end-of-turn falling edge", async () => {
     const checkThreadBranchDrift = vi.fn(async () => ({
       backend: "codex" as const,
