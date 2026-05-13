@@ -69,6 +69,10 @@ async function resolvePrLookupBranches(params: {
   }
 
   const branchesAtHead = await readLocalBranchesPointingAtHead(params.cwd);
+  const defaultBranch = await readDefaultBranch(params.cwd);
+  if (defaultBranch && branchesAtHead.includes(defaultBranch)) {
+    return [defaultBranch];
+  }
   return branchesAtHead.length > 0 ? branchesAtHead : ["HEAD"];
 }
 
@@ -97,6 +101,44 @@ async function readLocalBranchesPointingAtHead(cwd: string): Promise<string[]> {
     );
   } catch {
     return [];
+  }
+}
+
+async function readDefaultBranch(cwd: string): Promise<string | undefined> {
+  const remoteHead = await readGitLine(cwd, [
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "--short",
+  ]);
+  const normalizedRemoteHead = remoteHead?.replace(/^origin\//, "").trim();
+  if (normalizedRemoteHead) {
+    return normalizedRemoteHead;
+  }
+
+  const branches = await readGitLine(cwd, [
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "refs/heads/main",
+    "refs/heads/master",
+    "refs/heads/develop",
+    "refs/heads/trunk",
+  ]);
+  return branches?.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+}
+
+async function readGitLine(
+  cwd: string,
+  args: string[],
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd,
+      maxBuffer: 64 * 1024,
+      timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+    });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
   }
 }
 
