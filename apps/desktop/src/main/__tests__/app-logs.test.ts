@@ -52,4 +52,23 @@ describe("app log snapshots", () => {
     });
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it("overwrites the oldest slot after the fixed-size buffer fills", () => {
+    for (let index = 1; index <= 5002; index += 1) {
+      appendAppLogEntry({
+        timestamp: 1778616000000 + index,
+        level: "info",
+        line: `line ${index}`,
+      });
+    }
+
+    const snapshot = readAppLogSnapshot();
+
+    expect(snapshot.entries).toHaveLength(5000);
+    expect(snapshot.entries[0]?.sequence).toBe(3);
+    expect(snapshot.entries[0]?.line).toBe("line 3");
+    expect(snapshot.entries.at(-1)?.sequence).toBe(5002);
+    expect(snapshot.entries.at(-1)?.line).toBe("line 5002");
+    expect(snapshot.truncated).toBe(true);
+  });
 });
