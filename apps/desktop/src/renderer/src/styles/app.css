@@ -752,6 +752,22 @@ textarea,
   background: rgba(247, 243, 235, 0.035);
 }
 
+.log-window__line--warn {
+  background: rgba(217, 154, 61, 0.045);
+}
+
+.log-window__line--warn:hover {
+  background: rgba(217, 154, 61, 0.08);
+}
+
+.log-window__line--error {
+  background: rgba(185, 66, 50, 0.075);
+}
+
+.log-window__line--error:hover {
+  background: rgba(185, 66, 50, 0.12);
+}
+
 .log-window__line-number {
   display: inline-block;
   position: sticky;
@@ -768,8 +784,35 @@ textarea,
 }
 
 .log-window__line-text {
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  word-break: normal;
+}
+
+.log-window__part--timestamp {
+  color: var(--info-text);
+}
+
+.log-window__part--scope {
+  color: #2dd6d0;
+  font-weight: 600;
+}
+
+.log-window__part--level-debug {
+  color: var(--text-muted);
+}
+
+.log-window__part--level-info {
+  color: var(--text-primary);
+}
+
+.log-window__part--level-warn {
+  color: var(--status-warning);
+  font-weight: 700;
+}
+
+.log-window__part--level-error {
+  color: var(--danger-text);
+  font-weight: 700;
 }
 
 .log-window__match {

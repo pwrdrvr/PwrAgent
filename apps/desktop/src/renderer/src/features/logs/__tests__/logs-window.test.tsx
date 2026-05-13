@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LogsWindow, buildRenderedLogLines } from "../LogsWindow";
+import { LogsWindow, buildRenderedLogLines, tokenizeLogLine } from "../LogsWindow";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 afterEach(() => {
@@ -25,6 +25,50 @@ describe("buildRenderedLogLines", () => {
       { text: "INFO", matchIndex: 1 },
       { text: " ready" },
     ]);
+  });
+
+  it("preserves log prefix tones while applying search matches", () => {
+    const result = buildRenderedLogLines(
+      "[2026-05-12 20:06:28.644] [warn] (pwragent:settings) obsolete setting",
+      "pwragent",
+    );
+
+    expect(result.matchCount).toBe(1);
+    expect(result.lines[0].level).toBe("warn");
+    expect(result.lines[0].parts).toContainEqual({
+      text: "[2026-05-12 20:06:28.644]",
+      tone: "timestamp",
+    });
+    expect(result.lines[0].parts).toContainEqual({
+      text: "[warn]",
+      tone: "level-warn",
+    });
+    expect(result.lines[0].parts).toContainEqual({
+      text: "pwragent",
+      tone: "scope",
+      matchIndex: 0,
+    });
+  });
+});
+
+describe("tokenizeLogLine", () => {
+  it("classifies Electron log timestamps, levels, and scopes", () => {
+    expect(
+      tokenizeLogLine(
+        "[2026-05-12 20:06:28.722] [error] (pwragent:codex-client) failed",
+      ),
+    ).toEqual({
+      level: "error",
+      parts: [
+        { text: "[2026-05-12 20:06:28.722]", tone: "timestamp" },
+        { text: " " },
+        { text: "[error]", tone: "level-error" },
+        { text: " " },
+        { text: "(pwragent:codex-client)", tone: "scope" },
+        { text: " " },
+        { text: "failed" },
+      ],
+    });
   });
 });
 

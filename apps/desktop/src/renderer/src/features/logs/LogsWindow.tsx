@@ -16,12 +16,24 @@ const BOTTOM_THRESHOLD_PX = 32;
 type LogLinePart = {
   text: string;
   matchIndex?: number;
+  tone?: LogLinePartTone;
 };
 
 type RenderedLogLine = {
+  level?: LogLevel;
   lineNumber: number;
   parts: LogLinePart[];
 };
+
+type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "verbose";
+
+type LogLinePartTone =
+  | "timestamp"
+  | "level-debug"
+  | "level-error"
+  | "level-info"
+  | "level-warn"
+  | "scope";
 
 export function LogsWindow() {
   const desktopApi = useDesktopApi();
@@ -272,8 +284,11 @@ function LogLine(props: {
   activeMatchRef: MutableRefObject<HTMLElement | null>;
   line: RenderedLogLine;
 }) {
+  const levelClass = props.line.level
+    ? ` log-window__line--${props.line.level}`
+    : "";
   return (
-    <span className="log-window__line">
+    <span className={`log-window__line${levelClass}`}>
       <span className="log-window__line-number">{props.line.lineNumber}</span>
       <span className="log-window__line-text">
         {props.line.parts.map((part, index) =>
@@ -297,19 +312,34 @@ function renderLogLinePart(params: {
   part: LogLinePart;
 }): ReactNode {
   if (params.part.matchIndex === undefined) {
-    return <span key={params.key}>{params.part.text}</span>;
+    return (
+      <span key={params.key} className={classNameForLinePart(params.part)}>
+        {params.part.text}
+      </span>
+    );
   }
 
   const active = params.part.matchIndex === params.activeMatchIndex;
+  const className = [
+    "log-window__match",
+    active ? "log-window__match--active" : undefined,
+    classNameForLinePart(params.part),
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <mark
       key={params.key}
       ref={active ? params.activeMatchRef : undefined}
-      className={active ? "log-window__match log-window__match--active" : "log-window__match"}
+      className={className}
     >
       {params.part.text}
     </mark>
   );
+}
+
+function classNameForLinePart(part: LogLinePart): string | undefined {
+  return part.tone ? `log-window__part log-window__part--${part.tone}` : undefined;
 }
 
 export function buildRenderedLogLines(
@@ -320,23 +350,96 @@ export function buildRenderedLogLines(
   let matchCount = 0;
   const sourceLines = content.length > 0 ? content.split(/\r?\n/) : [];
   const lines = sourceLines.map((line, index) => {
-    const parts = normalizedQuery
-      ? splitLineMatches(line, normalizedQuery, matchCount)
-      : [{ text: line }];
-    matchCount += parts.filter((part) => part.matchIndex !== undefined).length;
+    const renderedLine = renderLogLine(line, normalizedQuery, matchCount);
+    matchCount += renderedLine.matchCount;
     return {
+      level: renderedLine.level,
       lineNumber: index + 1,
-      parts,
+      parts: renderedLine.parts,
     };
   });
 
   return { lines, matchCount };
 }
 
+function renderLogLine(
+  line: string,
+  normalizedQuery: string,
+  startMatchIndex: number,
+): { level?: LogLevel; matchCount: number; parts: LogLinePart[] } {
+  const tokens = tokenizeLogLine(line);
+  let nextMatchIndex = startMatchIndex;
+  const parts: LogLinePart[] = [];
+  for (const token of tokens.parts) {
+    const tokenParts = normalizedQuery
+      ? splitLineMatches(token.text, normalizedQuery, nextMatchIndex, token.tone)
+      : [token];
+    parts.push(...tokenParts);
+    nextMatchIndex += tokenParts.filter((part) => part.matchIndex !== undefined).length;
+  }
+
+  return {
+    level: tokens.level,
+    matchCount: nextMatchIndex - startMatchIndex,
+    parts,
+  };
+}
+
+export function tokenizeLogLine(line: string): {
+  level?: LogLevel;
+  parts: LogLinePart[];
+} {
+  const match = line.match(/^(\[[^\]]+\])(\s+)(\[[^\]]+\])(\s+)(\([^)]+\))(\s*)(.*)$/);
+  if (!match) {
+    return { parts: [{ text: line }] };
+  }
+
+  const level = normalizeLogLevel(match[3]);
+  const levelTone = toneForLogLevel(level);
+  return {
+    level,
+    parts: [
+      { text: match[1], tone: "timestamp" },
+      { text: match[2] },
+      { text: match[3], tone: levelTone },
+      { text: match[4] },
+      { text: match[5], tone: "scope" },
+      { text: match[6] },
+      { text: match[7] },
+    ],
+  };
+}
+
+function normalizeLogLevel(levelToken: string): LogLevel | undefined {
+  const value = levelToken.replace(/[[\]\s]/g, "").toLowerCase();
+  if (
+    value === "error" ||
+    value === "warn" ||
+    value === "info" ||
+    value === "debug" ||
+    value === "trace" ||
+    value === "verbose"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function toneForLogLevel(level: LogLevel | undefined): LogLinePartTone | undefined {
+  if (level === "error") return "level-error";
+  if (level === "warn") return "level-warn";
+  if (level === "info") return "level-info";
+  if (level === "debug" || level === "trace" || level === "verbose") {
+    return "level-debug";
+  }
+  return undefined;
+}
+
 function splitLineMatches(
   line: string,
   normalizedQuery: string,
   startMatchIndex: number,
+  tone?: LogLinePartTone,
 ): LogLinePart[] {
   const lowerLine = line.toLowerCase();
   const parts: LogLinePart[] = [];
@@ -346,20 +449,21 @@ function splitLineMatches(
   while (cursor < line.length) {
     const foundAt = lowerLine.indexOf(normalizedQuery, cursor);
     if (foundAt === -1) {
-      parts.push({ text: line.slice(cursor) });
+      parts.push({ text: line.slice(cursor), tone });
       break;
     }
     if (foundAt > cursor) {
-      parts.push({ text: line.slice(cursor, foundAt) });
+      parts.push({ text: line.slice(cursor, foundAt), tone });
     }
     const end = foundAt + normalizedQuery.length;
     parts.push({
       text: line.slice(foundAt, end),
       matchIndex,
+      tone,
     });
     matchIndex += 1;
     cursor = end;
   }
 
-  return parts.length > 0 ? parts : [{ text: line }];
+  return parts.length > 0 ? parts : [{ text: line, tone }];
 }
