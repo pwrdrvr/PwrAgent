@@ -1,0 +1,18 @@
+title: PwrAgent
+description: Run a coding agent. Drive it from your messenger.
+url: https://docs.pwragent.ai
+baseurl: ""
+theme: minima
+minima:
+  skin: classic
+  social_links: []
+header_pages:
+  - messaging/overview.md
+exclude:
+  - README.md
+  - vendor/
+  - Gemfile
+  - Gemfile.lock
+  - "*.swp"
+  - .DS_Store
+permalink: pretty
