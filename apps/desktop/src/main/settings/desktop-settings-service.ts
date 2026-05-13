@@ -261,6 +261,9 @@ export class DesktopSettingsService {
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
+          ...(messagingOverride.disabled
+            ? { disabledReasonKind: "explicit_override" as const }
+            : {}),
           ...(messagingOverride.reason
             ? { disabledReason: messagingOverride.reason }
             : {}),

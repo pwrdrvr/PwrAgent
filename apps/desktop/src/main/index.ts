@@ -50,6 +50,7 @@ import {
 } from "./messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
 import { resolveRuntimeMessagingOverride } from "./runtime-flags";
+import { getRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { disposeAppState, initializeAppState } from "./state/app-state";
 import { createMainWindow } from "./window";
@@ -156,12 +157,33 @@ export function bootstrapApp(): void {
       mainLog.info("messaging runtime disabled for this app instance", {
         reason: messagingOverride.reason,
       });
-    } else {
-      void messagingRuntime.start().catch((error) => {
-        mainLog.error("messaging runtime failed during background startup", {
-          error: error instanceof Error ? error.message : String(error),
+      void getRuntimeMessagingLeaseCoordinator()
+        .start(messagingRuntime, (options) =>
+          loadDesktopMessagingConfigFromSettings(
+            getDesktopSettingsService(),
+            process.env,
+            options,
+          ),
+        )
+        .catch((error) => {
+          mainLog.error("messaging runtime lease recording failed during startup", {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    } else {
+      void getRuntimeMessagingLeaseCoordinator()
+        .start(messagingRuntime, (options) =>
+          loadDesktopMessagingConfigFromSettings(
+            getDesktopSettingsService(),
+            process.env,
+            options,
+          ),
+        )
+        .catch((error) => {
+          mainLog.error("messaging runtime failed during background startup", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
     }
     // Register status IPC after the runtime is constructed so the
     // initial subscriber attaches before the renderer asks for the
@@ -204,6 +226,7 @@ export function bootstrapApp(): void {
       disposeRuntimeIdentityIpcHandlers();
     }
     void disposeMessagingStatusIpcHandlers();
+    getRuntimeMessagingLeaseCoordinator().shutdownSync();
     void disposeDesktopMessagingRuntime();
     void disposeAppServerIpcHandlers();
     disposeAppState();

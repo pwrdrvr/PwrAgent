@@ -249,7 +249,21 @@ export type DesktopSettingsSnapshot = {
     messaging: {
       disabled: boolean;
       disabledReason?: string;
+      disabledReasonKind?:
+        | "explicit_override"
+        | "lease_held"
+        | "no_runnable_adapters"
+        | "runtime_stopped"
+        | "startup_error"
+        | "saved_disabled";
       overrideActive?: boolean;
+      leaseHolder?: {
+        instanceId: string;
+        processId?: number;
+        cwdHint?: string;
+        startedAt?: number;
+        expiresAt: number;
+      };
     };
   };
   secretStorage: DesktopSettingsSecretStorageState;

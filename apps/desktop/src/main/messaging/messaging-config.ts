@@ -318,6 +318,19 @@ export type DesktopMessagingConfigLoadOptions = {
   messagingEnabledOverride?: boolean;
 };
 
+export function desktopMessagingConfigHasRunnableAdapters(
+  config: DesktopMessagingConfig,
+): boolean {
+  return Boolean(
+    config.telegram
+      || config.discord
+      || config.mattermost
+      || config.slack
+      || config.feishu
+      || config.line,
+  );
+}
+
 export function classifyDesktopMessagingChannelConfigUpdate(
   previous: DesktopMessagingConfig,
   next: DesktopMessagingConfig,

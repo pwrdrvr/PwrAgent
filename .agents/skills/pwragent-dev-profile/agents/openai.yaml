@@ -1,0 +1,4 @@
+interface:
+  display_name: "PwrAgent Dev Profile"
+  short_description: "Start the local dev profile app"
+  default_prompt: "Use $pwragent-dev-profile to restart the PwrAgent app in the dev profile from this checkout."

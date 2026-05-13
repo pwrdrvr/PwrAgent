@@ -249,6 +249,12 @@ This disables messaging only for that app process. It does not rewrite the
 settings file or remove stored bot credentials. The Settings > Messaging screen
 shows when this runtime override is active.
 
+Normal `pnpm dev` launches are protected by a profile-scoped messaging lease:
+only one live app instance for a profile starts messaging adapters. A second
+instance stays usable for desktop work and leaves messaging stopped until the
+holder exits or its heartbeat expires. Keep `dev:no-messaging` for work where
+the current process should never attempt messaging, even if the lease is free.
+
 Default 1Password item:
 
 - Vault: `Private`
