@@ -37,6 +37,14 @@ export type AppServerLocalImageInputItem = {
   path: string;
 };
 
+export type AppServerFileInputItem = {
+  type: "file";
+  name: string;
+  mimeType: string;
+  data: string;
+  sizeBytes?: number;
+};
+
 export type AppServerSkillSummary = {
   name: string;
   description?: string;
@@ -58,7 +66,8 @@ export type AppServerAvailableCommandSummary = {
 export type AppServerTurnInputItem =
   | AppServerTextInputItem
   | AppServerImageInputItem
-  | AppServerLocalImageInputItem;
+  | AppServerLocalImageInputItem
+  | AppServerFileInputItem;
 
 export type AppServerReviewTarget =
   | {
@@ -425,9 +434,17 @@ export type AppServerThreadImagePart = {
   alt?: string;
 };
 
+export type AppServerThreadFilePart = {
+  type: "file";
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
 export type AppServerThreadMessagePart =
   | AppServerThreadTextPart
-  | AppServerThreadImagePart;
+  | AppServerThreadImagePart
+  | AppServerThreadFilePart;
 
 export type AppServerTranscriptPhase = "commentary" | "final";
 

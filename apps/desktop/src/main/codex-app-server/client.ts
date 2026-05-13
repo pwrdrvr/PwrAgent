@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -16,6 +17,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerAvailableCommandSummary,
+  AppServerFileInputItem,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadCommandDetail,
@@ -23,6 +25,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
+  AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
@@ -1904,6 +1907,26 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
       imagePart.alt = alt;
     }
     return [imagePart];
+  }
+
+  if (normalizedType === "file" || normalizedType === "input_file") {
+    const name = pickString(record, ["name", "filename", "fileName", "file_name"]);
+    if (!name) {
+      return [];
+    }
+    const part: AppServerThreadFilePart = {
+      type: "file",
+      name,
+    };
+    const mimeType = pickString(record, ["mimeType", "mime_type", "mediaType", "media_type"]);
+    if (mimeType) {
+      part.mimeType = mimeType;
+    }
+    const sizeBytes = pickNumber(record, ["sizeBytes", "size_bytes", "bytes"]);
+    if (sizeBytes !== undefined) {
+      part.sizeBytes = sizeBytes;
+    }
+    return [part];
   }
 
   for (const nestedKey of ["content", "parts", "input", "output", "data"]) {
@@ -5737,7 +5760,9 @@ function buildCollaborationModeOverrides(params: {
   };
 }
 
-function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
+function toCodexUserInput(
+  input: Exclude<AppServerTurnInputItem, AppServerFileInputItem>,
+): CodexUserInput {
   if (input.type === "text") {
     return {
       type: "text",
@@ -5759,9 +5784,96 @@ function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
   };
 }
 
-function buildTurnStartPayload(params: {
+async function prepareCodexUserInput(params: {
   threadId: string;
   input: AppServerTurnInputItem[];
+}): Promise<CodexUserInput[]> {
+  const prepared: CodexUserInput[] = [];
+  const fileReferences: string[] = [];
+
+  for (const input of params.input) {
+    if (input.type !== "file") {
+      prepared.push(toCodexUserInput(input));
+      continue;
+    }
+
+    const filePath = await persistCodexFileInput({
+      file: input,
+      threadId: params.threadId,
+    });
+    fileReferences.push(formatCodexFileReference(input, filePath));
+    prepared.push({
+      type: "mention",
+      name: input.name,
+      path: filePath,
+    });
+  }
+
+  if (fileReferences.length === 0) {
+    return prepared;
+  }
+
+  return [
+    {
+      type: "text",
+      text: [
+        "Files attached from the messaging platform were saved locally for this turn:",
+        ...fileReferences,
+        "Use local tools to inspect these files as needed.",
+      ].join("\n"),
+      text_elements: [],
+    },
+    ...prepared,
+  ];
+}
+
+async function persistCodexFileInput(params: {
+  file: AppServerFileInputItem;
+  threadId: string;
+}): Promise<string> {
+  const attachmentDir = path.join(
+    tmpdir(),
+    "pwragent-codex-attachments",
+    sanitizePathSegment(params.threadId),
+    randomUUID(),
+  );
+  await mkdir(attachmentDir, { recursive: true });
+  const filePath = path.join(attachmentDir, sanitizeAttachmentFileName(params.file.name));
+  await writeFile(filePath, Buffer.from(params.file.data, "base64"));
+  return filePath;
+}
+
+function formatCodexFileReference(file: AppServerFileInputItem, filePath: string): string {
+  const size = typeof file.sizeBytes === "number" ? ` | Size: ${formatByteSize(file.sizeBytes)}` : "";
+  return `- ${file.name}: ${filePath} (Type: ${file.mimeType}${size})`;
+}
+
+function sanitizePathSegment(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  return sanitized || "thread";
+}
+
+function sanitizeAttachmentFileName(value: string): string {
+  const baseName = path.basename(value).replace(/[\0]/g, "");
+  const sanitized = baseName.replace(/[^a-zA-Z0-9._@()+,= -]/g, "_").slice(0, 160);
+  return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "attachment";
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} bytes`;
+  }
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
+  }
+  const mib = kib / 1024;
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+}
+
+function buildTurnStartPayload(params: {
+  threadId: string;
+  input: CodexUserInput[];
   cwd?: string;
   model?: string;
   reasoningEffort?: string;
@@ -5776,7 +5888,7 @@ function buildTurnStartPayload(params: {
 }, compatibility: CodexProtocolCompatibility): CodexTurnStartPayload {
   const base: CodexTurnStartPayload = {
     threadId: params.threadId,
-    input: params.input.map(toCodexUserInput),
+    input: params.input,
   };
 
   if (params.cwd?.trim()) {
@@ -7065,6 +7177,10 @@ export class CodexAppServerClient {
         return undefined;
       }));
 
+    const codexInput = await prepareCodexUserInput({
+      threadId: params.threadId,
+      input: params.input,
+    });
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
@@ -7072,7 +7188,7 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
-            input: params.input,
+            input: codexInput,
             cwd: params.cwd,
             model: params.model,
             reasoningEffort: params.reasoningEffort,
@@ -7285,7 +7401,7 @@ export class CodexAppServerClient {
           buildTurnStartPayload(
             {
               threadId: helperThreadId,
-              input: [{ type: "text", text: params.prompt }],
+              input: [{ type: "text", text: params.prompt, text_elements: [] }],
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               reasoningEffort: "low",
@@ -7652,9 +7768,13 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 
+    const codexInput = await prepareCodexUserInput({
+      threadId: params.threadId,
+      input: params.input,
+    });
     const payload: CodexTurnSteerParams = {
       threadId: params.threadId,
-      input: params.input.map(toCodexUserInput),
+      input: codexInput,
       expectedTurnId: params.expectedTurnId,
     };
     const result = await requestWithFallbacks({
