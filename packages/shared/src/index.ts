@@ -3,6 +3,7 @@ export * from "./backend-selection";
 export * from "./codex-environment-action-runs";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
+export * from "./contracts/automations";
 export * from "./contracts/branch-drift";
 export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
