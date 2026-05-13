@@ -60,6 +60,8 @@ const DEFAULT_CALLBACK_PORT = 47823;
 const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const FEISHU_SIGNED_VALUE_VERSION = 1;
 const FEISHU_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+const FEISHU_INBOUND_DEDUP_TTL_MS = 10 * 60 * 1000;
+const FEISHU_INBOUND_DEDUP_MAX = 1_000;
 
 export type FeishuProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -320,6 +322,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private readonly diagnosticListeners = new Set<MessagingAdapterDiagnosticListener>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
+  private readonly recentlyHandledInboundKeys = new Map<string, number>();
 
   constructor(options: FeishuAdapterOptions) {
     this.config = options.config;
@@ -707,6 +710,13 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const tenantKey = payload.header?.tenant_key ?? event?.sender?.tenant_key;
     const ids = this.validateInboundIds({ chatId, messageId, openId: senderId, tenantKey });
     if (!ids || !message) return;
+    const dedupKey = buildFeishuInboundDedupKey(payload, ids.messageId);
+    // Feishu/Lark retries webhook deliveries after slow or failed ACKs. Once
+    // the adapter has received a well-formed message, transport retries must
+    // not resubmit the same user command to the runtime.
+    if (this.markInboundDuplicate(dedupKey, ids.messageId, ids.chatId)) {
+      return;
+    }
 
     const conversationKind: MessagingConversationKind =
       message.chat_type === "p2p" ? "dm" : "channel";
@@ -810,6 +820,36 @@ export class FeishuAdapter implements FeishuProviderAdapter {
             text: messageText,
           };
     await this.listener?.(inbound);
+  }
+
+  private markInboundDuplicate(
+    dedupKey: string,
+    messageId: string,
+    chatId: string,
+  ): boolean {
+    const now = this.now();
+    for (const [key, expiresAt] of this.recentlyHandledInboundKeys) {
+      if (expiresAt > now) continue;
+      this.recentlyHandledInboundKeys.delete(key);
+    }
+    if (this.recentlyHandledInboundKeys.has(dedupKey)) {
+      this.logger.info?.("feishu duplicate inbound message ignored", {
+        chatId,
+        dedupKey,
+        messageId,
+      });
+      return true;
+    }
+    this.recentlyHandledInboundKeys.set(
+      dedupKey,
+      now + FEISHU_INBOUND_DEDUP_TTL_MS,
+    );
+    while (this.recentlyHandledInboundKeys.size > FEISHU_INBOUND_DEDUP_MAX) {
+      const oldest = this.recentlyHandledInboundKeys.keys().next().value;
+      if (oldest === undefined) break;
+      this.recentlyHandledInboundKeys.delete(oldest);
+    }
+    return false;
   }
 
   private async handleBotP2pChatEnteredEvent(payload: FeishuEventEnvelope): Promise<void> {
@@ -1670,6 +1710,15 @@ export function parseFeishuCommandText(
     return { command: "cas_click", args: [tokens[1], ...tokens.slice(2)] };
   }
   return { command: first, args: tokens.slice(1) };
+}
+
+function buildFeishuInboundDedupKey(
+  payload: FeishuEventEnvelope,
+  messageId: string,
+): string {
+  return payload.header?.event_id
+    ? `event:${payload.header.event_id}`
+    : `message:${messageId}`;
 }
 
 function parseFeishuMessageContent(content: string | undefined): Record<string, unknown> {
