@@ -1145,6 +1145,30 @@ textarea,
   cursor: grabbing;
 }
 
+.thread-row-shell.is-drop-target-before::before,
+.thread-row-shell.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.thread-row-shell.is-drop-target-before::before {
+  top: -3px;
+}
+
+.thread-row-shell.is-drop-target-after::after {
+  bottom: -3px;
+}
+
 .recents-pinned-divider {
   display: flex;
   align-items: center;
@@ -1157,6 +1181,10 @@ textarea,
   text-transform: uppercase;
 }
 
+.recents-pinned-divider.is-drop-target {
+  color: var(--accent-bright);
+}
+
 .recents-pinned-divider::before,
 .recents-pinned-divider::after {
   content: "";
@@ -1164,6 +1192,15 @@ textarea,
   height: 1px;
   flex: 1;
   background: var(--border-subtle);
+}
+
+.recents-pinned-divider.is-drop-target::before,
+.recents-pinned-divider.is-drop-target::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
 }
 
 .thread-row {
@@ -1194,9 +1231,9 @@ textarea,
 
 .thread-row.thread-row--drag-image {
   position: fixed;
-  top: -10000px;
-  left: -10000px;
-  z-index: -1;
+  top: 0;
+  left: 0;
+  z-index: 10000;
   border-color: var(--border-strong);
   background: var(--bg-panel-elevated);
   box-shadow:

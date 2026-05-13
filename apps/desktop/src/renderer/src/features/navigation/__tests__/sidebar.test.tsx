@@ -131,12 +131,16 @@ function createDataTransfer(threadKey: string) {
   return {
     effectAllowed: "move",
     getData: vi.fn((type: string) => (type === "text/plain" ? threadKey : "")),
+    setDragImage: vi.fn(),
     setData: vi.fn(),
   };
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
+  document
+    .querySelectorAll(".thread-row--drag-image")
+    .forEach((element) => element.remove());
   cleanup();
 });
 
@@ -739,6 +743,73 @@ describe("Sidebar", () => {
       "thread-updated",
       "thread-1",
     ]);
+  });
+
+  it("shows recents drop targets for row edges and the pin divider", () => {
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const draggedRow = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    expect(draggedRow).not.toBeNull();
+    const dataTransfer = createDataTransfer("codex:thread-1");
+    fireEvent.dragStart(draggedRow!, { dataTransfer });
+
+    const pinnedRow = screen
+      .getByRole("button", { name: /Updated thread/i })
+      .closest(".thread-row-shell");
+    expect(pinnedRow).not.toBeNull();
+    vi.spyOn(pinnedRow!, "getBoundingClientRect").mockReturnValue({
+      bottom: 100,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 0,
+      width: 300,
+      x: 0,
+      y: 0,
+    });
+
+    fireEvent.dragOver(pinnedRow!, {
+      clientY: 75,
+      dataTransfer,
+    });
+    expect(pinnedRow).toHaveClass("is-drop-target-before");
+
+    fireEvent.dragLeave(pinnedRow!, {
+      relatedTarget: null,
+    });
+    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+
+    const divider = screen.getByRole("separator", { name: "Unpinned threads" });
+    fireEvent.dragOver(divider, {
+      dataTransfer,
+    });
+    expect(divider).toHaveClass("is-drop-target");
   });
 
   it("ignores attempts to drop a thread on another directory pin divider", () => {

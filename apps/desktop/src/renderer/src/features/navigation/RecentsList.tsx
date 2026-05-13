@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
@@ -9,6 +10,11 @@ import {
   isPinnedThread,
   moveThreadKey,
 } from "@pwragent/shared";
+import {
+  didDragLeaveCurrentTarget,
+  getDropIndicatorPosition,
+  type DropIndicatorState,
+} from "./drag-drop";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
@@ -38,6 +44,13 @@ type RecentsListProps = {
 };
 
 export function RecentsList(props: RecentsListProps) {
+  const [dropIndicator, setDropIndicator] = useState<
+    DropIndicatorState | undefined
+  >(undefined);
+  const [dividerDropTarget, setDividerDropTarget] = useState(false);
+  const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
+    undefined,
+  );
   const pinnedThreads = props.threads
     .filter(isPinnedThread)
     .sort(comparePinnedThreads);
@@ -99,6 +112,11 @@ export function RecentsList(props: RecentsListProps) {
           <ThreadRow
             key={key}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+            dropIndicator={
+              dropIndicator?.targetKey === key
+                ? dropIndicator.position
+                : undefined
+            }
             draggable
             includeLinkedDirectories
             selectedThreadKey={props.selectedThreadKey}
@@ -106,22 +124,48 @@ export function RecentsList(props: RecentsListProps) {
             thread={thread}
             onDragOverThread={(event) => {
               event.preventDefault();
+              const draggedThread = draggedThreadKey
+                ? threadByKey.get(draggedThreadKey)
+                : undefined;
+              if (!draggedThread || draggedThread.source !== thread.source) {
+                event.dataTransfer.dropEffect = "none";
+                setDropIndicator(undefined);
+                return;
+              }
+
+              event.dataTransfer.dropEffect = "move";
+              setDropIndicator({
+                targetKey: key,
+                position: getDropIndicatorPosition(event),
+              });
+              setDividerDropTarget(false);
             }}
             onDragStartThread={(event) => {
+              setDraggedThreadKey(key);
               event.dataTransfer.effectAllowed = "move";
               event.dataTransfer.setData("text/plain", key);
             }}
+            onDragLeaveThread={(event) => {
+              if (didDragLeaveCurrentTarget(event)) {
+                setDropIndicator(undefined);
+              }
+            }}
+            onDragEndThread={() => {
+              setDraggedThreadKey(undefined);
+              setDropIndicator(undefined);
+              setDividerDropTarget(false);
+            }}
             onDropOnThread={(event) => {
               event.preventDefault();
+              setDraggedThreadKey(undefined);
+              setDropIndicator(undefined);
+              setDividerDropTarget(false);
               const draggedKey = event.dataTransfer.getData("text/plain");
               if (!draggedKey) return;
               const draggedThread = threadByKey.get(draggedKey);
               if (!draggedThread || draggedThread.source !== thread.source) return;
               const backendPinnedThreadKeys = pinnedThreadKeysForBackend(thread.source);
-              const rect = event.currentTarget.getBoundingClientRect();
-              const position = event.clientY > rect.top + rect.height / 2
-                ? "after"
-                : "before";
+              const position = getDropIndicatorPosition(event);
               const nextKeys = backendPinnedThreadKeys.includes(draggedKey)
                 ? moveThreadKey(backendPinnedThreadKeys, draggedKey, key, position)
                 : moveThreadKey(
@@ -143,12 +187,39 @@ export function RecentsList(props: RecentsListProps) {
       })}
       {pinnedThreads.length > 0 ? (
         <div
-          className="recents-pinned-divider"
+          className={`recents-pinned-divider${
+            dividerDropTarget ? " is-drop-target" : ""
+          }`}
           role="separator"
           aria-label="Unpinned threads"
-          onDragOver={(event) => event.preventDefault()}
+          onDragOver={(event) => {
+            event.preventDefault();
+            const draggedThread = draggedThreadKey
+              ? threadByKey.get(draggedThreadKey)
+              : undefined;
+            if (
+              !draggedThread ||
+              !draggedThreadKey ||
+              pinnedThreadKeys.includes(draggedThreadKey)
+            ) {
+              event.dataTransfer.dropEffect = "none";
+              setDividerDropTarget(false);
+              return;
+            }
+
+            event.dataTransfer.dropEffect = "move";
+            setDropIndicator(undefined);
+            setDividerDropTarget(true);
+          }}
+          onDragLeave={(event) => {
+            if (didDragLeaveCurrentTarget(event)) {
+              setDividerDropTarget(false);
+            }
+          }}
           onDrop={(event) => {
             event.preventDefault();
+            setDraggedThreadKey(undefined);
+            setDividerDropTarget(false);
             const draggedKey = event.dataTransfer.getData("text/plain");
             const draggedThread = threadByKey.get(draggedKey);
             if (!draggedThread || pinnedThreadKeys.includes(draggedKey)) return;
@@ -173,8 +244,14 @@ export function RecentsList(props: RecentsListProps) {
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
             onDragStartThread={(event) => {
+              setDraggedThreadKey(key);
               event.dataTransfer.effectAllowed = "move";
               event.dataTransfer.setData("text/plain", key);
+            }}
+            onDragEndThread={() => {
+              setDraggedThreadKey(undefined);
+              setDropIndicator(undefined);
+              setDividerDropTarget(false);
             }}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onPrefetchPullRequests={props.onPrefetchPullRequests}

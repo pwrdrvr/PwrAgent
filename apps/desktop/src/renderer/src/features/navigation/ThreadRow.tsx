@@ -19,6 +19,7 @@ import {
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChip } from "../pr-status/PrChip";
+import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
@@ -28,6 +29,7 @@ const HOVER_PREFETCH_DELAY_MS = 750;
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   compact?: boolean;
+  dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
@@ -56,6 +58,8 @@ type ThreadRowProps = {
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEndThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
   onMovePinnedThread?: (
     thread: NavigationThreadSummary,
@@ -125,7 +129,9 @@ export function ThreadRow(props: ThreadRowProps) {
 
   return (
     <div
-      className={`thread-row-shell${props.draggable ? " is-draggable" : ""}`}
+      className={`thread-row-shell${props.draggable ? " is-draggable" : ""}${
+        props.dropIndicator ? ` is-drop-target-${props.dropIndicator}` : ""
+      }`}
       draggable={props.draggable}
       role="listitem"
       onDragStart={(event) => {
@@ -135,6 +141,8 @@ export function ThreadRow(props: ThreadRowProps) {
         props.onDragStartThread?.(event);
       }}
       onDragOver={props.onDragOverThread}
+      onDragLeave={props.onDragLeaveThread}
+      onDragEnd={props.onDragEndThread}
       onDrop={props.onDropOnThread}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -290,6 +298,11 @@ function setThreadRowDragImage(event: DragEvent<HTMLDivElement>): void {
   const rect = row.getBoundingClientRect();
   const clone = row.cloneNode(true) as HTMLElement;
   clone.classList.add("thread-row--drag-image");
+  clone.classList.remove("thread-row--compact");
+  clone.querySelector(".thread-row__actions")?.remove();
+  clone.querySelector(".thread-row__chip--add-reaction")?.remove();
+  clone.querySelector(".thread-row__overflow-button")?.remove();
+  clone.setAttribute("aria-hidden", "true");
   clone.style.width = `${rect.width}px`;
   clone.style.height = `${rect.height}px`;
   document.body.appendChild(clone);

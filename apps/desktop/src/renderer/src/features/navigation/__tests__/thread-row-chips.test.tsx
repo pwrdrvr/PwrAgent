@@ -208,6 +208,50 @@ describe("ThreadRow chip flow", () => {
     expect(addReaction?.textContent ?? "").not.toContain("+");
   });
 
+  it("uses a full card without action controls for the drag preview", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = renderRow({
+        compact: true,
+        draggable: true,
+      });
+      const shell = container.querySelector(".thread-row-shell") as HTMLElement;
+      const dataTransfer = {
+        setDragImage: vi.fn(),
+      };
+
+      fireEvent.dragStart(shell, {
+        clientX: 12,
+        clientY: 18,
+        dataTransfer,
+      });
+
+      const dragImage = document.body.querySelector(".thread-row--drag-image");
+      expect(dragImage).not.toBeNull();
+      expect(dragImage).not.toHaveClass("thread-row--compact");
+      expect(dragImage?.querySelector(".thread-row__actions")).toBeNull();
+      expect(
+        dragImage?.querySelector(".thread-row__chip--add-reaction"),
+      ).toBeNull();
+      expect(dragImage?.querySelector(".thread-row__overflow-button")).toBeNull();
+      expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
+        dragImage,
+        expect.any(Number),
+        expect.any(Number),
+      );
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks the active drop edge on the row shell", () => {
+    const { container } = renderRow({ dropIndicator: "after" });
+    expect(container.querySelector(".thread-row-shell")).toHaveClass(
+      "is-drop-target-after",
+    );
+  });
+
   it("still selects the thread when the row body (outside chips) is clicked", () => {
     const { onSelectThread } = renderRow();
     // The row's accessible name is the thread title; click that to
