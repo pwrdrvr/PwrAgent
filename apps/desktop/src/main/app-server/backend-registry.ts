@@ -115,6 +115,7 @@ import {
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
+  CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
@@ -3397,21 +3398,36 @@ export class DesktopBackendRegistry {
       launchpad,
       codexEnvironmentOptions,
     );
-    const codexEnvironmentRuntime =
-      launchpad.backend === "codex"
-        ? await applyLocalCodexEnvironmentSelection({
-            cwd: workspace.cwd,
-            onSetupProgress: options?.onCodexEnvironmentSetupProgress
-              ? (event) => {
-                  options.onCodexEnvironmentSetupProgress?.({
-                    directoryKey: launchpad.directoryKey,
-                    ...event,
-                  });
-                }
-              : undefined,
-            selection: codexEnvironmentSelection,
-          })
-        : undefined;
+    let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let codexEnvironmentStartupFailure:
+      | MaterializeDirectoryLaunchpadResponse["codexEnvironmentStartupFailure"]
+      | undefined;
+    if (launchpad.backend === "codex") {
+      try {
+        codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+          cwd: workspace.cwd,
+          onSetupProgress: options?.onCodexEnvironmentSetupProgress
+            ? (event) => {
+                options.onCodexEnvironmentSetupProgress?.({
+                  directoryKey: launchpad.directoryKey,
+                  ...event,
+                });
+              }
+            : undefined,
+          selection: codexEnvironmentSelection,
+        });
+      } catch (error) {
+        if (!(error instanceof CodexEnvironmentStartupError)) {
+          throw error;
+        }
+        codexEnvironmentRuntime = error.runtime;
+        codexEnvironmentStartupFailure = {
+          message: error.message,
+          phase: error.phase,
+          worktreeCleanupAvailable: workspace.workMode === "worktree",
+        };
+      }
+    }
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
@@ -3437,7 +3453,9 @@ export class DesktopBackendRegistry {
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
-    if (request.reviewTarget) {
+    if (codexEnvironmentStartupFailure) {
+      turnId = undefined;
+    } else if (request.reviewTarget) {
       const reviewResponse = await this.startReview({
         backend: launchpad.backend,
         threadId: startThreadResponse.threadId,
@@ -3476,6 +3494,7 @@ export class DesktopBackendRegistry {
       ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
+      codexEnvironmentStartupFailure,
     };
   }
 

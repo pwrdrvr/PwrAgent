@@ -2034,6 +2034,171 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("keeps failed environment setup worktree threads registered without starting the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-failure-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(path.join(repoPath, ".codex", "environments"), { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    await writeFile(
+      path.join(repoPath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Broken Env"
+
+[setup]
+script = "printf setup-failed && exit 42"
+`,
+      "utf8",
+    );
+
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        input: [{ type: "text", text: "start after setup" }],
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentSetupEnabled: true,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response.threadId).toBe("thread-1");
+      expect(response.turnId).toBeUndefined();
+      expect(response.codexEnvironmentStartupFailure).toEqual({
+        message: "Codex environment command exited with 42",
+        phase: "setup",
+        worktreeCleanupAvailable: true,
+      });
+      expect(response.codexEnvironmentRuntime).toMatchObject({
+        environmentName: "Broken Env",
+        setupStatus: "failed",
+        setupExitCode: 42,
+        setupOutput: "setup-failed",
+      });
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+        worktreePath,
+        threadId: "thread-1",
+      });
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed environment action worktree threads registered without starting the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-action-failure-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "missing-worktree");
+    await mkdir(path.join(repoPath, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(repoPath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Broken Action Env"
+
+[[actions]]
+name = "Start dev"
+command = "pnpm dev"
+`,
+      "utf8",
+    );
+
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        input: [{ type: "text", text: "start after setup" }],
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentActionId: "start-dev",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response.threadId).toBe("thread-1");
+      expect(response.turnId).toBeUndefined();
+      expect(response.codexEnvironmentStartupFailure).toEqual({
+        message: expect.any(String),
+        phase: "action",
+        worktreeCleanupAvailable: true,
+      });
+      expect(response.codexEnvironmentRuntime).toMatchObject({
+        environmentName: "Broken Action Env",
+        actionStatus: "failed",
+        actionName: "Start dev",
+      });
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+        worktreePath,
+        threadId: "thread-1",
+      });
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps materialized worktree threads linked as worktrees before the backend list catches up", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/start"] },

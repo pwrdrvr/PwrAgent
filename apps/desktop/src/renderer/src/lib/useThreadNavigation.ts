@@ -2248,7 +2248,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           executionMode: response.executionMode,
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
-          optimisticUserMessage: buildOptimisticUserMessage(input),
+          optimisticUserMessage: response.codexEnvironmentStartupFailure
+            ? undefined
+            : buildOptimisticUserMessage(input),
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         setOptimisticThread(optimisticMaterializedThread);

@@ -292,6 +292,11 @@ export type MaterializeDirectoryLaunchpadResponse = {
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  codexEnvironmentStartupFailure?: {
+    message: string;
+    phase: "setup" | "action";
+    worktreeCleanupAvailable: boolean;
+  };
 };
 
 export type CodexEnvironmentSetupProgressEvent = {

@@ -7,6 +7,40 @@ import { getMainLogger } from "../log";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
+class ShellCommandError extends Error {
+  durationMs?: number;
+  exitCode?: number;
+  output?: string;
+
+  constructor(message: string, details?: {
+    durationMs?: number;
+    exitCode?: number;
+    output?: string;
+  }) {
+    super(message);
+    this.name = "ShellCommandError";
+    this.durationMs = details?.durationMs;
+    this.exitCode = details?.exitCode;
+    this.output = details?.output;
+  }
+}
+
+export class CodexEnvironmentStartupError extends Error {
+  phase: "setup" | "action";
+  runtime: CodexThreadEnvironmentRuntime;
+
+  constructor(
+    message: string,
+    phase: "setup" | "action",
+    runtime: CodexThreadEnvironmentRuntime,
+  ) {
+    super(message);
+    this.name = "CodexEnvironmentStartupError";
+    this.phase = phase;
+    this.runtime = runtime;
+  }
+}
+
 export type CodexEnvironmentSelection = {
   environment: CodexEnvironmentOption;
   executionTarget: "local" | "remote";
@@ -96,12 +130,28 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       });
     } catch (error) {
       runtime.setupStatus = "failed";
+      if (error instanceof ShellCommandError) {
+        runtime.setupOutput = error.output;
+        runtime.setupExitCode = error.exitCode;
+        runtime.setupDurationMs = error.durationMs;
+      } else if (error instanceof Error) {
+        runtime.setupOutput = error.message;
+      } else {
+        runtime.setupOutput = String(error);
+      }
       emitSetupProgress({
         phase: "failed",
         error: error instanceof Error ? error.message : String(error),
+        output: runtime.setupOutput,
+        exitCode: runtime.setupExitCode,
+        durationMs: runtime.setupDurationMs,
         at: Date.now(),
       });
-      throw error;
+      throw new CodexEnvironmentStartupError(
+        error instanceof Error ? error.message : String(error),
+        "setup",
+        runtime,
+      );
     }
   } else if (selection.setupEnabled) {
     runtime.setupStatus = "skipped";
@@ -121,7 +171,11 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       runtime.actionStatus = "started";
     } catch (error) {
       runtime.actionStatus = "failed";
-      throw error;
+      throw new CodexEnvironmentStartupError(
+        error instanceof Error ? error.message : String(error),
+        "action",
+        runtime,
+      );
     }
   }
 
@@ -227,8 +281,10 @@ function runShellCommand(params: {
     });
 
     if (params.mode === "detach") {
-      child.unref();
-      resolve({ pid: child.pid });
+      child.once("spawn", () => {
+        child.unref();
+        resolve({ pid: child.pid });
+      });
       return;
     }
 
@@ -249,8 +305,13 @@ function runShellCommand(params: {
       }
       const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
       reject(
-        new Error(
+        new ShellCommandError(
           `Codex environment command exited with ${code ?? signal ?? "unknown"}${suffix}`,
+          {
+            durationMs: Date.now() - startedAt,
+            exitCode: typeof code === "number" ? code : undefined,
+            output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+          },
         ),
       );
     });

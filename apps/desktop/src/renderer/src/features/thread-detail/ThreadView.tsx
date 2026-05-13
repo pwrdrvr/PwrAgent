@@ -193,6 +193,54 @@ function LaunchpadEnvironmentSetupPending(props: {
   );
 }
 
+function EnvironmentSetupFailureChoice(props: {
+  archiving: boolean;
+  error?: string;
+  environmentName: string;
+  hasWorktree: boolean;
+  phase: "setup" | "action";
+  onCleanup: () => void;
+  onContinue: () => void;
+}) {
+  const label =
+    props.phase === "action" ? "Environment action failed" : "Environment setup failed";
+  const commandLabel = props.phase === "action" ? "action command" : "setup command";
+  return (
+    <section className="environment-setup-choice" aria-label={label}>
+      <div>
+        <p className="eyebrow">{label}</p>
+        <h3>{props.environmentName}</h3>
+        <p>
+          {props.hasWorktree
+            ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
+            : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
+        </p>
+        {props.error ? (
+          <p className="environment-setup-choice__error">{props.error}</p>
+        ) : null}
+      </div>
+      <div className="environment-setup-choice__actions">
+        <button
+          className="composer__action-button composer__action-button--danger"
+          disabled={props.archiving}
+          type="button"
+          onClick={props.onCleanup}
+        >
+          {props.hasWorktree ? "Delete worktree and close" : "Close thread"}
+        </button>
+        <button
+          className="composer__action-button"
+          disabled={props.archiving}
+          type="button"
+          onClick={props.onContinue}
+        >
+          Continue anyway
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
   right: AppServerThreadPlanEntry
@@ -735,6 +783,7 @@ type ThreadViewProps = {
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
   launchpadError?: string;
+  archiveThreadError?: string;
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
@@ -777,6 +826,7 @@ type ThreadViewProps = {
   /** Forwarded to ThreadHeader → MessagingStatusBar — opens the Activity screen. */
   onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
   onLoadOlder: () => Promise<void>;
+  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
   onMaterializeLaunchpad?: (
@@ -873,6 +923,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
+  const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
+    useState<Set<string>>(() => new Set());
+  const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
   const [launchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
   // Auto-pin the context rail on wide displays (issue #240). Same
@@ -895,6 +948,7 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
+    setSetupFailureArchiving(false);
     setContextRailPinned(false);
     setContextRailResizing(false);
     setExpandedImage(undefined);
@@ -945,6 +999,23 @@ export function ThreadView(props: ThreadViewProps) {
       setBranchDriftError(undefined);
     }
   }, [props.suppressBranchDriftDialog]);
+  const selectedThreadSetupFailed =
+    selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
+  const selectedThreadActionFailed =
+    selectedThread?.codexEnvironmentRuntime?.actionStatus === "failed";
+  const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
+    (directory) =>
+      directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
+  );
+  const showSetupFailureChoice = Boolean(
+    selectedThread &&
+      selectedThreadKey &&
+      (selectedThreadSetupFailed || selectedThreadActionFailed) &&
+      !setupFailureDismissedThreadKeys.has(selectedThreadKey),
+  );
+  const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
+    ? "action"
+    : "setup";
 
   useEffect(() => {
     if (!branchDriftDialog) return;
@@ -1778,6 +1849,35 @@ export function ThreadView(props: ThreadViewProps) {
         thread={selectedThread!}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
       />
+
+      {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
+        <EnvironmentSetupFailureChoice
+          archiving={setupFailureArchiving}
+          environmentName={
+            selectedThread.codexEnvironmentRuntime?.environmentName ??
+            "Codex environment"
+          }
+          error={props.archiveThreadError}
+          hasWorktree={Boolean(selectedThreadWorktree)}
+          phase={selectedThreadEnvironmentFailurePhase}
+          onCleanup={() => {
+            if (!props.onArchiveThread) {
+              return;
+            }
+            setSetupFailureArchiving(true);
+            void props.onArchiveThread(selectedThread).finally(() => {
+              setSetupFailureArchiving(false);
+            });
+          }}
+          onContinue={() => {
+            setSetupFailureDismissedThreadKeys((current) => {
+              const next = new Set(current);
+              next.add(selectedThreadKey);
+              return next;
+            });
+          }}
+        />
+      ) : null}
 
       <div
         className={`thread-view__layout${
