@@ -38,9 +38,12 @@ export function resolveActiveProfileName(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cliProfile?: string;
+  argv?: readonly string[];
 }): string {
-  if (options?.cliProfile?.trim()) {
-    const name = options.cliProfile.trim();
+  const cliProfile =
+    options?.cliProfile?.trim() || readProfileArg(options?.argv)?.trim();
+  if (cliProfile) {
+    const name = cliProfile.trim();
     if (!isValidProfileName(name)) {
       throw new Error(
         `Invalid profile name "${name}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
@@ -90,6 +93,7 @@ export function resolveActiveProfileDir(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cliProfile?: string;
+  argv?: readonly string[];
 }): string {
   const profileName = resolveActiveProfileName(options);
   return resolveProfileDir(profileName, options);
@@ -101,6 +105,7 @@ export function resolveActiveProfilePath(
     env?: NodeJS.ProcessEnv;
     homeDir?: string;
     cliProfile?: string;
+    argv?: readonly string[];
   },
 ): string {
   return path.join(resolveActiveProfileDir(options), segment);
@@ -139,9 +144,32 @@ export function ensureProfileExists(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cliProfile?: string;
+  argv?: readonly string[];
 }): { profileDir: string; profileName: string; created: boolean } {
   const profileName = resolveActiveProfileName(options);
   return ensureNamedProfileExists(profileName, options);
+}
+
+export function readProfileArg(argv?: readonly string[]): string | undefined {
+  const args = argv ?? process.argv;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--profile") {
+      const value = args[index + 1]?.trim();
+      if (!value || value.startsWith("--")) {
+        throw new Error("--profile requires a profile name.");
+      }
+      return value;
+    }
+    if (arg?.startsWith("--profile=")) {
+      const value = arg.slice("--profile=".length).trim();
+      if (!value) {
+        throw new Error("--profile requires a profile name.");
+      }
+      return value;
+    }
+  }
+  return undefined;
 }
 
 export function ensureNamedProfileExists(

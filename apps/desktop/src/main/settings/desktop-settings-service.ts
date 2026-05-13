@@ -148,7 +148,8 @@ export class DesktopSettingsService {
     this.env = options.env ?? process.env;
     this.argv = options.argv ?? process.argv;
     this.configPath =
-      options.configPath ?? resolveDesktopConfigPath({ env: this.env });
+      options.configPath ??
+      resolveDesktopConfigPath({ argv: this.argv, env: this.env });
     this.now = options.now ?? Date.now;
   }
 

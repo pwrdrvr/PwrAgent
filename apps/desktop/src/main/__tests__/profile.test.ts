@@ -7,6 +7,7 @@ import {
   PWRAGENT_PROFILE_ENV,
   deleteProfile,
   ensureNamedProfileExists,
+  readProfileArg,
   readProfilesRegistry,
   resolveActiveProfileName,
   resolveDefaultProfileName,
@@ -42,12 +43,21 @@ describe("PwrAgent profiles", () => {
     expect(resolveActiveProfileName({ env })).toBe("dev");
     expect(
       resolveActiveProfileName({
+        argv: ["PwrAgent", "--profile", "work"],
         env: {
           ...env,
-          [PWRAGENT_PROFILE_ENV]: "work",
+          [PWRAGENT_PROFILE_ENV]: "personal",
         },
       }),
     ).toBe("work");
+  });
+
+  it("reads --profile arguments from argv", () => {
+    expect(readProfileArg(["PwrAgent", "--profile", "work"])).toBe("work");
+    expect(readProfileArg(["PwrAgent", "--profile=dev"])).toBe("dev");
+    expect(() => readProfileArg(["PwrAgent", "--profile"])).toThrow(
+      "--profile requires a profile name",
+    );
   });
 
   it("deletes inactive custom profiles and clears the startup default", () => {

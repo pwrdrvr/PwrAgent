@@ -35,7 +35,7 @@ export function ProfilesSettings(props: { desktopApi?: DesktopApi }) {
       <SettingsPanelHead
         eyebrow="Profiles"
         title="PwrAgent profiles"
-        help="Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with PWRAGENT_PROFILE still override the startup default."
+        help="Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with --profile or PWRAGENT_PROFILE still override the startup default."
       />
 
       <SettingsSection
