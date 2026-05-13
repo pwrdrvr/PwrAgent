@@ -108,6 +108,12 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
   updatedAt: number;
 };
 
+export type AutomationDetail = AutomationListItemSummary & {
+  taskPrompt: string;
+  createdAt: number;
+  deletedAt?: number;
+};
+
 export type AutomationThreadSummary = {
   totalCount: number;
   enabledCount: number;
@@ -136,6 +142,60 @@ export type AutomationRunSummary = {
   completedAt?: number;
   backendTurnId?: string;
   errorMessage?: string;
+};
+
+export type CreateAutomationRequest = AutomationThreadAssignment & {
+  name: string;
+  taskPrompt: string;
+  schedule: AutomationScheduleDefinition;
+  backlogPolicy?: AutomationBacklogPolicy;
+  enabled?: boolean;
+  nextRunAt?: number;
+};
+
+export type UpdateAutomationRequest = {
+  automationId: string;
+  name?: string;
+  taskPrompt?: string;
+  schedule?: AutomationScheduleDefinition;
+  backlogPolicy?: AutomationBacklogPolicy;
+  enabled?: boolean;
+  nextRunAt?: number | null;
+};
+
+export type AutomationIdRequest = {
+  automationId: string;
+};
+
+export type ListAutomationsRequest = {
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+};
+
+export type ListAutomationsResponse = {
+  automations: AutomationDetail[];
+};
+
+export type AutomationMutationResponse = {
+  automation: AutomationDetail;
+};
+
+export type ListAutomationRunsRequest = {
+  automationId?: string;
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  limit?: number;
+};
+
+export type ListAutomationRunsResponse = {
+  runs: AutomationRunSummary[];
+};
+
+export type RunAutomationNowResponse = {
+  run: AutomationRunSummary;
+  queueStatus: "started" | "queued" | "failed";
+  queueEntryId?: string;
+  turnId?: string;
 };
 
 export function validateAutomationScheduleDefinition(

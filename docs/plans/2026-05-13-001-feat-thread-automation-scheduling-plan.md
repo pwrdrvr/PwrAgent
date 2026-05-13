@@ -546,7 +546,7 @@ enqueue automation runs, and update run history from queue/backend events.
 - Scheduler tests prove due-window calculation, backlog policy outcomes,
   prompt metadata, and queue handoff without needing a live Electron window.
 
-- [ ] **Unit 5: Wire Automation IPC, Navigation Summaries, and Events**
+- [x] **Unit 5: Wire Automation IPC, Navigation Summaries, and Events**
 
 **Goal:** Expose automation CRUD, run-now, pause/resume, history, and global list
 operations to the renderer while keeping snapshots and secondary windows fresh.

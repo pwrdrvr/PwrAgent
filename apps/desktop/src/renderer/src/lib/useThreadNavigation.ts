@@ -212,6 +212,13 @@ function messagingBindingsEqual(
   });
 }
 
+function automationSummariesEqual(
+  left: NavigationThreadSummary["automationSummary"],
+  right: NavigationThreadSummary["automationSummary"]
+): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 function prSummariesEqual(
   left: NavigationThreadSummary["prs"],
   right: NavigationThreadSummary["prs"]
@@ -342,6 +349,7 @@ function threadSummariesEqual(
     // previous thread reference whenever nothing else changed and chips on
     // the row stay stale until something else triggers a re-render.
     messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
+    automationSummariesEqual(left.automationSummary, right.automationSummary) &&
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
     permissionTransitionLogsEqual(
@@ -2077,6 +2085,15 @@ export function useThreadNavigation(
               }
             : current
         );
+        scheduleRefresh();
+        return;
+      }
+
+      if (
+        method === "thread/automations/updated" ||
+        method === "automation/run/updated" ||
+        method === "thread/turnQueue/updated"
+      ) {
         scheduleRefresh();
         return;
       }

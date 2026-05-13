@@ -8,6 +8,8 @@ import type {
 } from "../../../shared/image-normalization";
 import type {
   AgentEvent,
+  AutomationIdRequest,
+  AutomationMutationResponse,
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
@@ -16,6 +18,7 @@ import type {
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CreateAutomationRequest,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   FocusedDiffAnalysisRequest,
@@ -30,6 +33,10 @@ import type {
   InterruptTurnRequest,
   InterruptTurnResponse,
   LatestCodexConfigWarningResponse,
+  ListAutomationRunsRequest,
+  ListAutomationRunsResponse,
+  ListAutomationsRequest,
+  ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   ListAcpAgentSettingsRequest,
@@ -89,6 +96,7 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  RunAutomationNowResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   QueueThreadExecutionModeRequest,
@@ -113,6 +121,7 @@ import type {
   TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
+  UpdateAutomationRequest,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -201,6 +210,30 @@ export type DesktopApi = {
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
   installAppUpdate?: () => Promise<AppUpdateInstallResult>;
+  listAutomations?: (
+    request?: ListAutomationsRequest,
+  ) => Promise<ListAutomationsResponse>;
+  createAutomation?: (
+    request: CreateAutomationRequest,
+  ) => Promise<AutomationMutationResponse>;
+  updateAutomation?: (
+    request: UpdateAutomationRequest,
+  ) => Promise<AutomationMutationResponse>;
+  deleteAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  pauseAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  resumeAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  runAutomationNow?: (
+    request: AutomationIdRequest,
+  ) => Promise<RunAutomationNowResponse>;
+  listAutomationRuns?: (
+    request: ListAutomationRunsRequest,
+  ) => Promise<ListAutomationRunsResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
