@@ -4,6 +4,18 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
+const codexClientLogError = vi.hoisted(() => vi.fn());
+const codexClientLogInfo = vi.hoisted(() => vi.fn());
+const codexClientLogWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => ({
+    error: codexClientLogError,
+    info: codexClientLogInfo,
+    warn: codexClientLogWarn,
+  })),
+}));
+
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
@@ -832,6 +844,9 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 
 describe("CodexAppServerClient", () => {
   beforeEach(() => {
+    codexClientLogError.mockClear();
+    codexClientLogInfo.mockClear();
+    codexClientLogWarn.mockClear();
     MockTransport.instances.length = 0;
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
@@ -2961,6 +2976,70 @@ describe("CodexAppServerClient", () => {
             status: "completed"
           })
         })
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("logs diagnostics for Codex skills changed notifications", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "skills/changed",
+      params: {
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        reason: "fileChanged"
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(codexClientLogWarn).toHaveBeenCalledWith(
+      "codex skills changed notification received",
+      expect.objectContaining({
+        method: "skills/changed",
+        payloadType: "object",
+        payloadKeys: ["cwd", "reason"],
+        listenerCount: 1,
+        initialized: true,
+        serverAdvertisesSkillsList: false,
+        expectedFollowup: "call skills/list when refreshed skill metadata is needed",
+        payload: {
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          reason: "fileChanged"
+        }
+      })
+    );
+    expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+      "unknown codex notification",
+      expect.anything()
+    );
+    expect(notifications).toEqual([
+      {
+        method: "skills/changed",
+        params: {
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          reason: "fileChanged"
+        }
       }
     ]);
 

@@ -159,6 +159,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "thread/compacted",
   "thread/archived",
   "thread/unarchived",
+  "skills/changed",
   "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
@@ -188,6 +189,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "thread/compacted",
   "thread/archived",
   "thread/unarchived",
+  "skills/changed",
   "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
@@ -241,6 +243,36 @@ function isRequestLikeMethod(method: string): boolean {
   return method.includes("/request");
 }
 
+function describePayloadShape(payload: unknown): {
+  payloadType: string;
+  payloadKeys?: string[];
+  payloadLength?: number;
+} {
+  if (payload === null) {
+    return { payloadType: "null" };
+  }
+
+  if (payload === undefined) {
+    return { payloadType: "undefined" };
+  }
+
+  if (Array.isArray(payload)) {
+    return {
+      payloadType: "array",
+      payloadLength: payload.length,
+    };
+  }
+
+  if (typeof payload === "object") {
+    return {
+      payloadType: "object",
+      payloadKeys: Object.keys(payload as Record<string, unknown>).sort(),
+    };
+  }
+
+  return { payloadType: typeof payload };
+}
+
 function logUnhandledCodexMessage(params: {
   kind: "notification" | "request";
   method: string;
@@ -264,6 +296,24 @@ function logUnhandledCodexMessage(params: {
 
   codexClientLog.warn("unknown codex notification", {
     method: params.method,
+    ...describePayloadShape(params.payload),
+    payload: params.payload,
+  });
+}
+
+function logSkillsChangedNotification(params: {
+  payload: unknown;
+  listenerCount: number;
+  initialized: boolean;
+  serverAdvertisesSkillsList: boolean;
+}): void {
+  codexClientLog.warn("codex skills changed notification received", {
+    method: "skills/changed",
+    ...describePayloadShape(params.payload),
+    listenerCount: params.listenerCount,
+    initialized: params.initialized,
+    serverAdvertisesSkillsList: params.serverAdvertisesSkillsList,
+    expectedFollowup: "call skills/list when refreshed skill metadata is needed",
     payload: params.payload,
   });
 }
@@ -3555,6 +3605,15 @@ export class CodexAppServerClient {
           kind: "notification",
           method,
           payload: params,
+        });
+      }
+      if (method === "skills/changed") {
+        logSkillsChangedNotification({
+          payload: params,
+          listenerCount: this.notificationListeners.size,
+          initialized: this.initialized,
+          serverAdvertisesSkillsList:
+            this.initializeResult?.methods?.includes("skills/list") ?? false,
         });
       }
 
