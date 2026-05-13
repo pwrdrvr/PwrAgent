@@ -71,14 +71,6 @@ accessibility need — streaming actively breaks the product.
 Edits are not free. On most platforms an edit is its own API request
 and counts against the same write budget as a new message.
 
-Telegram's measured limits (from May 2026 probes by the PwrAgent
-team):
-
-| Surface | Practical write budget |
-|---|---|
-| Telegram DM | ~60 messages/edits per minute |
-| Telegram supergroup | ~20 messages/edits per minute (shared across all topics) |
-
 A turn with ~10 bot messages and 2–3 edits per message is ~30 budget
 consumptions in the span of a single response. PwrAgent's local Slow
 Mode is designed to keep **critical** traffic flowing under tight
@@ -89,13 +81,12 @@ dropping. In practice, on any turn with serious tool activity you may
 turn streaming on and watch PwrAgent auto-disable it part-way through
 the turn.
 
-| Platform | Behavior |
-|---|---|
-| Telegram | Sends and edits share one supergroup budget. Edit calls return 429 with `retry_after` when the budget runs out. |
-| Slack | Edits are more permissive than sends (`chat.postMessage` has its own limit), but they still count as API requests. |
-| Discord | Edits are permissive but still hit route/global REST buckets. |
-| Mattermost | Server-configured. |
-| LINE | Edits aren't supported at all; the streaming toggle is a no-op on LINE. |
+For the per-platform measured budgets and the full edit-support
+matrix, see [Rate limits and budgets](/rate-limits/). Headline numbers:
+Telegram DMs allow ~60 messages+edits/min; Telegram supergroups allow
+~20 shared across all topics; Slack and Discord are more permissive
+on edits; LINE doesn't support edits at all, so the streaming toggle
+is a no-op there.
 
 ## When streaming might actually be the right call
 
