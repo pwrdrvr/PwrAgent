@@ -1,7 +1,15 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LogsWindow, buildRenderedLogLines, tokenizeLogLine } from "../LogsWindow";
+import {
+  MAX_RENDERED_LOG_ENTRIES,
+  LogsWindow,
+  appendRenderedLogEntry,
+  buildRenderedLogLines,
+  createRenderedLogEntryBuffer,
+  orderedRenderedLogEntries,
+  tokenizeLogLine,
+} from "../LogsWindow";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 afterEach(() => {
@@ -70,6 +78,44 @@ describe("tokenizeLogLine", () => {
         { text: "failed" },
       ],
     });
+  });
+});
+
+describe("rendered log entry buffer", () => {
+  it("keeps the newest ordered tail without shifting entries on append", () => {
+    const buffer = createRenderedLogEntryBuffer();
+
+    for (let index = 1; index <= MAX_RENDERED_LOG_ENTRIES + 2; index += 1) {
+      appendRenderedLogEntry(buffer, {
+        sequence: index,
+        timestamp: Date.now(),
+        level: "info",
+        line: `line ${index}`,
+      });
+    }
+
+    const entries = orderedRenderedLogEntries(buffer);
+
+    expect(entries).toHaveLength(MAX_RENDERED_LOG_ENTRIES);
+    expect(entries[0]?.sequence).toBe(3);
+    expect(entries.at(-1)?.sequence).toBe(MAX_RENDERED_LOG_ENTRIES + 2);
+  });
+
+  it("trims oversized snapshots to the newest ordered tail", () => {
+    const buffer = createRenderedLogEntryBuffer(
+      Array.from({ length: MAX_RENDERED_LOG_ENTRIES + 2 }, (_, index) => ({
+        sequence: index + 1,
+        timestamp: Date.now(),
+        level: "info",
+        line: `line ${index + 1}`,
+      })),
+    );
+
+    const entries = orderedRenderedLogEntries(buffer);
+
+    expect(entries).toHaveLength(MAX_RENDERED_LOG_ENTRIES);
+    expect(entries[0]?.sequence).toBe(3);
+    expect(entries.at(-1)?.sequence).toBe(MAX_RENDERED_LOG_ENTRIES + 2);
   });
 });
 
@@ -181,5 +227,124 @@ describe("LogsWindow", () => {
 
     expect(screen.queryByText(/moving line/)).not.toBeInTheDocument();
     expect(screen.getByText("Paused app log stream")).toBeInTheDocument();
+  });
+
+  it("does not trim visible paused output while newer stream entries arrive", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        entries: [
+          {
+            sequence: 1,
+            timestamp: Date.now(),
+            level: "info",
+            line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) selected line",
+          },
+        ],
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    await screen.findByText(/selected line/);
+    fireEvent.pointerDown(screen.getByLabelText("Log viewport"));
+    act(() => {
+      for (let index = 2; index <= MAX_RENDERED_LOG_ENTRIES + 2; index += 1) {
+        listener?.({
+          sequence: index,
+          timestamp: Date.now(),
+          level: "info",
+          line: `[2026-05-12 20:06:29.000] [info] (pwragent:main) hidden line ${index}`,
+        });
+      }
+    });
+
+    expect(screen.getByText(/selected line/)).toBeInTheDocument();
+    expect(screen.queryByText(/hidden line/)).not.toBeInTheDocument();
+    expect(screen.getByText("Paused app log stream")).toBeInTheDocument();
+  });
+
+  it("reloads the current tail before following again when scrolled back to bottom", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
+    const desktopApi = {
+      readAppLogSnapshot: vi
+        .fn()
+        .mockResolvedValueOnce({
+          kind: "log-snapshot",
+          title: "Logs",
+          entries: [
+            {
+              sequence: 1,
+              timestamp: Date.now(),
+              level: "info",
+              line: "[2026-05-12 20:05:00.000] [info] (pwragent:main) old visible line",
+            },
+          ],
+          readAt: Date.now(),
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          kind: "log-snapshot",
+          title: "Logs",
+          entries: [
+            {
+              sequence: 7,
+              timestamp: Date.now(),
+              level: "info",
+              line: "[2026-05-12 20:08:00.000] [info] (pwragent:main) current tail line",
+            },
+          ],
+          readAt: Date.now(),
+          truncated: true,
+        }),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    const viewport = await screen.findByLabelText("Log viewport");
+    await screen.findByText(/old visible line/);
+    fireEvent.pointerDown(viewport);
+    act(() => {
+      listener?.({
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:00.000] [info] (pwragent:main) skipped while paused",
+      });
+    });
+
+    Object.defineProperty(viewport, "scrollHeight", {
+      configurable: true,
+      value: 100,
+    });
+    Object.defineProperty(viewport, "clientHeight", {
+      configurable: true,
+      value: 100,
+    });
+    Object.defineProperty(viewport, "scrollTop", {
+      configurable: true,
+      value: 0,
+      writable: true,
+    });
+    fireEvent.scroll(viewport);
+
+    expect(await screen.findByText(/current tail line/)).toBeInTheDocument();
+    expect(screen.queryByText(/old visible line/)).not.toBeInTheDocument();
+    expect(screen.getByText("Showing tail")).toBeInTheDocument();
+    expect(desktopApi.readAppLogSnapshot).toHaveBeenCalledTimes(2);
   });
 });

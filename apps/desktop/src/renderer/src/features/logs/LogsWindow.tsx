@@ -11,6 +11,13 @@ import type { AppLogEntry } from "../../../../shared/app-metadata";
 import { useDesktopApi } from "../../lib/desktop-api";
 
 const BOTTOM_THRESHOLD_PX = 32;
+export const MAX_RENDERED_LOG_ENTRIES = 5000;
+
+type RenderedLogEntryBuffer = {
+  slots: Array<AppLogEntry | undefined>;
+  oldestEntryIndex: number;
+  entryCount: number;
+};
 
 type LogLinePart = {
   text: string;
@@ -39,13 +46,19 @@ export function LogsWindow() {
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const activeMatchRef = useRef<HTMLElement | null>(null);
   const followingRef = useRef(true);
-  const [entries, setEntries] = useState<AppLogEntry[]>([]);
+  const entryBufferRef = useRef(createRenderedLogEntryBuffer());
+  const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [following, setFollowing] = useState(true);
+
+  const setFollowingMode = useCallback((value: boolean) => {
+    followingRef.current = value;
+    setFollowing(value);
+  }, []);
 
   useEffect(() => {
     document.title = "Logs";
@@ -60,7 +73,8 @@ export function LogsWindow() {
     setLoading(true);
     try {
       const value = await reader();
-      setEntries(value.entries);
+      entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
+      setRenderVersion((version) => version + 1);
       setTruncated(value.truncated);
       setError(undefined);
     } catch (err: unknown) {
@@ -86,7 +100,8 @@ export function LogsWindow() {
       if (!followingRef.current) {
         return;
       }
-      setEntries((current) => [...current, entry]);
+      appendRenderedLogEntry(entryBufferRef.current, entry);
+      setRenderVersion((version) => version + 1);
     });
   }, [desktopApi]);
 
@@ -94,7 +109,7 @@ export function LogsWindow() {
     const handleSelectionChange = (): void => {
       const viewport = logViewportRef.current;
       if (viewport && selectionTouchesElement(viewport)) {
-        setFollowing(false);
+        setFollowingMode(false);
       }
     };
 
@@ -102,7 +117,7 @@ export function LogsWindow() {
     return () => {
       document.removeEventListener("selectionchange", handleSelectionChange);
     };
-  }, []);
+  }, [setFollowingMode]);
 
   useEffect(() => {
     if (!following) {
@@ -113,11 +128,12 @@ export function LogsWindow() {
       return;
     }
     element.scrollTop = element.scrollHeight;
-  }, [following, entries]);
+  }, [following, renderVersion]);
 
   const rendered = useMemo(() => {
+    const entries = orderedRenderedLogEntries(entryBufferRef.current);
     return buildRenderedLogLines(entries.map((entry) => entry.line).join("\n"), query);
-  }, [entries, query]);
+  }, [query, renderVersion]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -137,13 +153,13 @@ export function LogsWindow() {
   }, [activeMatchIndex]);
 
   const jumpToEnd = useCallback(() => {
-    setFollowing(true);
+    setFollowingMode(true);
     const element = logViewportRef.current;
     if (element) {
       element.scrollTop = element.scrollHeight;
     }
     void loadSnapshot();
-  }, [loadSnapshot]);
+  }, [loadSnapshot, setFollowingMode]);
 
   const handleScroll = useCallback(() => {
     const element = logViewportRef.current;
@@ -156,33 +172,39 @@ export function LogsWindow() {
     }
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
-    setFollowing(distanceFromBottom <= BOTTOM_THRESHOLD_PX);
-  }, []);
+    const shouldFollow = distanceFromBottom <= BOTTOM_THRESHOLD_PX;
+    if (shouldFollow && !followingRef.current) {
+      setFollowingMode(true);
+      void loadSnapshot();
+      return;
+    }
+    setFollowingMode(shouldFollow);
+  }, [loadSnapshot, setFollowingMode]);
 
   const pauseFollowingForInteraction = useCallback(() => {
-    setFollowing(false);
-  }, []);
+    setFollowingMode(false);
+  }, [setFollowingMode]);
 
   const goToMatch = useCallback(
     (direction: -1 | 1) => {
       if (rendered.matchCount === 0) {
         return;
       }
-      setFollowing(false);
+      setFollowingMode(false);
       setActiveMatchIndex(
         (current) =>
           (current + direction + rendered.matchCount) % rendered.matchCount,
       );
     },
-    [rendered.matchCount],
+    [rendered.matchCount, setFollowingMode],
   );
 
   const handleSearchChange = useCallback((value: string) => {
     setQuery(value);
     if (value.trim()) {
-      setFollowing(false);
+      setFollowingMode(false);
     }
-  }, []);
+  }, [setFollowingMode]);
 
   const activeMatchLabel =
     rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
@@ -290,6 +312,50 @@ export function LogsWindow() {
       </section>
     </div>
   );
+}
+
+export function appendRenderedLogEntry(
+  buffer: RenderedLogEntryBuffer,
+  entry: AppLogEntry,
+): void {
+  if (buffer.entryCount < MAX_RENDERED_LOG_ENTRIES) {
+    const writeIndex =
+      (buffer.oldestEntryIndex + buffer.entryCount) % buffer.slots.length;
+    buffer.slots[writeIndex] = entry;
+    buffer.entryCount += 1;
+    return;
+  }
+
+  buffer.slots[buffer.oldestEntryIndex] = entry;
+  buffer.oldestEntryIndex = (buffer.oldestEntryIndex + 1) % buffer.slots.length;
+}
+
+export function createRenderedLogEntryBuffer(
+  entries: AppLogEntry[] = [],
+): RenderedLogEntryBuffer {
+  const buffer: RenderedLogEntryBuffer = {
+    slots: new Array<AppLogEntry | undefined>(MAX_RENDERED_LOG_ENTRIES),
+    oldestEntryIndex: 0,
+    entryCount: 0,
+  };
+  for (const entry of entries.slice(-MAX_RENDERED_LOG_ENTRIES)) {
+    appendRenderedLogEntry(buffer, entry);
+  }
+  return buffer;
+}
+
+export function orderedRenderedLogEntries(
+  buffer: RenderedLogEntryBuffer,
+): AppLogEntry[] {
+  const ordered: AppLogEntry[] = [];
+  for (let offset = 0; offset < buffer.entryCount; offset += 1) {
+    const entry =
+      buffer.slots[(buffer.oldestEntryIndex + offset) % buffer.slots.length];
+    if (entry) {
+      ordered.push(entry);
+    }
+  }
+  return ordered;
 }
 
 function LogLine(props: {
