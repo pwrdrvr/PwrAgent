@@ -1,6 +1,11 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import { spawn } from "node:child_process";
 import type {
+  CheckDesktopCodexAuthProfileStatusRequest,
+  CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CreateDesktopCodexAuthProfileRequest,
+  CreateDesktopCodexAuthProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsConfigPatch,
@@ -15,6 +20,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  StartDesktopCodexAuthProfileLoginRequest,
+  StartDesktopCodexAuthProfileLoginResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
@@ -22,13 +29,16 @@ import {
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
 import {
+  SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
+  SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
 } from "../../shared/ipc";
@@ -41,6 +51,10 @@ import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-c
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { validateGhCommand } from "../settings/gh-discovery";
+import {
+  createCodexAuthProfile,
+  resolveCodexHomeForProfile,
+} from "../settings/codex-profiles";
 
 function getService(service?: DesktopSettingsService): DesktopSettingsService {
   return service ?? getDesktopSettingsService();
@@ -57,6 +71,78 @@ async function refreshModelBackendsIfNeeded(params: {
   ) {
     await disposeDesktopBackendRegistry();
   }
+}
+
+async function resolveCodexCommandForProfileWorkflow(
+  service: DesktopSettingsService,
+): Promise<string> {
+  const snapshot = await service.readSettings();
+  const command = snapshot.models.codex.discovery.selectedCommand;
+  if (!command) {
+    throw new Error("No Codex command is configured or discoverable.");
+  }
+  return command;
+}
+
+function resolveRequiredCodexProfileHome(profile: string): string {
+  const codexHome = resolveCodexHomeForProfile(profile);
+  if (!codexHome) {
+    throw new Error("A named Codex profile is required.");
+  }
+  return codexHome;
+}
+
+function collectCodexStatus(command: string, codexHome: string): Promise<{
+  code: number | null;
+  detail: string;
+}> {
+  return new Promise((resolve) => {
+    const child = spawn(command, ["login", "status"], {
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.on("error", (error) => {
+      resolve({ code: null, detail: error.message });
+    });
+    child.on("close", (code) => {
+      resolve({ code, detail: output.trim() });
+    });
+  });
+}
+
+async function checkCodexProfileAuthStatus(
+  service: DesktopSettingsService,
+  request: CheckDesktopCodexAuthProfileStatusRequest,
+): Promise<CheckDesktopCodexAuthProfileStatusResponse> {
+  const profile = request.profile.trim();
+  const codexHome = resolveRequiredCodexProfileHome(profile);
+  const command = await resolveCodexCommandForProfileWorkflow(service);
+  const result = await collectCodexStatus(command, codexHome);
+  const authenticated = result.code === 0;
+  return {
+    profile,
+    codexHome,
+    authenticated,
+    status:
+      result.code === null
+        ? "failed"
+        : authenticated
+          ? "authenticated"
+          : "unauthenticated",
+    ...(result.detail ? { detail: result.detail } : {}),
+  };
 }
 
 function messagingPatchTouchesRuntime(
@@ -418,6 +504,51 @@ export function registerSettingsIpcHandlers(
     }),
   );
 
+  ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
+    async (
+      _event,
+      request: CreateDesktopCodexAuthProfileRequest,
+    ): Promise<CreateDesktopCodexAuthProfileResponse> =>
+      createCodexAuthProfile(request.profile),
+  );
+
+  ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    async (
+      _event,
+      request: StartDesktopCodexAuthProfileLoginRequest,
+    ): Promise<StartDesktopCodexAuthProfileLoginResponse> => {
+      const profile = request.profile.trim();
+      const codexHome = resolveRequiredCodexProfileHome(profile);
+      const command = await resolveCodexCommandForProfileWorkflow(
+        getService(service),
+      );
+      const child = spawn(command, ["login", "--device-auth"], {
+        detached: true,
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome,
+        },
+        stdio: "ignore",
+      });
+      child.unref();
+      return { profile, codexHome, started: true, pid: child.pid };
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
+    async (
+      _event,
+      request: CheckDesktopCodexAuthProfileStatusRequest,
+    ): Promise<CheckDesktopCodexAuthProfileStatusResponse> =>
+      await checkCodexProfileAuthStatus(getService(service), request),
+  );
+
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.handle(
     SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -504,6 +635,9 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);

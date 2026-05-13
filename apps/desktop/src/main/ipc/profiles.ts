@@ -6,6 +6,8 @@ import type {
   ListDesktopPwrAgentProfilesResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  SetDesktopPwrAgentProfileCodexProfileRequest,
+  SetDesktopPwrAgentProfileCodexProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
 } from "@pwragent/shared";
@@ -13,6 +15,7 @@ import {
   PROFILES_DELETE_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
 } from "../../shared/ipc";
 import {
@@ -26,6 +29,13 @@ import {
   resolveProfileDir,
   setDefaultProfileName,
 } from "../profile";
+import { disposeDesktopBackendRegistry } from "../app-server/backend-registry";
+import {
+  applyDesktopSettingsPatch,
+  readDesktopSettingsConfig,
+  resolveDesktopConfigPath,
+} from "../settings/desktop-config";
+import { discoverCodexAuthProfiles } from "../settings/codex-profiles";
 
 export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesResponse {
   const activeProfile = resolveActiveProfileName();
@@ -63,8 +73,20 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
         default: profile.name === defaultProfile,
         profileDir: resolveProfileDir(profile.name),
         canDelete: profile.name !== activeProfile && profile.name !== "default",
+        codexProfile: readPwrAgentProfileCodexProfile(profile.name),
       })),
   };
+}
+
+function readPwrAgentProfileCodexProfile(profileName: string) {
+  const config = readDesktopSettingsConfig(
+    resolveDesktopConfigPath({ cliProfile: profileName }),
+  );
+  const discovery = discoverCodexAuthProfiles({
+    configuredProfile: config.models?.codex?.profile,
+  });
+  return discovery.profiles.find((profile) => profile.selected)
+    ?? discovery.profiles[0]!;
 }
 
 export function openDesktopPwrAgentProfile(
@@ -119,6 +141,35 @@ export function deleteDesktopPwrAgentProfile(
   return { deleted: true, profile };
 }
 
+export async function setDesktopPwrAgentProfileCodexProfile(
+  request: SetDesktopPwrAgentProfileCodexProfileRequest,
+): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> {
+  const profile = request.profile.trim();
+  const codexProfile = request.codexProfile.trim();
+  if (!isValidProfileName(profile)) {
+    throw new Error(`Invalid profile name "${profile}".`);
+  }
+  if (codexProfile && !isValidProfileName(codexProfile)) {
+    throw new Error(`Invalid Codex profile name "${codexProfile}".`);
+  }
+
+  ensureProfileExists({
+    env: {
+      ...process.env,
+      [PWRAGENT_PROFILE_ENV]: profile,
+    },
+  });
+  applyDesktopSettingsPatch(resolveDesktopConfigPath({ cliProfile: profile }), {
+    models: { codex: { profile: codexProfile } },
+  });
+
+  if (profile === resolveActiveProfileName()) {
+    await disposeDesktopBackendRegistry();
+  }
+
+  return { profile, codexProfile };
+}
+
 export function registerProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_LIST_CHANNEL);
   ipcMain.handle(
@@ -156,6 +207,16 @@ export function registerProfilesIpcHandlers(): void {
     ): Promise<DeleteDesktopPwrAgentProfileResponse> =>
       deleteDesktopPwrAgentProfile(request),
   );
+
+  ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
+  ipcMain.handle(
+    PROFILES_SET_CODEX_PROFILE_CHANNEL,
+    async (
+      _event,
+      request: SetDesktopPwrAgentProfileCodexProfileRequest,
+    ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
+      await setDesktopPwrAgentProfileCodexProfile(request),
+  );
 }
 
 export function disposeProfilesIpcHandlers(): void {
@@ -163,4 +224,5 @@ export function disposeProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_OPEN_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
+  ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
 }

@@ -1,5 +1,9 @@
 import { useState } from "react";
-import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
+import type { ReactNode } from "react";
+import type {
+  DesktopPwrAgentProfileSummary,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { usePwrAgentProfiles } from "../../lib/usePwrAgentProfiles";
 import {
@@ -7,8 +11,13 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import { CodexAuthProfileSelect } from "./CodexAuthProfileSelect";
 
-export function ProfilesSettings(props: { desktopApi?: DesktopApi }) {
+export function ProfilesSettings(props: {
+  desktopApi?: DesktopApi;
+  snapshot: DesktopSettingsSnapshot;
+  onSettingsChanged: () => Promise<void>;
+}) {
   const profiles = usePwrAgentProfiles(props.desktopApi);
   const [deleteCandidate, setDeleteCandidate] =
     useState<DesktopPwrAgentProfileSummary | null>(null);
@@ -62,6 +71,22 @@ export function ProfilesSettings(props: { desktopApi?: DesktopApi }) {
                     profiles.openProfile(profile.name),
                   );
                 }}
+                codexProfileControl={
+                  <CodexAuthProfileSelect
+                    aria-label={`Codex auth profile for ${profile.displayName || profile.name}`}
+                    desktopApi={props.desktopApi}
+                    disabled={busyProfile === profile.name}
+                    discovery={props.snapshot.models.codex.profiles}
+                    value={profile.codexProfile.name}
+                    onAfterProfilesChanged={props.onSettingsChanged}
+                    onChange={async (codexProfile) => {
+                      await profiles.setCodexProfile(profile.name, codexProfile);
+                      if (profile.active) {
+                        await props.onSettingsChanged();
+                      }
+                    }}
+                  />
+                }
                 onUseDefault={() => {
                   void runProfileAction(profile.name, () =>
                     profiles.setDefaultProfile(profile.name),
@@ -105,6 +130,7 @@ export function ProfilesSettings(props: { desktopApi?: DesktopApi }) {
 
 function PwrAgentProfileRow(props: {
   busy: boolean;
+  codexProfileControl: ReactNode;
   profile: DesktopPwrAgentProfileSummary;
   onDelete: () => void;
   onOpen: () => void;
@@ -127,6 +153,10 @@ function PwrAgentProfileRow(props: {
         <span className="settings-pathrow__title">{displayName}</span>
         <span className="settings-pathrow__path">{profile.profileDir}</span>
         <span className="settings-profile-row__meta">{lastUsed}</span>
+        <div className="settings-profile-row__codex">
+          <span className="settings-profile-row__label">Codex auth profile</span>
+          {props.codexProfileControl}
+        </div>
       </div>
       <div className="settings-pathrow__chips">
         {profile.active ? (

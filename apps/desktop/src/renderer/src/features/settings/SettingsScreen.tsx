@@ -376,7 +376,13 @@ function SettingsSectionBody(props: {
   }
 
   if (props.section === "profiles") {
-    return <ProfilesSettings desktopApi={props.desktopApi} />;
+    return (
+      <ProfilesSettings
+        desktopApi={props.desktopApi}
+        snapshot={props.snapshot}
+        onSettingsChanged={props.settings.refresh}
+      />
+    );
   }
 
   if (props.section === "worktrees") {

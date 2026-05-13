@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createCodexAuthProfile,
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
 } from "../settings/codex-profiles";
@@ -79,5 +80,27 @@ describe("Codex auth profile discovery", () => {
         env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
       }),
     ).toBeUndefined();
+  });
+
+  it("creates named Codex auth profile directories", () => {
+    const root = createTempRoot();
+    const codexHome = path.join(root, "codex");
+
+    const created = createCodexAuthProfile("work", {
+      env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+    });
+
+    expect(created).toEqual({
+      profile: "work",
+      codexHome: path.join(codexHome, "profiles", "work"),
+      created: true,
+    });
+    expect(fs.statSync(created.codexHome).isDirectory()).toBe(true);
+
+    expect(
+      createCodexAuthProfile("work", {
+        env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+      }).created,
+    ).toBe(false);
   });
 });

@@ -382,11 +382,9 @@ describe("SettingsScreen", () => {
 
     // Codex pathrow only renders a "Use" button on candidates that
     // are NOT currently selected (the selected one shows a "Using"
-    // chip instead). With the seed data the selected candidate is
-    // `/usr/local/bin/codex`, so the single "Use" here points at
-    // `/Applications/Codex.app/Contents/Resources/codex`.
+    // chip instead).
     const useButtons = screen.getAllByRole("button", { name: "Use" });
-    expect(useButtons).toHaveLength(2);
+    expect(useButtons).toHaveLength(1);
     fireEvent.click(useButtons[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -397,9 +395,11 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getByText("System default")).toBeInTheDocument();
-    expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
-    fireEvent.click(useButtons[1]!);
+    expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("option", { name: "work" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Codex auth profile" }), {
+      target: { value: "work" },
+    });
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -1375,6 +1375,19 @@ describe("SettingsScreen", () => {
         default: name === defaultProfile,
         profileDir: `/home/example/.pwragent/profiles/${name}`,
         canDelete: name !== "dev" && name !== "default",
+        codexProfile: {
+          name: name === "scratch" ? "work" : "",
+          displayName: name === "scratch" ? "work" : "System default",
+          codexHome:
+            name === "scratch"
+              ? "/home/example/.codex/profiles/work"
+              : "/home/example/.codex",
+          source: name === "scratch" ? "directory" : "default",
+          exists: true,
+          selected: true,
+          hasAuthFile: true,
+          hasConfigFile: name !== "scratch",
+        },
       })),
     }));
     const setDefaultPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
@@ -1390,11 +1403,15 @@ describe("SettingsScreen", () => {
       opened: true,
       profile,
     }));
+    const setPwrAgentProfileCodexProfile = vi.fn(
+      async (request: { profile: string; codexProfile: string }) => request,
+    );
     const desktopApi = {
       deletePwrAgentProfile,
       listPwrAgentProfiles,
       openPwrAgentProfile,
       setDefaultPwrAgentProfile,
+      setPwrAgentProfileCodexProfile,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
     const { container } = render(
@@ -1412,6 +1429,24 @@ describe("SettingsScreen", () => {
     const scratchRow = screen
       .getByText("scratch")
       .closest(".settings-profile-row") as HTMLElement;
+    expect(
+      within(scratchRow).getByRole("combobox", {
+        name: "Codex auth profile for scratch",
+      }),
+    ).toHaveValue("work");
+    fireEvent.change(
+      within(scratchRow).getByRole("combobox", {
+        name: "Codex auth profile for scratch",
+      }),
+      { target: { value: "" } },
+    );
+    await waitFor(() => {
+      expect(setPwrAgentProfileCodexProfile).toHaveBeenCalledWith({
+        profile: "scratch",
+        codexProfile: "",
+      });
+    });
+
     fireEvent.click(within(scratchRow).getByRole("button", { name: "Use on startup" }));
     await waitFor(() => {
       expect(setDefaultPwrAgentProfile).toHaveBeenCalledWith({

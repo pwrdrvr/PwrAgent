@@ -518,6 +518,39 @@ export type ClearDesktopSettingsSecretRequest = {
 
 export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
 
+export type CreateDesktopCodexAuthProfileRequest = {
+  profile: string;
+};
+
+export type CreateDesktopCodexAuthProfileResponse = {
+  profile: string;
+  codexHome: string;
+  created: boolean;
+};
+
+export type StartDesktopCodexAuthProfileLoginRequest = {
+  profile: string;
+};
+
+export type StartDesktopCodexAuthProfileLoginResponse = {
+  profile: string;
+  codexHome: string;
+  started: boolean;
+  pid?: number;
+};
+
+export type CheckDesktopCodexAuthProfileStatusRequest = {
+  profile: string;
+};
+
+export type CheckDesktopCodexAuthProfileStatusResponse = {
+  profile: string;
+  codexHome: string;
+  authenticated: boolean;
+  status: "authenticated" | "unauthenticated" | "failed";
+  detail?: string;
+};
+
 export type PickGhCommandResponse = {
   canceled: boolean;
   path?: string;
@@ -537,6 +570,7 @@ export type DesktopPwrAgentProfileSummary = {
   default: boolean;
   profileDir: string;
   canDelete: boolean;
+  codexProfile: DesktopCodexAuthProfileCandidate;
 };
 
 export type ListDesktopPwrAgentProfilesResponse = {
@@ -570,6 +604,16 @@ export type DeleteDesktopPwrAgentProfileRequest = {
 export type DeleteDesktopPwrAgentProfileResponse = {
   deleted: boolean;
   profile: string;
+};
+
+export type SetDesktopPwrAgentProfileCodexProfileRequest = {
+  profile: string;
+  codexProfile: string;
+};
+
+export type SetDesktopPwrAgentProfileCodexProfileResponse = {
+  profile: string;
+  codexProfile: string;
 };
 
 export type OpenDesktopApplicationRequest = {

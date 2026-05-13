@@ -137,6 +137,12 @@ export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
+export const SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL =
+  "settings:create-codex-auth-profile";
+export const SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL =
+  "settings:start-codex-auth-profile-login";
+export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
+  "settings:check-codex-auth-profile-status";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
@@ -152,3 +158,4 @@ export const PROFILES_LIST_CHANNEL = "profiles:list";
 export const PROFILES_OPEN_CHANNEL = "profiles:open";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
+export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";

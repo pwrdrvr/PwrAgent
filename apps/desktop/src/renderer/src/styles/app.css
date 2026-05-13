@@ -3108,6 +3108,41 @@ textarea,
   box-shadow: 0 0 0 1px var(--accent-shadow);
 }
 
+.settings-select {
+  width: 100%;
+  min-width: 0;
+  appearance: none;
+  height: 32px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border-default, var(--border-subtle));
+  border-radius: 6px;
+  background-color: var(--bg-input);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.settings-select:focus,
+.settings-select:focus-visible {
+  border-color: var(--accent-border);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .settings-input--invalid {
   border-color: var(--danger-border);
   box-shadow: 0 0 0 1px rgba(196, 90, 58, 0.22);
@@ -3633,6 +3668,20 @@ textarea,
   line-height: 1.3;
 }
 
+.settings-profile-row__codex {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.settings-profile-row__label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
 .settings-profile-row__actions {
   display: flex;
   flex: 0 0 auto;
@@ -3707,9 +3756,46 @@ textarea,
   margin-top: 16px;
 }
 
+.settings-codex-profile-select {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-codex-profile-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.settings-codex-profile-details__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-codex-profile-dialog .settings-input {
+  margin-top: 12px;
+}
+
+.settings-codex-profile-dialog__status {
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 @media (max-width: 760px) {
   .settings-profile-row,
-  .settings-profile-row__actions {
+  .settings-profile-row__actions,
+  .settings-codex-profile-details {
     align-items: stretch;
     flex-direction: column;
   }
