@@ -8,6 +8,12 @@ import type { GithubPrFetcher } from "./github-pr-fetcher";
 
 const execFileAsync = promisify(execFile);
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
+const FALLBACK_DEFAULT_BRANCHES = [
+  "main",
+  "master",
+  "develop",
+  "trunk",
+] as const;
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths
@@ -115,15 +121,17 @@ async function readDefaultBranch(cwd: string): Promise<string | undefined> {
     return normalizedRemoteHead;
   }
 
-  const branches = await readGitLine(cwd, [
-    "for-each-ref",
-    "--format=%(refname:short)",
-    "refs/heads/main",
-    "refs/heads/master",
-    "refs/heads/develop",
-    "refs/heads/trunk",
-  ]);
-  return branches?.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  for (const branch of FALLBACK_DEFAULT_BRANCHES) {
+    const localBranch = await readGitLine(cwd, [
+      "for-each-ref",
+      "--format=%(refname:short)",
+      `refs/heads/${branch}`,
+    ]);
+    if (localBranch === branch) {
+      return branch;
+    }
+  }
+  return undefined;
 }
 
 async function readGitLine(

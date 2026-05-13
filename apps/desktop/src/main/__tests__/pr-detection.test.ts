@@ -83,6 +83,42 @@ describe("detectPullRequestsForThread", () => {
     expect(fetchedBranches).toEqual(["main"]);
     expect(prs).toEqual([]);
   });
+
+  it("preserves feature branch lookup when fallback default candidates are not at HEAD", async () => {
+    const repo = await createDetachedRepoWithDevelopAndFeatureAtHead(
+      "fix/detached-feature-pr",
+    );
+    const fetchedBranches: string[] = [];
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) => {
+        fetchedBranches.push(branch);
+        if (branch !== "fix/detached-feature-pr") {
+          return [];
+        }
+        return [
+          {
+            number: 393,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/393",
+          },
+        ];
+      }),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "HEAD",
+      directoryPaths: [repo],
+    });
+
+    expect(fetchedBranches).toEqual(
+      expect.arrayContaining(["develop", "fix/detached-feature-pr"]),
+    );
+    expect(fetchedBranches).not.toEqual(["develop"]);
+    expect(prs).toHaveLength(1);
+  });
 });
 
 async function createDetachedRepoWithFeatureBranchAtHead(
@@ -112,6 +148,23 @@ async function createDetachedRepoWithDefaultAndStaleBranchAtHead(
   await git(repo, "commit", "--allow-empty", "-m", "initial");
   const sha = (await git(repo, "rev-parse", "HEAD")).trim();
   await git(repo, "branch", branch, sha);
+  await git(repo, "checkout", "--detach", sha);
+  return repo;
+}
+
+async function createDetachedRepoWithDevelopAndFeatureAtHead(
+  branch: string,
+): Promise<string> {
+  const repo = await mkdtemp(path.join(tmpdir(), "pwragent-pr-detection-"));
+  tempDirs.push(repo);
+  await git(repo, "init", "-b", "main");
+  await git(repo, "config", "user.email", "test@example.com");
+  await git(repo, "config", "user.name", "PwrAgent Test");
+  await git(repo, "commit", "--allow-empty", "-m", "initial");
+  const sha = (await git(repo, "rev-parse", "HEAD")).trim();
+  await git(repo, "branch", "develop", sha);
+  await git(repo, "branch", branch, sha);
+  await git(repo, "commit", "--allow-empty", "-m", "move main forward");
   await git(repo, "checkout", "--detach", sha);
   return repo;
 }
