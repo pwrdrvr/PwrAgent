@@ -12,31 +12,45 @@ you flip it.
 
 ## What you think it does
 
-You think you'll get a series of messages as the agent works — one for
-the start of the answer, one for each tool the agent runs, one for the
-final wrap-up — letting you follow along in chronological order, the
-way you might watch a person write.
+You think enabling streaming makes the agent's response arrive faster,
+or that streaming is the thing that breaks a long reply into smaller
+messages you can watch arrive piece by piece.
 
 ## What it actually does
 
-The bot posts **one** message at the start of the response. As the
-agent produces text, the bot **edits that same message** to extend it.
-By the end of the turn, you have a single message that contains the
-whole reply, but it was repeatedly rewritten on its way there.
+Streaming does not change how *many* messages you get per turn. A
+single agent turn typically produces a handful to a dozen separate bot
+messages already — each assistant text emission, the tool-progress
+summaries ("Read app.tsx", "Ran build"), the turn-completion summary
+at the end. Those are separate messages regardless of streaming;
+they're driven by the agent's own tool calls and your `Tools: <mode>`
+verbosity setting.
 
-You don't get a message per tool call. You don't get a paragraph at
-a time as the agent thinks. You get **one message, edited many times**.
+What streaming changes is how **each** of those bot messages arrives:
 
-## Why that's worse than it sounds
+- **With streaming off:** the bot waits until one of those emissions
+  is complete, then posts it as a single message.
+- **With streaming on:** the bot posts a partial version of the
+  message early and edits it two or three times as more text arrives,
+  until it reaches the final form.
 
-### 1. Voice readers only hear the first version
+So streaming doesn't take you from 10 messages per turn down to 1. It
+gives you the same ~10 messages, each with 2–3 extra edits while they
+finalize.
 
-Screen readers and voice assistants (Siri's "Announce Notifications,"
+## Why those extra edits are usually a bad trade
+
+Two follow-on effects from the edits:
+
+### 1. Voice readers only hear the first version of each message
+
+Screen readers and voice assistants (Siri's "Announce Notifications",
 Apple Watch, VoiceOver, Android TalkBack, in-car voice readers) read a
-message **when it first arrives**. They don't observe subsequent edits
-to the same message.
+message **when it first arrives**. They don't re-read it as the bot
+edits.
 
-So if streaming is on and the bot posts this sequence:
+So if streaming is on and one of the bot's messages goes through this
+sequence:
 
 | Time | Message body |
 |---|---|
@@ -44,17 +58,14 @@ So if streaming is on and the bot posts this sequence:
 | 0:01 | `I will explore the files ` |
 | 0:02 | `I will explore the files in this directory to look for the widget component that you mentioned.` |
 
-Siri reads to you: ***"I will."*** And stops. Streaming is off, the
-same response is delivered as one final message, and Siri reads the
-whole thing.
+Siri reads to you: ***"I will."*** And stops. Streaming off, the same
+emission arrives as one message and Siri reads the whole thing. For
+anyone consuming the bot via voice — driving, walking, multi-tasking,
+accessibility need — streaming actively breaks the product.
 
-For anyone who consumes the bot via voice — driving, walking,
-multi-tasking, accessibility need — streaming actively breaks the
-product.
+### 2. Each edit eats rate-limit budget — and gets auto-disabled when budgets tighten
 
-### 2. Each edit eats rate-limit budget
-
-Edits are not free. On most platforms, an edit is its own API request
+Edits are not free. On most platforms an edit is its own API request
 and counts against the same write budget as a new message.
 
 Telegram's measured limits (from May 2026 probes by the PwrAgent
@@ -65,9 +76,15 @@ team):
 | Telegram DM | ~60 messages/edits per minute |
 | Telegram supergroup | ~20 messages/edits per minute (shared across all topics) |
 
-A single streamed response can easily produce 5–10 edits. The example
-sequence above is 3 messages out of a 20/minute supergroup budget
-spent on a single response.
+A turn with ~10 bot messages and 2–3 edits per message is ~30 budget
+consumptions in the span of a single response. PwrAgent's local Slow
+Mode is designed to keep **critical** traffic flowing under tight
+budgets — approval prompts, the final assistant text, the turn
+completion summary. Streaming edits are the **least critical** thing
+the adapter sends, so they're the first thing Slow Mode starts
+dropping. In practice, on any turn with serious tool activity you may
+turn streaming on and watch PwrAgent auto-disable it part-way through
+the turn.
 
 | Platform | Behavior |
 |---|---|
@@ -75,48 +92,30 @@ spent on a single response.
 | Slack | Edits are more permissive than sends (`chat.postMessage` has its own limit), but they still count as API requests. |
 | Discord | Edits are permissive but still hit route/global REST buckets. |
 | Mattermost | Server-configured. |
+| LINE | Edits aren't supported at all; the streaming toggle is a no-op on LINE. |
 
-When the budget runs out, PwrAgent enters Slow Mode and starts dropping
-non-final streaming edits to preserve the final message and interactive
-prompts. The rate-limit pain doesn't bite mid-turn; it bites the **next
-few turns**, which run with degraded surfaces because the budget hasn't
-recovered.
+## When streaming might actually be the right call
 
-### 3. You don't get tool-by-tool visibility
+A narrow case: you know the turn will produce **exactly one** bot
+message (no tool calls, no skill use, no tool-update chatter), the
+**very start** of that message contains the information you actually
+care about, the rest doesn't, **and** you can't get the bot to shape
+the response any other way (split into chunks, lead with a summary,
+etc.). If you're sitting in front of a desktop chat client watching
+that single message render character by character is faster-feeling
+than waiting for the final blob.
 
-If your goal is "see what the agent is doing as it works," the right
-surface is **tool update notifications**, not streaming. Tool updates
-are separate messages — one per completed tool call (or batched, per
-your verbosity setting) — that summarize what the agent did. They
-survive voice readers, they're rate-limit-aware, and they're on by
-default at `Show Some`.
-
-See the per-platform "Settings reference" for the `Tools: <mode>` toggle.
-
-## When you might actually want streaming on
-
-A small set of cases where streaming is the right call:
-
-- **You're sitting in front of a desktop chat client**, watching the
-  message render.
-- **You're not using a voice reader.**
-- **The conversation is a private DM with no other concurrent traffic**
-  (rate-limit pressure is low).
-- **The response is long enough that the edit-by-edit rendering
-  actually gives you useful early-information**, rather than just a
-  half-formed first sentence.
-- **You don't have a per-binding `Tools` mode set to a verbose value**
-  (or you don't care about tool visibility).
-
-In every other case — the default desktop user, anyone using the bot
-hands-free, anyone routing through a supergroup with other activity —
-streaming is a net negative.
+That's the case streaming was built for. For everything else — any
+turn that touches tools or skills, anything routed to a phone, anyone
+using voice, anyone in a supergroup with other activity — streaming is
+a net negative, and often one PwrAgent will quietly disable on you
+mid-turn anyway.
 
 ## Defaults and how to change them
 
 - The provider-level toggle in Settings → Messaging → \<platform\> →
-  Streaming Responses is **off** by default. Leave it off unless one of
-  the cases above applies.
+  Streaming Responses is **off** by default. Leave it off unless your
+  use fits the narrow case above.
 - A single binding can opt in or out of streaming independently. The
   status card's `Stream: <mode>` button cycles through
   `Default` → `On` → `Off`.
@@ -124,9 +123,10 @@ streaming is a net negative.
   - `On` enables streaming for this binding only.
   - `Off` disables streaming for this binding only.
 
-If you're not sure: leave the toggle off, run a few turns, then decide
-whether the cost-of-edits and voice-reader breakage are worth the
-live-rendering you'd be trading them for. Usually they're not.
+If you're not sure: leave the toggle off, run a few turns, watch how
+many separate messages a representative turn produces, then decide
+whether the character-by-character rendering on a few of them is worth
+the edits.
 
 ## See also
 
