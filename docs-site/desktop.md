@@ -120,6 +120,174 @@ markers, and free text. Pin threads you want to keep at the top of
 Recents; the pinned section is scrollable independently of the rest
 of the list.
 
+## Multiple profiles
+
+PwrAgent has **two independent profile mechanisms** that compose.
+Read once; the rest of the section is a worked setup.
+
+### PwrAgent profiles
+
+A **PwrAgent profile** is selected by the `PWRAGENT_PROFILE` env
+var at launch. Each profile carries its own:
+
+- `config.toml` (settings) and `state.db` (sqlite session DB).
+- New-thread sticky settings (the per-thread defaults you've
+  carried forward).
+- **Messaging profile**, entirely isolated from other PwrAgent
+  profiles. One PwrAgent profile can have Telegram + Slack
+  configured; another can have just Mattermost; a third can have
+  the same Telegram platform but a **different bot token**. They
+  don't talk to each other.
+
+Creating a new PwrAgent profile is trivial: pick a name, set the
+env var, launch. PwrAgent creates the profile on first run under
+`~/.pwragent/profiles/<name>/`.
+
+> **Use case.** Two PwrAgent profiles pointed at the **same Codex
+> auth** share the underlying Codex threads, settings, and account
+> — but they're independent at the PwrAgent layer. That's how you
+> run **multiple bots of the same platform** (e.g. one Telegram bot
+> for personal work and another Telegram bot for a small team,
+> both driving the same Codex thread list).
+
+### Codex profiles
+
+A **Codex profile** is an isolated `CODEX_HOME` directory the
+Codex App Server uses for its own state — auth tokens, thread
+history, config. Each Codex profile points at its own OpenAI Codex
+identity (or the same identity, if you want).
+
+> **Use case.** Two Codex profiles for a single PwrAgent install:
+> `~/.codex/profiles/work/` (your day-job Codex account) and
+> `~/.codex/profiles/personal/` (your personal account). Threads
+> stay separated; auth stays separated. Switch between them by
+> changing the Codex auth profile selection in Settings → Models.
+
+> **Cheekier use case.** Four Codex profiles, each pointed at a
+> different Codex Pro account, because you are an animal and need
+> four accounts worth of tokens to rule the world. PwrAgent will
+> not stop you.
+
+### How the two profile mechanisms compose
+
+| What's isolated | PwrAgent profile | Codex profile |
+|---|---|---|
+| PwrAgent settings (`config.toml`) | ✅ | — |
+| PwrAgent state DB (`state.db`) | ✅ | — |
+| Messaging adapters + bot tokens | ✅ | — |
+| Codex threads + history | — | ✅ |
+| Codex auth (OpenAI account) | — | ✅ |
+| Per-thread settings stickiness | ✅ | — |
+
+You can compose them however you want. Examples:
+
+- **1 PwrAgent × 1 Codex.** Default. Single install.
+- **2 PwrAgent × 1 Codex.** Two messaging surfaces (different bots
+  for the same platform; or one with messaging, one without)
+  sharing the same Codex threads.
+- **1 PwrAgent × 2 Codex.** One PwrAgent install switching between
+  work and personal Codex identities via Settings → Models.
+- **N PwrAgent × M Codex.** Whatever combination makes sense.
+
+### Setting up an alternate Codex profile
+
+Today this is a CLI bootstrap (we're working on making it in-app —
+see [Coming soon](#coming-soon)). The flow:
+
+```bash
+# Pick a name. Avoid spaces; use lowercase / underscore / dash.
+export CODEX_PROFILE_NAME=work
+
+# Create the Codex home for that auth profile.
+mkdir -p "$HOME/.codex/profiles/$CODEX_PROFILE_NAME"
+
+# Optional: copy your existing Codex config as a starting point.
+cp "$HOME/.codex/config.toml" "$HOME/.codex/profiles/$CODEX_PROFILE_NAME/config.toml"
+
+# Log Codex into that isolated CODEX_HOME.
+CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" codex login
+
+# Verify it's logged in.
+CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" codex login status
+```
+
+If you use API-key auth instead of browser-flow login:
+
+```bash
+printenv OPENAI_API_KEY | \
+  CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" \
+  codex login --with-api-key
+```
+
+### Wiring it into PwrAgent
+
+After the alternate `CODEX_HOME` is logged in, point a PwrAgent
+profile at it:
+
+1. Launch PwrAgent with the PwrAgent profile you want this Codex
+   profile attached to. **From source:**
+
+   ```bash
+   PWRAGENT_PROFILE=dev pnpm --filter @pwragent/desktop dev:no-messaging
+   ```
+
+   **From the installed `.app`:**
+
+   ```bash
+   PWRAGENT_PROFILE=work /Applications/PwrAgent.app/Contents/MacOS/PwrAgent &
+   ```
+
+   This invokes the bundled binary directly with the env var set.
+   The `&` backgrounds the app so your terminal stays usable.
+
+2. Open **Settings → Models → Codex**.
+3. In the **Auth profile** picker, choose the directory you
+   created (`work` in the example above).
+4. Save and restart PwrAgent so the App Server re-launches with
+   the new `CODEX_HOME`.
+
+The selection writes to that PwrAgent profile's config only — for
+the example above, `~/.pwragent/profiles/dev/config.toml`:
+
+```toml
+[models.codex]
+profile = "work"
+```
+
+### Verifying without guessing
+
+After the wire-up:
+
+```bash
+# Confirm PwrAgent dev selected the Codex auth profile.
+rg -n 'profile = "work"|\[models.codex\]' \
+  ~/.pwragent/profiles/dev/config.toml
+
+# After starting a Codex thread from PwrAgent, confirm Codex state
+# lands in the isolated CODEX_HOME.
+find ~/.codex/profiles/work -maxdepth 4 -type f | sort | head -80
+```
+
+You should see something like:
+
+```
+~/.codex/profiles/work/auth.json
+~/.codex/profiles/work/config.toml  # if copied or created
+~/.codex/profiles/work/session_index.jsonl
+~/.codex/profiles/work/sessions/...
+~/.codex/profiles/work/worktrees/...  # if Codex user-home worktrees are used
+```
+
+### Mental model
+
+- `PWRAGENT_PROFILE=<name>` selects PwrAgent's **own** DB, config,
+  and secrets directory.
+- The **Codex auth profile** picked inside that PwrAgent profile
+  selects which `CODEX_HOME` PwrAgent hands to the Codex App Server.
+
+The two settings live at different layers and don't interact. Pick
+each one for its own reason.
+
 ## Not yet
 
 Features the desktop **doesn't have today** that operators have
@@ -152,6 +320,12 @@ release builds yet:
   above — tear down the worktree's working environment when a
   thread is archived or handed back to Local. Today nothing
   cleans up.
+- **In-app profile management.** Creating, switching, and
+  configuring PwrAgent profiles (and the Codex profiles bound to
+  them) currently requires the CLI bootstrap described in
+  [Multiple profiles](#multiple-profiles). The flow lands inside
+  the app shortly — pick / create / switch profiles from the
+  PwrAgent UI without dropping to a terminal.
 
 If either of these would be load-bearing for your workflow, watch
 the [GitHub repo](https://github.com/pwrdrvr/PwrAgent) for the
