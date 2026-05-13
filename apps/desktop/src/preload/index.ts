@@ -135,6 +135,9 @@ import {
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+  APP_LOG_ENTRY_EVENT_CHANNEL,
+  APP_LOG_SNAPSHOT_READ_CHANNEL,
+  APP_LOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
@@ -195,6 +198,8 @@ import {
 import type { RuntimeIdentity } from "../shared/runtime-identity";
 import type {
   AppChangelogDocument,
+  AppLogEntry,
+  AppLogSnapshot,
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
@@ -236,6 +241,19 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_CHANGELOG_DOCUMENT_READ_CHANNEL),
   openChangelogWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  },
+  readAppLogSnapshot: async (): Promise<AppLogSnapshot> =>
+    await ipcRenderer.invoke(APP_LOG_SNAPSHOT_READ_CHANNEL),
+  openAppLogWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(APP_LOG_WINDOW_OPEN_CHANNEL);
+  },
+  onAppLogEntry: (callback: (entry: AppLogEntry) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: AppLogEntry) =>
+      callback(payload);
+    ipcRenderer.on(APP_LOG_ENTRY_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(APP_LOG_ENTRY_EVENT_CHANNEL, listener);
+    };
   },
   checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),

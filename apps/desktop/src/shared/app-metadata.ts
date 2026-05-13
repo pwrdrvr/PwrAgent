@@ -22,6 +22,23 @@ export type AppChangelogDocument = {
   content: string;
 };
 
+export type AppLogSnapshot = {
+  kind: "log-snapshot";
+  title: string;
+  entries: AppLogEntry[];
+  readAt: number;
+  truncated: boolean;
+  unavailableReason?: string;
+};
+
+export type AppLogEntry = {
+  sequence: number;
+  timestamp: number;
+  level: string;
+  scope?: string;
+  line: string;
+};
+
 export type AppUpdateCheckResult =
   | { status: "skipped"; reason: string }
   | { status: "error"; message: string }

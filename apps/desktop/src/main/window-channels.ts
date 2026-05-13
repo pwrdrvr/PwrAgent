@@ -34,10 +34,12 @@ import type { BrowserWindow, WebContents } from "electron";
 export const WINDOW_KIND_MAIN = "main" as const;
 export const WINDOW_KIND_MESSAGING_ACTIVITY = "messaging-activity" as const;
 export const WINDOW_KIND_CHANGELOG = "changelog" as const;
+export const WINDOW_KIND_APP_LOGS = "app-logs" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_MAIN
   | typeof WINDOW_KIND_MESSAGING_ACTIVITY
-  | typeof WINDOW_KIND_CHANGELOG;
+  | typeof WINDOW_KIND_CHANGELOG
+  | typeof WINDOW_KIND_APP_LOGS;
 
 interface Entry {
   kind: WindowKind;
