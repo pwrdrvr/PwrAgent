@@ -4,7 +4,10 @@ import {
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
 import {
+  CodexModelInteractionMapperClient,
+  FallbackModelInteractionMapperClient,
   ModelInteractionMapper,
+  type ModelInteractionMapperClient,
   XaiModelInteractionMapperClient,
 } from "./core/model-interaction-mapper";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -835,9 +838,7 @@ export class DesktopMessagingRuntime {
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
       interactionMapper: new ModelInteractionMapper(
-        new XaiModelInteractionMapperClient({
-          apiKey: resolveGrokApiKeyForMessagingMapper(),
-        }),
+        buildMessagingInteractionMapperClient(this.options.backendBridge),
       ),
       interactionModeDefault: async () =>
         interactionModeDefaultForChannel(await this.loadConfig(), adapter.channel),
@@ -1914,6 +1915,29 @@ export class DesktopMessagingRuntime {
       ? await this.options.config(options)
       : this.options.config;
   }
+}
+
+function buildMessagingInteractionMapperClient(
+  backendBridge: MessagingBackendBridge,
+): ModelInteractionMapperClient {
+  const clients: ModelInteractionMapperClient[] = [];
+  if (backendBridge.generateHelperObject) {
+    clients.push(
+      new CodexModelInteractionMapperClient({
+        helper: {
+          generateHelperObject: (request) =>
+            backendBridge.generateHelperObject!(request),
+        },
+      }),
+    );
+  }
+  clients.push(
+    new XaiModelInteractionMapperClient({
+      apiKey: resolveGrokApiKeyForMessagingMapper(),
+    }),
+  );
+
+  return new FallbackModelInteractionMapperClient(clients);
 }
 
 function resolveGrokApiKeyForMessagingMapper(): string | undefined {

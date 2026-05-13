@@ -72,6 +72,25 @@ export type MessagingLastAssistantReply = {
   text: string;
 };
 
+export type MessagingHelperObjectRequest = {
+  prompt: string;
+  promptVersion: string;
+  schema: Record<string, unknown>;
+  schemaName: string;
+  timeoutMs: number;
+};
+
+export type MessagingHelperObjectResult =
+  | {
+      status: "ok";
+      object: unknown;
+      cachedTokens?: number;
+    }
+  | {
+      status: "unavailable" | "failed";
+      reason: string;
+    };
+
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
@@ -136,6 +155,9 @@ export type MessagingBackendBridge = {
     threadId: string;
     transition: ThreadMessagingBindingTransition;
   }): Promise<void>;
+  generateHelperObject?(
+    request: MessagingHelperObjectRequest,
+  ): Promise<MessagingHelperObjectResult>;
   submitServerRequest?(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;

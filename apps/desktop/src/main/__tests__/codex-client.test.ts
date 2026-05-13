@@ -4124,6 +4124,65 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("can generate arbitrary helper objects through Codex ephemeral threads", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-helper-object",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-helper-object",
+      },
+      turn: {
+        id: "turn-helper-object",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              disposition: "action",
+              actionId: "command:status",
+              confidence: 0.91,
+            }),
+          },
+        ],
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateHelperObject({
+        prompt: "Map the reply.",
+        promptVersion: "messaging-interaction-mapper-v1",
+        schema: {
+          type: "object",
+          required: ["disposition", "confidence"],
+          properties: {
+            disposition: { type: "string" },
+            actionId: { type: "string" },
+            confidence: { type: "number" },
+          },
+        },
+        schemaName: "messaging_interaction_mapping",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      status: "ok",
+      object: {
+        disposition: "action",
+        actionId: "command:status",
+        confidence: 0.91,
+      },
+    });
+
+    await client.close();
+  });
+
   it("uses helper title notifications that arrive before the turn/start response", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
