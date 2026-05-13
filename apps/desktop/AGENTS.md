@@ -26,9 +26,10 @@ The desktop style guide defines:
 
 ## Non-Negotiables
 
-- Recents and Directories live in one thread lens switch; Recents is the
+- Inbox, Recents, and Directories live in one thread lens switch; Inbox is the
   default browsing lens.
-- User-curated Pins live as a scrollable section at the top of Recents.
+- User-curated Pins live as a scrollable section at the top of Inbox and
+  Recents.
 - Unread state uses the orange cookie marker, not punctuation badges.
 - The sidebar is an information surface, not a stack of generic cards.
 - Do not use browser-default controls in shipped UI.

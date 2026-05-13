@@ -100,12 +100,13 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.inboxThreads).toHaveLength(0);
+      expect(result.current.inboxThreads).toHaveLength(1);
+      expect(result.current.inboxThreads[0]?.inbox.inInbox).toBe(false);
       expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
     });
   });
 
-  it("keeps a selected unread thread in Inbox until another item is selected", async () => {
+  it("keeps a selected unread marker until another item is selected", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-unread",
@@ -163,6 +164,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
         "thread-unread",
+        "thread-read",
       ]);
     });
 
@@ -179,14 +181,70 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
       "thread-unread",
+      "thread-read",
     ]);
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
 
     act(() => {
       result.current.selectThread(result.current.threads[1]!);
     });
 
     await waitFor(() => {
-      expect(result.current.inboxThreads).toHaveLength(0);
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    });
+  });
+
+  it("orders recent threads by creation time without changing inbox order", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "updated-newer",
+          title: "Updated newer",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          createdAt: 1_000,
+          updatedAt: 9_000,
+        },
+        {
+          id: "created-newer",
+          title: "Created newer",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          createdAt: 2_000,
+          updatedAt: 2_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
+        "updated-newer",
+        "created-newer",
+      ]);
+      expect(result.current.recentThreads.map((thread) => thread.id)).toEqual([
+        "created-newer",
+        "updated-newer",
+      ]);
     });
   });
 
@@ -447,7 +505,9 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads.map((thread) => thread.id)).toEqual([
       "thread-remaining",
     ]);
-    expect(result.current.inboxThreads).toHaveLength(0);
+    expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
+      "thread-remaining",
+    ]);
     expect(result.current.directories[0]?.threadKeys).toEqual([]);
     expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
   });

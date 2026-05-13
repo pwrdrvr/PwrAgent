@@ -27,6 +27,7 @@ describe("buildDirectorySummaries", () => {
       threads: [
         buildThread({
           id: "thread-1",
+          createdAt: 2_000,
           inbox: { inInbox: true },
           linkedDirectories: [
             {
@@ -39,6 +40,7 @@ describe("buildDirectorySummaries", () => {
         }),
         buildThread({
           id: "thread-2",
+          createdAt: 1_000,
           inbox: { inInbox: false },
           linkedDirectories: [
             {
@@ -61,6 +63,44 @@ describe("buildDirectorySummaries", () => {
         needsAttentionCount: 1,
         latestUpdatedAt: 2_000,
       }),
+    ]);
+  });
+
+  it("orders directory threads by creation time instead of last update time", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "updated-later",
+          createdAt: 1_000,
+          updatedAt: 9_000,
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "created-later",
+          createdAt: 2_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories[0]?.threadKeys).toEqual([
+      "codex:created-later",
+      "codex:updated-later",
     ]);
   });
 
@@ -99,6 +139,7 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [
         buildThread({
+          createdAt: 2_000,
           linkedDirectories: [
             {
               id: "dir-1",
@@ -238,6 +279,7 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [
         buildThread({
+          createdAt: 2_000,
           linkedDirectories: [
             {
               id: "/Users/huntharo/.pwragent/projects",
@@ -249,6 +291,7 @@ describe("buildDirectorySummaries", () => {
         }),
         buildThread({
           id: "thread-2",
+          createdAt: 1_000,
           linkedDirectories: [
             {
               id: "/Users/huntharo/.pwragent/projects/2026-05-02-a1b2c3",
@@ -448,6 +491,7 @@ describe("buildDirectorySummaries", () => {
       threads: [
         buildThread({
           id: "thread-1",
+          createdAt: 2_000,
           linkedDirectories: [
             {
               id: "dir-1",
@@ -459,6 +503,7 @@ describe("buildDirectorySummaries", () => {
         }),
         buildThread({
           id: "thread-2",
+          createdAt: 1_000,
           linkedDirectories: [
             {
               id: "dir-2",
@@ -496,6 +541,7 @@ describe("buildDirectorySummaries", () => {
       threads: [
         buildThread({
           id: "thread-1",
+          createdAt: 2_000,
           linkedDirectories: [
             {
               id: "dir-1",
@@ -508,6 +554,7 @@ describe("buildDirectorySummaries", () => {
         }),
         buildThread({
           id: "thread-2",
+          createdAt: 1_000,
           linkedDirectories: [
             {
               id: "dir-2",
@@ -538,6 +585,7 @@ describe("buildDirectorySummaries", () => {
       threads: [
         buildThread({
           id: "thread-home",
+          createdAt: 2_000,
           linkedDirectories: [
             {
               id: "/Users/huntharo/claude-worktrees/PwrAgnt/modest/apps/desktop",
@@ -549,6 +597,7 @@ describe("buildDirectorySummaries", () => {
         }),
         buildThread({
           id: "thread-worktree",
+          createdAt: 1_000,
           linkedDirectories: [
             {
               id: "/Users/huntharo/.pwragent/worktrees/mord46hf/PwrAgnt",

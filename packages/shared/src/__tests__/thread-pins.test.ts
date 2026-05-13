@@ -3,6 +3,7 @@ import {
   buildAppendPinRank,
   buildPinnedRanks,
   comparePinnedThreads,
+  compareThreadsByCreatedAtDesc,
   moveThreadKey,
 } from "../thread-pins";
 
@@ -28,6 +29,22 @@ describe("thread pins", () => {
     ].sort(comparePinnedThreads);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["c", "a", "b"]);
+  });
+
+  it("sorts created threads deterministically when creation timestamps are missing", () => {
+    const sorted = [
+      { id: "legacy-z", updatedAt: 9_000 },
+      { id: "created-newer", createdAt: 2_000, updatedAt: 2_000 },
+      { id: "legacy-a", updatedAt: 10_000 },
+      { id: "created-older", createdAt: 1_000, updatedAt: 8_000 },
+    ].sort(compareThreadsByCreatedAtDesc);
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "created-newer",
+      "created-older",
+      "legacy-z",
+      "legacy-a",
+    ]);
   });
 
   it("moves a dragged key before or after the target key", () => {

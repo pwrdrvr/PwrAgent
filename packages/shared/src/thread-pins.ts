@@ -6,6 +6,12 @@ type PinSortableThread = {
   updatedAt?: number;
 };
 
+type CreationSortableThread = {
+  id: string;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
 export function isPinnedThread(thread: PinSortableThread): boolean {
   return Boolean(thread.pinnedRank?.trim());
 }
@@ -28,6 +34,16 @@ export function comparePinRanks(left?: string, right?: string): number {
   const rightNumber = parsePinRank(right);
   if (leftNumber !== rightNumber) return leftNumber - rightNumber;
   return (left ?? "").localeCompare(right ?? "");
+}
+
+export function compareThreadsByCreatedAtDesc<T extends CreationSortableThread>(
+  left: T,
+  right: T,
+): number {
+  const createdComparison = (right.createdAt ?? 0) - (left.createdAt ?? 0);
+  if (createdComparison !== 0) return createdComparison;
+
+  return right.id.localeCompare(left.id);
 }
 
 export function buildAppendPinRank(existingRanks: Array<string | undefined>): string {

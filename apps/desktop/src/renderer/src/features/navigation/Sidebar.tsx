@@ -35,6 +35,7 @@ type SidebarProps = {
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
+  recentThreads?: NavigationThreadSummary[];
   loading: boolean;
   creatingThread?: {
     backend: AppServerBackendKind;
@@ -94,6 +95,12 @@ type SidebarProps = {
   onResizeByKeyboard?: (delta: number) => void;
 };
 
+const browseModeLabels = {
+  inbox: "Updated",
+  recents: "Created",
+  directories: "Directories",
+} satisfies Record<BrowseMode, string>;
+
 export function Sidebar(props: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -128,6 +135,10 @@ export function Sidebar(props: SidebarProps) {
   const runtimeGitRefValue = props.runtimeIdentity
     ? runtimeGitRefCopyValue(props.runtimeIdentity)
     : undefined;
+  const visibleThreads =
+    props.browseMode === "recents"
+      ? props.recentThreads ?? props.threads
+      : props.inboxThreads ?? props.threads;
 
   useEffect(() => {
     if (!copiedRuntimeValue) {
@@ -427,7 +438,7 @@ export function Sidebar(props: SidebarProps) {
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {(["recents", "directories"] as const).map((mode) => (
+          {(["inbox", "recents", "directories"] as const).map((mode) => (
             <button
               key={mode}
               aria-pressed={props.browseMode === mode}
@@ -437,7 +448,7 @@ export function Sidebar(props: SidebarProps) {
               type="button"
               onClick={() => props.onBrowseModeChange(mode)}
             >
-              {mode}
+              {browseModeLabels[mode]}
             </button>
           ))}
         </div>
@@ -463,14 +474,14 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : (
-            props.threads.length === 0 ? (
+            visibleThreads.length === 0 ? (
               <p className="sidebar-empty">No threads yet.</p>
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
-                threads={props.threads}
+                threads={visibleThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onReorderThreadPins={props.onReorderThreadPins}

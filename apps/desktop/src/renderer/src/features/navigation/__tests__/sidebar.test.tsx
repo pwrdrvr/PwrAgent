@@ -145,7 +145,7 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("renders Recents as the first thread lens and keeps directory rows available", () => {
+  it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     const onOpenSettings = vi.fn();
     render(
       <Sidebar
@@ -175,10 +175,11 @@ describe("Sidebar", () => {
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("button");
     expect(lensButtons.map((button) => button.textContent)).toEqual([
-      "recents",
-      "directories",
+      "Updated",
+      "Created",
+      "Directories",
     ]);
-    expect(screen.getByRole("button", { name: "directories" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Directories" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
@@ -520,11 +521,13 @@ describe("Sidebar", () => {
     expect(unreadIndicator).not.toHaveTextContent("!");
   });
 
-  it("does not render the retired inbox lens", () => {
+  it("renders Inbox as the updated-activity thread lens", () => {
+    const onBrowseModeChange = vi.fn();
+
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="inbox"
         createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
@@ -533,6 +536,59 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         selectedItemKey={undefined}
         threads={[sharedThread, updatedSinceSeenThread]}
+        onBrowseModeChange={onBrowseModeChange}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Updated" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Created" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: /Updated thread/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Created" }));
+
+    expect(onBrowseModeChange).toHaveBeenCalledWith("recents");
+  });
+
+  it("renders Recents from the creation-time thread order", () => {
+    const updatedLater = {
+      ...sharedThread,
+      id: "updated-later",
+      title: "Updated later",
+      createdAt: 1_000,
+      updatedAt: 9_000,
+      inbox: { inInbox: false },
+    };
+    const createdLater = {
+      ...sharedThread,
+      id: "created-later",
+      title: "Created later",
+      createdAt: 2_000,
+      updatedAt: 2_000,
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedLater, createdLater]}
+        recentThreads={[createdLater, updatedLater]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[updatedLater, createdLater]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -540,11 +596,14 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: "inbox" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "recents" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const rows = within(browseSection as HTMLElement).getAllByRole("button", {
+      name: /Updated later|Created later/i,
+    });
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Created later"),
+      expect.stringContaining("Updated later"),
+    ]);
   });
 
   it("opens thread actions from the row overflow button", () => {

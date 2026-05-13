@@ -20,11 +20,12 @@ import {
   buildPinnedRanks,
   buildThreadIdentityKey,
   comparePinnedThreads,
+  compareThreadsByCreatedAtDesc,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
-export type BrowseMode = "recents" | "directories";
+export type BrowseMode = "inbox" | "recents" | "directories";
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
@@ -1028,6 +1029,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads: NavigationThreadSummary[];
+  recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
   archiveThreadError?: string;
   worktreeArchiveError?: string;
@@ -1125,7 +1127,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
-  const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
+  const [browseMode, setBrowseMode] = useState<BrowseMode>("inbox");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
@@ -1735,28 +1737,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [optimisticThread, state.response?.directories, state.response?.threads]
   );
 
-  const inboxThreads = useMemo(() => {
-    const unreadThreads = threads.filter(
-      (thread) => thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen"
-    );
-    if (!retainedUnreadThread) {
-      return unreadThreads;
-    }
-
-    const retainedThreadKey = buildThreadIdentityKey(
-      retainedUnreadThread.source,
-      retainedUnreadThread.id
-    );
-    if (
-      unreadThreads.some(
-        (thread) => buildThreadIdentityKey(thread.source, thread.id) === retainedThreadKey
-      )
-    ) {
-      return unreadThreads;
-    }
-
-    return [retainedUnreadThread, ...unreadThreads];
-  }, [retainedUnreadThread, threads]);
+  const inboxThreads = threads;
+  const recentThreads = useMemo(
+    () => [...threads].sort(compareThreadsByCreatedAtDesc),
+    [threads],
+  );
 
   const selectedThreadKey = useMemo(() => {
     if (selectedItemKey && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)) {
@@ -2703,6 +2688,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     directories,
     error: state.error,
     inboxThreads,
+    recentThreads,
     launchpadError,
     archiveThreadError,
     worktreeArchiveError,
