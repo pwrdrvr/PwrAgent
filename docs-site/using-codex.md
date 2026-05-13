@@ -158,6 +158,7 @@ instead. Both paths dispatch to the same handler.
 | **Discord** | Slash-command registration silently no-ops if the Application ID isn't configured in PwrAgent. The bot still listens for at-mentions, but `/resume` etc. won't appear in the `/` menu. |
 | **Slack** | Slack slash commands are registered only when you flip the explicit toggle in Settings → Messaging → Slack. The recommended path on Slack is `@PwrAgent resume` text mention, which works in every workspace without per-app slash-command configuration. |
 | **Mattermost** (label) | Action buttons are capped at 40 characters of label — long model names truncate hard. Prefer text fallback (`reply 1`) over button clicks when labels read as ambiguous. |
+| **LINE** | Buttons on LINE are the most restrictive of any supported platform: **13 actions per message maximum** (tightest budget) and **20-character label cap** (tied for shortest, with Feishu). LINE also **doesn't support editing messages**, so paginated button surfaces — the [Resume Thread browser](#resume-thread-browser), the [New Thread starter](#new-thread-starter), the `/help` menu — post a **fresh card** on every Prev / Next / page-change click instead of editing the existing card in place. The combination makes button-driven flows noisier on LINE than elsewhere; prefer text fallback (`reply 1`, `next`, `back`, `cancel`) when a button reads as ambiguous or you don't want a chain of replacement cards in the conversation. |
 
 </details>
 
