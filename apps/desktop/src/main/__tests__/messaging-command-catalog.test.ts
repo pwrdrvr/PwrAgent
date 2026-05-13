@@ -263,7 +263,7 @@ describe("paginateHelpCatalog", () => {
 });
 
 describe("buildHelpActions", () => {
-  it("emits one command:<verb> button per catalog entry, no nav when single page", () => {
+  it("emits one command:<verb> button per catalog entry plus Cancel when single page", () => {
     const page = paginateHelpCatalog({
       profile: profileWithMaxActions(25),
     });
@@ -276,6 +276,7 @@ describe("buildHelpActions", () => {
       "command:detach",
       "command:monitor",
       "command:help",
+      "help:cancel",
     ]);
   });
 
@@ -298,7 +299,11 @@ describe("buildHelpActions", () => {
     });
     const actions = buildHelpActions({ page });
 
-    expect(actions.map((a) => a.layout)).toEqual([
+    expect(
+      actions
+        .filter((action) => action.id.startsWith("command:"))
+        .map((action) => action.layout),
+    ).toEqual([
       { row: 0, column: 0 },
       { row: 0, column: 1 },
       { row: 1, column: 0 },

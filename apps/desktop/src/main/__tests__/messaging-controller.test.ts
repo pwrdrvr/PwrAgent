@@ -175,6 +175,44 @@ describe("MessagingController", () => {
     });
   });
 
+  it("lets text-mode help prompts be cancelled before sending normal replies", async () => {
+    const harness = await createHarness({ interactionModeDefault: "text" });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    const help = harness.delivered[0];
+    expect(help).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining(
+        "Reply with: /resume, /new, /status, /detach, /monitor, /help, cancel.",
+      ),
+    });
+    await expect(
+      harness.store.findActivePendingIntentForChannel({
+        actorId: "user-1",
+        channel: buildTextEvent("ignored").channel,
+        now: 1000,
+      }),
+    ).resolves.toMatchObject({
+      id: help?.id,
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("cancel"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Help dismissed",
+      actions: [],
+    });
+    await expect(
+      harness.store.findActivePendingIntentForChannel({
+        actorId: "user-1",
+        channel: buildTextEvent("ignored").channel,
+        now: 1000,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("shows projects from /resume --projects and filters threads after a project click", async () => {
     const harness = await createHarness();
 
@@ -2219,8 +2257,8 @@ describe("MessagingController", () => {
       | { actions?: Array<{ id?: string; label?: string; style?: string }> }
       | undefined;
     expect(last?.actions).toBeDefined();
-    // One button per canonical verb. Catalog fits a
-    // single page on every reasonable provider profile, so no nav
+    // One button per canonical verb plus Cancel. Catalog fits a
+    // single page on every reasonable provider profile, so no page
     // buttons are rendered.
     const ids = (last?.actions ?? []).map((a) => a.id);
     expect(ids).toEqual([
@@ -2230,6 +2268,7 @@ describe("MessagingController", () => {
       "command:detach",
       "command:monitor",
       "command:help",
+      "help:cancel",
     ]);
     // Resume retains primary styling — matches the previous
     // single-button shape for users who tap rather than read.
@@ -2249,10 +2288,10 @@ describe("MessagingController", () => {
       | undefined;
     const navIds = (last?.actions ?? [])
       .map((a) => a.id ?? "")
-      .filter((id) => id.startsWith("help:"));
+      .filter((id) => id.startsWith("help:page:"));
     // The test capability profile grants well over the catalog count
-    // plus the worst-case nav buttons — single page, no navigation
-    // needed.
+    // plus the worst-case page buttons — single page, no page
+    // navigation needed.
     expect(navIds).toEqual([]);
   });
 
@@ -2339,6 +2378,8 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "help:cancel",
+        interactionId: "surface-help",
+        interactionState: { opaque: { callbackData: "help:cancel" } },
       }),
     );
 
@@ -2359,6 +2400,8 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "help:page:next",
+        interactionId: "surface-help",
+        interactionState: { opaque: { callbackData: "help:page:next" } },
         value: { pageIndex: 1 },
       }),
     );
@@ -7794,6 +7837,7 @@ function buildCallbackEvent(params: {
   actionId: string;
   channel?: MessagingInboundCallbackEvent["channel"];
   interactionId?: string;
+  interactionState?: MessagingInboundCallbackEvent["interaction"]["state"];
   routingState?: MessagingInboundCallbackEvent["routingState"];
   value?: MessagingInboundCallbackEvent["value"];
 }): MessagingInboundCallbackEvent {
@@ -7815,6 +7859,7 @@ function buildCallbackEvent(params: {
     interaction: {
       channel: "telegram",
       id: params.interactionId ?? params.actionId,
+      ...(params.interactionState ? { state: params.interactionState } : {}),
     },
     actionId: params.actionId,
     value: params.value,

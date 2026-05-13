@@ -562,6 +562,7 @@ describe("TelegramAdapter", () => {
       ["Resume", "New"],
       ["Status", "Detach"],
       ["Monitor", "Help"],
+      ["Cancel"],
     ]);
   });
 

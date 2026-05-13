@@ -2622,12 +2622,15 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    const targetSurface: MessagingSurfaceRef | undefined = {
-      channel: event.interaction.channel,
-      id: event.interaction.id,
-      ...(event.interaction.state ? { state: event.interaction.state } : {}),
-    };
+    const targetSurface: MessagingSurfaceRef | undefined = event.interaction.state
+      ? {
+          channel: event.interaction.channel,
+          id: event.interaction.id,
+          state: event.interaction.state,
+        }
+      : undefined;
     if (actionId === "help:cancel") {
+      await this.clearActiveHelpPendingIntent(event);
       // Replace the help body with a brief dismissal and strip the
       // action row. Mirrors the resume browser's "Resume cancelled"
       // pattern for consistent dismissed-surface UX across both
@@ -2640,8 +2643,12 @@ export class MessagingController {
           title: "Help dismissed",
           body: "Send `/help` or `@<bot> help` to see commands again.",
           actions: [],
-          delivery: { mode: "update", replaceMarkup: true },
-          targetSurface,
+          ...(targetSurface
+            ? {
+                delivery: { mode: "update" as const, replaceMarkup: true },
+                targetSurface,
+              }
+            : {}),
         }),
         undefined,
         event,
@@ -2653,6 +2660,20 @@ export class MessagingController {
       pageIndex: requestedPage,
       targetSurface,
     });
+  }
+
+  private async clearActiveHelpPendingIntent(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const pendingIntent =
+      await this.options.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+        now: this.now(),
+      });
+    if (pendingIntent && isHelpPendingIntent(pendingIntent)) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+    }
   }
 
   private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
@@ -7218,6 +7239,13 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
+}
+
+function isHelpPendingIntent(record: MessagingPendingIntentRecord): boolean {
+  return (
+    record.intent.kind === "confirmation" &&
+    record.intent.id.startsWith("help:")
+  );
 }
 
 function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceIntent {
