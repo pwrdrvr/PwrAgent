@@ -749,7 +749,7 @@ submission onto the shared turn FIFO while preserving their existing UX.
 - Manual desktop, scheduled automation, and messaging follow-up next-turn paths
   no longer maintain competing FIFO queues for the same thread.
 
-- [ ] **Unit 8: Add Integration Coverage, Docs, and Release Checks**
+- [x] **Unit 8: Add Integration Coverage, Docs, and Release Checks**
 
 **Goal:** Prove the feature across persistence, scheduling, queue admission, and
 UI surfaces; document the local-only scheduling contract.
