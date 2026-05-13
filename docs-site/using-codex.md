@@ -641,25 +641,31 @@ queue beat. Two distinct queueing surfaces; don't conflate them.
 
 `/monitor` (or `@PwrAgent monitor`) posts a **monitor card** to the
 current conversation and subscribes the binding to periodic
-refreshes. The card shows recent activity on the bound thread without
-needing you to be at the desktop:
+refreshes. The card is a small dashboard of **your pinned and
+recent PwrAgent threads** across the workspace — not items inside
+the bound thread. It lets you see what's running and what's been
+active without being at the desktop.
 
-- **Pinned items** — up to 5 high-priority items on the thread.
-- **Recent items** — up to 5 most-recent items, with 100-character
-  snippets.
+- **Pinned threads** — your pinned threads. Default 5; can cycle to
+  0 (hide the section) or 10.
+- **Recent threads** — your most-recently-active threads. Default
+  5; can cycle to 0 or 10.
+- **Snippet line** — optional ~100-character preview of each
+  thread's latest response. Toggle on or off; default on.
 - A **button row** to adjust the card live.
 
 The monitor refreshes every **60 seconds by default** on platforms
 that support message edits (everywhere except LINE). The card edits
 in place at each tick — the timestamp updates, snippets refresh,
-pinned items reorder if you've pinned/unpinned from the desktop.
+the thread order reflows as pins or recent activity change on the
+desktop.
 
 | Button | What it changes |
 |---|---|
-| **Interval** | Cycle through `10s` → `30s` → `60s` → `5m` |
-| **Pins** | Cycle pinned-item count (0/1/2/3/5) |
-| **Recent** | Cycle recent-item count (0/1/2/3/5) |
-| **Snippet** | Cycle snippet length (50/100/200/400 chars) |
+| **Interval** | Cycle through `10s` → `30s` → `60s` → `5m` (default 60s) |
+| **Pins** | Cycle pinned-thread count: `0` → `5` → `10` (default 5) |
+| **Recent** | Cycle recent-thread count: `0` → `5` → `10` (default 5) |
+| **Snippet** | Toggle the per-thread response snippet on / off (default on; fixed ~100-character preview when on) |
 | **Refresh** | Re-render right now |
 | **Stop** | Unsubscribe the binding from the monitor |
 | **Status** | Show the underlying thread's status card |
