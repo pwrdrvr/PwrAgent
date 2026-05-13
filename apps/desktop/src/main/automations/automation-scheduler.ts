@@ -80,6 +80,7 @@ export class AutomationScheduler {
   handleTurnQueueUpdate(params: {
     automationRunId?: string;
     status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+    terminalStatus?: string;
     turnId?: string;
     errorMessage?: string;
     now?: number;
@@ -107,9 +108,12 @@ export class AutomationScheduler {
       return;
     }
     if (params.status === "terminal") {
+      const terminalStatus = classifyTerminalStatus(params.terminalStatus);
       this.options.store.markRunTerminal({
         runId: params.automationRunId,
-        status: "completed",
+        status: terminalStatus,
+        errorMessage:
+          terminalStatus === "completed" ? undefined : params.terminalStatus,
         completedAt: now,
         now,
       });
@@ -295,4 +299,17 @@ export class AutomationScheduler {
     }
     clearTimeout(timer);
   }
+}
+
+function classifyTerminalStatus(
+  status: string | undefined,
+): Extract<AutomationRunStatus, "completed" | "failed" | "cancelled"> {
+  const normalized = status?.toLowerCase() ?? "";
+  if (normalized.includes("fail") || normalized.includes("error")) {
+    return "failed";
+  }
+  if (normalized.includes("cancel") || normalized.includes("interrupt")) {
+    return "cancelled";
+  }
+  return "completed";
 }

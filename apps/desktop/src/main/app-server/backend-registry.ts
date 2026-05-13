@@ -2060,6 +2060,7 @@ export class DesktopBackendRegistry {
                       ...baseParams,
                       status: "terminal",
                       turnId: event.turnId,
+                      terminalStatus: event.status,
                     },
       },
     });

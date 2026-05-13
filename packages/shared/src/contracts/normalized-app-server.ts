@@ -1025,6 +1025,7 @@ export type AppServerNotification =
         turnId?: string;
         automationRunId?: string;
         errorMessage?: string;
+        terminalStatus?: string;
       };
     }
   | {
