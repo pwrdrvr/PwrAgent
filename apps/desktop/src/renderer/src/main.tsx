@@ -2,6 +2,7 @@ import React, { type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { ChangelogWindow } from "./features/changelog/ChangelogWindow";
+import { LogsWindow } from "./features/logs/LogsWindow";
 import { MessagingActivityWindow } from "./features/messaging-activity/MessagingActivityWindow";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
@@ -32,6 +33,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "changelog",
     render: () => <ChangelogWindow />,
+  },
+  {
+    match: (hash) => hash === "logs",
+    render: () => <LogsWindow />,
   },
 ];
 

@@ -13,6 +13,7 @@ const disposeAppMetadataIpcHandlersMock = vi.fn();
 const registerAppUpdateIpcHandlersMock = vi.fn();
 const disposeAppUpdateIpcHandlersMock = vi.fn();
 const initAutoUpdaterMock = vi.fn();
+const showAppLogWindowMock = vi.fn();
 const showChangelogWindowMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
@@ -119,6 +120,10 @@ vi.mock("../auto-updater", () => ({
   initAutoUpdater: initAutoUpdaterMock,
 }));
 
+vi.mock("../app-log-window", () => ({
+  showAppLogWindow: showAppLogWindowMock,
+}));
+
 vi.mock("../changelog-window", () => ({
   showChangelogWindow: showChangelogWindowMock,
 }));
@@ -209,6 +214,7 @@ describe("bootstrapApp", () => {
     disposeAgentIpcHandlersMock.mockReset();
     registerApplicationIpcHandlersMock.mockReset();
     disposeApplicationIpcHandlersMock.mockReset();
+    showAppLogWindowMock.mockReset();
     showChangelogWindowMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();

@@ -11,6 +11,7 @@ import {
   initAutoUpdater,
   registerAppUpdateIpcHandlers,
 } from "./auto-updater";
+import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
 import {
   disposeApplicationIpcHandlers,
@@ -97,6 +98,12 @@ function installApplicationMenu(): void {
           label: "Changelog",
           click: () => {
             showChangelogWindow();
+          },
+        },
+        {
+          label: "Logs",
+          click: () => {
+            showAppLogWindow();
           },
         },
         {

@@ -5,15 +5,20 @@ import { app, ipcMain } from "electron";
 import {
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
+  APP_LOG_SNAPSHOT_READ_CHANNEL,
+  APP_LOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
 } from "../../shared/ipc";
 import type {
   AppChangelogDocument,
+  AppLogSnapshot,
   AppLicenseDocument,
   AppLicenseDocumentKind,
   AppMetadata,
 } from "../../shared/app-metadata";
+import { readAppLogSnapshot } from "../app-logs";
+import { showAppLogWindow } from "../app-log-window";
 import { showChangelogWindow } from "../changelog-window";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -79,6 +84,8 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
   ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
     resolveAppMetadata(),
   );
@@ -96,6 +103,13 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.handle(APP_CHANGELOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
     showChangelogWindow();
   });
+  ipcMain.handle(
+    APP_LOG_SNAPSHOT_READ_CHANNEL,
+    async (): Promise<AppLogSnapshot> => readAppLogSnapshot(),
+  );
+  ipcMain.handle(APP_LOG_WINDOW_OPEN_CHANNEL, async (): Promise<void> => {
+    showAppLogWindow();
+  });
 }
 
 export function disposeAppMetadataIpcHandlers(): void {
@@ -103,4 +117,6 @@ export function disposeAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
+  ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
 }

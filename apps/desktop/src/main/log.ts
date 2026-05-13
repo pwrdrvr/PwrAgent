@@ -23,6 +23,16 @@ export function getMainLogger(scope: string) {
   return electronLog.scope(scope);
 }
 
+export function getMainLogFilePath(): string | undefined {
+  const transport = electronLog.transports.file as {
+    getFile?: () => { path?: unknown };
+  };
+  const filePath = transport.getFile?.().path;
+  return typeof filePath === "string" && filePath.length > 0
+    ? filePath
+    : undefined;
+}
+
 type CompactField = {
   key: string;
   value: string;
