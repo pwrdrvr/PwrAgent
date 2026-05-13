@@ -98,8 +98,12 @@ The composer parses Markdown as you type:
 
 - Triple backticks + space opens a code block.
 - `>` + space opens a blockquote.
-- Standard inline formatting (`**bold**`, `*italic*`, `` `code` ``,
-  links) renders as you type.
+- `-` or `*` + space starts a bulleted list; press Enter on an empty
+  bullet to exit.
+- `1.` + space starts a numbered list; subsequent Enters keep the
+  numbering going until you exit on an empty item.
+- Standard inline formatting (`**bold**`, `*italic*`, `~~strikethrough~~`,
+  `` `code` ``, links) renders as you type.
 
 Codex Desktop doesn't have this yet.
 
