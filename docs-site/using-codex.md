@@ -42,6 +42,7 @@ in sync on every state change.
 **While the thread is bound**
 
 - [Status card on a bound thread](#status-card-bound)
+- [Skills browser](#skills-browser)
 - [Tool-update verbosity](#tool-update-verbosity)
 - [Typing indicators](#typing-indicators)
 - [Sending attachments](#attachments)
@@ -381,6 +382,7 @@ same four state buttons as the Start Card plus four runtime controls:
 | **Permissions** | Cycle Default Access ↔ Full Access (mid-turn cycles queue — see [Start Card buttons](#start-card-buttons)) |
 | **Tools: \<mode\>** | Cycle [tool-update verbosity](#tool-update-verbosity) |
 | **Stream: \<mode\>** | Cycle streaming mode for this binding only — see [Streaming responses](streaming/) |
+| **Skills** | Open the [skills browser](#skills-browser) to stage a Codex skill that gets prepended to your next prompt |
 | **Refresh** | Re-render the card immediately |
 | **Detach** | [Detach](#detaching-a-thread) this binding |
 
@@ -392,6 +394,46 @@ on the messenger. There's no "out of sync" window to worry about.
 `/status` from the conversation forces a refresh — useful if the
 card scrolled out of view and your platform doesn't auto-pin (some
 don't), or if you want a fresh card after a long quiet stretch.
+
+## Skills browser {#skills-browser}
+
+PwrAgent surfaces Codex skills from the bound conversation. The
+**Skills** button on the [bound-thread status card](#status-card-bound)
+opens a paged browser of the skills available on the thread:
+
+1. Click **Skills** on the status card. The bot replies with a paged
+   skill picker — same page-size / Next / Prev / Cancel mechanics as
+   the [Resume Thread browser](#resume-thread-browser).
+2. Either click the skill you want from the page, or click **Search**.
+   With Search active, your next free-form reply to the bot becomes
+   the skill query (no turn started); the browser re-renders showing
+   the matches.
+3. Click the skill row. PwrAgent posts a confirmation message showing
+   the full `$skill` name plus available metadata — description,
+   workspace, enabled status, skill path.
+
+**Selecting a skill does not start a turn.** The skill is staged on
+the binding. The **next free-form user message** you send becomes the
+next turn with the staged skill **prepended once** to its input. The
+staged skill survives across queueing — if your message gets held by
+the [debounce / queue / steer](#debounce-queue-steer) state machine,
+the prepend happens once when the turn finally runs.
+
+What does **not** consume the staged skill (i.e. these are safe to do
+between staging the skill and sending the real prompt):
+
+- Commands (`/resume`, `/status`, `/detach`, `/help`, etc.)
+- Browser-navigation clicks (Next, Prev, Cancel, Projects, etc.)
+- Button callbacks on any surface
+- Replies that match an active Search prompt (those re-query the
+  browser instead)
+
+To clear a staged skill before sending the prompt, click **Remove**
+on the selection confirmation message.
+
+The staged-skill state is **per-binding**. If a thread carries
+multiple bindings (one Telegram, one Slack), each binding can have
+its own staged skill independently; they don't bleed across.
 
 ## Tool-update verbosity {#tool-update-verbosity}
 
