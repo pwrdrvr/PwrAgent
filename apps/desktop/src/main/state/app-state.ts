@@ -65,6 +65,10 @@ export function getAppRuntimeInstanceStore(): AppRuntimeInstanceStore {
   return runtimeInstanceStore;
 }
 
+export function isAppStateInitialized(): boolean {
+  return runtimeInstanceStore !== null;
+}
+
 export function disposeAppState(): void {
   if (stateDb) {
     stateDb.close();

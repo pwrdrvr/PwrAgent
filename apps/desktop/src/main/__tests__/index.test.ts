@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
+const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const createMainWindowMock = vi.fn();
 const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
@@ -30,9 +31,14 @@ const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
+const initializeAppStateMock = vi.fn();
+const disposeAppStateMock = vi.fn();
+const isAppStateInitializedMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
+const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
+const getExistingRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
@@ -45,6 +51,7 @@ const setAboutPanelOptionsMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
+const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn(() => []);
 const dockSetIconMock = vi.fn();
 const nativeImageMock = {
@@ -73,7 +80,7 @@ vi.mock("electron", () => ({
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
     }),
-    quit: vi.fn(),
+    quit: quitMock,
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
@@ -177,11 +184,21 @@ vi.mock("../messaging/messaging-runtime", () => ({
 }));
 
 vi.mock("../runtime-messaging-lease", () => ({
-  getRuntimeMessagingLeaseCoordinator: vi.fn(() => ({
-    start: messagingLeaseStartMock,
-    shutdownSync: messagingLeaseShutdownSyncMock,
-  })),
+  getRuntimeMessagingLeaseCoordinator: getRuntimeMessagingLeaseCoordinatorMock,
+  getExistingRuntimeMessagingLeaseCoordinator:
+    getExistingRuntimeMessagingLeaseCoordinatorMock,
 }));
+
+vi.mock("../state/app-state", () => ({
+  initializeAppState: initializeAppStateMock,
+  disposeAppState: disposeAppStateMock,
+  isAppStateInitialized: isAppStateInitializedMock,
+}));
+
+const runtimeMessagingLeaseCoordinatorMock = {
+  start: messagingLeaseStartMock,
+  shutdownSync: messagingLeaseShutdownSyncMock,
+};
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
@@ -207,6 +224,13 @@ async function flushMicrotasks(): Promise<void> {
 describe("bootstrapApp", () => {
   beforeEach(() => {
     appEventHandlers.clear();
+    processEventHandlers.clear();
+    vi.spyOn(process, "once").mockImplementation(
+      (event: string | symbol, handler: (...args: unknown[]) => void) => {
+        processEventHandlers.set(String(event), handler);
+        return process;
+      },
+    );
     createMainWindowMock.mockReset();
     registerAppServerIpcHandlersMock.mockReset();
     disposeAppServerIpcHandlersMock.mockReset();
@@ -231,11 +255,23 @@ describe("bootstrapApp", () => {
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
+    initializeAppStateMock.mockReset();
+    disposeAppStateMock.mockReset();
+    isAppStateInitializedMock.mockReset();
+    isAppStateInitializedMock.mockReturnValue(true);
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     messagingLeaseStartMock.mockReset();
     messagingLeaseStartMock.mockResolvedValue();
     messagingLeaseShutdownSyncMock.mockReset();
+    getRuntimeMessagingLeaseCoordinatorMock.mockReset();
+    getRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
+      runtimeMessagingLeaseCoordinatorMock,
+    );
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReset();
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
+      runtimeMessagingLeaseCoordinatorMock,
+    );
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -251,6 +287,7 @@ describe("bootstrapApp", () => {
     nativeImageCreateFromPathMock.mockClear();
     whenReadyMock.mockReset();
     whenReadyMock.mockReturnValue(Promise.resolve());
+    quitMock.mockReset();
     getAllWindowsMock.mockReset();
     getAllWindowsMock.mockReturnValue([]);
     startupProfilerInstance.start.mockReset();
@@ -262,6 +299,7 @@ describe("bootstrapApp", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -382,6 +420,49 @@ describe("bootstrapApp", () => {
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create the messaging lease coordinator on early SIGTERM", async () => {
+    whenReadyMock.mockReturnValue(new Promise(() => {}));
+    isAppStateInitializedMock.mockReturnValue(false);
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(null);
+
+    await import("../index");
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    expect(() => sigtermHandler("SIGTERM")).not.toThrow();
+
+    expect(getRuntimeMessagingLeaseCoordinatorMock).not.toHaveBeenCalled();
+    expect(messagingLeaseShutdownSyncMock).not.toHaveBeenCalled();
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(quitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the messaging lease synchronously on SIGTERM", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+
+    expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(quitMock).toHaveBeenCalledTimes(1);
+
+    appEventHandlers.get("before-quit")?.();
+    expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {
