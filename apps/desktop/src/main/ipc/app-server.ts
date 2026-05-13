@@ -40,6 +40,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationSnapshot,
+  AutomationThreadSummary,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -194,6 +195,19 @@ async function hydrateRetainedThreadOverlayData(
       worktreeSnapshots: overlay.worktreeSnapshots,
     };
   });
+}
+
+function buildAutomationSummariesByThreadKey():
+  | Record<string, AutomationThreadSummary | undefined>
+  | undefined {
+  try {
+    return getDesktopAutomationService().buildThreadSummaries();
+  } catch (error) {
+    appServerLog.warn("automation store unavailable for navigation snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 function directoryStatusesEqual(
@@ -530,8 +544,7 @@ class DesktopAppServerService {
     const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const bindingsDurationMs = Date.now() - bindingsStartedAt;
-    const automationsByThreadKey = getDesktopAutomationService()
-      .buildThreadSummaries();
+    const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
     const overlayStartedAt = Date.now();

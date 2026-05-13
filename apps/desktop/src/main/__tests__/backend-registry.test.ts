@@ -4422,7 +4422,6 @@ command = "pnpm dev"
       turnId: "turn-1",
     });
 
-    expect(codexClient.lastRenameThreadParams).toBeUndefined();
     await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({

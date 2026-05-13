@@ -34,6 +34,18 @@ const registry = {
     threadId: request.threadId,
     turnId: "turn-1",
   })),
+  submitTurn: vi.fn(async (request: StartTurnRequest & { origin: "manual" }) => ({
+    status: "started" as const,
+    entry: {
+      id: "queue-1",
+      backend: request.backend,
+      createdAt: 1,
+      input: request.input,
+      origin: request.origin,
+      threadId: request.threadId,
+    },
+    turnId: "turn-1",
+  })),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -106,6 +118,7 @@ describe("agent ipc", () => {
     registry.onEvent.mockClear();
     registry.startThread.mockClear();
     registry.startTurn.mockClear();
+    registry.submitTurn.mockClear();
     registry.startReview.mockClear();
     registry.interruptTurn.mockClear();
     registry.steerTurn.mockClear();
@@ -149,6 +162,8 @@ describe("agent ipc", () => {
       }),
     ).toEqual({
       backend: "grok",
+      queueEntryId: "queue-1",
+      queueStatus: "started",
       threadId: "thread-1",
       turnId: "turn-1",
     });

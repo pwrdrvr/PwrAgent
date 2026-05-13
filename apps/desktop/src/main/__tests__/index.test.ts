@@ -9,6 +9,8 @@ const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
 const registerApplicationIpcHandlersMock = vi.fn();
 const disposeApplicationIpcHandlersMock = vi.fn();
+const registerAutomationIpcHandlersMock = vi.fn();
+const disposeAutomationIpcHandlersMock = vi.fn();
 const registerAppMetadataIpcHandlersMock = vi.fn();
 const disposeAppMetadataIpcHandlersMock = vi.fn();
 const registerAppUpdateIpcHandlersMock = vi.fn();
@@ -162,6 +164,11 @@ vi.mock("../ipc/agent-ipc", () => ({
 vi.mock("../ipc/applications", () => ({
   registerApplicationIpcHandlers: registerApplicationIpcHandlersMock,
   disposeApplicationIpcHandlers: disposeApplicationIpcHandlersMock,
+}));
+
+vi.mock("../ipc/automation-ipc", () => ({
+  registerAutomationIpcHandlers: registerAutomationIpcHandlersMock,
+  disposeAutomationIpcHandlers: disposeAutomationIpcHandlersMock,
 }));
 
 vi.mock("../ipc/app-metadata", () => ({
@@ -327,6 +334,8 @@ describe("bootstrapApp", () => {
     initAutoUpdaterMock.mockReset();
     checkForAppUpdatesNowMock.mockReset();
     showAppLogWindowMock.mockReset();
+    registerAutomationIpcHandlersMock.mockReset();
+    disposeAutomationIpcHandlersMock.mockReset();
     showChangelogWindowMock.mockReset();
     showLicenseWindowMock.mockReset();
     showThirdPartyNoticesWindowMock.mockReset();
