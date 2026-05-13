@@ -221,6 +221,14 @@ function collapseWorkspaceSummaries(params: {
     return params.summaries;
   }
 
+  const pendingWorkspaces = workspaces.filter(
+    (workspace) =>
+      workspace.launchpad && hasPersistableLaunchpadState(workspace.launchpad),
+  );
+  if (pendingWorkspaces.length > 1) {
+    return params.summaries;
+  }
+
   const preferred = chooseWorkspaceSummary(workspaces);
   const threadOrder = new Map(
     params.threads.map((thread, index) => [

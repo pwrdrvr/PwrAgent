@@ -391,6 +391,58 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("keeps multiple pending workspace drafts selectable instead of collapsing one away", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "workspace:/Users/huntharo/.pwragnt/projects": {
+          directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/huntharo/.pwragnt/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Legacy draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+        "workspace:/Users/huntharo/.pwragent/profiles/dev/projects": {
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/huntharo/.pwragent/profiles/dev/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Profile draft",
+          workMode: "local",
+          createdAt: 3_000,
+          updatedAt: 4_000,
+        },
+      },
+    });
+
+    expect(directories).toHaveLength(2);
+    expect(directories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "workspace:/Users/huntharo/.pwragnt/projects",
+          launchpad: expect.objectContaining({
+            directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
+            prompt: "Legacy draft",
+          }),
+        }),
+        expect.objectContaining({
+          key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          launchpad: expect.objectContaining({
+            directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+            prompt: "Profile draft",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps same-named Codex worktrees as separate directory rows", () => {
     const directories = buildDirectorySummaries({
       threads: [
