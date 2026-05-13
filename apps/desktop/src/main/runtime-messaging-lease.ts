@@ -412,6 +412,12 @@ export function getRuntimeMessagingLeaseCoordinator(): RuntimeMessagingLeaseCoor
   return coordinator;
 }
 
+export function getExistingRuntimeMessagingLeaseCoordinator():
+  | RuntimeMessagingLeaseCoordinator
+  | null {
+  return coordinator;
+}
+
 export function setRuntimeMessagingLeaseCoordinatorForTests(
   next: RuntimeMessagingLeaseCoordinator | null,
 ): void {

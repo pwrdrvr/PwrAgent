@@ -31,9 +31,14 @@ const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
+const initializeAppStateMock = vi.fn();
+const disposeAppStateMock = vi.fn();
+const isAppStateInitializedMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
+const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
+const getExistingRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
@@ -179,11 +184,21 @@ vi.mock("../messaging/messaging-runtime", () => ({
 }));
 
 vi.mock("../runtime-messaging-lease", () => ({
-  getRuntimeMessagingLeaseCoordinator: vi.fn(() => ({
-    start: messagingLeaseStartMock,
-    shutdownSync: messagingLeaseShutdownSyncMock,
-  })),
+  getRuntimeMessagingLeaseCoordinator: getRuntimeMessagingLeaseCoordinatorMock,
+  getExistingRuntimeMessagingLeaseCoordinator:
+    getExistingRuntimeMessagingLeaseCoordinatorMock,
 }));
+
+vi.mock("../state/app-state", () => ({
+  initializeAppState: initializeAppStateMock,
+  disposeAppState: disposeAppStateMock,
+  isAppStateInitialized: isAppStateInitializedMock,
+}));
+
+const runtimeMessagingLeaseCoordinatorMock = {
+  start: messagingLeaseStartMock,
+  shutdownSync: messagingLeaseShutdownSyncMock,
+};
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
@@ -240,11 +255,23 @@ describe("bootstrapApp", () => {
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
+    initializeAppStateMock.mockReset();
+    disposeAppStateMock.mockReset();
+    isAppStateInitializedMock.mockReset();
+    isAppStateInitializedMock.mockReturnValue(true);
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     messagingLeaseStartMock.mockReset();
     messagingLeaseStartMock.mockResolvedValue();
     messagingLeaseShutdownSyncMock.mockReset();
+    getRuntimeMessagingLeaseCoordinatorMock.mockReset();
+    getRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
+      runtimeMessagingLeaseCoordinatorMock,
+    );
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReset();
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
+      runtimeMessagingLeaseCoordinatorMock,
+    );
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -393,6 +420,27 @@ describe("bootstrapApp", () => {
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create the messaging lease coordinator on early SIGTERM", async () => {
+    whenReadyMock.mockReturnValue(new Promise(() => {}));
+    isAppStateInitializedMock.mockReturnValue(false);
+    getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(null);
+
+    await import("../index");
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    expect(() => sigtermHandler("SIGTERM")).not.toThrow();
+
+    expect(getRuntimeMessagingLeaseCoordinatorMock).not.toHaveBeenCalled();
+    expect(messagingLeaseShutdownSyncMock).not.toHaveBeenCalled();
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(quitMock).toHaveBeenCalledTimes(1);
   });
 
   it("releases the messaging lease synchronously on SIGTERM", async () => {

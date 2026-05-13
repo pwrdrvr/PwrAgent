@@ -51,9 +51,16 @@ import {
 } from "./messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
 import { resolveRuntimeMessagingOverride } from "./runtime-flags";
-import { getRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
+import {
+  getExistingRuntimeMessagingLeaseCoordinator,
+  getRuntimeMessagingLeaseCoordinator,
+} from "./runtime-messaging-lease";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
-import { disposeAppState, initializeAppState } from "./state/app-state";
+import {
+  disposeAppState,
+  initializeAppState,
+  isAppStateInitialized,
+} from "./state/app-state";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgent";
@@ -81,7 +88,10 @@ function disposeMainProcessResourcesSync(): void {
     disposeRuntimeIdentityIpcHandlers();
   }
   void disposeMessagingStatusIpcHandlers();
-  getRuntimeMessagingLeaseCoordinator().shutdownSync();
+  const runtimeMessagingLeaseCoordinator =
+    getExistingRuntimeMessagingLeaseCoordinator() ??
+    (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
+  runtimeMessagingLeaseCoordinator?.shutdownSync();
   void disposeDesktopMessagingRuntime();
   void disposeAppServerIpcHandlers();
   disposeAppState();
