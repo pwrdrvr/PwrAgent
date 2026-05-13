@@ -1052,10 +1052,13 @@ export class MessagingController {
       prepared,
       currentBinding,
     );
+    const consumedSkillBinding = currentBinding.pendingSkillSelection
+      ? bindingWithoutPendingSkillSelection(currentBinding)
+      : currentBinding;
 
     if (await this.isTurnOccupied(currentBinding, bundle.threadKey)) {
       await this.queuePreparedInput({
-        binding: currentBinding,
+        binding: consumedSkillBinding,
         input: preparedWithSkill.input,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
@@ -1067,7 +1070,7 @@ export class MessagingController {
     }
 
     const startResult = await this.startPreparedInput({
-      binding: currentBinding,
+      binding: consumedSkillBinding,
       input: preparedWithSkill.input,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
@@ -7721,6 +7724,13 @@ function skillSearchCwdsForThreadState(
   ].filter((cwd, index, candidates): cwd is string =>
     Boolean(cwd) && candidates.indexOf(cwd) === index,
   );
+}
+
+function bindingWithoutPendingSkillSelection(
+  binding: MessagingBindingRecord,
+): MessagingBindingRecord {
+  const { pendingSkillSelection: _pendingSkillSelection, ...rest } = binding;
+  return rest;
 }
 
 function isToolsFallbackText(text: string): boolean {

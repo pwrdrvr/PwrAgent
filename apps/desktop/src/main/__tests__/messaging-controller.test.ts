@@ -3090,6 +3090,69 @@ describe("MessagingController", () => {
     ).resolves.not.toHaveProperty("pendingSkillSelection");
   });
 
+  it("does not restore a consumed skill when a queued turn starts later", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const planChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: planChoice.value,
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Use [$ce:plan](/skills/ce-plan/SKILL.md)",
+          },
+          {
+            type: "text",
+            text: "second turn",
+          },
+        ],
+      }),
+    );
+    const latestStatus = harness.delivered
+      .filter((intent) => intent.kind === "status")
+      .at(-1);
+    expect(latestStatus).toMatchObject({
+      kind: "status",
+      text: expect.not.stringContaining("Pending skill: $ce:plan"),
+    });
+  });
+
   it("clears starting state when navigation lookup fails before retrying", async () => {
     const harness = await createHarness();
     await bindThread(harness);
