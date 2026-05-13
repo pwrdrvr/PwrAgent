@@ -183,6 +183,98 @@ function hasPersistableLaunchpadState(
   );
 }
 
+function compareWorkspaceSummaryPreference(
+  left: NavigationDirectorySummary,
+  right: NavigationDirectorySummary,
+): number {
+  const leftLaunchpadUpdatedAt = left.launchpad?.updatedAt ?? 0;
+  const rightLaunchpadUpdatedAt = right.launchpad?.updatedAt ?? 0;
+  const launchpadUpdatedDelta = rightLaunchpadUpdatedAt - leftLaunchpadUpdatedAt;
+  if (launchpadUpdatedDelta !== 0) {
+    return launchpadUpdatedDelta;
+  }
+
+  const updatedDelta = (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0);
+  return updatedDelta !== 0 ? updatedDelta : left.key.localeCompare(right.key);
+}
+
+function chooseWorkspaceSummary(
+  workspaces: NavigationDirectorySummary[],
+): NavigationDirectorySummary {
+  const withPendingLaunchpads = workspaces.filter(
+    (workspace) =>
+      workspace.launchpad && hasPersistableLaunchpadState(workspace.launchpad),
+  );
+  const candidates =
+    withPendingLaunchpads.length > 0 ? withPendingLaunchpads : workspaces;
+  return [...candidates].sort(compareWorkspaceSummaryPreference)[0]!;
+}
+
+function collapseWorkspaceSummaries(params: {
+  summaries: NavigationDirectorySummary[];
+  threads: NavigationThreadSummary[];
+}): NavigationDirectorySummary[] {
+  const workspaces = params.summaries.filter(
+    (summary) => summary.kind === "workspace",
+  );
+  if (workspaces.length <= 1) {
+    return params.summaries;
+  }
+
+  const pendingWorkspaces = workspaces.filter(
+    (workspace) =>
+      workspace.launchpad && hasPersistableLaunchpadState(workspace.launchpad),
+  );
+  if (pendingWorkspaces.length > 1) {
+    return params.summaries;
+  }
+
+  const preferred = chooseWorkspaceSummary(workspaces);
+  const threadOrder = new Map(
+    params.threads.map((thread, index) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      index,
+    ]),
+  );
+  const inboxByThreadKey = new Map(
+    params.threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ]),
+  );
+  const threadKeys = [...new Set(workspaces.flatMap((summary) => summary.threadKeys))]
+    .sort(
+      (left, right) =>
+        (threadOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (threadOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+    );
+  const latestUpdatedAt = Math.max(
+    ...workspaces.map((summary) => summary.latestUpdatedAt ?? 0),
+  );
+
+  return [
+    {
+      ...preferred,
+      threadKeys,
+      needsAttentionCount: threadKeys.reduce(
+        (count, threadKey) => count + (inboxByThreadKey.get(threadKey) ? 1 : 0),
+        0,
+      ),
+      latestUpdatedAt: latestUpdatedAt || undefined,
+      launchpad: preferred.launchpad
+        ? {
+            ...preferred.launchpad,
+            directoryKey: preferred.key,
+            directoryKind: "workspace",
+            directoryLabel: preferred.label,
+            directoryPath: preferred.path,
+          }
+        : undefined,
+    },
+    ...params.summaries.filter((summary) => summary.kind !== "workspace"),
+  ];
+}
+
 export function buildDirectorySummaries(params: {
   threads: NavigationThreadSummary[];
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
@@ -281,5 +373,8 @@ export function buildDirectorySummaries(params: {
     }
   }
 
-  return [...summaries.values()].sort((left, right) => left.label.localeCompare(right.label));
+  return collapseWorkspaceSummaries({
+    summaries: [...summaries.values()],
+    threads: params.threads,
+  }).sort((left, right) => left.label.localeCompare(right.label));
 }

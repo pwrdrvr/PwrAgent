@@ -300,6 +300,149 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("collapses current, legacy, and launchpad-only scratch roots into one Workspaces row", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "019e1e90-ae49-78a0-8414-266602c3a532",
+          inbox: { inInbox: true },
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragent/profiles/dev/projects/2026-05-12-605c84",
+              label: "2026-05-12-605c84",
+              path: "/Users/huntharo/.pwragent/profiles/dev/projects/2026-05-12-605c84",
+              kind: "local",
+            },
+          ],
+          updatedAt: 4_000,
+        }),
+        buildThread({
+          id: "019e1732-3ce4-7dd1-9191-f097f816a5dd",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragent/profiles/dev/projects/2026-05-11-dc5db1",
+              label: "2026-05-11-dc5db1",
+              path: "/Users/huntharo/.pwragent/profiles/dev/projects/2026-05-11-dc5db1",
+              kind: "local",
+            },
+          ],
+          updatedAt: 3_000,
+        }),
+        buildThread({
+          id: "019deae0-5018-7ac3-8b5c-2ac392f8fbd8",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects/2026-05-02-bc16ae",
+              label: "2026-05-02-bc16ae",
+              path: "/Users/huntharo/.pwragnt/projects/2026-05-02-bc16ae",
+              kind: "local",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+        buildThread({
+          id: "019de4af-5a9e-7813-88f0-6cc4ac251fda",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects/2026-05-01-800a67",
+              label: "2026-05-01-800a67",
+              path: "/Users/huntharo/.pwragnt/projects/2026-05-01-800a67",
+              kind: "local",
+            },
+          ],
+          updatedAt: 1_000,
+        }),
+      ],
+      launchpadsByKey: {
+        "workspace:/Users/huntharo/.pwragent/profiles/default/projects": {
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/huntharo/.pwragent/profiles/default/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Pending scratchpad draft",
+          workMode: "local",
+          createdAt: 5_000,
+          updatedAt: 6_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/huntharo/.pwragent/profiles/default/projects",
+        threadKeys: [
+          "codex:019e1e90-ae49-78a0-8414-266602c3a532",
+          "codex:019e1732-3ce4-7dd1-9191-f097f816a5dd",
+          "codex:019deae0-5018-7ac3-8b5c-2ac392f8fbd8",
+          "codex:019de4af-5a9e-7813-88f0-6cc4ac251fda",
+        ],
+        needsAttentionCount: 1,
+        latestUpdatedAt: 6_000,
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+          prompt: "Pending scratchpad draft",
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps multiple pending workspace drafts selectable instead of collapsing one away", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "workspace:/Users/huntharo/.pwragnt/projects": {
+          directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/huntharo/.pwragnt/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Legacy draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+        "workspace:/Users/huntharo/.pwragent/profiles/dev/projects": {
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/huntharo/.pwragent/profiles/dev/projects",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Profile draft",
+          workMode: "local",
+          createdAt: 3_000,
+          updatedAt: 4_000,
+        },
+      },
+    });
+
+    expect(directories).toHaveLength(2);
+    expect(directories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "workspace:/Users/huntharo/.pwragnt/projects",
+          launchpad: expect.objectContaining({
+            directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
+            prompt: "Legacy draft",
+          }),
+        }),
+        expect.objectContaining({
+          key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          launchpad: expect.objectContaining({
+            directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+            prompt: "Profile draft",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps same-named Codex worktrees as separate directory rows", () => {
     const directories = buildDirectorySummaries({
       threads: [
