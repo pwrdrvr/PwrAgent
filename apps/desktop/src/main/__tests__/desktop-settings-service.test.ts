@@ -36,6 +36,9 @@ describe("DesktopSettingsService", () => {
         "input_debounce_ms = 750",
         'tool_update_mode = "show_more"',
         "",
+        "[messaging.attachments]",
+        'image_profile = "high"',
+        "",
         "[messaging.telegram]",
         "enabled = true",
         "streaming_responses = true",
@@ -97,6 +100,10 @@ describe("DesktopSettingsService", () => {
       value: "always",
       source: "config",
     });
+    expect(snapshot.messaging.attachments.imageProfile).toEqual({
+      value: "high",
+      source: "config",
+    });
     expect(snapshot.messaging.telegram.enabled).toEqual({
       value: true,
       source: "config",
@@ -150,6 +157,49 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.worktrees.effectivePath).toMatch(
       /\.pwragent\/worktrees$/,
     );
+  });
+
+  it("defaults the image upload profile and only persists non-default values", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.messaging.attachments.imageProfile).toEqual({
+      value: "medium",
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        attachments: { imageProfile: "actual" },
+      },
+    });
+
+    const afterActual = fs.readFileSync(configPath, "utf8");
+    expect(afterActual).toContain("[messaging.attachments]");
+    expect(afterActual).toContain('image_profile = "actual"');
+    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+      value: "actual",
+      source: "config",
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        attachments: { imageProfile: "medium" },
+      },
+    });
+
+    const afterDefault = fs.readFileSync(configPath, "utf8");
+    expect(afterDefault).not.toContain("image_profile");
+    expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
+      value: "medium",
+      source: "default",
+    });
   });
 
   it("marks legacy chat reply composer config when another setting is saved", async () => {

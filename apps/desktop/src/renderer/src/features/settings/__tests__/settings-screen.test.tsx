@@ -282,11 +282,28 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("button", { name: "Applications" })).toHaveAttribute(
+    expect(within(sections).getByRole("button", { name: "General" })).toHaveAttribute(
       "aria-current",
       "page",
     );
 
+    expect(screen.getByRole("heading", { name: "Image uploads" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "High" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          attachments: {
+            imageProfile: "high",
+          },
+        },
+      });
+    });
+
+    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
     expect(screen.getByRole("heading", { name: "Editor" })).toBeInTheDocument();
     expect(screen.getByText("VS Code")).toBeInTheDocument();
     expect(screen.getByText("/Applications/Visual Studio Code.app")).toBeInTheDocument();
@@ -427,7 +444,7 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
+    fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
       "aria-current",
       "page",
@@ -588,6 +605,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ getGhStatus }}
+        initialSection="applications"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -651,6 +669,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ copyText: copyTextMock }}
+        initialSection="applications"
         settings={settings}
         onClose={() => undefined}
       />,

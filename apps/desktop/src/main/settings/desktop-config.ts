@@ -341,7 +341,14 @@ export function desktopSettingsPatchToEdits(
 
   const attachments = patch.messaging?.attachments;
   if (attachments?.imageProfile !== undefined) {
-    set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+    if (attachments.imageProfile === "medium") {
+      edits.push({
+        op: "delete",
+        path: ["messaging", "attachments", "image_profile"],
+      });
+    } else {
+      set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+    }
   }
   if (attachments?.maxAttachmentBytes !== undefined) {
     set(["messaging", "attachments", "max_attachment_bytes"], attachments.maxAttachmentBytes);

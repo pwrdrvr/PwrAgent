@@ -20,6 +20,39 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
   });
 });
 
+describe("desktopSettingsPatchToEdits — messaging attachments", () => {
+  it("writes non-default image upload profiles", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        messaging: {
+          attachments: { imageProfile: "high" },
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["messaging", "attachments", "image_profile"],
+        value: "high",
+      },
+    ]);
+  });
+
+  it("removes the image upload profile when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        messaging: {
+          attachments: { imageProfile: "medium" },
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["messaging", "attachments", "image_profile"],
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — Mattermost", () => {
   it("emits one set op per defined Mattermost field with the correct snake_case key", () => {
     const edits = desktopSettingsPatchToEdits({
