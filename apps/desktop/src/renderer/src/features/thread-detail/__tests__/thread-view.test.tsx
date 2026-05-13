@@ -2,7 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  AppServerPendingRequestNotification,
+  MessagingPlatformStatus,
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+} from "@pwragent/shared";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 import { ThreadView } from "../ThreadView";
@@ -219,6 +225,114 @@ describe("ThreadView", () => {
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("renders launchpad header chips and messaging status icons", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+        account: "@pwragent_bot",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const selectedDirectory = {
+      key: "directory:/Users/huntharo/github/PwrAgnt",
+      kind: "directory",
+      label: "PwrAgnt",
+      path: "/Users/huntharo/github/PwrAgnt",
+      threadKeys: ["thread-1", "thread-2"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "main",
+        upstreamBranch: "origin/main",
+        syncState: "in-sync",
+      },
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      branchName: "main",
+      createdAt: 1000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "full-access",
+      prompt: "",
+      updatedAt: 1000,
+      workMode: "worktree",
+    } satisfies NavigationLaunchpadDraft;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          getMessagingPlatformStatuses: vi.fn(async () => statuses),
+          onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-launchpad",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={2}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const header = document.querySelector(".thread-header--launchpad");
+    expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).getByText("New thread")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("Full Access")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
+    });
+    expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
   it("shows missing recorded working directory details and copies the thread id", async () => {

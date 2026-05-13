@@ -3923,7 +3923,24 @@ textarea,
 }
 
 .thread-header--launchpad {
-  align-items: center;
+  align-items: flex-start;
+}
+
+.thread-header__main--launchpad {
+  flex: 1 1 auto;
+}
+
+.thread-header__launchpad-aside {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 16px;
+  min-width: max-content;
+}
+
+.thread-header--launchpad .messaging-status-bar {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .thread-header--launchpad .thread-header__title {
@@ -3936,6 +3953,14 @@ textarea,
   gap: 8px;
   max-width: 100%;
   min-width: 0;
+}
+
+.thread-header__eyebrow-row > .eyebrow {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  margin: 0 2px 0 0;
+  line-height: 1;
 }
 
 .thread-header__compact-title {
@@ -3956,6 +3981,14 @@ textarea,
 .thread-header__eyebrow-row > .thread-row__chip {
   flex: 0 0 auto;
   max-width: min(26ch, 28%);
+}
+
+.thread-header--launchpad .thread-header__eyebrow-row {
+  flex-wrap: wrap;
+}
+
+.thread-header--launchpad .thread-header__eyebrow-row > .thread-row__chip {
+  max-width: 100%;
 }
 
 .thread-header__warning {
