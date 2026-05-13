@@ -105,7 +105,23 @@ import {
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
-import { resolveMessagingThreadState } from "./messaging-thread-state.js";
+import {
+  buildSkillRemovedIntent,
+  buildSkillSelectedIntent,
+  buildSkillsBrowserIntent,
+  buildSkillsSearchPromptIntent,
+  flattenSkillEntries,
+  formatSkillInputPrefix,
+  isSkillSelectionNoticeIntent,
+  isSkillsSearchIntent,
+  isSkillsWorkflowIntent,
+  skillSelectionFromValue,
+  skillsBrowserPageFromValue,
+} from "./messaging-skills-browser.js";
+import {
+  resolveMessagingThreadState,
+  type MessagingResolvedThreadState,
+} from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import {
   MessagingToolUpdatePolicy,
@@ -137,6 +153,8 @@ const TYPING_ACTIVITY_CONTINUATION_REFRESH_MS = 9_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
+
+type PreparedInputStartResult = "failed" | "queued" | "started";
 // Provider adapters own stricter platform pacing; the generic layer only
 // coalesces noisy token deltas into human-visible refreshes.
 const STREAM_UPDATE_REFRESH_MS = 1_000;
@@ -877,41 +895,76 @@ export class MessagingController {
       now: this.now(),
     });
     if (pendingIntent) {
-      const mapped = await this.interactionMapper.mapText({
-        intent: pendingIntent.intent,
-        text: event.text,
-      });
-      if (mapped.kind === "matched") {
-        await this.handleCallback({
-          ...event,
-          kind: "callback",
-          interaction: {
-            channel: event.channel.channel,
-            id: mapped.action.id,
-          },
-          actionId: mapped.action.id,
-          value: mapped.action.value,
+      if (isSkillsSearchIntent(pendingIntent.intent)) {
+        const mapped = await this.interactionMapper.mapText({
+          intent: pendingIntent.intent,
+          text: event.text,
         });
-        return;
-      }
-      if (pendingNewThread) {
-        await this.appendPendingNewThreadPrompt(pendingNewThread, event);
-        return;
-      }
-      if (mapped.kind === "ambiguous") {
-        await this.deliver(
-          buildConfirmationIntent({
-            id: this.newIntentId("ambiguous-reply"),
-            capabilityProfile: this.capabilityProfile,
-            createdAt: this.now(),
-            title: "Choose an option",
-            body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
-            fallbackText: pendingIntent.intent.fallbackText,
-          }),
-          undefined,
-          event,
-        );
-        return;
+        if (mapped.kind === "matched") {
+          await this.handleCallback({
+            ...event,
+            kind: "callback",
+            interaction: {
+              channel: event.channel.channel,
+              id: mapped.action.id,
+            },
+            actionId: mapped.action.id,
+            value: mapped.action.value,
+          });
+          return;
+        }
+
+        const binding = pendingIntent.bindingId
+          ? await this.options.store.getBinding(pendingIntent.bindingId)
+          : undefined;
+        await this.options.store.deletePendingIntent(pendingIntent.id);
+        if (binding && !binding.revokedAt) {
+          await this.presentSkillsBrowser(binding, event, {
+            pageIndex: 0,
+            query: event.text,
+            targetSurface: pendingIntent.surface,
+          });
+          return;
+        }
+      } else {
+        const mapped = await this.interactionMapper.mapText({
+          intent: pendingIntent.intent,
+          text: event.text,
+        });
+        if (mapped.kind === "matched") {
+          await this.handleCallback({
+            ...event,
+            kind: "callback",
+            interaction: {
+              channel: event.channel.channel,
+              id: mapped.action.id,
+            },
+            actionId: mapped.action.id,
+            value: mapped.action.value,
+          });
+          return;
+        }
+        if (pendingNewThread) {
+          await this.appendPendingNewThreadPrompt(pendingNewThread, event);
+          return;
+        }
+        if (isSkillSelectionNoticeIntent(pendingIntent.intent)) {
+          await this.options.store.deletePendingIntent(pendingIntent.id);
+        } else if (mapped.kind === "ambiguous") {
+          await this.deliver(
+            buildConfirmationIntent({
+              id: this.newIntentId("ambiguous-reply"),
+              capabilityProfile: this.capabilityProfile,
+              createdAt: this.now(),
+              title: "Choose an option",
+              body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
+              fallbackText: pendingIntent.intent.fallbackText,
+            }),
+            undefined,
+            event,
+          );
+          return;
+        }
       }
     }
 
@@ -988,28 +1041,64 @@ export class MessagingController {
   private async handleAdmittedTurnBundle(
     bundle: MessagingTurnAdmissionBundle,
   ): Promise<void> {
-    const prepared = await this.prepareTurnInput(bundle.events, bundle.binding, bundle.events[0]);
+    const currentBinding = bundle.binding.pendingSkillSelection
+      ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
+      : bundle.binding;
+    const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
     if (!prepared) {
       return;
     }
+    const preparedWithSkill = this.prependPendingSkillSelection(
+      prepared,
+      currentBinding,
+    );
+    const consumedSkillBinding = currentBinding.pendingSkillSelection
+      ? bindingWithoutPendingSkillSelection(currentBinding)
+      : currentBinding;
 
-    if (await this.isTurnOccupied(bundle.binding, bundle.threadKey)) {
+    if (await this.isTurnOccupied(currentBinding, bundle.threadKey)) {
       await this.queuePreparedInput({
-        binding: bundle.binding,
-        input: prepared.input,
-        preview: prepared.preview,
+        binding: consumedSkillBinding,
+        input: preparedWithSkill.input,
+        preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
       });
+      if (currentBinding.pendingSkillSelection) {
+        await this.clearPendingSkillSelection(currentBinding);
+      }
       return;
     }
 
-    await this.startPreparedInput({
-      binding: bundle.binding,
-      input: prepared.input,
-      preview: prepared.preview,
+    const startResult = await this.startPreparedInput({
+      binding: consumedSkillBinding,
+      input: preparedWithSkill.input,
+      preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
     });
+    if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
+      const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
+      await this.renderBindingStatus(updatedBinding, bundle.events[0]);
+    }
+  }
+
+  private prependPendingSkillSelection(
+    prepared: { input: AppServerTurnInputItem[]; preview: string },
+    binding: MessagingBindingRecord,
+  ): { input: AppServerTurnInputItem[]; preview: string } {
+    const selection = binding.pendingSkillSelection;
+    if (!selection) return prepared;
+    const prefix = formatSkillInputPrefix(selection);
+    return {
+      input: [
+        {
+          type: "text",
+          text: prefix,
+        },
+        ...prepared.input,
+      ],
+      preview: `${prefix}\n${prepared.preview}`,
+    };
   }
 
   private async findPendingNewThreadSession(
@@ -1237,7 +1326,7 @@ export class MessagingController {
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
-  }): Promise<boolean> {
+  }): Promise<PreparedInputStartResult> {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
 
@@ -1295,14 +1384,14 @@ export class MessagingController {
         force: true,
       });
       await this.renderBindingStatus(params.binding, undefined, navigation);
-      return true;
+      return "started";
     } catch (error) {
       if (turnStarted) {
         this.logger.debug?.("messaging post-start update failed", {
           error: error instanceof Error ? error.message : String(error),
           threadId: params.binding.threadId,
         });
-        return true;
+        return "started";
       }
       if (isTurnInProgressStartError(error)) {
         if (params.queueOnConcurrentStart !== false) {
@@ -1312,8 +1401,9 @@ export class MessagingController {
             preview: params.preview,
             threadKey: params.threadKey,
           });
+          return "queued";
         }
-        return false;
+        return "failed";
       }
       await this.deliver(
         buildErrorIntent({
@@ -1326,7 +1416,7 @@ export class MessagingController {
         params.binding,
         params.event,
       );
-      return false;
+      return "failed";
     } finally {
       this.turnAdmission.clearStarting(params.threadKey);
     }
@@ -1537,14 +1627,14 @@ export class MessagingController {
       return;
     }
 
-    const started = await this.startPreparedInput({
+    const startResult = await this.startPreparedInput({
       binding: entry.binding,
       input: entry.input,
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
     });
-    if (!started) {
+    if (startResult !== "started") {
       return;
     }
 
@@ -3694,9 +3784,43 @@ export class MessagingController {
     }
 
     if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
+      if (
+        actionId === "status:refresh" &&
+        await this.dismissActiveSkillsWorkflow(binding, event)
+      ) {
+        return;
+      }
       // "Back" buttons from handoff sub-flows resolve to a status card
       // refresh, same as an explicit Refresh tap.
+      await this.clearActiveBindingSubmodeIntent(event, binding);
       await this.renderBindingStatus(binding, event);
+      return;
+    }
+    if (actionId === "status:skills") {
+      await this.presentSkillsBrowser(binding, event);
+      return;
+    }
+    if (actionId === "skills:next" || actionId === "skills:previous") {
+      const page = skillsBrowserPageFromValue(event.value);
+      await this.presentSkillsBrowser(binding, event, page);
+      return;
+    }
+    if (actionId === "skills:search") {
+      await this.presentSkillsSearchPrompt(binding, event);
+      return;
+    }
+    if (actionId === "skills:cancel" || actionId === "skills:search:cancel") {
+      await this.dismissActiveSkillsWorkflow(binding, event, {
+        allowCallbackFallback: true,
+      });
+      return;
+    }
+    if (actionId === "skills:select") {
+      await this.selectPendingSkill(binding, event);
+      return;
+    }
+    if (actionId === "skills:remove") {
+      await this.removePendingSkill(binding, event);
       return;
     }
     if (actionId === "status:handoff") {
@@ -3794,6 +3918,242 @@ export class MessagingController {
       }),
       binding,
     );
+  }
+
+  private async presentSkillsBrowser(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    options: {
+      pageIndex?: number;
+      query?: string;
+      targetSurface?: MessagingSurfaceRef;
+    } = {},
+  ): Promise<void> {
+    if (!this.options.backend.listSkills) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("skills-unavailable"),
+          createdAt: this.now(),
+          title: "Skills unavailable",
+          body: "This runtime does not expose skill browsing through messaging.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      const threadState = resolveMessagingThreadState({ binding, navigation });
+      const cwds = skillSearchCwdsForThreadState(threadState);
+      const response = await this.options.backend.listSkills({
+        backend: binding.backend,
+        ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
+      });
+      const targetSurface = options.targetSurface ??
+        await this.findActiveSkillsWorkflowSurface(binding, event);
+      await this.deliverAndStoreSkillsWorkflow(
+        buildSkillsBrowserIntent({
+          id: this.newIntentId("skills-browser"),
+          binding,
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          entries: flattenSkillEntries(response.data),
+          pageIndex: options.pageIndex,
+          query: options.query,
+          targetSurface,
+        }),
+        binding,
+        event,
+      );
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("skills-list-failed"),
+          createdAt: this.now(),
+          title: "Skills unavailable",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+    }
+  }
+
+  private async presentSkillsSearchPrompt(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
+      buildSkillsSearchPromptIntent({
+        id: this.newIntentId("skills-search"),
+        binding,
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        targetSurface,
+      }),
+      binding,
+      event,
+    );
+  }
+
+  private async selectPendingSkill(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const selection = skillSelectionFromValue(
+      event.value,
+      this.now(),
+      event.actor.platformUserId,
+    );
+    if (!selection) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      pendingSkillSelection: selection,
+      updatedAt: this.now(),
+    });
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
+      buildSkillSelectedIntent({
+        id: this.newIntentId("skill-selected"),
+        binding: updatedBinding,
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        selection,
+        targetSurface,
+      }),
+      updatedBinding,
+      event,
+    );
+  }
+
+  private async removePendingSkill(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const { pendingSkillSelection } = binding;
+    const updatedBinding = await this.clearPendingSkillSelection(binding);
+    const targetSurface = await this.findActiveSkillsWorkflowSurface(binding, event);
+    await this.deliverAndStoreSkillsWorkflow(
+      buildSkillRemovedIntent({
+        id: this.newIntentId("skill-removed"),
+        binding: updatedBinding,
+        createdAt: this.now(),
+        removed: pendingSkillSelection,
+        targetSurface,
+      }),
+      updatedBinding,
+      event,
+    );
+  }
+
+  private async clearPendingSkillSelection(
+    binding: MessagingBindingRecord,
+  ): Promise<MessagingBindingRecord> {
+    const { pendingSkillSelection: _pendingSkillSelection, ...rest } = binding;
+    return await this.options.store.upsertBinding({
+      ...rest,
+      updatedAt: this.now(),
+    });
+  }
+
+  private async clearActiveBindingSubmodeIntent(
+    event: MessagingInboundEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      pendingIntent &&
+      pendingIntent.bindingId === binding.id &&
+      !pendingIntent.intent.requestContext
+    ) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+    }
+  }
+
+  private async dismissActiveSkillsWorkflow(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    options: { allowCallbackFallback?: boolean } = {},
+  ): Promise<boolean> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    const activeSkillsIntent = pendingIntent &&
+      pendingIntent.bindingId === binding.id &&
+      isSkillsWorkflowIntent(pendingIntent.intent)
+      ? pendingIntent
+      : undefined;
+    const targetSurface = activeSkillsIntent?.surface ??
+      (event.kind === "callback" && (activeSkillsIntent || options.allowCallbackFallback)
+        ? event.interaction
+        : undefined);
+
+    if (activeSkillsIntent && !activeSkillsIntent.intent.requestContext) {
+      await this.options.store.deletePendingIntent(activeSkillsIntent.id);
+    }
+
+    if (!activeSkillsIntent && !targetSurface) {
+      return false;
+    }
+
+    if (targetSurface) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("skills-dismissed"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Skills dismissed",
+          body: "Use Skills from the status menu to choose a skill again.",
+          actions: [],
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "present_new",
+          },
+          targetSurface,
+        }),
+        binding,
+        event,
+      );
+    }
+
+    return true;
+  }
+
+  private async findActiveSkillsWorkflowSurface(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<MessagingSurfaceRef | undefined> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      pendingIntent?.bindingId === binding.id &&
+      pendingIntent.surface &&
+      isSkillsWorkflowIntent(pendingIntent.intent)
+    ) {
+      return pendingIntent.surface;
+    }
+    return undefined;
   }
 
   private async presentHandoffOverview(
@@ -4045,6 +4405,19 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      activeIntent &&
+      activeIntent.id !== intent.id &&
+      activeIntent.bindingId === binding.id &&
+      !activeIntent.intent.requestContext
+    ) {
+      await this.options.store.deletePendingIntent(activeIntent.id);
+    }
     const pendingIntent = await this.storePendingIntent(intent, binding, event);
     const result = await this.deliver(intent, binding, event);
     if (!result.surface) {
@@ -4058,6 +4431,35 @@ export class MessagingController {
       ...binding,
       statusSurface: result.surface,
       updatedAt: this.now(),
+    });
+  }
+
+  private async deliverAndStoreSkillsWorkflow(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const activeIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (
+      activeIntent &&
+      activeIntent.id !== intent.id &&
+      activeIntent.bindingId === binding.id &&
+      !activeIntent.intent.requestContext
+    ) {
+      await this.options.store.deletePendingIntent(activeIntent.id);
+    }
+    const pendingIntent = await this.storePendingIntent(intent, binding, event);
+    const result = await this.deliver(intent, binding, event);
+    if (!result.surface) {
+      return;
+    }
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      surface: result.surface,
     });
   }
 
@@ -6022,7 +6424,9 @@ function readHelpPageIndex(event: MessagingInboundCallbackEvent): number {
 
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith("status:") || actionId.startsWith("handoff:")
+  return actionId.startsWith("status:")
+    || actionId.startsWith("handoff:")
+    || actionId.startsWith("skills:")
     ? actionId
     : undefined;
 }
@@ -7305,6 +7709,28 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function skillSearchCwdsForThreadState(
+  threadState: MessagingResolvedThreadState,
+): string[] {
+  return [
+    threadState.worktreePath,
+    threadState.directoryPath,
+    ...(threadState.thread?.linkedDirectories ?? []).flatMap((directory) => [
+      directory.worktreePath,
+      directory.path,
+    ]),
+  ].filter((cwd, index, candidates): cwd is string =>
+    Boolean(cwd) && candidates.indexOf(cwd) === index,
+  );
+}
+
+function bindingWithoutPendingSkillSelection(
+  binding: MessagingBindingRecord,
+): MessagingBindingRecord {
+  const { pendingSkillSelection: _pendingSkillSelection, ...rest } = binding;
+  return rest;
 }
 
 function isToolsFallbackText(text: string): boolean {

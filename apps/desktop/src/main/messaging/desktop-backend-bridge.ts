@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
   AppServerBackendKind,
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
   AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
@@ -127,6 +129,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {
     return await this.registry.interruptTurn(request);
+  }
+
+  async listSkills(
+    request: AppServerListSkillsRequest = {},
+  ): Promise<Pick<AppServerListSkillsResponse, "data">> {
+    return await this.registry.listSkills(request);
   }
 
   async listBackends(request: ListBackendsRequest = {}): Promise<ListBackendsResponse> {

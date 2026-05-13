@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  AppServerListSkillsResponse,
   AppServerPendingRequestNotification,
   CancelThreadExecutionModeQueueRequest,
   HandoffThreadWorkspaceRequest,
@@ -3054,6 +3055,104 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clears a staged skill when backend concurrent-start rejection queues the prefixed request", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const planChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: planChoice.value,
+      }),
+    );
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("thread already has an active turn in progress"),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.not.stringContaining("Pending skill: $ce:plan"),
+    });
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    expect(queuedNotice).toMatchObject({
+      body: expect.stringContaining("> Use [$ce:plan](/skills/ce-plan/SKILL.md)"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+  });
+
+  it("does not restore a consumed skill when a queued turn starts later", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const planChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: planChoice.value,
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Use [$ce:plan](/skills/ce-plan/SKILL.md)",
+          },
+          {
+            type: "text",
+            text: "second turn",
+          },
+        ],
+      }),
+    );
+    const latestStatus = harness.delivered
+      .filter((intent) => intent.kind === "status")
+      .at(-1);
+    expect(latestStatus).toMatchObject({
+      kind: "status",
+      text: expect.not.stringContaining("Pending skill: $ce:plan"),
+    });
+  });
+
   it("clears starting state when navigation lookup fails before retrying", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -5038,6 +5137,392 @@ describe("MessagingController", () => {
     });
   });
 
+  it("opens, searches, selects, removes, and consumes skills from the status menu", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    expect(harness.listSkills).toHaveBeenCalledWith({
+      backend: "codex",
+      cwds: ["/repo/pwragent"],
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Skills",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "skills:select",
+          label: "1. $ce:plan",
+        }),
+        expect.objectContaining({ id: "skills:search" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Search Skills",
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("work"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Skills matching \"work\""),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "skills:select",
+          label: "1. $ce:work",
+        }),
+      ]),
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    const workChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: workChoice.value,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skill Selected",
+      body: expect.stringContaining("Skill: $ce:work"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "skills:remove" }),
+      ]),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      pendingSkillSelection: {
+        name: "ce:work",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:remove" }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: workChoice.value,
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      pendingSkillSelection: {
+        name: "ce:work",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("implement it"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Use [$ce:work](/skills/ce-work/SKILL.md)",
+          },
+          {
+            type: "text",
+            text: "implement it",
+          },
+        ],
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.not.toHaveProperty("pendingSkillSelection");
+  });
+
+  it("presents the skills browser as a current chat message instead of editing the status card", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+    if (!binding) throw new Error("Expected an active binding");
+    await harness.store.upsertBinding({
+      ...binding,
+      statusSurface: {
+        channel: "telegram",
+        id: "status-surface",
+        state: { opaque: { messageId: "status-message" } },
+      },
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    const skillsBrowser = harness.delivered.at(-1);
+    expect(skillsBrowser).toMatchObject({
+      kind: "single_select",
+      delivery: {
+        mode: "present",
+      },
+    });
+    expect(skillsBrowser).not.toHaveProperty("targetSurface");
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      statusSurface: {
+        id: "status-surface",
+      },
+    });
+  });
+
+  it("updates the active skills message for button-driven navigation and typed search results", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const initialSkillsSurface = harness.delivered.at(-1)?.id;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      delivery: {
+        mode: "update",
+      },
+      targetSurface: {
+        id: `surface:${initialSkillsSurface}`,
+      },
+    });
+    const searchPromptIntent = await harness.store.findActivePendingIntentForChannel({
+      actorId: buildTextEvent("work").actor.platformUserId,
+      channel: buildTextEvent("work").channel,
+      now: 1000,
+    });
+    expect(searchPromptIntent?.surface).toBeDefined();
+
+    await harness.controller.handleInboundEvent(buildTextEvent("work"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      delivery: {
+        mode: "update",
+      },
+      prompt: expect.stringContaining('Skills matching "work"'),
+      targetSurface: {
+        id: searchPromptIntent?.surface?.id,
+      },
+    });
+  });
+
+  it("lists skills from every linked directory on the bound thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+        {
+          id: "directory:secondary",
+          kind: "local",
+          label: "Secondary",
+          path: "/repo/secondary",
+        },
+        {
+          id: "directory:tools-worktree",
+          kind: "worktree",
+          label: "Tools",
+          path: "/repo/tools",
+          worktreePath: "/repo/tools/.worktrees/feature",
+        },
+      ],
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    expect(harness.listSkills).toHaveBeenCalledWith({
+      backend: "codex",
+      cwds: [
+        "/repo/tools/.worktrees/feature",
+        "/repo/tools",
+        "/repo/pwragent",
+        "/repo/secondary",
+      ],
+    });
+  });
+
+  it("reports skills as unavailable when the backend bridge cannot list them", async () => {
+    const harness = await createHarness({ listSkills: false });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Skills unavailable",
+    });
+  });
+
+  it("honors Back and Cancel text fallbacks from the skills search prompt", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("back"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Skills",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:search" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("cancel"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the skills browser and clears the pending intent on Cancel", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:cancel" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("dismisses older skills browser Cancel buttons that still send status refresh", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:refresh" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Skills dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("does not let the removed-skill notice block the next short request", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+    const workChoice = findChoice(harness.delivered.at(-1), "skills:select");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "skills:select",
+        value: workChoice.value,
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "skills:remove" }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+  });
+
   it("toggles fast mode and applies it to later free-form turns", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -6018,6 +6503,7 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
   now?: () => number;
   channel?: MessagingChannelKind;
@@ -6051,6 +6537,7 @@ async function createHarness(options?: {
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
+  listSkills: ReturnType<typeof vi.fn> | undefined;
   listBackends: ReturnType<typeof vi.fn>;
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
@@ -6145,6 +6632,39 @@ async function createHarness(options?: {
     itemId: "compact-item-1",
   }));
   const interruptTurn = vi.fn(async (request) => request);
+  const listSkills =
+    options?.listSkills === false
+      ? undefined
+      : vi.fn(
+          options?.listSkills ??
+            (async (): Promise<Pick<AppServerListSkillsResponse, "data">> => ({
+              data: [
+                {
+                  cwd: "/repo/pwragent",
+                  skills: [
+                    {
+                      name: "ce:plan",
+                      description: "Create implementation plans",
+                      enabled: true,
+                      path: "/skills/ce-plan/SKILL.md",
+                    },
+                    {
+                      name: "ce:work",
+                      description: "Execute implementation plans",
+                      enabled: true,
+                      path: "/skills/ce-work/SKILL.md",
+                    },
+                    {
+                      name: "review-pr",
+                      description: "Review pull requests",
+                      enabled: true,
+                      path: "/skills/review-pr/SKILL.md",
+                    },
+                  ],
+                },
+              ],
+            })),
+        );
   // Mirror the real BackendRegistry emit-after-mutation behavior: the
   // mutation methods also fan out a notification on the bus so the
   // controller's refreshStatusSurfacesForThread path runs end-to-end.
@@ -6242,6 +6762,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
+    ...(listSkills ? { listSkills } : {}),
     listBackends,
     materializeDirectoryLaunchpad,
     readThreadLastAssistantMessage,
@@ -6287,6 +6808,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     handoffThreadWorkspace,
     interruptTurn,
+    listSkills,
     listBackends,
     materializeDirectoryLaunchpad,
     onBindingChanged,

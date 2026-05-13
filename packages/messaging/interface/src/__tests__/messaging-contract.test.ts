@@ -368,6 +368,48 @@ describe("messaging surface contract", () => {
     expect(JSON.stringify(intent)).not.toMatch(/callback_data|custom_id/);
   });
 
+  it("describes skill browsing as generic single-select actions", () => {
+    const intent = {
+      id: "skills-browser-1",
+      kind: "single_select",
+      createdAt: 1000,
+      bindingId: "binding-1",
+      prompt: "Skills",
+      fallbackText: "Reply with a number, Search, Back, Next, Prev, or Cancel.",
+      choices: [
+        {
+          id: "skills:select",
+          label: "1. $ce:work",
+          style: "secondary",
+          fallbackText: "1",
+          value: {
+            name: "ce:work",
+            path: "/skills/ce-work/SKILL.md",
+            description: "Execute implementation plans",
+          },
+        },
+        {
+          id: "skills:search",
+          label: "Search",
+          style: "secondary",
+          fallbackText: "search",
+        },
+        {
+          id: "status:refresh",
+          label: "Cancel",
+          style: "secondary",
+          fallbackText: "cancel",
+        },
+      ],
+    } satisfies MessagingSingleSelectIntent;
+
+    expect(intent.choices[0]?.value).toMatchObject({
+      name: "ce:work",
+      path: "/skills/ce-work/SKILL.md",
+    });
+    expect(JSON.stringify(intent)).not.toMatch(/callback_data|custom_id/);
+  });
+
   it("marks inbound media as unsupported by default", () => {
     const event = {
       id: "event-media",
@@ -503,6 +545,13 @@ describe("messaging surface contract", () => {
           },
         },
       },
+      pendingSkillSelection: {
+        name: "ce:work",
+        path: "/skills/ce-work/SKILL.md",
+        description: "Execute implementation plans",
+        selectedActorId: "telegram-user-1",
+        selectedAt: 1000,
+      },
     } satisfies MessagingBindingRecord;
     const browseSession = {
       id: "browse-1",
@@ -568,6 +617,7 @@ describe("messaging surface contract", () => {
     expect(monitorSubscription.monitor.recentThreadLimit).toBe(10);
     expect(monitorSubscription.monitor.showLastResponseSnippet).toBe(true);
     expect(monitorSubscription.monitorSurface?.id).toBe("monitor-message-1");
+    expect(binding.pendingSkillSelection?.name).toBe("ce:work");
   });
 
   it("defines callback handles as long-lived sqlite routes", () => {

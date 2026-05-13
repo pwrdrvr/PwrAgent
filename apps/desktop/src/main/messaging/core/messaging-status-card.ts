@@ -122,6 +122,9 @@ export function buildBindingStatusIntent(params: {
       `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
+      params.binding.pendingSkillSelection
+        ? `Pending skill: $${params.binding.pendingSkillSelection.name}`
+        : undefined,
       "Context usage: unavailable",
       "Account: unavailable",
       "Rate limits: unavailable",
@@ -248,6 +251,13 @@ function buildStatusActions(params: {
       style: "secondary",
       fallbackText: "sync name",
       priority: 12,
+    },
+    {
+      id: "status:skills",
+      label: "Skills",
+      style: "secondary",
+      fallbackText: "skills",
+      priority: 13,
     },
     {
       id: "status:stop",

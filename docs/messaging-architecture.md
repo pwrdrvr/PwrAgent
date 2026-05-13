@@ -390,6 +390,7 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |
+| `apps/desktop/src/main/messaging/core/messaging-skills-browser.ts` | Producer/helpers for status-card skill browsing, search results, selected-skill confirmations, and skill-prefix formatting |
 | `apps/desktop/src/main/messaging/core/messaging-resume-browser.ts` | Producer for resume browser (`/resume`) — picker pagination, project/thread filtering |
 | `apps/desktop/src/main/messaging/core/messaging-approval-renderer.ts` | Producer for approval prompts |
 | `apps/desktop/src/main/messaging/core/messaging-attachment-processor.ts` | Inbound attachment normalization (size caps, MIME sniffing, image conversion) |
