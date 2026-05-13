@@ -5,16 +5,28 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(import.meta.dirname, "../../../../..");
 
 describe("messaging docs links", () => {
-  it("keeps README messaging docs links resolvable", () => {
-    const readme = readText("README.md");
-    const links = [...readme.matchAll(/\[.*?\]\((docs\/messaging-[^)]+\.md)\)/g)].map(
-      (match) => match[1],
-    );
+  it("keeps messaging docs reachable from the top-level entry points", () => {
+    // The README rewrite split top-level docs by audience: README is
+    // user-facing, ARCHITECTURE.md is the engineer's first pass, and
+    // CONTRIBUTING.md owns developer/operator workflow. Each of the four
+    // messaging deep-dives must remain reachable from at least one of
+    // those three entry points so visitors and contributors can find them
+    // without already knowing the path.
+    //
+    // - messaging-architecture is the umbrella overview.
+    // - messaging-platform-integration covers operator setup.
+    // - messaging-adapter-contract is the implementer's contract.
+    // - messaging-adding-a-provider is the hands-on walkthrough.
+    const entryPoints = ["README.md", "ARCHITECTURE.md", "CONTRIBUTING.md"];
+    const links = new Set<string>();
+    for (const entry of entryPoints) {
+      const body = readText(entry);
+      for (const match of body.matchAll(/\[.*?\]\((docs\/messaging-[^)]+\.md)\)/g)) {
+        links.add(match[1]);
+      }
+    }
 
-    // The architecture doc is the umbrella overview added in PR #180;
-    // platform-integration covers operator setup; adapter-contract is the
-    // implementer's contract. README must link all three.
-    expect(new Set(links)).toEqual(
+    expect(links).toEqual(
       new Set([
         "docs/messaging-architecture.md",
         "docs/messaging-adding-a-provider.md",
