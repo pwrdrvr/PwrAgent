@@ -77,8 +77,11 @@ Screenshots."
    `~/.pwragent/`.
 4. (Optional) Pair a messenger from **Settings → Messaging**. PwrAgent
    supports Telegram, Discord, Slack, Mattermost, Feishu/Lark, and LINE.
-   Per-platform setup walkthroughs and settings reference live at
-   **[docs.pwragent.ai/messaging/](https://docs.pwragent.ai/messaging/)**.
+   Per-platform setup walkthroughs live at
+   **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**,
+   and the usage guide (bound threads, commands, queue/steer, monitor
+   cards, detach) lives at
+   **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
 
 ### From source
 
@@ -186,7 +189,8 @@ streaming-responses tradeoff, the webhook security note — see
   models.
 - [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md)
   — contributor cross-references for the messaging layer; operator
-  content has moved to [docs.pwragent.ai/messaging/](https://docs.pwragent.ai/messaging/).
+  content lives at [docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)
+  and [docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/).
 - [docs/state-layout.md](docs/state-layout.md) — on-disk state layout,
   environment variables, profiles.
 

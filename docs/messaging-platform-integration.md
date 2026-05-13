@@ -1,19 +1,25 @@
 # Messaging Platform Integration
 
-PwrAgent's **operator-facing setup guide** for messaging platforms now
-lives at **<https://docs.pwragent.ai/messaging/>**. That site is the
-single source of truth for:
+PwrAgent's **operator-facing documentation** for messaging now lives
+at **<https://docs.pwragent.ai>**. That site is the single source of
+truth for:
 
-- Setup walkthroughs per platform (Telegram, Discord, Slack,
-  Mattermost, Feishu/Lark, LINE).
-- "What you need to get started" and the exact paste/save/test/pair
-  flow from the desktop Settings → Messaging panel.
-- Settings reference: what each field above and below the Test button
-  does, defaults, and when you'd change them.
-- The streaming-responses tradeoff
-  (<https://docs.pwragent.ai/messaging/streaming/>).
-- The webhook security note for HTTP-callback platforms
-  (<https://docs.pwragent.ai/messaging/webhook-dangers/>).
+- **Setup** — per-platform setup walkthroughs at
+  <https://docs.pwragent.ai/providers/> (Telegram, Discord, Slack,
+  Mattermost, Feishu/Lark, LINE), each with "What you need to get
+  started," the exact paste/save/test/pair flow, and Settings
+  reference for every field above and below the Test button.
+- **Usage** — bound threads, slash commands, at-mention commands,
+  resume browser, new-thread starter, start card, debounce / queue
+  / steer, monitor cards, detach, archive — all at
+  <https://docs.pwragent.ai/using-codex/>.
+- **Rate limits and budgets** —
+  <https://docs.pwragent.ai/rate-limits/> with per-platform measured
+  write budgets and PwrAgent's Slow Mode / Cool Off priority order.
+- **The streaming-responses tradeoff** —
+  <https://docs.pwragent.ai/streaming/>.
+- **The webhook security note** for HTTP-callback platforms —
+  <https://docs.pwragent.ai/webhook-dangers/>.
 
 The Pages source for that site lives in the repo under
 [`docs-site/`](../docs-site/).
