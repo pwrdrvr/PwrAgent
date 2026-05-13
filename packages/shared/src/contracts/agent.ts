@@ -224,6 +224,7 @@ export type EnsureDirectoryLaunchpadRequest = {
   directoryPath?: string;
   currentBranch?: string;
   preferredBackend?: AppServerBackendKind;
+  registeredAt?: number;
 };
 
 export type EnsureDirectoryLaunchpadResponse = {

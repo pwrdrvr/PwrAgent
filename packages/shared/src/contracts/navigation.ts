@@ -158,6 +158,7 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   editorDocument?: Record<string, unknown>;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
   prompt: string;
+  registeredAt?: number;
   settingsTouchedAt?: number;
   workMode: LaunchpadWorkMode;
   branchName?: string;

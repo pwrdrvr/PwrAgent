@@ -68,6 +68,8 @@ function buildEnsureSpy() {
       directoryLabel: string;
       directoryPath: string;
       currentBranch?: string;
+      preferredBackend?: "codex" | "grok";
+      registeredAt?: number;
     }) => Promise<EnsureDirectoryLaunchpadResponse>
   >(async (request) => {
     return {
@@ -77,6 +79,7 @@ function buildEnsureSpy() {
         directoryLabel: request.directoryLabel,
         directoryPath: request.directoryPath,
         branchName: request.currentBranch,
+        registeredAt: request.registeredAt,
       },
       defaults: sampleDefaults,
     };
@@ -127,7 +130,9 @@ describe("registerDirectoryFromDisk", () => {
       directoryPath: "/Users/huntharo/code/PwrAgent",
       currentBranch: "main",
       preferredBackend: undefined,
+      registeredAt: expect.any(Number),
     });
+    expect(result.launchpad.registeredAt).toEqual(expect.any(Number));
   });
 
   it("normalizes symlinked roots via `git rev-parse --show-toplevel`", async () => {

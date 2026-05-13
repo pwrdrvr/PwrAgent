@@ -182,6 +182,7 @@ function hasPersistableLaunchpadState(
   return (
     launchpad.prompt.trim().length > 0 ||
     (launchpad.imageAttachments?.length ?? 0) > 0 ||
+    launchpad.registeredAt !== undefined ||
     launchpad.settingsTouchedAt !== undefined
   );
 }
