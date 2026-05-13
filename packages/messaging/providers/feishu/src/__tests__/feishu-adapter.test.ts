@@ -1068,6 +1068,61 @@ describe("FeishuAdapter", () => {
     );
   });
 
+  it("does not redispatch a retry after downstream handling fails", async () => {
+    const logger = {
+      info: vi.fn(),
+    };
+    const adapter = new FeishuAdapter({
+      config: {
+        ...baseConfig,
+        authorizedChatIds: [{ id: "oc_chat", displayName: "Ops" }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      logger,
+      now: () => 1_700_000_000_000,
+    });
+    const listener = vi.fn(async () => {
+      throw new Error("runtime unavailable");
+    });
+    await adapter.start(listener);
+    const payload: Parameters<FeishuAdapter["handleWebhookPayload"]>[0] = {
+      header: {
+        event_id: "evt_retry_after_failure",
+        event_type: "im.message.receive_v1",
+        tenant_key: "tenant_1",
+        token: "verify-token",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user" },
+          tenant_key: "tenant_1",
+        },
+        message: {
+          chat_id: "oc_chat",
+          chat_type: "group",
+          content: JSON.stringify({ text: "@_user_1 /detach" }),
+          mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "PwrAgent" }],
+          message_id: "om_retry_after_failure",
+          message_type: "text",
+        },
+      },
+    };
+
+    await expect(adapter.handleWebhookPayload(payload)).rejects.toThrow("runtime unavailable");
+    await expect(adapter.handleWebhookPayload(payload)).resolves.toEqual({ status: 200 });
+    await adapter.stop();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      "feishu duplicate inbound message ignored",
+      expect.objectContaining({
+        dedupKey: "event:evt_retry_after_failure",
+        messageId: "om_retry_after_failure",
+      }),
+    );
+  });
+
   it("lets pairing-token messages reach the runtime before authorization", async () => {
     const adapter = new FeishuAdapter({
       config: {

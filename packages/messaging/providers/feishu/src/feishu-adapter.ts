@@ -711,6 +711,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const ids = this.validateInboundIds({ chatId, messageId, openId: senderId, tenantKey });
     if (!ids || !message) return;
     const dedupKey = buildFeishuInboundDedupKey(payload, ids.messageId);
+    // Feishu/Lark retries webhook deliveries after slow or failed ACKs. Once
+    // the adapter has received a well-formed message, transport retries must
+    // not resubmit the same user command to the runtime.
     if (this.markInboundDuplicate(dedupKey, ids.messageId, ids.chatId)) {
       return;
     }
