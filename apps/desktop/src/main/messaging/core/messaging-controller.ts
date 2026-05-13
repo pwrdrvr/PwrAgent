@@ -5063,6 +5063,15 @@ export class MessagingController {
         }
         return;
       }
+      const binding = await this.options.store.getBinding(context.bindingId);
+      if (!binding) {
+        await this.deliverInvalidStatusSelection(event);
+        return;
+      }
+      if (binding.statusSurface || binding.pinnedStatusSurface) {
+        await this.renderBindingStatus(binding, event);
+        return;
+      }
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("full-access-risk-cancelled"),
@@ -7376,7 +7385,10 @@ function fullAccessRiskPresentationForContext(
   context: FullAccessEscalationContext,
 ): FullAccessRiskPresentation {
   if (context.kind === "thread") {
-    return { binding: context.binding };
+    return {
+      binding: context.binding,
+      surface: context.binding?.statusSurface ?? context.binding?.pinnedStatusSurface,
+    };
   }
   return { surface: context.session.surface };
 }

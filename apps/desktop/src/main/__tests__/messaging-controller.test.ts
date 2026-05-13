@@ -5673,6 +5673,9 @@ describe("MessagingController", () => {
       },
     });
     await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "status:permissions" }),
@@ -5684,6 +5687,11 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Enable Full Access?",
       body: expect.stringContaining("data can be exfiltrated"),
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: binding?.statusSurface,
       actions: expect.arrayContaining([
         expect.objectContaining({ id: "full-access-risk:accept", label: "Yes" }),
         expect.objectContaining({
@@ -5710,6 +5718,93 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "thread-1",
       executionMode: "full-access",
+    });
+  });
+
+  it("restores the status surface after accepting a Full Access warning", async () => {
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    const warning = harness.delivered.at(-1);
+    expect(warning).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: binding?.statusSurface,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({
+        mode: "update",
+      }),
+      targetSurface: binding?.statusSurface,
+      text: expect.stringContaining("Permissions: Full Access"),
+    });
+  });
+
+  it("restores the status surface after cancelling a Full Access warning", async () => {
+    const harness = await createHarness({
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    const warning = harness.delivered.at(-1);
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:cancel",
+        value: findAction(warning, "full-access-risk:cancel").value,
+      }),
+    );
+
+    expect(harness.setThreadExecutionMode).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: expect.objectContaining({
+        mode: "update",
+      }),
+      targetSurface: binding?.statusSurface,
+      text: expect.stringContaining("Permissions: Default"),
     });
   });
 
