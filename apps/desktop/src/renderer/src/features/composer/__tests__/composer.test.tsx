@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
+  NavigationThreadSummary,
   NavigationLaunchpadDraft,
   StartReviewRequest,
   StartTurnRequest,
@@ -329,6 +330,108 @@ describe("Composer", () => {
         targetPath: "/repo/PwrAgent",
       });
     });
+  });
+
+  it("shows thread environment commands from refreshed environment options", async () => {
+    const runCodexEnvironmentAction = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local" as const,
+      },
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Environment commands",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local",
+        actions: [],
+      },
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          actions: [
+            {
+              id: "dev-messaging",
+              name: "Dev - Messaging",
+              command: "pnpm dev:messaging",
+            },
+          ],
+        },
+      ],
+    };
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+      "Dev - Messaging",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await waitFor(() => {
+      expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        actionId: "dev-messaging",
+      });
+    });
+  });
+
+  it("shows an explicit empty state when a selected environment has no commands", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Environment commands",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            actions: [],
+          },
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              actions: [],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+      "No commands",
+    );
+    expect(screen.getByLabelText("Environment command")).toBeDisabled();
   });
 
   it("shows an orange moon for reported context window usage", () => {

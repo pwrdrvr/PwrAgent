@@ -3344,10 +3344,14 @@ export class DesktopBackendRegistry {
       throw new Error("This thread does not have a selected Codex environment.");
     }
 
+    const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
+      runtime,
+      request.actionId,
+    );
     const nextRuntime = await startLocalCodexEnvironmentAction({
       actionId: request.actionId,
       env: this.codexEnvironmentCommandEnv,
-      runtime,
+      runtime: runtimeForAction,
     });
     await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
       backend: request.backend,
@@ -3360,6 +3364,33 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
       codexEnvironmentRuntime: nextRuntime,
+    };
+  }
+
+  private async refreshCodexEnvironmentRuntimeActions(
+    runtime: CodexThreadEnvironmentRuntime,
+    actionId: string,
+  ): Promise<CodexThreadEnvironmentRuntime> {
+    if (runtime.actions?.some((action) => action.id === actionId)) {
+      return runtime;
+    }
+
+    const cwd = runtime.cwd?.trim();
+    if (!cwd) {
+      return runtime;
+    }
+
+    const environment = (await listCodexEnvironmentOptions(cwd).catch(() => []))
+      .find((candidate) => candidate.id === runtime.environmentId);
+    if (!environment) {
+      return runtime;
+    }
+
+    return {
+      ...runtime,
+      actions: environment.actions,
+      setupCommand: environment.setupScript,
+      sourcePath: environment.sourcePath,
     };
   }
 

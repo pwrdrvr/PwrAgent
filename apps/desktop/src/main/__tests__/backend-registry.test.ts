@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -73,6 +73,31 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
     }
     await flushAsync();
   }
+}
+
+async function expectEventually<T>(
+  read: () => Promise<T>,
+  expected: T,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastValue: T | undefined;
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastValue = await read();
+      if (lastValue === expected) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (lastError && lastValue === undefined) {
+    throw lastError;
+  }
+  expect(lastValue).toBe(expected);
 }
 
 function createOverlayStoreMock(params?: {
@@ -2012,6 +2037,72 @@ command = "pnpm dev:messaging"
           ],
         },
       });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes stale thread environment actions before running a command", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
+    const outputPath = path.join(root, "action.txt");
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = '''printf action-ran > ${outputPath}'''
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: root,
+            setupEnabled: false,
+            actions: [],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "dev-messaging",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          actionName: "Dev - Messaging",
+          actionStatus: "started",
+        },
+      });
+      await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });

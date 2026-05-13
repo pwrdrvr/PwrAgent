@@ -2687,10 +2687,18 @@ export function Composer(props: ComposerProps) {
     props.thread?.source === "codex"
       ? props.thread.codexEnvironmentOptions ?? []
       : [];
-  const threadCodexEnvironmentActions =
+  const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
+    (environment) =>
+      environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+  );
+  const runtimeThreadCodexEnvironmentActions =
     props.thread?.source === "codex"
       ? props.thread.codexEnvironmentRuntime?.actions ?? []
       : [];
+  const threadCodexEnvironmentActions =
+    runtimeThreadCodexEnvironmentActions.length > 0
+      ? runtimeThreadCodexEnvironmentActions
+      : selectedThreadCodexEnvironmentOption?.actions ?? [];
   const [selectedThreadCodexActionId, setSelectedThreadCodexActionId] =
     useState<string>("");
   const selectedThreadCodexAction =
@@ -3617,17 +3625,24 @@ export function Composer(props: ComposerProps) {
             />
           ) : null}
 
-          {props.thread && threadCodexEnvironmentActions.length > 0 ? (
+          {props.thread?.codexEnvironmentRuntime ? (
             <>
               <ComposerDropdown
                 ariaLabel="Environment command"
                 compact
-                disabled={!props.desktopApi?.runCodexEnvironmentAction}
+                disabled={
+                  threadCodexEnvironmentActions.length === 0 ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
                 value={selectedThreadCodexAction?.id ?? ""}
-                options={threadCodexEnvironmentActions.map((action) => ({
-                  label: action.name,
-                  value: action.id,
-                }))}
+                options={
+                  threadCodexEnvironmentActions.length > 0
+                    ? threadCodexEnvironmentActions.map((action) => ({
+                        label: action.name,
+                        value: action.id,
+                      }))
+                    : [{ label: "No commands", value: "" }]
+                }
                 onChange={(value) => {
                   setSelectedThreadCodexActionId(value);
                 }}
