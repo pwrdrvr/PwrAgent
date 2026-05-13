@@ -100,6 +100,8 @@ import type {
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
   CodexEnvironmentSetupProgressEvent,
+  DeleteDesktopPwrAgentProfileRequest,
+  DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -115,6 +117,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SetDefaultDesktopPwrAgentProfileRequest,
+  SetDefaultDesktopPwrAgentProfileResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -149,6 +153,12 @@ export type DesktopApi = {
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
   ) => Promise<OpenDesktopPwrAgentProfileResponse>;
+  setDefaultPwrAgentProfile?: (
+    request: SetDefaultDesktopPwrAgentProfileRequest,
+  ) => Promise<SetDefaultDesktopPwrAgentProfileResponse>;
+  deletePwrAgentProfile?: (
+    request: DeleteDesktopPwrAgentProfileRequest,
+  ) => Promise<DeleteDesktopPwrAgentProfileResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

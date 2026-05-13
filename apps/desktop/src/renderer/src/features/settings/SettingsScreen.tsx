@@ -8,6 +8,7 @@ import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
+import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
@@ -25,12 +26,14 @@ export type SettingsSection =
   | "experimental"
   | "messaging"
   | "models"
+  | "profiles"
   | "applications"
   | "worktrees"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
+  { id: "profiles", label: "Profiles" },
   { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
@@ -370,6 +373,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "profiles") {
+    return <ProfilesSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "worktrees") {

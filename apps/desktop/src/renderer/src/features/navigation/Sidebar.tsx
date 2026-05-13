@@ -417,7 +417,13 @@ export function Sidebar(props: SidebarProps) {
                     {profile.displayName || profile.name}
                   </span>
                   <span className="sidebar__menu-item-detail">
-                    {profile.active ? "Current profile" : "Open in new app instance"}
+                    {profile.active
+                      ? profile.default
+                        ? "Current profile - startup default"
+                        : "Current profile"
+                      : profile.default
+                        ? "Startup default - open in new app instance"
+                        : "Open in new app instance"}
                   </span>
                 </button>
               ))}

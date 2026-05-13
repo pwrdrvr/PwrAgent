@@ -1361,6 +1361,82 @@ describe("SettingsScreen", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("manages PwrAgent profiles from Settings", async () => {
+    let defaultProfile = "default";
+    let profileNames = ["dev", "default", "scratch"];
+    const listPwrAgentProfiles = vi.fn(async () => ({
+      activeProfile: "dev",
+      defaultProfile,
+      profiles: profileNames.map((name) => ({
+        name,
+        displayName: name,
+        lastUsed: name === "scratch" ? undefined : "2026-05-13T12:00:00.000Z",
+        active: name === "dev",
+        default: name === defaultProfile,
+        profileDir: `/home/example/.pwragent/profiles/${name}`,
+        canDelete: name !== "dev" && name !== "default",
+      })),
+    }));
+    const setDefaultPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      defaultProfile = profile;
+      return { profile };
+    });
+    const deletePwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      profileNames = profileNames.filter((name) => name !== profile);
+      if (defaultProfile === profile) defaultProfile = "default";
+      return { deleted: true, profile };
+    });
+    const openPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => ({
+      opened: true,
+      profile,
+    }));
+    const desktopApi = {
+      deletePwrAgentProfile,
+      listPwrAgentProfiles,
+      openPwrAgentProfile,
+      setDefaultPwrAgentProfile,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { container } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="profiles"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("scratch")).toBeInTheDocument();
+    expect(screen.getByText("/home/example/.pwragent/profiles/dev")).toBeInTheDocument();
+
+    const scratchRow = screen
+      .getByText("scratch")
+      .closest(".settings-profile-row") as HTMLElement;
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Use on startup" }));
+    await waitFor(() => {
+      expect(setDefaultPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "scratch",
+      });
+    });
+
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Open" }));
+    await waitFor(() => {
+      expect(openPwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
+    });
+
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete profile?" });
+    expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete profile" }));
+
+    await waitFor(() => {
+      expect(deletePwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".settings-confirm-dialog")).toBeNull();
+    });
+  });
+
   it("renders About license attribution and opens bundled notices", async () => {
     const openChangelogWindow = vi.fn(async () => undefined);
     const readLicenseDocument = vi.fn(async (kind: string) => ({

@@ -534,10 +534,14 @@ export type DesktopPwrAgentProfileSummary = {
   displayName?: string;
   lastUsed?: string;
   active: boolean;
+  default: boolean;
+  profileDir: string;
+  canDelete: boolean;
 };
 
 export type ListDesktopPwrAgentProfilesResponse = {
   activeProfile: string;
+  defaultProfile: string;
   profiles: DesktopPwrAgentProfileSummary[];
 };
 
@@ -549,6 +553,23 @@ export type OpenDesktopPwrAgentProfileResponse = {
   opened: boolean;
   profile: string;
   reason?: "active";
+};
+
+export type SetDefaultDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type SetDefaultDesktopPwrAgentProfileResponse = {
+  profile: string;
+};
+
+export type DeleteDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type DeleteDesktopPwrAgentProfileResponse = {
+  deleted: boolean;
+  profile: string;
 };
 
 export type OpenDesktopApplicationRequest = {

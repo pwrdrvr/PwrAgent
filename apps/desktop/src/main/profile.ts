@@ -15,6 +15,7 @@ export type ProfileEntry = {
 };
 
 export type ProfilesRegistry = {
+  default_profile?: string;
   profiles: ProfileEntry[];
 };
 
@@ -35,6 +36,7 @@ export function resolvePwragentRoot(options?: {
 
 export function resolveActiveProfileName(options?: {
   env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   cliProfile?: string;
 }): string {
   if (options?.cliProfile?.trim()) {
@@ -58,7 +60,30 @@ export function resolveActiveProfileName(options?: {
     return envProfile;
   }
 
+  return resolveDefaultProfileName(options);
+}
+
+export function resolveDefaultProfileName(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  const defaultProfile = readProfilesRegistry(options).default_profile?.trim();
+  if (defaultProfile && isValidProfileName(defaultProfile)) {
+    return defaultProfile;
+  }
   return "default";
+}
+
+export function resolveProfileDir(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  if (!isValidProfileName(profileName)) {
+    throw new Error(
+      `Invalid profile name "${profileName}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+    );
+  }
+  return path.join(resolvePwragentRoot(options), "profiles", profileName);
 }
 
 export function resolveActiveProfileDir(options?: {
@@ -66,9 +91,8 @@ export function resolveActiveProfileDir(options?: {
   homeDir?: string;
   cliProfile?: string;
 }): string {
-  const root = resolvePwragentRoot(options);
   const profileName = resolveActiveProfileName(options);
-  return path.join(root, "profiles", profileName);
+  return resolveProfileDir(profileName, options);
 }
 
 export function resolveActiveProfilePath(
@@ -117,7 +141,17 @@ export function ensureProfileExists(options?: {
   cliProfile?: string;
 }): { profileDir: string; profileName: string; created: boolean } {
   const profileName = resolveActiveProfileName(options);
-  const profileDir = resolveActiveProfileDir(options);
+  return ensureNamedProfileExists(profileName, options);
+}
+
+export function ensureNamedProfileExists(
+  profileName: string,
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: string;
+  },
+): { profileDir: string; profileName: string; created: boolean } {
+  const profileDir = resolveProfileDir(profileName, options);
   const created = !fs.existsSync(profileDir);
 
   if (created) {
@@ -132,6 +166,46 @@ export function ensureProfileExists(options?: {
   }
 
   return { profileDir, profileName, created };
+}
+
+export function setDefaultProfileName(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  ensureNamedProfileExists(profileName, options);
+  const registry = readProfilesRegistry(options);
+  registry.default_profile = profileName === "default" ? undefined : profileName;
+  writeProfilesRegistry(registry, options);
+  return profileName;
+}
+
+export function deleteProfile(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): void {
+  if (!isValidProfileName(profileName)) {
+    throw new Error(`Invalid profile name "${profileName}".`);
+  }
+  if (profileName === "default") {
+    throw new Error("The default profile cannot be deleted.");
+  }
+
+  const activeProfile = resolveActiveProfileName(options);
+  if (profileName === activeProfile) {
+    throw new Error("The active profile cannot be deleted.");
+  }
+
+  const profileDir = resolveProfileDir(profileName, options);
+  fs.rmSync(profileDir, { recursive: true, force: true });
+
+  const registry = readProfilesRegistry(options);
+  registry.profiles = registry.profiles.filter(
+    (entry) => entry.name !== profileName,
+  );
+  if (registry.default_profile === profileName) {
+    registry.default_profile = undefined;
+  }
+  writeProfilesRegistry(registry, options);
 }
 
 export function updateLastUsed(
@@ -151,6 +225,7 @@ export function updateLastUsed(
 
 function parseProfilesToml(contents: string): ProfilesRegistry {
   const profiles: ProfileEntry[] = [];
+  let defaultProfile: string | undefined;
   let current: Partial<ProfileEntry> | null = null;
 
   for (const rawLine of contents.split(/\r?\n/)) {
@@ -163,8 +238,6 @@ function parseProfilesToml(contents: string): ProfilesRegistry {
       continue;
     }
 
-    if (!current) continue;
-
     const eqIdx = line.indexOf("=");
     if (eqIdx < 1) continue;
 
@@ -175,21 +248,34 @@ function parseProfilesToml(contents: string): ProfilesRegistry {
         ? rawValue.slice(1, -1)
         : rawValue;
 
+    if (!current) {
+      if (key === "default_profile" && isValidProfileName(value)) {
+        defaultProfile = value;
+      }
+      continue;
+    }
+
     if (key === "name") current.name = value;
     else if (key === "display_name") current.display_name = value;
     else if (key === "last_used") current.last_used = value;
   }
 
   if (current?.name) profiles.push(current as ProfileEntry);
-  return { profiles };
+  return { default_profile: defaultProfile, profiles };
 }
 
 function stringifyProfilesToml(registry: ProfilesRegistry): string {
+  const header =
+    registry.default_profile && registry.default_profile !== "default"
+      ? [`default_profile = "${registry.default_profile}"`]
+      : [];
   const sections = registry.profiles.map((entry) => {
     const lines = ["[[profiles]]", `name = "${entry.name}"`];
     if (entry.display_name) lines.push(`display_name = "${entry.display_name}"`);
     if (entry.last_used) lines.push(`last_used = "${entry.last_used}"`);
     return lines.join("\n");
   });
-  return sections.join("\n\n").concat(sections.length ? "\n" : "");
+  return [...header, ...sections]
+    .join("\n\n")
+    .concat(header.length || sections.length ? "\n" : "");
 }

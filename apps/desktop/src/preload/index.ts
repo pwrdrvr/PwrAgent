@@ -95,6 +95,8 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
+  DeleteDesktopPwrAgentProfileRequest,
+  DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -109,6 +111,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SetDefaultDesktopPwrAgentProfileRequest,
+  SetDefaultDesktopPwrAgentProfileResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -188,8 +192,10 @@ import {
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   PRELOAD_LOG_CHANNEL,
+  PROFILES_DELETE_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_SET_DEFAULT_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
@@ -271,6 +277,14 @@ const desktopApi = Object.freeze({
     request: OpenDesktopPwrAgentProfileRequest,
   ): Promise<OpenDesktopPwrAgentProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_OPEN_CHANNEL, request),
+  setDefaultPwrAgentProfile: async (
+    request: SetDefaultDesktopPwrAgentProfileRequest,
+  ): Promise<SetDefaultDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_SET_DEFAULT_CHANNEL, request),
+  deletePwrAgentProfile: async (
+    request: DeleteDesktopPwrAgentProfileRequest,
+  ): Promise<DeleteDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_DELETE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
