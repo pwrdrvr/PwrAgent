@@ -39,14 +39,22 @@ called out inline.
 
 ## Messaging platforms
 
-| Platform | Inbound transport | Outbound limits | Setup |
-|---|---|---|---|
-| Telegram | Long polling | Tightest of the bunch — supergroup writes and edits share one budget | [telegram](providers/telegram/) |
-| Discord | Gateway WebSocket | Edits permissive, route buckets apply | [discord](providers/discord/) |
-| Slack | Socket Mode | DM edits permissive; `chat.postMessage` has its own limit | [slack](providers/slack/) |
-| Feishu / Lark | Persistent SDK WebSocket | Tenant-scoped | [feishu](providers/feishu/) |
-| Mattermost | HTTP callback (your host) | Server-configured | [mattermost](providers/mattermost/) |
-| LINE | HTTP webhook (your host) | LINE Bot API limits | [line](providers/line/) |
+The **Public port?** column says whether PwrAgent has to expose an
+HTTP listener to the internet for that platform to deliver events to
+it. Platforms with **✅ No** use a PwrAgent-initiated outbound
+connection — nothing on your machine accepts incoming traffic.
+Platforms with **❌ Yes** require a publicly reachable callback URL,
+usually fronted by Cloudflare Tunnel or Tailscale Funnel. See
+[Webhooks — a security note](webhook-dangers/) before standing one up.
+
+| Platform | Inbound transport | Public port? | Outbound limits | Setup |
+|---|---|---|---|---|
+| Telegram | Long polling | ✅ No | Tightest of the bunch — supergroup writes and edits share one budget | [telegram](providers/telegram/) |
+| Discord | Gateway WebSocket | ✅ No | Edits permissive, route buckets apply | [discord](providers/discord/) |
+| Slack | Socket Mode | ✅ No | DM edits permissive; `chat.postMessage` has its own limit | [slack](providers/slack/) |
+| Feishu / Lark | Persistent SDK WebSocket | ✅ No | Tenant-scoped | [feishu](providers/feishu/) |
+| Mattermost | HTTP callback (your host) | ❌ Yes | Server-configured | [mattermost](providers/mattermost/) |
+| LINE | HTTP webhook (your host) | ❌ Yes | LINE Bot API limits | [line](providers/line/) |
 
 ## Read before you toggle
 
