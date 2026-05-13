@@ -202,6 +202,23 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps launchpad header chips content-sized and aligned with the eyebrow", () => {
+    const launchpadHeaderRule = extractRuleBody(css, ".thread-header--launchpad");
+    const launchpadAsideRule = extractRuleBody(css, ".thread-header__launchpad-aside");
+    const eyebrowRule = extractRuleBody(css, ".thread-header__eyebrow-row > .eyebrow");
+
+    expect(launchpadHeaderRule).toContain("align-items: flex-start;");
+    expect(launchpadAsideRule).toContain("align-items: flex-start;");
+    expect(eyebrowRule).toContain("height: 24px;");
+    expect(eyebrowRule).toContain("margin: 0 2px 0 0;");
+    expect(css).toMatch(
+      /\.thread-header--launchpad \.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.thread-header--launchpad \.messaging-status-bar\s*\{[\s\S]*?padding-top:\s*0;[\s\S]*?padding-bottom:\s*0;[\s\S]*?\}/
+    );
+  });
+
   it("reserves opened context rail width for the thread header status area", () => {
     expect(css).toMatch(
       /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 12px\);[\s\S]*?\}/

@@ -32,6 +32,7 @@ import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
+import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -1433,7 +1434,7 @@ export function ThreadView(props: ThreadViewProps) {
     return (
       <section className="thread-view thread-view--launchpad">
         <header className="thread-header thread-header--launchpad">
-          <div>
+          <div className="thread-header__main thread-header__main--launchpad">
             <div className="thread-header__eyebrow-row">
               <p className="eyebrow">New thread</p>
               <span className="thread-row__chip thread-row__chip--backend">
@@ -1446,21 +1447,27 @@ export function ThreadView(props: ThreadViewProps) {
             <h2 className="thread-header__title">{launchpadTitle}</h2>
           </div>
 
-          <div className="thread-header__stats">
-            <div>
-              <span className="thread-header__stat-label">Workspace</span>
-              <strong>{workspaceLabel}</strong>
+          <div className="thread-header__launchpad-aside">
+            <div className="thread-header__stats">
+              <div>
+                <span className="thread-header__stat-label">Workspace</span>
+                <strong>{workspaceLabel}</strong>
+              </div>
+              <div>
+                <span className="thread-header__stat-label">Branch</span>
+                <strong>
+                  {selectedLaunchpad.workMode === "worktree"
+                    ? selectedLaunchpad.branchName ??
+                      props.selectedDirectory.gitStatus?.currentBranch ??
+                      "Pick one"
+                    : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached"}
+                </strong>
+              </div>
             </div>
-            <div>
-              <span className="thread-header__stat-label">Branch</span>
-              <strong>
-                {selectedLaunchpad.workMode === "worktree"
-                  ? selectedLaunchpad.branchName ??
-                    props.selectedDirectory.gitStatus?.currentBranch ??
-                    "Pick one"
-                  : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached"}
-              </strong>
-            </div>
+            <MessagingStatusBar
+              desktopApi={props.desktopApi}
+              onOpenActivity={props.onOpenMessagingActivity}
+            />
           </div>
         </header>
 
