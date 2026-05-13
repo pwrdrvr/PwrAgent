@@ -117,7 +117,10 @@ import {
   skillSelectionFromValue,
   skillsBrowserPageFromValue,
 } from "./messaging-skills-browser.js";
-import { resolveMessagingThreadState } from "./messaging-thread-state.js";
+import {
+  resolveMessagingThreadState,
+  type MessagingResolvedThreadState,
+} from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
 import {
   MessagingToolUpdatePolicy,
@@ -3930,10 +3933,7 @@ export class MessagingController {
         backend: "all",
       });
       const threadState = resolveMessagingThreadState({ binding, navigation });
-      const cwds = [
-        threadState.worktreePath,
-        threadState.directoryPath,
-      ].filter((cwd): cwd is string => Boolean(cwd));
+      const cwds = skillSearchCwdsForThreadState(threadState);
       const response = await this.options.backend.listSkills({
         backend: binding.backend,
         ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
@@ -7584,6 +7584,21 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function skillSearchCwdsForThreadState(
+  threadState: MessagingResolvedThreadState,
+): string[] {
+  return [
+    threadState.worktreePath,
+    threadState.directoryPath,
+    ...(threadState.thread?.linkedDirectories ?? []).flatMap((directory) => [
+      directory.worktreePath,
+      directory.path,
+    ]),
+  ].filter((cwd, index, candidates): cwd is string =>
+    Boolean(cwd) && candidates.indexOf(cwd) === index,
+  );
 }
 
 function isToolsFallbackText(text: string): boolean {

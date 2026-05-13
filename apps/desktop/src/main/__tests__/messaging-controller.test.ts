@@ -5186,6 +5186,50 @@ describe("MessagingController", () => {
     ).resolves.not.toHaveProperty("pendingSkillSelection");
   });
 
+  it("lists skills from every linked directory on the bound thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      linkedDirectories: [
+        {
+          id: "directory:pwragent",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+        {
+          id: "directory:secondary",
+          kind: "local",
+          label: "Secondary",
+          path: "/repo/secondary",
+        },
+        {
+          id: "directory:tools-worktree",
+          kind: "worktree",
+          label: "Tools",
+          path: "/repo/tools",
+          worktreePath: "/repo/tools/.worktrees/feature",
+        },
+      ],
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:skills" }),
+    );
+
+    expect(harness.listSkills).toHaveBeenCalledWith({
+      backend: "codex",
+      cwds: [
+        "/repo/tools/.worktrees/feature",
+        "/repo/tools",
+        "/repo/pwragent",
+        "/repo/secondary",
+      ],
+    });
+  });
+
   it("reports skills as unavailable when the backend bridge cannot list them", async () => {
     const harness = await createHarness({ listSkills: false });
     await bindThread(harness);
