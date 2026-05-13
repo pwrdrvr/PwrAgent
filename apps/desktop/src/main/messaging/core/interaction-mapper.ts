@@ -13,6 +13,10 @@ export type MessagingInteractionMapperResult =
       text: string;
     }
   | {
+      kind: "clarification";
+      text: string;
+    }
+  | {
       kind: "ambiguous";
       text: string;
     };

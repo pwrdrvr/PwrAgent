@@ -1044,6 +1044,19 @@ export class MessagingController {
         }
         if (isSkillSelectionNoticeIntent(pendingIntent.intent)) {
           await this.options.store.deletePendingIntent(pendingIntent.id);
+        } else if (mapped.kind === "clarification") {
+          await this.deliver(
+            buildConfirmationIntent({
+              id: this.newIntentId("clarify-reply"),
+              capabilityProfile: this.capabilityProfile,
+              createdAt: this.now(),
+              title: "Clarify option",
+              body: mapped.text,
+            }),
+            undefined,
+            event,
+          );
+          return;
         } else if (mapped.kind === "ambiguous") {
           await this.deliver(
             buildConfirmationIntent({

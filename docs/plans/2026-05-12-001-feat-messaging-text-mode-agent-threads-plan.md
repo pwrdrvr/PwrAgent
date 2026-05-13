@@ -14,6 +14,14 @@ Add a user-controlled text interaction mode for messaging platforms and thread b
 
 This plan also lays the foundation for model-backed helper threads and future agent threads. The text-mode mapper, command help assistant, thread naming service, and eventual personality/memory-backed agent conversations should share one non-Codex-coding-agent helper runtime boundary rather than each inventing its own ephemeral model call.
 
+## Implementation Update
+
+The first implementation pass shipped the settings contract, effective text-mode rendering, and deterministic fallback mapping. That was necessary but incomplete relative to the original product intent: it made text mode operable by typed command tokens, but it did not yet provide the “say what you mean” model-backed mapping that a voice user expects.
+
+The immediate correction is to add a structured, ephemeral model-backed mapper behind `ModelInteractionMapper`. The mapper should run only after deterministic matching cannot confidently resolve the reply, use a repo-owned system prompt plus the visible choices/pending intent as context, and return one of three safe outcomes: a known action id, pass-through text, or a short clarification. The controller should keep the original pending intent active across clarification so the next reply still maps against the same offered choices.
+
+This correction intentionally stops short of the full hidden multi-turn helper-session and future visible agent-thread architecture. The full helper session/agent-thread boundary in Units 5 and 6 remains the durable follow-up for persisted clarification state, SOUL.md-style personality files, memory, and agent conversations that are not registered as normal Codex project threads.
+
 ## Problem Frame
 
 PwrAgent already has a channel-neutral messaging surface contract with actions, `fallbackText`, capability profiles, managed surfaces, callback handles, deterministic text mapping, and Settings-backed messaging configuration. That is the right base for voice-friendly controls, but button-capable providers currently still render buttons by default whenever actions fit the provider profile.
