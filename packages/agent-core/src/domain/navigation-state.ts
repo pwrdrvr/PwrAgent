@@ -1,5 +1,6 @@
 import type {
   DirectoryLaunchpadOverlayState,
+  CodexEnvironmentOption,
   NavigationDirectoryGitStatus,
   AppServerBackendScope,
   AppServerThreadSummary,
@@ -13,6 +14,10 @@ import type {
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
+
+type AppServerThreadSummaryWithEnvironmentOptions = AppServerThreadSummary & {
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
+};
 
 /** Check whether a linked directory was created by the handoff service. */
 function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
@@ -122,7 +127,7 @@ export function materializeNavigationThreads(params: {
    */
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   previousKnownThreadKeys: string[];
-  threads: AppServerThreadSummary[];
+  threads: AppServerThreadSummaryWithEnvironmentOptions[];
 }): NavigationThreadSummary[] {
   const previousKnownThreadKeys = new Set(params.previousKnownThreadKeys);
 
@@ -153,6 +158,7 @@ export function materializeNavigationThreads(params: {
       fastMode: overlay?.fastMode ?? thread.fastMode,
       codexEnvironmentRuntime:
         overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
+      codexEnvironmentOptions: thread.codexEnvironmentOptions,
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
@@ -183,7 +189,7 @@ export function buildNavigationSnapshot(params: {
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
-  threads: AppServerThreadSummary[];
+  threads: AppServerThreadSummaryWithEnvironmentOptions[];
   unchanged: boolean;
 }): NavigationSnapshot {
   const threads = materializeNavigationThreads({
@@ -295,6 +301,21 @@ export function buildNavigationSnapshotHash(params: {
             sourcePath: thread.codexEnvironmentRuntime.sourcePath ?? null,
           }
         : null,
+      codexEnvironmentOptions: (thread.codexEnvironmentOptions ?? []).map(
+        (environment) => ({
+          id: environment.id,
+          name: environment.name,
+          sourcePath: environment.sourcePath,
+          setupScript: environment.setupScript ?? null,
+          cleanupScript: environment.cleanupScript ?? null,
+          actions: environment.actions.map((action) => ({
+            id: action.id,
+            name: action.name,
+            icon: action.icon ?? null,
+            command: action.command,
+          })),
+        }),
+      ),
       linkedDirectories: thread.linkedDirectories.map((directory) => ({
         id: directory.id,
         kind: directory.kind,

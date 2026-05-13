@@ -326,6 +326,18 @@ export type RunCodexEnvironmentActionResponse = {
   codexEnvironmentRuntime: CodexThreadEnvironmentRuntime;
 };
 
+export type SetCodexThreadEnvironmentRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  environmentId?: string;
+};
+
+export type SetCodexThreadEnvironmentResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+};
+
 /**
  * Ask the main process to open the system "choose folder" dialog. The
  * renderer never sees the path until the user confirms — `canceled: true`

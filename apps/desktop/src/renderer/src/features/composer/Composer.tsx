@@ -97,6 +97,7 @@ type ComposerProps = {
   ) => Promise<void>;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
+  onRefreshNavigation?: () => Promise<void>;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -2529,6 +2530,33 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         actionId: selectedThreadCodexAction.id,
       });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      props.onPendingStatusChange?.(undefined);
+    }
+  };
+
+  const setThreadCodexEnvironment = async (environmentId: string): Promise<void> => {
+    if (
+      !props.thread ||
+      props.thread.source !== "codex" ||
+      !props.desktopApi?.setCodexThreadEnvironment
+    ) {
+      return;
+    }
+
+    setSendError(undefined);
+    props.onPendingStatusChange?.("Updating environment");
+    try {
+      await props.desktopApi.setCodexThreadEnvironment({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        environmentId: environmentId || undefined,
+      });
+      setSelectedThreadCodexActionId("");
+      await props.onRefreshNavigation?.();
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2655,6 +2683,10 @@ export function Composer(props: ComposerProps) {
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
     (environment) => environment.id === props.launchpad?.codexEnvironmentId,
   );
+  const threadCodexEnvironmentOptions =
+    props.thread?.source === "codex"
+      ? props.thread.codexEnvironmentOptions ?? []
+      : [];
   const threadCodexEnvironmentActions =
     props.thread?.source === "codex"
       ? props.thread.codexEnvironmentRuntime?.actions ?? []
@@ -3563,6 +3595,26 @@ export function Composer(props: ComposerProps) {
             <span className="composer__fixed-value" aria-label="Provider">
               {formatBackendLabel(props.thread.source)}
             </span>
+          ) : null}
+
+          {props.thread && threadCodexEnvironmentOptions.length > 0 ? (
+            <ComposerDropdown
+              ariaLabel="Codex environment"
+              compact
+              disabled={!props.desktopApi?.setCodexThreadEnvironment}
+              icon={FileCodeIcon}
+              value={props.thread.codexEnvironmentRuntime?.environmentId ?? ""}
+              options={[
+                { label: "No environment", value: "" },
+                ...threadCodexEnvironmentOptions.map((environment) => ({
+                  label: environment.name,
+                  value: environment.id,
+                })),
+              ]}
+              onChange={(value) => {
+                void setThreadCodexEnvironment(value);
+              }}
+            />
           ) : null}
 
           {props.thread && threadCodexEnvironmentActions.length > 0 ? (

@@ -50,6 +50,7 @@ export type CodexEnvironmentSelection = {
 
 export async function applyLocalCodexEnvironmentSelection(params: {
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   onSetupProgress?: (
     event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
   ) => void;
@@ -112,6 +113,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       const result = await runShellCommand({
         cwd,
         command: selection.environment.setupScript,
+        env: params.env,
         mode: "wait",
         onProgress: (event) => {
           emitSetupProgress(event);
@@ -165,6 +167,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       const result = await runShellCommand({
         cwd,
         command: selection.action.command,
+        env: params.env,
         mode: "detach",
       });
       runtime.actionPid = result.pid;
@@ -184,6 +187,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
 
 export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
+  env?: NodeJS.ProcessEnv;
   runtime: CodexThreadEnvironmentRuntime;
 }): Promise<CodexThreadEnvironmentRuntime> {
   if (params.runtime.executionTarget !== "local") {
@@ -208,6 +212,7 @@ export async function startLocalCodexEnvironmentAction(params: {
     const result = await runShellCommand({
       cwd: params.runtime.cwd,
       command: action.command,
+      env: params.env,
       mode: "detach",
     });
     nextRuntime.actionPid = result.pid;
@@ -223,6 +228,7 @@ export async function startLocalCodexEnvironmentAction(params: {
 function runShellCommand(params: {
   cwd?: string;
   command: string;
+  env?: NodeJS.ProcessEnv;
   mode: "wait" | "detach";
   onProgress?: (
     event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
@@ -247,7 +253,7 @@ function runShellCommand(params: {
     const child = spawn(shell, ["-lc", params.command], {
       cwd: params.cwd,
       detached: params.mode === "detach",
-      env: process.env,
+      env: params.env ?? process.env,
       stdio: params.mode === "detach" ? "ignore" : "pipe",
     });
 

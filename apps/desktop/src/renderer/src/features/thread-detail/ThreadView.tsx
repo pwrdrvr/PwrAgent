@@ -1953,6 +1953,7 @@ export function ThreadView(props: ThreadViewProps) {
             }
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
+            onRefreshNavigation={props.onRefreshNavigation}
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={
               selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift

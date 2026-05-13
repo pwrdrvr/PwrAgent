@@ -52,6 +52,8 @@ import {
   type RetainThreadBranchDriftResponse,
   type RunCodexEnvironmentActionRequest,
   type RunCodexEnvironmentActionResponse,
+  type SetCodexThreadEnvironmentRequest,
+  type SetCodexThreadEnvironmentResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -1288,6 +1290,7 @@ export class DesktopBackendRegistry {
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
+  private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
@@ -1382,6 +1385,7 @@ export class DesktopBackendRegistry {
       typeof settingsService?.resolveCodexSpawnEnv === "function"
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
+    this.codexEnvironmentCommandEnv = codexEnv;
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
@@ -3342,6 +3346,7 @@ export class DesktopBackendRegistry {
 
     const nextRuntime = await startLocalCodexEnvironmentAction({
       actionId: request.actionId,
+      env: this.codexEnvironmentCommandEnv,
       runtime,
     });
     await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
@@ -3355,6 +3360,63 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
       codexEnvironmentRuntime: nextRuntime,
+    };
+  }
+
+  async setCodexThreadEnvironment(
+    request: SetCodexThreadEnvironmentRequest,
+  ): Promise<SetCodexThreadEnvironmentResponse> {
+    if (request.backend !== "codex") {
+      throw new Error("Codex environments are only available for Codex threads.");
+    }
+
+    if (!request.environmentId) {
+      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+        backend: request.backend,
+        threadId: request.threadId,
+        codexEnvironmentRuntime: undefined,
+      });
+      this.invalidateThreadListCache(request.backend);
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+      };
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const cwd = await this.resolveCodexThreadTurnCwd(request.threadId, overlay);
+    const options = await listCodexEnvironmentOptions(cwd);
+    const environment = options.find(
+      (candidate) => candidate.id === request.environmentId,
+    );
+    if (!environment) {
+      throw new Error("Selected Codex environment is not available for this thread.");
+    }
+
+    const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: environment.id,
+      environmentName: environment.name,
+      executionTarget: "local",
+      cwd,
+      setupEnabled: false,
+      setupCommand: environment.setupScript,
+      actions: environment.actions,
+      sourcePath: environment.sourcePath,
+    };
+    await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime,
+    });
+    this.invalidateThreadListCache(request.backend);
+
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime,
     };
   }
 
@@ -3406,6 +3468,7 @@ export class DesktopBackendRegistry {
       try {
         codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
           cwd: workspace.cwd,
+          env: this.codexEnvironmentCommandEnv,
           onSetupProgress: options?.onCodexEnvironmentSetupProgress
             ? (event) => {
                 options.onCodexEnvironmentSetupProgress?.({
@@ -4048,15 +4111,27 @@ export class DesktopBackendRegistry {
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
 
-    return threadsWithPending
-      .map((thread) => {
+    const enrichedThreads = await Promise.all(
+      threadsWithPending.map(async (thread) => {
         const overlay = overlaysByThreadId[thread.id];
+        const cwd = resolveThreadGitSourcePath(
+          thread,
+          overlay?.extraLinkedDirectories ?? [],
+        );
+        const codexEnvironmentOptions = cwd
+          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
+          : [];
         return {
           ...thread,
           executionMode: overlay?.executionMode ?? thread.executionMode,
+          codexEnvironmentOptions,
         };
-      })
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+      }),
+    );
+
+    return enrichedThreads.sort(
+      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+    );
   }
 
   private withPendingStartedThreads(

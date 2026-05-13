@@ -886,6 +886,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
@@ -1844,6 +1845,172 @@ name = "Repo Environment"
         prompt: "",
         codexEnvironmentId: "environment",
         codexEnvironmentExecutionTarget: "local",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces Codex environment options on existing threads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-options-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: 1,
+            projectKey: root,
+            linkedDirectories: [
+              {
+                id: root,
+                kind: "local",
+                label: "repo",
+                path: root,
+              },
+            ],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+        expect.objectContaining({
+          id: "thread-1",
+          codexEnvironmentOptions: [
+            expect.objectContaining({
+              id: "environment",
+              name: "PwrAgnt",
+              actions: [
+                expect.objectContaining({
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets existing Codex threads select a local environment for command actions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-select-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[setup]
+script = "pnpm install"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: 1,
+            projectKey: root,
+            linkedDirectories: [
+              {
+                id: root,
+                kind: "local",
+                label: "repo",
+                path: root,
+              },
+            ],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.setCodexThreadEnvironment({
+          backend: "codex",
+          threadId: "thread-1",
+          environmentId: "environment",
+        }),
+      ).resolves.toMatchObject({
+        backend: "codex",
+        threadId: "thread-1",
+        codexEnvironmentRuntime: {
+          environmentId: "environment",
+          environmentName: "PwrAgnt",
+          executionTarget: "local",
+          cwd: root,
+          setupEnabled: false,
+          setupCommand: "pnpm install",
+          actions: [
+            {
+              id: "dev-messaging",
+              name: "Dev - Messaging",
+              command: "pnpm dev:messaging",
+            },
+          ],
+        },
+      });
+
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          environmentName: "PwrAgnt",
+          actions: [
+            expect.objectContaining({
+              name: "Dev - Messaging",
+            }),
+          ],
+        },
       });
     } finally {
       await registry.close();

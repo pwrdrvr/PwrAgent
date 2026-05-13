@@ -61,6 +61,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** GitHub pull requests detected for this thread's linked directories + branch. */
   prs?: PrSummary[];
+  /** Codex environments discovered from the active thread workspace. */
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
   /**
    * Messaging platform conversations bound to this thread. Each binding
    * represents a single conversation (DM, channel, topic, etc.) on one

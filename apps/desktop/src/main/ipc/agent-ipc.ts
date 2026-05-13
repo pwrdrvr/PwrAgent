@@ -18,6 +18,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
+  SetCodexThreadEnvironmentRequest,
+  SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -45,6 +47,7 @@ import {
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+  AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -435,6 +438,17 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+    async (
+      _event,
+      request: SetCodexThreadEnvironmentRequest,
+    ): Promise<SetCodexThreadEnvironmentResponse> => {
+      return await registry.setCodexThreadEnvironment(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
   ipcMain.handle(
     AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
@@ -464,5 +478,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
   ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }
