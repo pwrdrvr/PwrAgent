@@ -75,7 +75,7 @@ PwrAgent verifies every inbound LINE webhook by checking
 keyed by the channel secret. Requests that don't verify are rejected
 before JSON parsing.
 
-<!-- screenshot: settings-messaging-line.png — Settings → Messaging → line with channel secret, local listener URL, public webhook URL. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Messaging → LINE panel](../assets/screenshots/settings-messaging-line.png)
 
 ## Settings reference
 

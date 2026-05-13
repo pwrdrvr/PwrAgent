@@ -87,7 +87,7 @@ Broad shortcut: `im:message` covers multiple message read/send
 capabilities. Fine for a private internal app; narrower scopes above
 are easier to get approved.
 
-<!-- screenshot: settings-messaging-feishu.png — Settings → Messaging → feishu with App ID, App Secret, tenant region, Inbound Mode = persistent. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Messaging → Feishu / Lark panel](../assets/screenshots/settings-messaging-feishu.png)
 
 ## Settings reference
 

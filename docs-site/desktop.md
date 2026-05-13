@@ -20,7 +20,7 @@ it yet, and what's coming soon.
 
 ### Recents lens
 
-<!-- screenshot: desktop-recents.png — Recents lens populated with realistic threads. See DOCS_SITE_SHOT_LIST.md. -->
+![Recents lens populated with realistic threads](assets/screenshots/desktop-recents.png)
 
 The default browsing surface is the **Recents lens** in the left
 sidebar — a single scrollable list of your recent threads. User-

@@ -28,7 +28,7 @@ If the auto-discovery picks the wrong binary or doesn't find one,
 override the path in **Settings → Applications**. Paths are
 per-tool; an explicit value beats the auto-discovered one.
 
-<!-- screenshot: settings-applications.png — Settings → Applications with all four tools discovered. See DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Applications panel showing discovered terminal, editor, git, and gh CLI paths](assets/screenshots/settings-applications.png)
 
 Codex App Server discovery is its own beast — see
 [Models / Codex App Server](#models--codex-app-server) below.
@@ -44,7 +44,7 @@ storage location**. Pick a path on the same filesystem as your
 repos — `git worktree` requires that, and putting the storage on a
 different volume will produce surprising errors at handoff.
 
-<!-- screenshot: settings-worktrees.png — Settings → Worktrees showing the default storage path. See DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Worktrees panel showing the default storage location](assets/screenshots/settings-worktrees.png)
 
 When PwrAgent creates a worktree for a thread, it lands at
 `<worktree-storage>/<hash>/<project-folder-name>` where `<hash>` is
@@ -68,7 +68,7 @@ your threads. The version currently in use is shown in **Settings →
 Models** — same panel where you'd verify which models are available
 and which one PwrAgent thinks you're logged into.
 
-<!-- screenshot: settings-models.png — Settings → Models with App Server version, source path, logged-in account, model list. See DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Models panel showing Codex App Server version, source, and model list](assets/screenshots/settings-models.png)
 
 ### Keeping the App Server up to date
 

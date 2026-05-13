@@ -81,6 +81,23 @@ Re-capture all five with:
 pnpm --filter @pwragent/desktop screenshot:readme
 ```
 
+For the **docs-site** screenshots (the `docs.pwragent.ai` site under
+[`docs-site/assets/screenshots/`](../../docs-site/assets/screenshots/)
+— Settings → Applications / Worktrees / Models panels, Settings →
+Messaging panels for each of the six platforms, and a Recents lens
+hero) the equivalent command is:
+
+```bash
+pnpm --filter @pwragent/desktop screenshot:docs-site
+```
+
+It runs ten tests through the same `capture-window.swift` pipeline
+but writes into `docs-site/assets/screenshots/` instead of
+`docs/assets/screenshots/` and uses `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`
+as its gate. See
+[`../../docs-site/assets/screenshots/DOCS_SITE_SHOT_LIST.md`](../../docs-site/assets/screenshots/DOCS_SITE_SHOT_LIST.md)
+for the shot list and what state each capture needs.
+
 The script builds the desktop app, launches it headed against curated
 replay fixtures + state-seeded sqlite rows, takes the screenshots, and
 exits. macOS Screen Recording permission is required for whichever
@@ -92,8 +109,10 @@ Pieces, all under `apps/desktop/`:
 | File | What it does |
 |---|---|
 | `e2e/readme-screenshots.inspect.spec.ts` | Five tests, one per surface. Gated behind `PWRAGENT_SCREENSHOT_CAPTURE=1`. |
+| `e2e/docs-site-screenshots.inspect.spec.ts` | Ten tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in `docs-site/assets/screenshots/`. |
 | `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
+| `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. |
 | `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Optional `--title=<substring>` for multi-window apps. |
 | `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
 | `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |

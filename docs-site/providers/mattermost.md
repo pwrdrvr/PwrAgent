@@ -128,7 +128,7 @@ Set `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` to that value
 in the environment, or store it in the Settings UI. The HMAC pin is
 **strongly recommended** for any production deployment.
 
-<!-- screenshot: settings-messaging-mattermost.png — Settings → Messaging → mattermost with bot token, server URL, callback base URL, and HMAC-secret field visible. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+![Settings → Messaging → Mattermost panel](../assets/screenshots/settings-messaging-mattermost.png)
 
 ## Settings reference
 
