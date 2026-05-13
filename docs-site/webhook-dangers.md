@@ -82,50 +82,86 @@ breaks.
 
 ## What "running a webhook safely" looks like
 
-If you're going to operate a webhook, here's a non-exhaustive list of
-the work involved:
+Treat the tunnel — Cloudflare, Tailscale, or whatever you're using —
+as the primary line of defense, not PwrAgent. The hardening work
+lives at the tunnel layer because that's where the public traffic
+actually arrives. A non-exhaustive list of what's involved:
 
-- A tunnel (Cloudflare, Tailscale, or otherwise) with a stable URL.
-- An IP allowlist on the tunnel (where supported) restricted to the
-  platform's egress range. For self-hosted Mattermost, the operator's
-  IPs. For SaaS, the platform's published egress IPs.
-- Cloudflare Access (or equivalent) policies on the public hostname.
-- HMAC verification on the inbound payloads — PwrAgent does this, but
-  you have to pin the HMAC secret across restarts or buttons rendered
-  in the previous session will silently fail.
-- Request-size caps to prevent payload-bomb attempts.
-- Rate limiting on the tunnel or upstream.
-- Logging on the listener with anomaly alerting — fuzzing produces a
+- A tunnel with a stable public hostname.
+- **Source-IP allowlisting at the tunnel layer**, restricted to the
+  messaging platform's outbound egress range (for self-hosted
+  Mattermost, your own IPs; for SaaS-hosted platforms, the platform's
+  published egress range).
+- **Request signature verification at the tunnel layer.** Every
+  webhook-using messaging platform signs its callbacks with a
+  per-app secret. The right place to verify those signatures is
+  **at the tunnel** (a Cloudflare Worker, a Tailscale Funnel-side
+  middleware, a reverse proxy with a Lua/WASM check, etc.) so
+  unsigned or forged traffic is rejected before it ever reaches the
+  agent. The exact mechanism varies by **both** the messaging
+  platform **and** the tunneling provider; **figuring out how to
+  wire it up for your specific combination is beyond the scope of
+  this guide** and is left to the reader.
+- Cloudflare Access (or equivalent identity-aware proxy) on the
+  public hostname.
+- Request-size caps and rate limits on the tunnel.
+- Anomaly alerting on the request stream — fuzzing produces a
   specific traffic pattern you'd want to see early.
-- A plan for what to do when you see one — rotate the HMAC, restart the
-  adapter, tighten the allowlist.
+- A plan for what to do when you do see one.
 
 Most desktop users will not do most of this. Most won't even know to.
+**This is the operational reason we don't recommend webhook-only
+platforms.** The work is real, platform-and-tunnel-specific, and
+getting it wrong has a real attack surface — none of which PwrAgent
+can do on your behalf.
 
 ## The honest recommendation
 
 If you can use a platform that supports outbound sockets (Telegram,
-Discord, Slack, Feishu / Lark), use it. Treat that as the default and
-the webhook platforms as the exception.
+Discord, Slack, Feishu / Lark), use it. Treat that as the default
+and the webhook platforms as the exception.
 
-If you need a webhook platform specifically (you live in LINE, or your
-team uses Mattermost), accept the trade-off knowingly. Set up the
-tunnel, pin the HMAC, monitor the logs, and budget the time. PwrAgent's
-HMAC verification gets you started, but it's not a substitute for the
-operational work.
+The two webhook-required platforms split very differently:
 
-If you read all of the above and you're confident this is easy:
-operating a webhook safely is a skill, and you almost certainly have
-it. Set it up the way you'd set up any other public service. You don't
-need this page.
+### Mattermost — depends on whose server it is
+
+If the Mattermost server you're connecting to is **yours** — running
+on the same machine as PwrAgent, on your home LAN, or on a private
+VPC you operate — the webhook callback path can stay on that private
+network. The Mattermost server can dial the bot's local listener at
+`127.0.0.1` (or its LAN-private equivalent) directly; no public
+tunnel, no public hostname, no public attack surface. In that
+posture Mattermost is functionally equivalent to the outbound-socket
+platforms and the rest of this page doesn't apply.
+
+If the Mattermost server is **someone else's** SaaS-hosted instance,
+or otherwise lives outside your private network, then the same
+public-tunnel work the rest of this page describes applies in full.
+
+### LINE — always public
+
+LINE doesn't give you that choice. LINE's servers live on the public
+internet and have to be able to reach your webhook over the public
+internet. There is no private-network mode and no equivalent of
+"point LINE at 127.0.0.1." If you use LINE, you **must** stand up a
+public tunnel and do the operational hardening yourself. There is
+no shortcut.
+
+This is why LINE is the platform we'd most steer people away from
+unless they specifically need it.
+
+## If this is easy for you
+
+Operating a public webhook safely is a skill, and if you've shipped
+one before you almost certainly have it. Set it up the way you'd set
+up any other public service. You don't need this page.
 
 For everyone else: this page is here so that you know the choice you
 made, before you made it.
 
 ## See also
 
-- [Mattermost setup](mattermost.md) — Cloudflare Tunnel and Tailscale
-  Funnel options, HMAC-secret pinning.
-- [LINE setup](line.md) — webhook-only platform, channel-secret
-  signature verification.
+- [Mattermost setup](providers/mattermost/) — tunnel options for the
+  public-server case and the connection-test flow.
+- [LINE setup](providers/line/) — webhook-only platform.
 - [Using Codex via Messaging](/using-codex/).
