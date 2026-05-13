@@ -79,6 +79,8 @@ below.
   instead of their `U…` ID.
 - `commands` — only if you're registering Slack slash commands.
 
+<!-- screenshot: settings-messaging-slack.png — Settings → Messaging → slack with Bot Token, App Token, Inbound Mode = Socket Mode. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+
 ## Settings reference
 
 ### Required (above the Test button)

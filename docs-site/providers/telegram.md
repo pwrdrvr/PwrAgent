@@ -54,6 +54,8 @@ discards the unauthorized message and logs your Telegram user ID
 there. Copy the ID into the authorized list. The pairing flow is just
 the friendlier version of that same path.
 
+<!-- screenshot: settings-messaging-telegram.png — Settings → Messaging → telegram with bot token, authorized user IDs, and the Test button visible. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+
 ## Settings reference
 
 ### Required (above the Test button)

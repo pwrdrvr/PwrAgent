@@ -52,6 +52,8 @@ flow or discovery-mode logging will surface it after the bot is online.
 11. **Try `/resume`.** Send `/resume` from the DM or any allowlisted
     channel; the bot replies with the thread picker.
 
+<!-- screenshot: settings-messaging-discord.png — Settings → Messaging → discord with bot token, Application ID, authorized user IDs, and the Test button visible. See ../assets/screenshots/DOCS_SITE_SHOT_LIST.md. -->
+
 ## Settings reference
 
 ### Required (above the Test button)

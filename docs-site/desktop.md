@@ -20,6 +20,8 @@ it yet, and what's coming soon.
 
 ### Recents lens
 
+<!-- screenshot: desktop-recents.png — Recents lens populated with realistic threads. See DOCS_SITE_SHOT_LIST.md. -->
+
 The default browsing surface is the **Recents lens** in the left
 sidebar — a single scrollable list of your recent threads. User-
 curated **Pins** live as a scrollable section at the top of the same
@@ -44,6 +46,8 @@ status card — PwrAgent moves the thread's working state and updates
 the binding. Local-to-Worktree handoff asks which branch should
 remain checked out in Local before it moves you over; Worktree-to-
 Local handoff asks for confirmation.
+
+<!-- screenshot: desktop-worktree-picker.png — Handoff dialog with Local-to-Worktree branch picker. See DOCS_SITE_SHOT_LIST.md. -->
 
 Worktree storage location is configurable — see
 [Settings → Worktrees](../settings/#worktrees).

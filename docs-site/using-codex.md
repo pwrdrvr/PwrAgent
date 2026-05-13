@@ -235,6 +235,9 @@ rest via macOS Keychain and never travel over the messenger.
 
 ## Resume Thread browser {#resume-thread-browser}
 
+<!-- screenshot: desktop-resume-browser.png — Resume Thread browser rendered on the desktop side. See DOCS_SITE_SHOT_LIST.md. -->
+<!-- screenshot: messenger-resume-browser-telegram.png — Resume browser as it renders inside Telegram. Tracked at pwrdrvr/PwrAgent#345. -->
+
 `/resume` (or `@PwrAgent resume`) opens the **thread browser** in the
 current conversation. It paginates through your existing threads
 with navigation buttons:
@@ -378,6 +381,9 @@ chosen model, reasoning, fast mode, and permissions so you can verify
 the Start Card state was captured correctly.
 
 ## Status card on a bound thread {#status-card-bound}
+
+<!-- screenshot: desktop-status-card.png — Bound-thread status card on the desktop. See DOCS_SITE_SHOT_LIST.md. -->
+<!-- screenshot: messenger-status-card-telegram.png — Status card as it renders inside Telegram. Tracked at pwrdrvr/PwrAgent#345. -->
 
 After the binding completes, the **Start Card** evolves into the
 **bound-thread status card**, pinned (or repeatedly posted, where the
