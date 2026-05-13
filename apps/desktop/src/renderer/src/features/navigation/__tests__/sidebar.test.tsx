@@ -175,11 +175,11 @@ describe("Sidebar", () => {
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("button");
     expect(lensButtons.map((button) => button.textContent)).toEqual([
-      "inbox",
-      "recents",
-      "directories",
+      "Updated",
+      "Created",
+      "Directories",
     ]);
-    expect(screen.getByRole("button", { name: "directories" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Directories" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );
@@ -543,17 +543,17 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "inbox" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Updated" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: "recents" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Created" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
     expect(screen.getByRole("button", { name: /Updated thread/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "recents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Created" }));
 
     expect(onBrowseModeChange).toHaveBeenCalledWith("recents");
   });

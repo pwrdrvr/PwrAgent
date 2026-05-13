@@ -1216,7 +1216,8 @@ textarea,
 .lens-switch {
   display: inline-grid;
   width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -1237,11 +1238,11 @@ textarea,
 .lens-switch__button {
   min-width: 0;
   height: 32px;
-  padding: 0 8px;
+  padding: 0 6px;
   background: transparent;
   color: var(--text-secondary);
-  text-transform: capitalize;
   transition: none;
+  white-space: nowrap;
 }
 
 .lens-switch__button.is-active {

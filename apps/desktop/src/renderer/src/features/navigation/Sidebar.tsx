@@ -95,6 +95,12 @@ type SidebarProps = {
   onResizeByKeyboard?: (delta: number) => void;
 };
 
+const browseModeLabels = {
+  inbox: "Updated",
+  recents: "Created",
+  directories: "Directories",
+} satisfies Record<BrowseMode, string>;
+
 export function Sidebar(props: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -442,7 +448,7 @@ export function Sidebar(props: SidebarProps) {
               type="button"
               onClick={() => props.onBrowseModeChange(mode)}
             >
-              {mode}
+              {browseModeLabels[mode]}
             </button>
           ))}
         </div>
