@@ -1,7 +1,7 @@
 ---
 title: "docs: Codex via Messaging usage guide + site restructure"
 type: docs
-status: active
+status: completed
 date: 2026-05-13
 origin: docs/brainstorms/2026-05-13-codex-via-messaging-docs-requirements.md
 ---
