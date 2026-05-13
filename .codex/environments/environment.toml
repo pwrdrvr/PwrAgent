@@ -25,3 +25,13 @@ pnpm install
 
 [cleanup]
 script = "rm -rf node_modules dist"
+
+[[actions]]
+name = "Dev - Messaging"
+icon = "run"
+command = "PWRAGENT_PROFILE=dev pnpm dev"
+
+[[actions]]
+name = "Dev - No Messaging"
+icon = "run"
+command = "PWRAGENT_PROFILE=dev pnpm dev:no-messaging"
