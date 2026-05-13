@@ -112,6 +112,10 @@ type ComposerProps = {
         | "fastMode"
         | "workMode"
         | "branchName"
+        | "codexEnvironmentId"
+        | "codexEnvironmentExecutionTarget"
+        | "codexEnvironmentSetupEnabled"
+        | "codexEnvironmentActionId"
         | "directoryLabel"
         | "directoryPath"
         | "imageAttachments"
@@ -2454,6 +2458,10 @@ export function Composer(props: ComposerProps) {
         | "fastMode"
         | "workMode"
         | "branchName"
+        | "codexEnvironmentId"
+        | "codexEnvironmentExecutionTarget"
+        | "codexEnvironmentSetupEnabled"
+        | "codexEnvironmentActionId"
       >
     >
   ): void => {
@@ -2591,6 +2599,13 @@ export function Composer(props: ComposerProps) {
     launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
       ? props.launchpad.workMode
       : "local";
+  const launchpadCodexEnvironmentOptions =
+    props.launchpad?.backend === "codex"
+      ? props.launchpad.codexEnvironmentOptions ?? []
+      : [];
+  const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
+    (environment) => environment.id === props.launchpad?.codexEnvironmentId,
+  );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
@@ -3478,6 +3493,10 @@ export function Composer(props: ComposerProps) {
                     : undefined,
                   serviceTier: undefined,
                   fastMode: undefined,
+                  codexEnvironmentId: undefined,
+                  codexEnvironmentExecutionTarget: undefined,
+                  codexEnvironmentSetupEnabled: false,
+                  codexEnvironmentActionId: undefined,
                 });
               }}
             />
@@ -3534,6 +3553,72 @@ export function Composer(props: ComposerProps) {
               onPickFromDisk={() => {
                 props.onClearPickDirectoryError?.();
                 props.onPickAndRegisterDirectory?.();
+              }}
+            />
+          ) : null}
+
+          {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
+            <ComposerDropdown
+              ariaLabel="Codex environment"
+              compact
+              disabled={launchpadSubmitting}
+              value={props.launchpad.codexEnvironmentId ?? ""}
+              options={[
+                { label: "No environment", value: "" },
+                ...launchpadCodexEnvironmentOptions.map((environment) => ({
+                  label: environment.name,
+                  value: environment.id,
+                })),
+              ]}
+              onChange={(value) => {
+                const environment = launchpadCodexEnvironmentOptions.find(
+                  (candidate) => candidate.id === value,
+                );
+                handleLaunchpadPatch({
+                  codexEnvironmentId: environment?.id,
+                  codexEnvironmentExecutionTarget: environment
+                    ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
+                    : undefined,
+                  codexEnvironmentSetupEnabled: false,
+                  codexEnvironmentActionId: undefined,
+                });
+              }}
+            />
+          ) : null}
+
+          {props.launchpad && selectedCodexEnvironment?.setupScript ? (
+            <label className="composer__checkbox">
+              <input
+                checked={Boolean(props.launchpad.codexEnvironmentSetupEnabled)}
+                disabled={launchpadSubmitting}
+                type="checkbox"
+                onChange={(event) => {
+                  handleLaunchpadPatch({
+                    codexEnvironmentSetupEnabled: event.target.checked,
+                  });
+                }}
+              />
+              <span>Run setup</span>
+            </label>
+          ) : null}
+
+          {props.launchpad && selectedCodexEnvironment?.actions.length ? (
+            <ComposerDropdown
+              ariaLabel="Environment command"
+              compact
+              disabled={launchpadSubmitting}
+              value={props.launchpad.codexEnvironmentActionId ?? ""}
+              options={[
+                { label: "No command", value: "" },
+                ...selectedCodexEnvironment.actions.map((action) => ({
+                  label: action.name,
+                  value: action.id,
+                })),
+              ]}
+              onChange={(value) => {
+                handleLaunchpadPatch({
+                  codexEnvironmentActionId: value || undefined,
+                });
               }}
             />
           ) : null}

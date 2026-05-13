@@ -3,6 +3,8 @@ import type {
   AppServerBackendKind,
   AppServerThreadImagePart,
   AppServerThreadSummary,
+  CodexEnvironmentExecutionTarget,
+  CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -134,6 +136,22 @@ export type PrSummary = {
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 export type LaunchpadWorkMode = "local" | "worktree";
 
+export type CodexEnvironmentAction = {
+  id: string;
+  name: string;
+  icon?: string;
+  command: string;
+};
+
+export type CodexEnvironmentOption = {
+  id: string;
+  name: string;
+  sourcePath: string;
+  setupScript?: string;
+  cleanupScript?: string;
+  actions: CodexEnvironmentAction[];
+};
+
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
   executionMode: ThreadExecutionMode;
@@ -162,6 +180,11 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   settingsTouchedAt?: number;
   workMode: LaunchpadWorkMode;
   branchName?: string;
+  codexEnvironmentId?: string;
+  codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  codexEnvironmentSetupEnabled?: boolean;
+  codexEnvironmentActionId?: string;
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
   createdAt: number;
   updatedAt: number;
 };
@@ -345,6 +368,7 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   gitBranch?: string;
   observedGitBranch?: string;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

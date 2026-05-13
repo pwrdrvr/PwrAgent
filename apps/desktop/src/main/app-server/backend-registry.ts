@@ -25,6 +25,8 @@ import {
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
   type BackendCapabilities,
+  type CodexEnvironmentOption,
+  type CodexThreadEnvironmentRuntime,
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendRateLimitSummary,
@@ -107,6 +109,11 @@ import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
 } from "./backend-model-catalog";
+import { listCodexEnvironmentOptions } from "./codex-environment-config";
+import {
+  applyLocalCodexEnvironmentSelection,
+  type CodexEnvironmentSelection,
+} from "./codex-environment-runtime";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 
 type InitializeResult = {
@@ -218,6 +225,7 @@ type BackendClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -902,6 +910,72 @@ function defaultLaunchpadWorkMode(
   return request.directoryKind === "directory" && request.directoryPath
     ? defaults.workMode ?? "local"
     : "local";
+}
+
+function withCodexEnvironmentOptions(
+  launchpad: NavigationLaunchpadDraft,
+  options: CodexEnvironmentOption[],
+): NavigationLaunchpadDraft {
+  if (launchpad.backend !== "codex") {
+    return {
+      ...launchpad,
+      codexEnvironmentOptions: [],
+    };
+  }
+
+  if (options.length === 0) {
+    return {
+      ...launchpad,
+      codexEnvironmentId: undefined,
+      codexEnvironmentActionId: undefined,
+      codexEnvironmentOptions: [],
+    };
+  }
+
+  const selectedEnvironment = options.find(
+    (environment) => environment.id === launchpad.codexEnvironmentId,
+  );
+  const selectedAction = selectedEnvironment?.actions.find(
+    (action) => action.id === launchpad.codexEnvironmentActionId,
+  );
+
+  return {
+    ...launchpad,
+    codexEnvironmentId: selectedEnvironment?.id,
+    codexEnvironmentExecutionTarget:
+      launchpad.codexEnvironmentExecutionTarget ?? "local",
+    codexEnvironmentSetupEnabled:
+      launchpad.codexEnvironmentSetupEnabled ?? false,
+    codexEnvironmentActionId: selectedAction?.id,
+    codexEnvironmentOptions: options,
+  };
+}
+
+function resolveCodexEnvironmentSelection(
+  launchpad: NavigationLaunchpadDraft,
+  options: CodexEnvironmentOption[],
+): CodexEnvironmentSelection | undefined {
+  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+    return undefined;
+  }
+
+  const environment = options.find(
+    (candidate) => candidate.id === launchpad.codexEnvironmentId,
+  );
+  if (!environment) {
+    return undefined;
+  }
+
+  const action = environment.actions.find(
+    (candidate) => candidate.id === launchpad.codexEnvironmentActionId,
+  );
+
+  return {
+    environment,
+    executionTarget: launchpad.codexEnvironmentExecutionTarget ?? "local",
+    setupEnabled: Boolean(launchpad.codexEnvironmentSetupEnabled),
+    action,
+  };
 }
 
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
@@ -1718,6 +1792,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
     const {
@@ -1764,6 +1839,7 @@ export class DesktopBackendRegistry {
       cwd,
       approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.sandbox ?? modeSettings.sandbox,
+      codexEnvironmentRuntime: request.codexEnvironmentRuntime,
     });
     const startedAt = Date.now();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
@@ -1779,6 +1855,7 @@ export class DesktopBackendRegistry {
         updatedAt: startedAt,
         executionMode,
         ...modelSettings,
+        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
         ).map(normalizeLinkedDirectoryKind),
@@ -1805,6 +1882,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
+      if (request.codexEnvironmentRuntime) {
+        await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+          backend,
+          threadId: result.threadId,
+          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        });
+      }
     }
     if (
       modelSettings.model !== undefined ||
@@ -1823,6 +1907,7 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
       executionMode,
+      codexEnvironmentRuntime: request.codexEnvironmentRuntime,
     };
   }
 
@@ -2938,6 +3023,9 @@ export class DesktopBackendRegistry {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
+      request.directoryPath,
+    );
     const existing = await this.overlayStore.getDirectoryLaunchpad({
       directoryKey: request.directoryKey,
     });
@@ -2985,7 +3073,10 @@ export class DesktopBackendRegistry {
           updatedAt: Date.now(),
         };
         return {
-          launchpad: await this.overlayStore.upsertDirectoryLaunchpad(refreshed),
+          launchpad: withCodexEnvironmentOptions(
+            await this.overlayStore.upsertDirectoryLaunchpad(refreshed),
+            codexEnvironmentOptions,
+          ),
           defaults,
         };
       }
@@ -3001,20 +3092,23 @@ export class DesktopBackendRegistry {
         registeredAt !== existing.registeredAt
       ) {
         return {
-          launchpad: await this.overlayStore.upsertDirectoryLaunchpad({
-            ...normalizedExisting,
-            directoryKind: request.directoryKind,
-            directoryLabel: request.directoryLabel,
-            directoryPath: request.directoryPath,
-            registeredAt,
-            updatedAt: Date.now(),
-          }),
+          launchpad: withCodexEnvironmentOptions(
+            await this.overlayStore.upsertDirectoryLaunchpad({
+              ...normalizedExisting,
+              directoryKind: request.directoryKind,
+              directoryLabel: request.directoryLabel,
+              directoryPath: request.directoryPath,
+              registeredAt,
+              updatedAt: Date.now(),
+            }),
+            codexEnvironmentOptions,
+          ),
           defaults,
         };
       }
 
       return {
-        launchpad: existing,
+        launchpad: withCodexEnvironmentOptions(existing, codexEnvironmentOptions),
         defaults,
       };
     }
@@ -3038,7 +3132,10 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     return {
-      launchpad: await this.overlayStore.upsertDirectoryLaunchpad(launchpad),
+      launchpad: withCodexEnvironmentOptions(
+        await this.overlayStore.upsertDirectoryLaunchpad(launchpad),
+        codexEnvironmentOptions,
+      ),
       defaults,
     };
   }
@@ -3096,7 +3193,10 @@ export class DesktopBackendRegistry {
         : await this.overlayStore.getLaunchpadDefaults();
 
     return {
-      launchpad: persisted,
+      launchpad: withCodexEnvironmentOptions(
+        persisted,
+        await listCodexEnvironmentOptions(persisted.directoryPath),
+      ),
       defaults,
     };
   }
@@ -3141,6 +3241,20 @@ export class DesktopBackendRegistry {
             worktreePath: workspace.cwd,
           })
         : undefined;
+    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
+      launchpad.directoryPath,
+    );
+    const codexEnvironmentSelection = resolveCodexEnvironmentSelection(
+      launchpad,
+      codexEnvironmentOptions,
+    );
+    const codexEnvironmentRuntime =
+      launchpad.backend === "codex"
+        ? await applyLocalCodexEnvironmentSelection({
+            cwd: workspace.cwd,
+            selection: codexEnvironmentSelection,
+          })
+        : undefined;
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
@@ -3150,6 +3264,7 @@ export class DesktopBackendRegistry {
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      codexEnvironmentRuntime,
     });
     if (workspace.workMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
@@ -3198,6 +3313,7 @@ export class DesktopBackendRegistry {
       executionMode: startThreadResponse.executionMode,
       ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
+      codexEnvironmentRuntime,
     };
   }
 

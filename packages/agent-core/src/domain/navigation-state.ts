@@ -151,6 +151,8 @@ export function materializeNavigationThreads(params: {
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
+      codexEnvironmentRuntime:
+        overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
@@ -265,6 +267,21 @@ export function buildNavigationSnapshotHash(params: {
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,
       fastMode: thread.fastMode ?? null,
+      codexEnvironmentRuntime: thread.codexEnvironmentRuntime
+        ? {
+            environmentId: thread.codexEnvironmentRuntime.environmentId,
+            environmentName: thread.codexEnvironmentRuntime.environmentName,
+            executionTarget: thread.codexEnvironmentRuntime.executionTarget,
+            setupEnabled: thread.codexEnvironmentRuntime.setupEnabled ?? null,
+            setupStatus: thread.codexEnvironmentRuntime.setupStatus ?? null,
+            actionId: thread.codexEnvironmentRuntime.actionId ?? null,
+            actionName: thread.codexEnvironmentRuntime.actionName ?? null,
+            actionCommand: thread.codexEnvironmentRuntime.actionCommand ?? null,
+            actionStatus: thread.codexEnvironmentRuntime.actionStatus ?? null,
+            actionPid: thread.codexEnvironmentRuntime.actionPid ?? null,
+            sourcePath: thread.codexEnvironmentRuntime.sourcePath ?? null,
+          }
+        : null,
       linkedDirectories: thread.linkedDirectories.map((directory) => ({
         id: directory.id,
         kind: directory.kind,
@@ -339,6 +356,29 @@ export function buildNavigationSnapshotHash(params: {
             workMode: directory.launchpad.workMode,
             branchName: directory.launchpad.branchName ?? null,
             registeredAt: directory.launchpad.registeredAt ?? null,
+            codexEnvironmentId:
+              directory.launchpad.codexEnvironmentId ?? null,
+            codexEnvironmentExecutionTarget:
+              directory.launchpad.codexEnvironmentExecutionTarget ?? null,
+            codexEnvironmentSetupEnabled:
+              directory.launchpad.codexEnvironmentSetupEnabled ?? null,
+            codexEnvironmentActionId:
+              directory.launchpad.codexEnvironmentActionId ?? null,
+            codexEnvironmentOptions: (
+              directory.launchpad.codexEnvironmentOptions ?? []
+            ).map((environment) => ({
+              id: environment.id,
+              name: environment.name,
+              sourcePath: environment.sourcePath,
+              setupScript: environment.setupScript ?? null,
+              cleanupScript: environment.cleanupScript ?? null,
+              actions: environment.actions.map((action) => ({
+                id: action.id,
+                name: action.name,
+                icon: action.icon ?? null,
+                command: action.command,
+              })),
+            })),
             settingsTouchedAt: directory.launchpad.settingsTouchedAt ?? null,
             updatedAt: directory.launchpad.updatedAt,
           }

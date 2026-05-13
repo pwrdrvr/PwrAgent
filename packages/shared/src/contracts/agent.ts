@@ -7,6 +7,7 @@ import type {
   AppServerReviewDelivery,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  CodexThreadEnvironmentRuntime,
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type {
@@ -28,12 +29,14 @@ export type StartThreadRequest = {
   fastMode?: boolean;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 export type StartThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 export type StartTurnRequest = {
@@ -248,6 +251,10 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "fastMode"
       | "workMode"
       | "branchName"
+      | "codexEnvironmentId"
+      | "codexEnvironmentExecutionTarget"
+      | "codexEnvironmentSetupEnabled"
+      | "codexEnvironmentActionId"
       | "directoryLabel"
       | "directoryPath"
     >
@@ -284,6 +291,7 @@ export type MaterializeDirectoryLaunchpadResponse = {
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 /**

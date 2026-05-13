@@ -73,6 +73,8 @@ export class SqliteOverlayStore {
           fastMode: current?.fastMode ?? thread.fastMode,
           gitBranch: current?.gitBranch,
           observedGitBranch: current?.observedGitBranch,
+          codexEnvironmentRuntime:
+            current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
@@ -486,6 +488,26 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setThreadCodexEnvironmentRuntime(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    codexEnvironmentRuntime?: ThreadOverlayState["codexEnvironmentRuntime"];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadExpectedBranch(params: {
     backend: ThreadOverlayState["backend"];
     branch: string;
@@ -765,4 +787,6 @@ export type OverlayStoreLike = Pick<
   | "listDirectoryLaunchpads"
   | "upsertDirectoryLaunchpad"
   | "resetDirectoryLaunchpad"
->;
+> & {
+  setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
+};
