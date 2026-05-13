@@ -82,16 +82,49 @@ in sqlite, are never synced to a server, and never leave your
 machine. Adding a new authorized user or space is a deliberate edit
 made from **Settings → Messaging → `<platform>`** in the desktop.
 
-If you launch a bot with an **empty user allowlist**, PwrAgent runs
-in *discovery mode*. The bot connects, every inbound is denied, and
-each rejection logs the platform's stable user ID. Send the bot a
-message from your account, then copy your ID out of Messaging
-Activity into the allowlist. The pairing-DM flow on Telegram is the
-friendlier version of this same path.
+### Pairing — how you populate the allowlists
 
-Stable platform IDs only — usernames, display names, guild nicknames,
-and other mutable identifiers are not authorization-safe. PwrAgent
-ignores them for allowlisting.
+PwrAgent provides a **pairing flow** that handles both allowlists
+across every provider without you needing to find a numeric ID
+anywhere. The same flow has two phases:
+
+1. **Pair yourself as a user.** Click **Generate pairing token** in
+   Settings → Messaging → \<platform\>. PwrAgent shows a short
+   one-time code. Send that code to the bot — in a DM where direct
+   messages exist, or from inside the space you'll later pair on
+   DM-less surfaces. A confirmation prompt appears on the desktop.
+   Approve it; your platform user ID joins the user allowlist.
+
+2. **Pair a shared space** (once you're an authorized user). Same
+   mechanic: generate another token, post it in the space you want
+   to allowlist, approve on the desktop. The space ID joins the
+   per-platform space allowlist. The user who pairs a space has to
+   already be on the user allowlist — that's the two-keyed model in
+   action.
+
+The available space types vary by platform: Telegram has DMs and
+supergroups; Discord has DMs, servers, and channels within servers;
+Slack has DMs, workspaces, and channels within workspaces;
+Mattermost has DMs, teams, and channels within teams; Feishu / Lark
+has DMs and group chats; LINE has 1:1 chats, group chats, and
+multi-person rooms. The pairing flow applies to whichever level
+your platform exposes.
+
+### Discovery-mode fallback
+
+If pairing isn't convenient (or you'd rather copy-paste IDs), the
+fallback works on every provider: launch with an empty user
+allowlist, send the bot any message from your account, open
+**Settings → Messaging → Activity**, and copy the platform user ID
+PwrAgent logged for your rejected attempt into the user allowlist.
+Same end result, same two-keyed model — just more typing.
+
+### Stable IDs only
+
+Usernames, display names, guild nicknames, and other mutable
+identifiers are **not** authorization-safe. PwrAgent ignores them
+when matching against the allowlists; only the platform's immutable
+ID for the user / workspace / supergroup / channel / room counts.
 
 ## Slash commands and buttons {#slash-commands-and-buttons}
 
