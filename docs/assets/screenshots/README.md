@@ -11,11 +11,12 @@ retina resolution).
 | File | Surface |
 |---|---|
 | `screenshot-recents-hero.png` | Hero — Recents lens populated with realistic threads |
+| `screenshot-install.png` | macOS DMG install window — drag PwrAgent into Applications |
 | `screenshot-bound-thread.png` | Thread detail with linked-messenger context |
 | `screenshot-messenger-status.png` | Settings → Messaging status card |
 | `screenshot-pairing.gif` | Multi-frame animated demo of the paste-token pairing flow |
 | `screenshot-pairing-frame-1.png` … `-frame-3.png` | Source frames for the pairing GIF |
-| `screenshot-closed-by-default.png` | Approval gate / closed-by-default surface |
+| `screenshot-closed-by-default.png` | Messaging activity log with denied unauthorized users |
 
 ## Regenerating
 

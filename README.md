@@ -69,8 +69,13 @@ Screenshots."
 
 1. Grab the latest signed build from the
    [GitHub Releases page](https://github.com/pwrdrvr/PwrAgent/releases).
-2. Open the app. PwrAgent stores all config and state under `~/.pwragent/`.
-3. (Optional) Pair a messenger from **Settings → Messaging**. You'll need
+2. Open the DMG and drag PwrAgent into Applications.
+
+   ![DMG install — drag PwrAgent into Applications](docs/assets/screenshots/screenshot-install.png)
+
+3. Launch PwrAgent from Applications. Config and state live under
+   `~/.pwragent/`.
+4. (Optional) Pair a messenger from **Settings → Messaging**. You'll need
    a bot token from Telegram, Discord, or Mattermost and your own
    platform user ID for the allowlist.
 
