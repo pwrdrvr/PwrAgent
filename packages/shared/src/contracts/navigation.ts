@@ -19,6 +19,7 @@ import type {
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
+import type { AutomationThreadSummary } from "./automations";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -73,6 +74,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * the user unbind from the desktop side via the chip menu.
    */
   messagingBindings?: MessagingThreadBindingSummary[];
+  /**
+   * Compact automation state for the thread. Detailed records and run
+   * history are fetched through automation IPC; this summary only keeps
+   * navigation refreshes and thread chrome honest.
+   */
+  automationSummary?: AutomationThreadSummary;
 };
 
 /**

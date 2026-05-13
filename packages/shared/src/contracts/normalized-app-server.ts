@@ -993,6 +993,28 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/automations/updated";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "automation/run/updated";
+      params: {
+        threadId: string;
+        automationId: string;
+        runId: string;
+        status:
+          | "pending"
+          | "queued"
+          | "running"
+          | "completed"
+          | "failed"
+          | "cancelled"
+          | "skipped";
+      };
+    }
+  | {
       method: "thread/pin/added";
       params: {
         threadId: string;

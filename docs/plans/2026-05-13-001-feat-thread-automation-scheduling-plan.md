@@ -278,7 +278,7 @@ flowchart TB
   U7 --> U8
 ```
 
-- [ ] **Unit 1: Define Shared Automation Contracts and Schedule Model**
+- [x] **Unit 1: Define Shared Automation Contracts and Schedule Model**
 
 **Goal:** Add provider-neutral automation types, schedule definitions, backlog
 policy vocabulary, run statuses, IPC request/response contracts, and thread

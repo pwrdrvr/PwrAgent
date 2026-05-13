@@ -2,6 +2,7 @@ import type {
   DirectoryLaunchpadOverlayState,
   DirectoryOverlayState,
   CodexEnvironmentOption,
+  AutomationThreadSummary,
   NavigationDirectoryGitStatus,
   AppServerBackendScope,
   AppServerThreadSummary,
@@ -132,6 +133,7 @@ export function materializeNavigationThreads(params: {
    * (tests, server-side use) don't need to wire it.
    */
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+  automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
 }): NavigationThreadSummary[] {
@@ -147,6 +149,7 @@ export function materializeNavigationThreads(params: {
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
     const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
     const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
+    const automationSummary = params.automationsByThreadKey?.[threadKey];
 
     return {
       ...thread,
@@ -173,6 +176,7 @@ export function materializeNavigationThreads(params: {
       messagingBindings: messagingBindings && messagingBindings.length > 0
         ? messagingBindings
         : undefined,
+      automationSummary,
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
         isNewThread: !previousKnownThreadKeys.has(threadKey),
@@ -200,6 +204,7 @@ export function buildNavigationSnapshot(params: {
    */
   directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
+  automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
@@ -211,6 +216,7 @@ export function buildNavigationSnapshot(params: {
     now: params.now,
     overlayByThreadKey: params.overlayByThreadKey,
     messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
+    automationsByThreadKey: params.automationsByThreadKey,
     previousKnownThreadKeys: params.previousKnownThreadKeys,
     threads: params.threads,
   });
@@ -404,6 +410,32 @@ export function buildNavigationSnapshotHash(params: {
         parentTitle: binding.parentTitle ?? null,
         ancestorTitle: binding.ancestorTitle ?? null,
       })),
+      automationSummary: thread.automationSummary
+        ? {
+            totalCount: thread.automationSummary.totalCount,
+            enabledCount: thread.automationSummary.enabledCount,
+            pausedCount: thread.automationSummary.pausedCount,
+            nextRunAt: thread.automationSummary.nextRunAt ?? null,
+            lastRunAt: thread.automationSummary.lastRunAt ?? null,
+            pendingRunCount: thread.automationSummary.pendingRunCount,
+            coalescedWindowCount: thread.automationSummary.coalescedWindowCount,
+            skippedSinceLastCompletedCount:
+              thread.automationSummary.skippedSinceLastCompletedCount,
+            automations: thread.automationSummary.automations.map((automation) => ({
+              id: automation.id,
+              name: automation.name,
+              status: automation.status,
+              scheduleSummary: automation.scheduleSummary,
+              backlogPolicy: automation.backlogPolicy,
+              nextRunAt: automation.nextRunAt ?? null,
+              lastRunAt: automation.lastRunAt ?? null,
+              lastRunStatus: automation.lastRunStatus ?? null,
+              pendingRunCount: automation.pendingRunCount ?? null,
+              coalescedWindowCount: automation.coalescedWindowCount ?? null,
+              updatedAt: automation.updatedAt,
+            })),
+          }
+        : null,
     })),
     directories: (params.directories ?? []).map((directory) => ({
       key: directory.key,
