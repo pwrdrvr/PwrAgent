@@ -245,6 +245,13 @@ describe("ThreadRow chip flow", () => {
     }
   });
 
+  it("marks the active drop edge on the row shell", () => {
+    const { container } = renderRow({ dropIndicator: "after" });
+    expect(container.querySelector(".thread-row-shell")).toHaveClass(
+      "is-drop-target-after",
+    );
+  });
+
   it("still selects the thread when the row body (outside chips) is clicked", () => {
     const { onSelectThread } = renderRow();
     // The row's accessible name is the thread title; click that to
