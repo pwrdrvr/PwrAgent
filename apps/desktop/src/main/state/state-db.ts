@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 8;
+export const CURRENT_STATE_DB_USER_VERSION = 9;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -281,6 +281,56 @@ CREATE INDEX IF NOT EXISTS idx_messaging_topic_cleanup_proposals_supergroup
   ON messaging_topic_cleanup_proposals(channel_kind, supergroup_id, updated_at DESC);
 `;
 
+const AUTOMATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS automations (
+  automation_id  TEXT PRIMARY KEY,
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  backlog_policy TEXT NOT NULL,
+  next_run_at    INTEGER,
+  last_run_at    INTEGER,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  deleted_at     INTEGER,
+  payload        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_thread
+  ON automations(backend, thread_id, status);
+CREATE INDEX IF NOT EXISTS idx_automations_next_run
+  ON automations(status, next_run_at);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  run_id          TEXT PRIMARY KEY,
+  automation_id  TEXT NOT NULL,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  trigger         TEXT NOT NULL,
+  scheduled_for   INTEGER,
+  queued_at       INTEGER,
+  started_at      INTEGER,
+  completed_at    INTEGER,
+  backend_turn_id TEXT,
+  queue_entry_id  TEXT,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL,
+  FOREIGN KEY (automation_id) REFERENCES automations(automation_id)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_automation_updated
+  ON automation_runs(automation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_thread_updated
+  ON automation_runs(backend, thread_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_status
+  ON automation_runs(status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_one_pending_scheduled
+  ON automation_runs(automation_id)
+  WHERE trigger = 'scheduled' AND status IN ('pending', 'queued');
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -374,6 +424,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 8) {
       db.transaction(() => {
         db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+        db.pragma("user_version = 8");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 9) {
+      db.transaction(() => {
+        db.exec(AUTOMATION_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -518,6 +574,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+    db.exec(AUTOMATION_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

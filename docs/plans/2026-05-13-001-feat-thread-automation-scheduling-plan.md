@@ -338,7 +338,7 @@ summary fields.
   automation summaries, and no implementation unit needs to invent type names or
   status vocabulary.
 
-- [ ] **Unit 2: Add Profile-Local Automation Persistence**
+- [x] **Unit 2: Add Profile-Local Automation Persistence**
 
 **Goal:** Store automation definitions, pending/coalesced run state, and run
 history in `state.db` with restart reconciliation rules.
