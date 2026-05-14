@@ -29,6 +29,7 @@ type DesktopConfigPathOptions = {
   homeDir?: string;
   xdgConfigHome?: string;
   cliProfile?: string;
+  argv?: readonly string[];
 };
 
 type AuthorizedContactConfig = DesktopAuthorizedContact;

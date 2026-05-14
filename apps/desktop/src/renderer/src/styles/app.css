@@ -3146,6 +3146,41 @@ textarea,
   box-shadow: 0 0 0 1px var(--accent-shadow);
 }
 
+.settings-select {
+  width: 100%;
+  min-width: 0;
+  appearance: none;
+  height: 32px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border-default, var(--border-subtle));
+  border-radius: 6px;
+  background-color: var(--bg-input);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.settings-select:focus,
+.settings-select:focus-visible {
+  border-color: var(--accent-border);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .settings-input--invalid {
   border-color: var(--danger-border);
   box-shadow: 0 0 0 1px rgba(196, 90, 58, 0.22);
@@ -3657,6 +3692,174 @@ textarea,
 
 .settings-pathrow__action {
   flex: 0 0 auto;
+}
+
+.settings-profile-row {
+  align-items: flex-start;
+}
+
+.settings-profile-row__meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.settings-profile-row__codex {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.settings-profile-row__label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.settings-profile-row__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-profile-row__button {
+  min-height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.settings-profile-row__button--danger {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.settings-profile-row__button--danger:hover:not([disabled]) {
+  background: var(--danger-soft);
+}
+
+.settings-confirm-modal {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 62%);
+  isolation: isolate;
+}
+
+.settings-confirm-dialog {
+  position: relative;
+  overflow: hidden;
+  width: min(520px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.settings-confirm-dialog--danger::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--danger-text);
+  content: "";
+}
+
+.settings-confirm-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.settings-confirm-dialog p {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.settings-codex-profile-select {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-codex-profile-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.settings-codex-profile-details__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-codex-profile-dialog .settings-input,
+.settings-profile-create-dialog .settings-input {
+  margin-top: 12px;
+}
+
+.settings-codex-profile-dialog__status {
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-codex-profile-dialog__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-codex-profile-dialog__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .settings-profile-row,
+  .settings-profile-row__actions,
+  .settings-codex-profile-details {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-profile-row__actions,
+  .settings-profile-row__button {
+    width: 100%;
+  }
 }
 
 /* Composer-options list — full-width radio cards. Each option is its

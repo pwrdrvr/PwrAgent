@@ -3,11 +3,13 @@ import type {
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
+import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
@@ -25,12 +27,14 @@ export type SettingsSection =
   | "experimental"
   | "messaging"
   | "models"
+  | "profiles"
   | "applications"
   | "worktrees"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
+  { id: "profiles", label: "Profiles" },
   { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
@@ -40,6 +44,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 export function SettingsScreen(props: {
   desktopApi?: DesktopApi;
+  profiles?: PwrAgentProfilesState;
   settings: DesktopSettingsState;
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
@@ -181,6 +186,7 @@ export function SettingsScreen(props: {
           ) : snapshot ? (
             <SettingsSectionBody
               desktopApi={props.desktopApi}
+              profiles={props.profiles}
               section={section}
               settings={props.settings}
               snapshot={snapshot}
@@ -199,6 +205,7 @@ export function SettingsScreen(props: {
 
 function SettingsSectionBody(props: {
   desktopApi?: DesktopApi;
+  profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
   snapshot: DesktopSettingsSnapshot;
@@ -372,6 +379,17 @@ function SettingsSectionBody(props: {
     );
   }
 
+  if (props.section === "profiles") {
+    return (
+      <ProfilesSettings
+        desktopApi={props.desktopApi}
+        profiles={props.profiles}
+        snapshot={props.snapshot}
+        onSettingsChanged={props.settings.refresh}
+      />
+    );
+  }
+
   if (props.section === "worktrees") {
     return (
       <WorktreesSettings
@@ -393,6 +411,7 @@ function SettingsSectionBody(props: {
       snapshot={props.snapshot}
       onClearSecret={props.settings.clearSecret}
       onReplaceSecret={props.settings.replaceSecret}
+      onRefresh={props.settings.refresh}
       onSaveCodexPath={async (path) => {
         await props.settings.writeConfig({
           models: {

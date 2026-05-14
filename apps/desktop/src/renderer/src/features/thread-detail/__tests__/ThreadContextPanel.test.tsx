@@ -187,27 +187,11 @@ describe("ThreadContextPanel", () => {
     );
   });
 
-  it("hides unused Spark rate limits on non-Spark threads", () => {
+  it("shows regular and Spark rate limits together", () => {
     render(<ThreadContextPanel backends={[baseBackend]} pinned thread={baseThread} />);
 
     expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
     expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
-    expect(screen.queryByText(/Spark 5h limit/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Spark Weekly limit/)).not.toBeInTheDocument();
-  });
-
-  it("labels Spark rate limits when the current thread uses Spark", () => {
-    render(
-      <ThreadContextPanel
-        backends={[baseBackend]}
-        pinned
-        thread={{
-          ...baseThread,
-          model: "gpt-5.3-codex-spark",
-        }}
-      />
-    );
-
     expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
   });

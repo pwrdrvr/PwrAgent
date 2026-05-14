@@ -518,6 +518,42 @@ export type ClearDesktopSettingsSecretRequest = {
 
 export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
 
+export type CreateDesktopCodexAuthProfileRequest = {
+  profile: string;
+};
+
+export type CreateDesktopCodexAuthProfileResponse = {
+  profile: string;
+  codexHome: string;
+  created: boolean;
+};
+
+export type StartDesktopCodexAuthProfileLoginRequest = {
+  profile: string;
+};
+
+export type StartDesktopCodexAuthProfileLoginResponse = {
+  profile: string;
+  codexHome: string;
+  started: boolean;
+  authenticated?: boolean;
+  pid?: number;
+  loginUrl?: string;
+  detail?: string;
+};
+
+export type CheckDesktopCodexAuthProfileStatusRequest = {
+  profile: string;
+};
+
+export type CheckDesktopCodexAuthProfileStatusResponse = {
+  profile: string;
+  codexHome: string;
+  authenticated: boolean;
+  status: "authenticated" | "unauthenticated" | "failed";
+  detail?: string;
+};
+
 export type PickGhCommandResponse = {
   canceled: boolean;
   path?: string;
@@ -534,10 +570,15 @@ export type DesktopPwrAgentProfileSummary = {
   displayName?: string;
   lastUsed?: string;
   active: boolean;
+  default: boolean;
+  profileDir: string;
+  canDelete: boolean;
+  codexProfile: DesktopCodexAuthProfileCandidate;
 };
 
 export type ListDesktopPwrAgentProfilesResponse = {
   activeProfile: string;
+  defaultProfile: string;
   profiles: DesktopPwrAgentProfileSummary[];
 };
 
@@ -549,6 +590,44 @@ export type OpenDesktopPwrAgentProfileResponse = {
   opened: boolean;
   profile: string;
   reason?: "active";
+};
+
+export type CreateDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type CreateDesktopPwrAgentProfileResponse = {
+  profile: string;
+  profileDir: string;
+  created: boolean;
+};
+
+export type SetDefaultDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type SetDefaultDesktopPwrAgentProfileResponse = {
+  profile: string;
+};
+
+export type DeleteDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type DeleteDesktopPwrAgentProfileResponse = {
+  deleted: boolean;
+  movedToTrash?: boolean;
+  profile: string;
+};
+
+export type SetDesktopPwrAgentProfileCodexProfileRequest = {
+  profile: string;
+  codexProfile: string;
+};
+
+export type SetDesktopPwrAgentProfileCodexProfileResponse = {
+  profile: string;
+  codexProfile: string;
 };
 
 export type OpenDesktopApplicationRequest = {

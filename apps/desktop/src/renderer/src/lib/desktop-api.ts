@@ -98,8 +98,16 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  CheckDesktopCodexAuthProfileStatusRequest,
+  CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
   CodexEnvironmentSetupProgressEvent,
+  CreateDesktopCodexAuthProfileRequest,
+  CreateDesktopCodexAuthProfileResponse,
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
+  DeleteDesktopPwrAgentProfileRequest,
+  DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -115,6 +123,12 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SetDesktopPwrAgentProfileCodexProfileRequest,
+  SetDesktopPwrAgentProfileCodexProfileResponse,
+  SetDefaultDesktopPwrAgentProfileRequest,
+  SetDefaultDesktopPwrAgentProfileResponse,
+  StartDesktopCodexAuthProfileLoginRequest,
+  StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -149,6 +163,18 @@ export type DesktopApi = {
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
   ) => Promise<OpenDesktopPwrAgentProfileResponse>;
+  createPwrAgentProfile?: (
+    request: CreateDesktopPwrAgentProfileRequest,
+  ) => Promise<CreateDesktopPwrAgentProfileResponse>;
+  setDefaultPwrAgentProfile?: (
+    request: SetDefaultDesktopPwrAgentProfileRequest,
+  ) => Promise<SetDefaultDesktopPwrAgentProfileResponse>;
+  deletePwrAgentProfile?: (
+    request: DeleteDesktopPwrAgentProfileRequest,
+  ) => Promise<DeleteDesktopPwrAgentProfileResponse>;
+  setPwrAgentProfileCodexProfile?: (
+    request: SetDesktopPwrAgentProfileCodexProfileRequest,
+  ) => Promise<SetDesktopPwrAgentProfileCodexProfileResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
@@ -238,6 +264,15 @@ export type DesktopApi = {
   refreshCodexDiscovery?: (
     request?: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  createCodexAuthProfile?: (
+    request: CreateDesktopCodexAuthProfileRequest,
+  ) => Promise<CreateDesktopCodexAuthProfileResponse>;
+  startCodexAuthProfileLogin?: (
+    request: StartDesktopCodexAuthProfileLoginRequest,
+  ) => Promise<StartDesktopCodexAuthProfileLoginResponse>;
+  checkCodexAuthProfileStatus?: (
+    request: CheckDesktopCodexAuthProfileStatusRequest,
+  ) => Promise<CheckDesktopCodexAuthProfileStatusResponse>;
   pickGhCommand?: () => Promise<PickGhCommandResponse>;
   /** Run the per-credential connection-test probe for a settings panel.
    *  Result contains parsed identity (bot username, model IDs, codex

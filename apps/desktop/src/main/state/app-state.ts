@@ -1,6 +1,8 @@
 import {
   ensureProfileExists,
   resolveActiveProfilePath,
+  startProfileRuntimeHeartbeat,
+  type ProfileRuntimeHeartbeat,
   updateLastUsed,
 } from "../profile";
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
@@ -13,6 +15,7 @@ let stateDb: StateDb | null = null;
 let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
+let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
 
 export function initializeAppState(): {
   stateDb: StateDb;
@@ -37,6 +40,7 @@ export function initializeAppState(): {
   stateDb.startGc();
 
   updateLastUsed(profileName);
+  profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName);
 
   messagingStore = new SqliteMessagingStore(stateDb);
   overlayStore = new SqliteOverlayStore(stateDb);
@@ -70,6 +74,10 @@ export function isAppStateInitialized(): boolean {
 }
 
 export function disposeAppState(): void {
+  if (profileRuntimeHeartbeat) {
+    profileRuntimeHeartbeat.stop();
+    profileRuntimeHeartbeat = null;
+  }
   if (stateDb) {
     stateDb.close();
     stateDb = null;
@@ -80,6 +88,8 @@ export function disposeAppState(): void {
 }
 
 export function resetAppStateForTests(): void {
+  profileRuntimeHeartbeat?.stop();
+  profileRuntimeHeartbeat = null;
   stateDb = null;
   messagingStore = null;
   overlayStore = null;

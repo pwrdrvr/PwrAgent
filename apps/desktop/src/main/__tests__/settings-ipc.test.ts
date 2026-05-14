@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,10 @@ const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
+  spawn: vi.fn(),
+}));
+const electronMocks = vi.hoisted(() => ({
+  openExternal: vi.fn(async () => undefined),
 }));
 const providerMocks = vi.hoisted(() => ({
   resolveTelegramContact: vi.fn(),
@@ -49,6 +54,37 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
   })),
 }));
 
+function createMockSpawnChild(
+  schedule: (child: EventEmitter & {
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  }) => void,
+): EventEmitter & {
+  kill: ReturnType<typeof vi.fn>;
+  pid: number;
+  stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    kill: ReturnType<typeof vi.fn>;
+    pid: number;
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  };
+  child.pid = 321;
+  child.kill = vi.fn();
+  child.stdout = new EventEmitter() as EventEmitter & {
+    setEncoding: ReturnType<typeof vi.fn>;
+  };
+  child.stderr = new EventEmitter() as EventEmitter & {
+    setEncoding: ReturnType<typeof vi.fn>;
+  };
+  child.stdout.setEncoding = vi.fn();
+  child.stderr.setEncoding = vi.fn();
+  schedule(child);
+  return child;
+}
+
 vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -63,10 +99,14 @@ vi.mock("electron", () => ({
     decryptString: vi.fn(),
     isEncryptionAvailable: vi.fn(() => false),
   },
+  shell: {
+    openExternal: electronMocks.openExternal,
+  },
 }));
 
 vi.mock("node:child_process", () => ({
   execFile: childProcessMocks.execFile,
+  spawn: childProcessMocks.spawn,
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -133,6 +173,8 @@ describe("settings ipc", () => {
     runtimeMock.isEnabled.mockClear();
     runtimeMock.requestCredentialValidation.mockReset();
     childProcessMocks.execFile.mockReset();
+    childProcessMocks.spawn.mockReset();
+    electronMocks.openExternal.mockClear();
     childProcessMocks.execFile.mockImplementation(
       (
         _command: string,
@@ -145,6 +187,9 @@ describe("settings ipc", () => {
         callback(error);
       },
     );
+    childProcessMocks.spawn.mockImplementation(() => {
+      throw new Error("unexpected spawn");
+    });
   });
 
   it("registers redacted read and write handlers", async () => {
@@ -273,6 +318,20 @@ describe("settings ipc", () => {
         patch: {
           models: {
             codex: {
+              profile: "work",
+            },
+          },
+        },
+      },
+    );
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
+
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          models: {
+            codex: {
               path: "codex-next",
             },
           },
@@ -339,6 +398,198 @@ describe("settings ipc", () => {
       status: "unset",
     });
     expect(childProcessMocks.execFile).not.toHaveBeenCalled();
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("starts named Codex auth profile login with the browser OAuth flow", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+            },
+          },
+        },
+      })),
+    } as unknown as DesktopSettingsService;
+    const loginUrl =
+      "https://auth.openai.com/oauth/authorize?client_id=codex&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";
+    childProcessMocks.spawn.mockImplementation(() => {
+      return createMockSpawnChild((child) => {
+        queueMicrotask(() => {
+          child.stdout.emit("data", `If your browser did not open, navigate to:\n${loginUrl}\n`);
+        });
+      });
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+        {},
+        { profile: "work" },
+      ),
+    ).resolves.toMatchObject({
+      codexHome: path.join(codexHome, "profiles", "work"),
+      loginUrl,
+      profile: "work",
+      started: true,
+    });
+    expect(childProcessMocks.spawn).toHaveBeenCalledExactlyOnceWith(
+      "/Applications/Codex.app/Contents/Resources/codex",
+      ["login"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: path.join(codexHome, "profiles", "work"),
+        }),
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(loginUrl);
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("keeps the newest Codex login process tracked when restarting login", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+            },
+          },
+        },
+      })),
+    } as unknown as DesktopSettingsService;
+    const loginUrl =
+      "https://auth.openai.com/oauth/authorize?client_id=codex&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";
+    const children: Array<ReturnType<typeof createMockSpawnChild>> = [];
+    childProcessMocks.spawn.mockImplementation(() => {
+      const child = createMockSpawnChild((spawnedChild) => {
+        queueMicrotask(() => {
+          spawnedChild.stdout.emit("data", `If your browser did not open:\n${loginUrl}\n`);
+        });
+      });
+      child.pid = 321 + children.length;
+      children.push(child);
+      return child;
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+      {},
+      { profile: "work" },
+    );
+    await handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+      {},
+      { profile: "work" },
+    );
+    expect(children[0]?.kill).toHaveBeenCalledOnce();
+
+    children[0]?.emit("close", 0);
+    disposeSettingsIpcHandlers();
+
+    expect(children[1]?.kill).toHaveBeenCalledOnce();
+  });
+
+  it("treats Codex login exit without a link as authenticated when status passes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+            },
+          },
+        },
+      })),
+    } as unknown as DesktopSettingsService;
+    childProcessMocks.spawn.mockImplementation((_command: string, args: string[]) => {
+      if (args.join(" ") === "login status") {
+        return createMockSpawnChild((child) => {
+          queueMicrotask(() => {
+            child.stdout.emit("data", "Logged in as user@example.com");
+            child.emit("close", 0);
+          });
+        });
+      }
+      return createMockSpawnChild((child) => {
+        queueMicrotask(() => {
+          child.emit("close", 0);
+        });
+      });
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+        {},
+        { profile: "work" },
+      ),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      codexHome: path.join(codexHome, "profiles", "work"),
+      profile: "work",
+      started: false,
+    });
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "/Applications/Codex.app/Contents/Resources/codex",
+      ["login"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: path.join(codexHome, "profiles", "work"),
+        }),
+      }),
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "/Applications/Codex.app/Contents/Resources/codex",
+      ["login", "status"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: path.join(codexHome, "profiles", "work"),
+        }),
+      }),
+    );
 
     disposeSettingsIpcHandlers();
   });

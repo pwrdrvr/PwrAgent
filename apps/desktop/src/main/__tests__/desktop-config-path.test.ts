@@ -45,4 +45,14 @@ describe("desktop config path", () => {
       }),
     ).toBe("/Users/tester/.pwragent/profiles/default/config.toml");
   });
+
+  it("uses --profile for the profile path", () => {
+    expect(
+      resolveDesktopConfigPath({
+        argv: ["PwrAgent", "--profile", "work"],
+        env: {} as NodeJS.ProcessEnv,
+        homeDir: "/Users/tester",
+      }),
+    ).toBe("/Users/tester/.pwragent/profiles/work/config.toml");
+  });
 });

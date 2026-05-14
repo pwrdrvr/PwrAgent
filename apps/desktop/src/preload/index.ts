@@ -94,7 +94,15 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  CheckDesktopCodexAuthProfileStatusRequest,
+  CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
+  CreateDesktopCodexAuthProfileRequest,
+  CreateDesktopCodexAuthProfileResponse,
+  DeleteDesktopPwrAgentProfileRequest,
+  DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -109,6 +117,12 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SetDesktopPwrAgentProfileCodexProfileRequest,
+  SetDesktopPwrAgentProfileCodexProfileResponse,
+  SetDefaultDesktopPwrAgentProfileRequest,
+  SetDefaultDesktopPwrAgentProfileResponse,
+  StartDesktopCodexAuthProfileLoginRequest,
+  StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -188,17 +202,24 @@ import {
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   PRELOAD_LOG_CHANNEL,
+  PROFILES_CREATE_CHANNEL,
+  PROFILES_DELETE_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_SET_CODEX_PROFILE_CHANNEL,
+  PROFILES_SET_DEFAULT_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
+  SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
@@ -271,6 +292,22 @@ const desktopApi = Object.freeze({
     request: OpenDesktopPwrAgentProfileRequest,
   ): Promise<OpenDesktopPwrAgentProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_OPEN_CHANNEL, request),
+  createPwrAgentProfile: async (
+    request: CreateDesktopPwrAgentProfileRequest,
+  ): Promise<CreateDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_CREATE_CHANNEL, request),
+  setDefaultPwrAgentProfile: async (
+    request: SetDefaultDesktopPwrAgentProfileRequest,
+  ): Promise<SetDefaultDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_SET_DEFAULT_CHANNEL, request),
+  deletePwrAgentProfile: async (
+    request: DeleteDesktopPwrAgentProfileRequest,
+  ): Promise<DeleteDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_DELETE_CHANNEL, request),
+  setPwrAgentProfileCodexProfile: async (
+    request: SetDesktopPwrAgentProfileCodexProfileRequest,
+  ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -309,6 +346,24 @@ const desktopApi = Object.freeze({
     request?: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  createCodexAuthProfile: async (
+    request: CreateDesktopCodexAuthProfileRequest,
+  ): Promise<CreateDesktopCodexAuthProfileResponse> =>
+    await ipcRenderer.invoke(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL, request),
+  startCodexAuthProfileLogin: async (
+    request: StartDesktopCodexAuthProfileLoginRequest,
+  ): Promise<StartDesktopCodexAuthProfileLoginResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+      request,
+    ),
+  checkCodexAuthProfileStatus: async (
+    request: CheckDesktopCodexAuthProfileStatusRequest,
+  ): Promise<CheckDesktopCodexAuthProfileStatusResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
+      request,
+    ),
   pickGhCommand: async (): Promise<PickGhCommandResponse> =>
     await ipcRenderer.invoke(SETTINGS_PICK_GH_COMMAND_CHANNEL),
   testSettingsCredentials: async (

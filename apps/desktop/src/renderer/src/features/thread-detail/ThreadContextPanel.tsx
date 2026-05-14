@@ -20,6 +20,11 @@ import type {
 import { FolderIcon, WorktreeIcon } from "../../icons";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  formatBackendAccountText,
+  formatRateLimitLine,
+  selectVisibleRateLimits,
+} from "../../lib/backend-status-format";
 
 type ThreadContextPanelProps = {
   backendError?: string;
@@ -569,7 +574,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         ) : null}
                         {backend.rateLimits?.length ? (
                           <ul className="backend-status-list__limits">
-                            {selectVisibleRateLimits(backend, props.thread).map((limit) => (
+                            {selectVisibleRateLimits(backend).map((limit) => (
                               <li key={`${limit.limitId ?? "limit"}:${limit.name}`}>
                                 {formatRateLimitLine(limit)}
                               </li>
@@ -727,138 +732,6 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
-}
-
-function formatBackendAccountText(
-  account: NonNullable<BackendSummary["account"]>
-): string {
-  if (account.type === "chatgpt" && account.email?.trim()) {
-    return account.email.trim();
-  }
-  if (account.type === "apiKey") {
-    return "API key";
-  }
-  if (account.requiresOpenaiAuth === false) {
-    return "Not required";
-  }
-  if (account.requiresOpenaiAuth === true) {
-    return "Not signed in";
-  }
-  return "Unknown";
-}
-
-function splitRateLimitName(name: string): {
-  label: string;
-  labelOrder: number;
-  prefix: string;
-} {
-  const trimmed = name.trim();
-  const lower = trimmed.toLowerCase();
-  if (lower.endsWith("5h limit")) {
-    const prefix = trimmed.slice(0, Math.max(0, trimmed.length - "5h limit".length)).trim();
-    return { label: "5h limit", labelOrder: 0, prefix };
-  }
-  if (lower.endsWith("weekly limit")) {
-    const prefix = trimmed.slice(0, Math.max(0, trimmed.length - "weekly limit".length)).trim();
-    return { label: "Weekly limit", labelOrder: 1, prefix };
-  }
-  return { label: trimmed, labelOrder: 99, prefix: "" };
-}
-
-function selectVisibleRateLimits(
-  backend: BackendSummary,
-  thread: NavigationThreadSummary
-): NonNullable<BackendSummary["rateLimits"]> {
-  const limits = backend.rateLimits ?? [];
-  const currentThreadUsesSpark = backend.kind === "codex" && isSparkName(thread.model);
-  const sparkHasUsage = limits.some((limit) => isSparkRateLimit(limit) && hasRateLimitUsage(limit));
-
-  return [...limits]
-    .filter((limit) => {
-      const { label } = splitRateLimitName(limit.name);
-      if (label !== "5h limit" && label !== "Weekly limit") {
-        return false;
-      }
-      if (!isSparkRateLimit(limit)) {
-        return true;
-      }
-      return currentThreadUsesSpark || sparkHasUsage;
-    })
-    .sort((left, right) => {
-      const leftName = splitRateLimitName(left.name);
-      const rightName = splitRateLimitName(right.name);
-      const leftFamilyOrder = rateLimitFamilyOrder(left);
-      const rightFamilyOrder = rateLimitFamilyOrder(right);
-      if (leftFamilyOrder !== rightFamilyOrder) {
-        return leftFamilyOrder - rightFamilyOrder;
-      }
-      if (leftName.labelOrder !== rightName.labelOrder) {
-        return leftName.labelOrder - rightName.labelOrder;
-      }
-      return left.name.localeCompare(right.name);
-    });
-}
-
-function formatRateLimitLine(limit: NonNullable<BackendSummary["rateLimits"]>[number]): string {
-  const { label } = splitRateLimitName(limit.name);
-  const displayLabel = isSparkRateLimit(limit) ? `Spark ${label}` : label;
-  const resetText = formatRateLimitReset(limit.resetAt);
-  if (typeof limit.usedPercent === "number") {
-    const remaining = Math.max(0, Math.round(100 - limit.usedPercent));
-    return `${displayLabel}: ${remaining}% left${resetText ? `, resets ${resetText}` : ""}`;
-  }
-  if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
-    return `${displayLabel}: ${limit.remaining}/${limit.limit} remaining${
-      resetText ? `, resets ${resetText}` : ""
-    }`;
-  }
-  return `${displayLabel}: unavailable`;
-}
-
-function isSparkRateLimit(limit: NonNullable<BackendSummary["rateLimits"]>[number]): boolean {
-  return isSparkName(limit.limitId) || isSparkName(limit.name);
-}
-
-function isSparkName(value: string | undefined): boolean {
-  return value?.toLowerCase().includes("spark") ?? false;
-}
-
-function hasRateLimitUsage(limit: NonNullable<BackendSummary["rateLimits"]>[number]): boolean {
-  if (typeof limit.usedPercent === "number") {
-    return limit.usedPercent > 0;
-  }
-  if (typeof limit.used === "number") {
-    return limit.used > 0;
-  }
-  if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
-    return limit.remaining < limit.limit;
-  }
-  return false;
-}
-
-function rateLimitFamilyOrder(limit: NonNullable<BackendSummary["rateLimits"]>[number]): number {
-  return isSparkRateLimit(limit) ? 1 : 0;
-}
-
-function formatRateLimitReset(resetAt: number | undefined): string | undefined {
-  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
-    return undefined;
-  }
-  const date = new Date(resetAt);
-  if (Number.isNaN(date.getTime())) {
-    return undefined;
-  }
-  const now = new Date();
-  if (now.toDateString() === date.toDateString()) {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(date);
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(date);
 }
 
 function findSnapshotForWorktree(

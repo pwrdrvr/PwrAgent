@@ -36,6 +36,20 @@ export function resolveCodexHomeForProfile(
   return path.join(resolveCodexProfileRoot(options), name);
 }
 
+export function createCodexAuthProfile(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): { profile: string; codexHome: string; created: boolean } {
+  const name = profileName.trim();
+  if (!isValidProfileName(name)) {
+    throw new Error("Codex profile names must match PwrAgent profile naming rules.");
+  }
+  const codexHome = path.join(resolveCodexProfileRoot(options), name);
+  const created = !fs.existsSync(codexHome);
+  fs.mkdirSync(codexHome, { recursive: true });
+  return { profile: name, codexHome, created };
+}
+
 export function discoverCodexAuthProfiles(options?: {
   configuredProfile?: string;
   env?: NodeJS.ProcessEnv;

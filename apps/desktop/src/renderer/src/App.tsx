@@ -325,8 +325,9 @@ function DesktopAppShell(props: {
         <div className="app-shell__settings-layer">
           <SettingsScreen
             desktopApi={desktopApi}
-            settings={settings}
             initialSection={settingsInitialSection}
+            profiles={profiles}
+            settings={settings}
             onClose={() => setMainView("thread")}
             onOpenMessagingActivity={openMessagingActivityWindow}
           />

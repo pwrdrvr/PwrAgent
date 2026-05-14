@@ -141,6 +141,7 @@ export class DesktopSettingsService {
   private readonly argv: readonly string[];
   private readonly configPath: string;
   private readonly now: () => number;
+  private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
   private loggedObsoleteComposerEnv = false;
 
@@ -148,8 +149,13 @@ export class DesktopSettingsService {
     this.env = options.env ?? process.env;
     this.argv = options.argv ?? process.argv;
     this.configPath =
-      options.configPath ?? resolveDesktopConfigPath({ env: this.env });
+      options.configPath ??
+      resolveDesktopConfigPath({ argv: this.argv, env: this.env });
     this.now = options.now ?? Date.now;
+    this.startupCodexHome = resolveCodexHomeForProfile(
+      this.readConfig().config.models?.codex?.profile,
+      { env: this.env },
+    );
   }
 
   async readSettings(): Promise<DesktopSettingsSnapshot> {
@@ -709,17 +715,13 @@ export class DesktopSettingsService {
   }
 
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
-    const configuredProfile = this.readConfig().config.models?.codex?.profile;
-    const codexHome = resolveCodexHomeForProfile(configuredProfile, {
-      env: this.env,
-    });
     const spawnEnv = mergeLoginShellEnvIntoEnv(this.env, {
       resolveShellEnv: this.options.resolveCodexShellEnv,
     });
-    if (!codexHome) return spawnEnv;
+    if (!this.startupCodexHome) return spawnEnv;
     return {
       ...spawnEnv,
-      CODEX_HOME: codexHome,
+      CODEX_HOME: this.startupCodexHome,
     };
   }
 

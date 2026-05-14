@@ -39,6 +39,8 @@ export function SettingsPathRow(props: {
   /** Override the "Selected" chip text. Defaults to "Selected". */
   selectedLabel?: string;
   disabled?: boolean;
+  /** Optional secondary action rendered before the selection/use action. */
+  extraAction?: ReactNode;
   /** When omitted, no action button renders (caller handles it elsewhere). */
   onUse?: () => void;
 }) {
@@ -77,6 +79,9 @@ export function SettingsPathRow(props: {
             );
           })}
         </div>
+      ) : null}
+      {props.extraAction ? (
+        <span className="settings-pathrow__action">{props.extraAction}</span>
       ) : null}
       {props.selected ? (
         <span className="settings-pathrow__action settings-pathrow__chip settings-pathrow__chip--ok">

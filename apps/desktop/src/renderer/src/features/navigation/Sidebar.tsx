@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent,
+} from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
@@ -19,6 +23,10 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  formatRateLimitLine,
+  selectVisibleRateLimits,
+} from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 
@@ -134,6 +142,29 @@ export function Sidebar(props: SidebarProps) {
     : undefined;
   const runtimeGitRefValue = props.runtimeIdentity
     ? runtimeGitRefCopyValue(props.runtimeIdentity)
+    : undefined;
+  const currentActiveProfile = props.activeProfile
+    ? props.profiles?.find((profile) => profile.active)
+      ?? props.profiles?.find((profile) => profile.name === props.activeProfile)
+    : undefined;
+  const [startupActiveProfile, setStartupActiveProfile] =
+    useState<DesktopPwrAgentProfileSummary>();
+  useEffect(() => {
+    if (!startupActiveProfile && currentActiveProfile) {
+      setStartupActiveProfile(currentActiveProfile);
+    }
+  }, [currentActiveProfile, startupActiveProfile]);
+  const activeProfile = startupActiveProfile ?? currentActiveProfile;
+  const codexBackend = props.backends.find((backend) => backend.kind === "codex");
+  const profileLabel = props.activeProfile
+    ? formatProfileIdentityLabel(props.activeProfile, activeProfile)
+    : undefined;
+  const profileTooltip = props.activeProfile
+    ? formatProfileIdentityTooltip({
+      activeProfile: props.activeProfile,
+      codexBackend,
+      profile: activeProfile,
+    })
     : undefined;
   const visibleThreads =
     props.browseMode === "recents"
@@ -385,16 +416,14 @@ export function Sidebar(props: SidebarProps) {
 
       {props.activeProfile ? (
         <div className="runtime-identity" aria-label="PwrAgent profile">
-          <button
-            className="runtime-identity__button"
-            type="button"
-            onClick={(event) => {
+          <ProfileIdentityButton
+            label={profileLabel ?? `profile:${props.activeProfile}`}
+            tooltipText={profileTooltip}
+            onToggle={(event) => {
               event.stopPropagation();
               setProfileMenuOpen((open) => !open);
             }}
-          >
-            {`profile:${props.activeProfile}`}
-          </button>
+          />
           {profileMenuOpen && props.profiles?.length ? (
             <div
               className="sidebar__menu sidebar__menu--profile"
@@ -417,7 +446,13 @@ export function Sidebar(props: SidebarProps) {
                     {profile.displayName || profile.name}
                   </span>
                   <span className="sidebar__menu-item-detail">
-                    {profile.active ? "Current profile" : "Open in new app instance"}
+                    {profile.active
+                      ? profile.default
+                        ? "Current profile - startup default"
+                        : "Current profile"
+                      : profile.default
+                        ? "Startup default - open in new app instance"
+                        : "Open in new app instance"}
                   </span>
                 </button>
               ))}
@@ -673,6 +708,53 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
+function formatProfileIdentityLabel(
+  activeProfile: string,
+  profile?: DesktopPwrAgentProfileSummary,
+): string {
+  const codexProfile = profile?.codexProfile;
+  const codexName =
+    codexProfile?.name || (codexProfile ? "default" : undefined);
+  return codexName
+    ? `profile:${activeProfile}, codex:${codexName}`
+    : `profile:${activeProfile}`;
+}
+
+function formatProfileIdentityTooltip(params: {
+  activeProfile: string;
+  codexBackend?: BackendSummary;
+  profile?: DesktopPwrAgentProfileSummary;
+}): string {
+  const lines = [
+    `PwrAgent profile: ${params.activeProfile}`,
+  ];
+  const codexProfile = params.profile?.codexProfile;
+  if (codexProfile) {
+    lines.push(`Codex profile: ${codexProfile.name || "default"}`);
+    lines.push(`Codex home: ${codexProfile.codexHome}`);
+  }
+  const account = params.codexBackend?.account;
+  if (params.codexBackend?.available && account) {
+    lines.push(`Codex account: ${account.email ?? "unknown"}`);
+    if (account.planType) {
+      lines.push(`Plan: ${account.planType}`);
+    }
+  } else if (params.codexBackend?.unavailableReason) {
+    lines.push(`Codex account: unavailable (${params.codexBackend.unavailableReason})`);
+  } else if (params.codexBackend) {
+    lines.push("Codex account: not reported");
+  }
+  const limits = params.codexBackend ? selectVisibleRateLimits(params.codexBackend) : [];
+  if (limits.length) {
+    lines.push("Limits:");
+    for (const limit of limits) {
+      lines.push(formatRateLimitLine(limit));
+    }
+  }
+  lines.push("Click to open profile menu");
+  return lines.join("\n");
+}
+
 function formatPlatformLabel(platform: string): string {
   if (!platform) return platform;
   return platform.charAt(0).toUpperCase() + platform.slice(1);
@@ -704,6 +786,40 @@ function placeThreadContextMenu(
       Math.min(wouldOverflowBottom ? flippedTop : belowTop, maxY)
     ),
   };
+}
+
+function ProfileIdentityButton(props: {
+  label: string;
+  tooltipText?: string;
+  onToggle: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const showTooltip = (target: HTMLButtonElement): void => {
+    if (props.tooltipText) {
+      tooltip.show(target, props.tooltipText);
+    }
+  };
+
+  return (
+    <>
+      <button
+        aria-label="Open PwrAgent profile menu"
+        className="runtime-identity__button"
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={(event) => {
+          tooltip.hide();
+          props.onToggle(event);
+        }}
+        onFocus={(event) => showTooltip(event.currentTarget)}
+        onMouseEnter={(event) => showTooltip(event.currentTarget)}
+        onMouseLeave={tooltip.hide}
+      >
+        <span className="runtime-identity__text">{props.label}</span>
+      </button>
+      {tooltip.tooltipNode}
+    </>
+  );
 }
 
 function RuntimeIdentityButton(props: {

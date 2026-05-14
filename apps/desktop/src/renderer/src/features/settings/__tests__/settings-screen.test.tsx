@@ -382,9 +382,7 @@ describe("SettingsScreen", () => {
 
     // Codex pathrow only renders a "Use" button on candidates that
     // are NOT currently selected (the selected one shows a "Using"
-    // chip instead). With the seed data the selected candidate is
-    // `/usr/local/bin/codex`, so the single "Use" here points at
-    // `/Applications/Codex.app/Contents/Resources/codex`.
+    // chip instead).
     const useButtons = screen.getAllByRole("button", { name: "Use" });
     expect(useButtons).toHaveLength(2);
     fireEvent.click(useButtons[0]!);
@@ -397,7 +395,7 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getByText("System default")).toBeInTheDocument();
+    expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
     fireEvent.click(useButtons[1]!);
     await waitFor(() => {
@@ -432,6 +430,120 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
+  });
+
+  it("can restart login for an existing Codex auth profile", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;
+    const settings = createSettingsState(snapshot);
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      started: true,
+      loginUrl: "https://auth.openai.com/oauth/authorize?client_id=codex",
+    }));
+    const checkCodexAuthProfileStatus = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      authenticated: true,
+      status: "authenticated" as const,
+      detail: "Logged in",
+    }));
+    let focusCallback: (() => void) | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const desktopApi = {
+      startCodexAuthProfileLogin,
+      checkCodexAuthProfileStatus,
+      onWindowFocus: vi.fn((callback: () => void) => {
+        focusCallback = callback;
+        return () => {
+          focusCallback = undefined;
+        };
+      }),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Log in to Codex profile",
+    });
+    await waitFor(() => {
+      expect(startCodexAuthProfileLogin).toHaveBeenCalledWith({
+        profile: "work",
+      });
+    });
+    expect(dialog).toHaveTextContent("work");
+    expect(dialog).not.toHaveTextContent("https://auth.openai.com");
+
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "open the login link again",
+      }),
+    );
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/authorize?client_id=codex",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    await act(async () => {
+      focusCallback?.();
+    });
+    await waitFor(() => {
+      expect(checkCodexAuthProfileStatus).toHaveBeenCalledWith({
+        profile: "work",
+      });
+    });
+    await waitFor(() => {
+      expect(dialog).toHaveTextContent("work is logged in.");
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    await waitFor(() => {
+      expect(settings.refresh).toHaveBeenCalled();
+    });
+  });
+
+  it("shows authenticated when Codex login exits after auth already exists", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;
+    const settings = createSettingsState(snapshot);
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      started: false,
+      authenticated: true,
+    }));
+    const desktopApi = {
+      startCodexAuthProfileLogin,
+      checkCodexAuthProfileStatus: vi.fn(),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Log in to Codex profile",
+    });
+    await waitFor(() => {
+      expect(dialog).toHaveTextContent("work is logged in.");
+    });
+    expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
   });
 
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
@@ -1359,6 +1471,216 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Exit Settings/i }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("manages PwrAgent profiles from Settings", async () => {
+    let defaultProfile = "default";
+    let profileNames = ["dev", "default", "scratch"];
+    const listPwrAgentProfiles = vi.fn(async () => ({
+      activeProfile: "dev",
+      defaultProfile,
+      profiles: profileNames.map((name) => ({
+        name,
+        displayName: name,
+        lastUsed: name === "scratch" ? undefined : "2026-05-13T12:00:00.000Z",
+        active: name === "dev",
+        default: name === defaultProfile,
+        profileDir: `/home/example/.pwragent/profiles/${name}`,
+        canDelete: name !== "dev" && name !== "default",
+        codexProfile: {
+          name: name === "scratch" ? "work" : "",
+          displayName: name === "scratch" ? "work" : "System default",
+          codexHome:
+            name === "scratch"
+              ? "/home/example/.codex/profiles/work"
+              : "/home/example/.codex",
+          source: name === "scratch" ? "directory" : "default",
+          exists: true,
+          selected: true,
+          hasAuthFile: true,
+          hasConfigFile: name !== "scratch",
+        },
+      })),
+    }));
+    const setDefaultPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      defaultProfile = profile;
+      return { profile };
+    });
+    const deletePwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      profileNames = profileNames.filter((name) => name !== profile);
+      if (defaultProfile === profile) defaultProfile = "default";
+      return { deleted: true, profile };
+    });
+    const openPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => ({
+      opened: true,
+      profile,
+    }));
+    const createPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      profileNames = [...profileNames, profile];
+      return {
+        profile,
+        profileDir: `/home/example/.pwragent/profiles/${profile}`,
+        created: true,
+      };
+    });
+    const setPwrAgentProfileCodexProfile = vi.fn(
+      async (request: { profile: string; codexProfile: string }) => request,
+    );
+    const desktopApi = {
+      createPwrAgentProfile,
+      deletePwrAgentProfile,
+      listPwrAgentProfiles,
+      openPwrAgentProfile,
+      platform: "darwin",
+      setDefaultPwrAgentProfile,
+      setPwrAgentProfileCodexProfile,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { container } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="profiles"
+        settings={createSettingsState()}
+      onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    const createDialog = await screen.findByRole("dialog", {
+      name: "Add PwrAgent profile",
+    });
+    expect(createDialog).not.toHaveClass("settings-confirm-dialog--danger");
+    fireEvent.change(
+      within(createDialog).getByRole("textbox", {
+        name: "PwrAgent profile name",
+      }),
+      { target: { value: "work" } },
+    );
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Add profile" }));
+    await waitFor(() => {
+      expect(createPwrAgentProfile).toHaveBeenCalledWith({ profile: "work" });
+    });
+
+    expect(await screen.findByText("scratch")).toBeInTheDocument();
+    expect(screen.getByText("/home/example/.pwragent/profiles/dev")).toBeInTheDocument();
+
+    const scratchRow = screen
+      .getByText("scratch")
+      .closest(".settings-profile-row") as HTMLElement;
+    expect(
+      within(scratchRow).getByRole("combobox", {
+        name: "Codex auth profile for scratch",
+      }),
+    ).toHaveValue("work");
+    fireEvent.change(
+      within(scratchRow).getByRole("combobox", {
+        name: "Codex auth profile for scratch",
+      }),
+      { target: { value: "" } },
+    );
+    await waitFor(() => {
+      expect(setPwrAgentProfileCodexProfile).toHaveBeenCalledWith({
+        profile: "scratch",
+        codexProfile: "",
+      });
+    });
+
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Use on startup" }));
+    await waitFor(() => {
+      expect(setDefaultPwrAgentProfile).toHaveBeenCalledWith({
+        profile: "scratch",
+      });
+    });
+
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Open" }));
+    await waitFor(() => {
+      expect(openPwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
+    });
+
+    fireEvent.click(within(scratchRow).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete profile?" });
+    expect(dialog).toHaveClass("settings-confirm-dialog--danger");
+    expect(dialog).toHaveTextContent("Move scratch to Trash.");
+    expect(dialog).toHaveTextContent("Close any other PwrAgent windows using this profile first.");
+    expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Move profile to Trash" }),
+    );
+
+    await waitFor(() => {
+      expect(deletePwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".settings-confirm-dialog")).toBeNull();
+    });
+  });
+
+  it("uses shared PwrAgent profile state from the app shell", async () => {
+    const setDefaultProfile = vi.fn(async () => undefined);
+    render(
+      <SettingsScreen
+        initialSection="profiles"
+        profiles={{
+          activeProfile: "dev",
+          createProfile: vi.fn(async () => undefined),
+          defaultProfile: "default",
+          deleteProfile: vi.fn(async () => undefined),
+          loading: false,
+          openProfile: vi.fn(async () => undefined),
+          profiles: [
+            {
+              name: "dev",
+              displayName: "dev",
+              active: true,
+              default: false,
+              profileDir: "/home/example/.pwragent/profiles/dev",
+              canDelete: false,
+              codexProfile: {
+                name: "",
+                displayName: "System default",
+                codexHome: "/home/example/.codex",
+                source: "default",
+                exists: true,
+                selected: true,
+                hasAuthFile: true,
+                hasConfigFile: true,
+              },
+            },
+            {
+              name: "work",
+              displayName: "work",
+              active: false,
+              default: false,
+              profileDir: "/home/example/.pwragent/profiles/work",
+              canDelete: true,
+              codexProfile: {
+                name: "",
+                displayName: "System default",
+                codexHome: "/home/example/.codex",
+                source: "default",
+                exists: true,
+                selected: true,
+                hasAuthFile: true,
+                hasConfigFile: true,
+              },
+            },
+          ],
+          refresh: vi.fn(async () => undefined),
+          setCodexProfile: vi.fn(async () => undefined),
+          setDefaultProfile,
+        }}
+        settings={createSettingsState()}
+      />,
+    );
+
+    const workRow = screen
+      .getByText("/home/example/.pwragent/profiles/work")
+      .closest(".settings-profile-row") as HTMLElement;
+    fireEvent.click(within(workRow).getByRole("button", { name: "Use on startup" }));
+
+    await waitFor(() => {
+      expect(setDefaultProfile).toHaveBeenCalledWith("work");
+    });
   });
 
   it("renders About license attribution and opens bundled notices", async () => {
