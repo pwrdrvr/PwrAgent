@@ -15,7 +15,7 @@ code identifier and exposes the region as a setting.
 The default and recommended transport is the **persistent SDK
 WebSocket** — PwrAgent dials out, and operators don't need to expose a
 localhost listener. Webhook mode exists as a fallback; see
-[webhook-dangers.md](/webhook-dangers/) before enabling it.
+[Webhooks — a security note](/webhook-dangers/) before enabling it.
 
 ## What you need to get started
 
@@ -105,7 +105,7 @@ are easier to get approved.
 
 | Setting | Default | What it does | When to change |
 |---|---|---|---|
-| **Inbound Mode** | persistent | Use the persistent WebSocket or a public webhook. | Leave on `persistent`. Switching to `webhook` requires running a tunneled HTTP listener — see [webhook-dangers.md](/webhook-dangers/). |
+| **Inbound Mode** | persistent | Use the persistent WebSocket or a public webhook. | Leave on `persistent`. Switching to `webhook` requires running a tunneled HTTP listener — see [Webhooks — a security note](/webhook-dangers/). |
 | **Tenant URL** | (region default) | Override the API host. | Only for self-hosted Lark deployments or special tenants. |
 | **Callback Base URL** | (blank) | Public URL for webhook mode. | Only required if you set Inbound Mode to webhook. |
 | **Verification Token** | (blank) | Webhook event verification token. | Only required in webhook mode. |
@@ -114,7 +114,7 @@ are easier to get approved.
 | **Authorized Tenants** | (empty) | Allowlist of tenant keys for shared workspaces. | Use for multi-tenant deployments where you want the bot to scope to specific tenants. |
 | **Slash Command Prefix** | pwragent_ | Prefix prepended to registered slash commands. | Set to empty to register bare triggers; accept the collision risk. |
 | **Register Slash Commands** | Off | Reconcile native slash commands on startup. | Turn on if you want `/pwragent_resume` etc. in the console-registered slash menu. |
-| **Streaming Responses** | Off | Bot edits its reply message in place as text streams in. | Leave off. See [streaming.md](/streaming/). |
+| **Streaming Responses** | Off | Bot edits its reply message in place as text streams in. | Leave off. See [Streaming responses](/streaming/). |
 | **Tool Usage Notifications** | Show Some | Same as the global Tools setting. | Per-binding override on the status card. |
 | **Image Upload Profile** | medium | Quality used when forwarding inbound images to the model. | Tune per bandwidth / fidelity tradeoff. |
 
@@ -134,6 +134,6 @@ are easier to get approved.
 ## See also
 
 - [Using Codex via Messaging](/using-codex/)
-- [Streaming responses: why you probably don't want them](/streaming/)
-- [Webhooks: a security note](/webhook-dangers/) — only relevant if
+- [Streaming responses](/streaming/)
+- [Webhooks — a security note](/webhook-dangers/) — only relevant if
   you switch off persistent mode.

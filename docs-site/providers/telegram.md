@@ -70,7 +70,7 @@ the friendlier version of that same path.
 
 | Setting | Default | What it does | When to change |
 |---|---|---|---|
-| **Streaming Responses** | Off | When on, the bot edits its reply message in place as the agent's response arrives. | Leave off. Edits eat Telegram's tight rate-limit budget and break voice readers. See [streaming.md](/streaming/). |
+| **Streaming Responses** | Off | When on, the bot edits its reply message in place as the agent's response arrives. | Leave off. Edits eat Telegram's tight rate-limit budget and break voice readers. See [Streaming responses](/streaming/). |
 | **Tool Usage Notifications** | Show Some | Controls how often PwrAgent posts progress messages for the agent's tool calls. | `Show More` if you want more visibility, `Show Less` or `Show None` to quiet the channel. The status card's `Tools: <mode>` button overrides per-binding. |
 | **Image Upload Profile** | medium | Quality / size used when forwarding inbound images to the model. | `low` if uploads are slow, `high` / `actual` if you're sharing screenshots with text the model needs to read. |
 | **Input Debounce (ms)** | 500 | How long PwrAgent waits after a message before starting a turn, so multi-part messages stay in one turn. | Increase if you tend to send multi-part messages over a few seconds; `0` disables the wait entirely. |
@@ -103,11 +103,11 @@ polling. The author worked on Telegram webhook delivery in
 [OpenClaw](https://github.com/pwrdrvr/openclaw-codex-app-server) and
 confirmed it does not improve message delivery time vs. long polling.
 The webhook path adds public-internet attack surface for no measurable
-benefit. See [webhook-dangers.md](/webhook-dangers/).
+benefit. See [Webhooks — a security note](/webhook-dangers/).
 
 ## See also
 
 - [Using Codex via Messaging](/using-codex/) — bindings, commands,
   status card, tool updates, slow mode.
-- [Streaming responses: why you probably don't want them](/streaming/)
-- [Webhooks: a security note](/webhook-dangers/)
+- [Streaming responses](/streaming/)
+- [Webhooks — a security note](/webhook-dangers/)

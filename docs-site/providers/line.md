@@ -12,7 +12,7 @@ PwrAgent's LINE adapter is **webhook-only**. LINE does not offer an
 outbound-socket option, so operators have to expose PwrAgent's local
 listener through a public HTTPS URL.
 
-**Read [webhook-dangers.md](/webhook-dangers/) first.** A public HTTP
+**Read [Webhooks — a security note](/webhook-dangers/) first.** A public HTTP
 listener is a meaningfully larger attack surface than an outbound
 socket, even behind Cloudflare Tunnel or Tailscale Funnel. LINE is the
 only adapter in PwrAgent that forces this trade-off — if your usage
@@ -115,12 +115,12 @@ before JSON parsing.
 - **Operating LINE safely requires the same diligence as any other
   webhook platform.** Tunnel, HMAC verification (PwrAgent does this
   via the channel secret), monitoring on the listener. See
-  [webhook-dangers.md](/webhook-dangers/).
+  [Webhooks — a security note](/webhook-dangers/).
 
 ## See also
 
-- [Webhooks: a security note](/webhook-dangers/) — **read this
+- [Webhooks — a security note](/webhook-dangers/) — **read this
   before exposing the listener publicly.**
 - [Using Codex via Messaging](/using-codex/)
-- [Streaming responses: why you probably don't want them](/streaming/)
+- [Streaming responses](/streaming/)
   — note that the toggle is a no-op on LINE.

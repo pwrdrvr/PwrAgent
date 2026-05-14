@@ -69,7 +69,7 @@ flow or discovery-mode logging will surface it after the bot is online.
 
 | Setting | Default | What it does | When to change |
 |---|---|---|---|
-| **Streaming Responses** | Off | Bot edits its reply message in place as the response streams in. | Leave off unless you have a specific reason. See [streaming.md](/streaming/). |
+| **Streaming Responses** | Off | Bot edits its reply message in place as the response streams in. | Leave off unless you have a specific reason. See [Streaming responses](/streaming/). |
 | **Tool Usage Notifications** | Show Some | Same semantics as the global Tools setting. | `Show More` for visibility, `Show Less`/`None` to quiet the channel. Per-binding override on the status card. |
 | **Image Upload Profile** | medium | Quality used when forwarding inbound images to the model. | `low`/`high`/`actual` per your bandwidth / fidelity tradeoff. |
 
@@ -97,4 +97,4 @@ flow or discovery-mode logging will surface it after the bot is online.
 ## See also
 
 - [Using Codex via Messaging](/using-codex/)
-- [Streaming responses: why you probably don't want them](/streaming/)
+- [Streaming responses](/streaming/)
