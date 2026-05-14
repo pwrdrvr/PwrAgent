@@ -432,6 +432,59 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("can restart login for an existing Codex auth profile", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;
+    const settings = createSettingsState(snapshot);
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      started: true,
+      loginUrl: "https://auth.openai.com/oauth/authorize?client_id=codex",
+    }));
+    const checkCodexAuthProfileStatus = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      authenticated: true,
+      status: "authenticated" as const,
+      detail: "Logged in",
+    }));
+    const desktopApi = {
+      startCodexAuthProfileLogin,
+      checkCodexAuthProfileStatus,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Log in to Codex profile",
+    });
+    await waitFor(() => {
+      expect(startCodexAuthProfileLogin).toHaveBeenCalledWith({
+        profile: "work",
+      });
+    });
+    expect(dialog).toHaveTextContent("work");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check status" }));
+    await waitFor(() => {
+      expect(checkCodexAuthProfileStatus).toHaveBeenCalledWith({
+        profile: "work",
+      });
+    });
+    await waitFor(() => {
+      expect(settings.refresh).toHaveBeenCalled();
+    });
+  });
+
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.gh = {

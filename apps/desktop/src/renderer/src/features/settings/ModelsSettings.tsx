@@ -18,7 +18,10 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
-import { CodexAuthProfileCreateButton } from "./CodexAuthProfileSelect";
+import {
+  CodexAuthProfileCreateButton,
+  CodexAuthProfileLoginButton,
+} from "./CodexAuthProfileSelect";
 
 type CodexPathMode = "auto" | "specified";
 
@@ -31,6 +34,7 @@ export function ModelsSettings(props: {
     secret: DesktopSettingsSecretName,
     value: string,
   ) => Promise<boolean>;
+  onRefresh: () => Promise<void>;
   onSaveCodexPath: (path: string) => Promise<void>;
   onSaveCodexProfile: (profile: string) => Promise<void>;
 }) {
@@ -186,7 +190,9 @@ export function ModelsSettings(props: {
                   <CodexProfileRow
                     key={profile.name || "default"}
                     profile={profile}
+                    desktopApi={props.desktopApi}
                     disabled={props.saving}
+                    onAuthenticated={props.onRefresh}
                     onUse={(profileName) => {
                       void props.onSaveCodexProfile(profileName);
                     }}
@@ -285,8 +291,10 @@ export function ModelsSettings(props: {
 }
 
 function CodexProfileRow(props: {
+  desktopApi?: DesktopApi;
   profile: DesktopCodexAuthProfileCandidate;
   disabled?: boolean;
+  onAuthenticated: () => Promise<void>;
   onUse: (profile: string) => void;
 }) {
   const profile = props.profile;
@@ -313,6 +321,17 @@ function CodexProfileRow(props: {
       selected={profile.selected}
       selectedLabel="Using"
       disabled={props.disabled || !profile.exists}
+      extraAction={
+        profile.name && profile.exists && !profile.hasAuthFile ? (
+          <CodexAuthProfileLoginButton
+            desktopApi={props.desktopApi}
+            disabled={props.disabled}
+            displayName={profile.displayName}
+            profile={profile.name}
+            onAuthenticated={props.onAuthenticated}
+          />
+        ) : undefined
+      }
       onUse={() => props.onUse(profile.name)}
     />
   );

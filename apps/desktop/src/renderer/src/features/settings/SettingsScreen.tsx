@@ -406,6 +406,7 @@ function SettingsSectionBody(props: {
       snapshot={props.snapshot}
       onClearSecret={props.settings.clearSecret}
       onReplaceSecret={props.settings.replaceSecret}
+      onRefresh={props.settings.refresh}
       onSaveCodexPath={async (path) => {
         await props.settings.writeConfig({
           models: {
