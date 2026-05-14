@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type {
+  AgentEvent,
   AppServerBackendKind,
   AppServerBackendScope,
   ArchiveWorktreeRequest,
@@ -29,6 +30,8 @@ import type {
   RegisterDirectoryFromDiskResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
+  NavigationDirectoryGitStatus,
+  NavigationDirectoryGitStatusUpdatedNotification,
   NavigationSnapshot,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
@@ -116,6 +119,19 @@ function directoryStatusesEqual(
   });
 }
 
+function applyDirectoryGitStatus(
+  directory: NavigationSnapshot["directories"][number],
+  gitStatus: NavigationDirectoryGitStatus | undefined,
+): NavigationSnapshot["directories"][number] {
+  const next = { ...directory };
+  if (gitStatus) {
+    next.gitStatus = gitStatus;
+  } else {
+    delete next.gitStatus;
+  }
+  return next;
+}
+
 function getNavigationSnapshotRequestKey(
   request: GetNavigationSnapshotRequest,
 ): string {
@@ -155,6 +171,11 @@ class DesktopAppServerService {
     AppServerBackendScope,
     NavigationSnapshot["directories"]
   >();
+  private readonly directoryGitStatusByKey = new Map<
+    string,
+    NavigationDirectoryGitStatus | undefined
+  >();
+  private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
 
   async listThreads(
     request: AppServerListThreadsRequest = {}
@@ -377,18 +398,22 @@ class DesktopAppServerService {
     });
     const overlayDurationMs = Date.now() - overlayStartedAt;
     const directoryStartedAt = Date.now();
-    const directoryStatuses =
-      await getDesktopBackendRegistry().readDirectoryStatuses(snapshot.directories);
+    const directories = snapshot.directories.map((directory) => {
+      if (!this.directoryGitStatusByKey.has(directory.key)) {
+        return directory;
+      }
+      return applyDirectoryGitStatus(
+        directory,
+        this.directoryGitStatusByKey.get(directory.key),
+      );
+    });
     const directoryDurationMs = Date.now() - directoryStartedAt;
-    const directories = snapshot.directories.map((directory) => ({
-      ...directory,
-      gitStatus: directoryStatuses[directory.key],
-    }));
     const previousDirectories = this.previousDirectoriesByBackend.get(backend);
     const directoriesUnchanged = previousDirectories
       ? directoryStatusesEqual(previousDirectories, directories)
       : false;
     this.previousDirectoriesByBackend.set(backend, directories);
+    this.startDirectoryGitStatusRefresh(request, snapshot.directories);
 
     logDebug("getNavigationSnapshot", {
       backend,
@@ -400,6 +425,7 @@ class DesktopAppServerService {
       bindingsDurationMs,
       overlayDurationMs,
       directoryDurationMs,
+      directoryStatusMode: "background",
     });
 
     return {
@@ -407,6 +433,57 @@ class DesktopAppServerService {
       directories,
       unchanged: snapshot.unchanged && directoriesUnchanged,
     };
+  }
+
+  private startDirectoryGitStatusRefresh(
+    request: GetNavigationSnapshotRequest,
+    directories: NavigationSnapshot["directories"],
+  ): void {
+    if (directories.length === 0) {
+      return;
+    }
+
+    const refreshKey = JSON.stringify({
+      request: getNavigationSnapshotRequestKey(request),
+      directoryKeys: directories.map((directory) => directory.key),
+    });
+    if (this.pendingDirectoryGitStatusRefreshes.has(refreshKey)) {
+      return;
+    }
+
+    const promise = this.refreshDirectoryGitStatuses(directories)
+      .catch((error) => {
+        logDebug("directoryGitStatusRefresh:failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.pendingDirectoryGitStatusRefreshes.get(refreshKey) === promise) {
+          this.pendingDirectoryGitStatusRefreshes.delete(refreshKey);
+        }
+      });
+    this.pendingDirectoryGitStatusRefreshes.set(refreshKey, promise);
+  }
+
+  private async refreshDirectoryGitStatuses(
+    directories: NavigationSnapshot["directories"],
+  ): Promise<void> {
+    const registry = getDesktopBackendRegistry();
+    for await (const entry of registry.readDirectoryStatusEntries(directories)) {
+      this.directoryGitStatusByKey.set(entry.directoryKey, entry.gitStatus);
+      const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+        method: "navigation/directoryGitStatus/updated",
+        params: {
+          directoryKey: entry.directoryKey,
+          gitStatus: entry.gitStatus ?? null,
+          fetchedAt: Date.now(),
+        },
+      };
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification,
+      } as unknown as AgentEvent);
+    }
   }
 
   async markThreadSeen(
@@ -776,6 +853,10 @@ class DesktopAppServerService {
     this.focusedDiffServiceApiKey = undefined;
     this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
+    this.pendingNavigationSnapshots.clear();
+    this.pendingDirectoryGitStatusRefreshes.clear();
+    this.previousDirectoriesByBackend.clear();
+    this.directoryGitStatusByKey.clear();
     await disposeDesktopBackendRegistry();
   }
 

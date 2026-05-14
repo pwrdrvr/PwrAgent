@@ -95,6 +95,7 @@ import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
+import type { DirectoryGitStatusEntry } from "./git-directory-service";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -1854,6 +1855,12 @@ export class DesktopBackendRegistry {
     Record<string, NavigationDirectoryGitStatus | undefined>
   > {
     return await this.gitDirectoryService.readDirectoryStatuses(directories);
+  }
+
+  readDirectoryStatusEntries(
+    directories: NavigationDirectorySummary[],
+  ): AsyncIterable<DirectoryGitStatusEntry> {
+    return this.gitDirectoryService.readDirectoryStatusEntries(directories);
   }
 
   async readThread(

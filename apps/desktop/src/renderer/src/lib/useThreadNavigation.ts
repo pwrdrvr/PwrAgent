@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
+  NavigationDirectoryGitStatusUpdatedNotification,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -345,8 +346,20 @@ function reconcileNavigationSnapshot(
       thread,
     ])
   );
+  const previousByDirectoryKey = new Map(
+    previous.directories.map((directory) => [directory.key, directory])
+  );
   return {
     ...next,
+    directories: next.directories.map((directory) => {
+      if (Object.prototype.hasOwnProperty.call(directory, "gitStatus")) {
+        return directory;
+      }
+      const previousDirectory = previousByDirectoryKey.get(directory.key);
+      return previousDirectory?.gitStatus
+        ? { ...directory, gitStatus: previousDirectory.gitStatus }
+        : directory;
+    }),
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id)
@@ -356,6 +369,36 @@ function reconcileNavigationSnapshot(
         : thread;
     }),
   };
+}
+
+function applyDirectoryGitStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: NavigationDirectoryGitStatusUpdatedNotification["params"],
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (JSON.stringify(directory.gitStatus ?? null) === JSON.stringify(params.gitStatus)) {
+      return directory;
+    }
+
+    changed = true;
+    const next = { ...directory };
+    if (params.gitStatus) {
+      next.gitStatus = params.gitStatus;
+    } else {
+      delete next.gitStatus;
+    }
+    return next;
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
 }
 
 function updateThreadReactionsInSnapshot(
@@ -1498,7 +1541,17 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     }
 
     return desktopApi.onAgentEvent((event) => {
-      const method = event.notification.method;
+      const method = event.notification.method as string;
+      if (method === "navigation/directoryGitStatus/updated") {
+        const params = event.notification
+          .params as NavigationDirectoryGitStatusUpdatedNotification["params"];
+        setState((current) => ({
+          ...current,
+          response: applyDirectoryGitStatusUpdate(current.response, params),
+        }));
+        return;
+      }
+
       if (method === "thread/name/updated") {
         const { threadId, threadName } = event.notification.params as {
           threadId: string;

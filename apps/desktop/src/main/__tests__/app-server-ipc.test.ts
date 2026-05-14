@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
@@ -157,6 +157,25 @@ const readDirectoryStatuses = vi.fn(async () => ({
     branches: ["main"],
   },
 }));
+const directoryGitStatus = {
+  currentBranch: "main",
+  upstreamBranch: "origin/main",
+  ahead: 0,
+  behind: 0,
+  syncState: "in-sync" as const,
+  branches: ["main"],
+};
+const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =>
+  (async function* () {
+    for (const directory of directories) {
+      yield {
+        directoryKey: directory.key,
+        gitStatus: directoryGitStatus,
+      };
+    }
+  })(),
+);
+const publishLocalEvent = vi.fn(async () => undefined);
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -197,6 +216,8 @@ vi.mock("../app-server/backend-registry", () => ({
     listThreads,
     readThread,
     readDirectoryStatuses,
+    readDirectoryStatusEntries,
+    publishLocalEvent,
     getQueuedExecutionModesSnapshot: () => ({}),
   }),
 }));
@@ -214,7 +235,14 @@ describe("app server ipc", () => {
     readThread.mockClear();
     reconcileNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
+    readDirectoryStatusEntries.mockClear();
+    publishLocalEvent.mockClear();
     markThreadSeen.mockClear();
+  });
+
+  afterEach(async () => {
+    const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
+    await disposeAppServerIpcHandlers();
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
@@ -260,14 +288,6 @@ describe("app server ipc", () => {
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 1,
           latestUpdatedAt: 2000,
-          gitStatus: {
-            currentBranch: "main",
-            upstreamBranch: "origin/main",
-            ahead: 0,
-            behind: 0,
-            syncState: "in-sync",
-            branches: ["main"],
-          },
         },
       ],
       launchpadDefaults: {
@@ -560,17 +580,58 @@ describe("app server ipc", () => {
           backend: "codex" as const,
           executionMode: "default" as const,
         },
+      })
+      .mockResolvedValueOnce({
+        backend: "all",
+        fetchedAt: 9012,
+        unchanged: true,
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread one",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            updatedAt: 2000,
+          },
+        ],
+        inboxThreadKeys: ["codex:thread-1"],
+        directories: [
+          {
+            key: "directory:/repo/app",
+            kind: "directory" as const,
+            label: "app",
+            path: "/repo/app",
+            threadKeys: ["codex:thread-1"],
+            needsAttentionCount: 1,
+            latestUpdatedAt: 2000,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
       });
 
     registerAppServerIpcHandlers();
 
     await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(publishLocalEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notification: expect.objectContaining({
+            method: "navigation/directoryGitStatus/updated",
+          }),
+        }),
+      );
+    });
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
     const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
 
-    expect(readDirectoryStatuses).toHaveBeenCalledTimes(2);
+    expect(readDirectoryStatuses).not.toHaveBeenCalled();
     expect(response).toEqual({
       backend: "all",
-      fetchedAt: 5678,
+      fetchedAt: 9012,
       unchanged: true,
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
@@ -585,14 +646,7 @@ describe("app server ipc", () => {
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 1,
           latestUpdatedAt: 2000,
-          gitStatus: {
-            currentBranch: "main",
-            upstreamBranch: "origin/main",
-            ahead: 0,
-            behind: 0,
-            syncState: "in-sync",
-            branches: ["main"],
-          },
+          gitStatus: directoryGitStatus,
         },
       ],
       launchpadDefaults: {
