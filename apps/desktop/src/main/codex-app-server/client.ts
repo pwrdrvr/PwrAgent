@@ -59,6 +59,7 @@ import type {
   TurnSteerParams as CodexTurnSteerParams,
   UserInput as CodexUserInput,
 } from "@pwragent/codex-app-server-protocol/v2";
+import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
   JsonRpcConnection,
   type JsonRpcId,
@@ -3115,6 +3116,9 @@ type EnrichedCodexThread = AppServerThreadSummary & {
   gitOriginUrl?: string;
 };
 
+const THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY = 8;
+const THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD = 16;
+
 function hydrateMissingLinkedDirectoriesFromSiblingRepos(
   threads: EnrichedCodexThread[]
 ): EnrichedCodexThread[] {
@@ -4052,8 +4056,28 @@ export class CodexAppServerClient {
       });
     }
 
-    const enrichedThreads = await Promise.all(
-      threads.map(async (thread) => {
+    const enrichedThreads = await this.enrichRawThreadDirectories(threads);
+
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
+  }
+
+  async enrichThreadDirectories(
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    const enrichedThreads = await this.enrichRawThreadDirectories(
+      threads as RawCodexThreadSummary[],
+    );
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
+  }
+
+  private async enrichRawThreadDirectories(
+    threads: RawCodexThreadSummary[],
+  ): Promise<EnrichedCodexThread[]> {
+    const enrichedThreads: EnrichedCodexThread[] = [];
+
+    for await (const enrichedThread of new IterableMapper(
+      threads,
+      async (thread): Promise<EnrichedCodexThread> => {
         const projectKey = await resolveThreadProjectKey(thread);
         const enrichment = await this.threadDirectoryEnricher(projectKey);
         return {
@@ -4062,12 +4086,18 @@ export class CodexAppServerClient {
           gitBranch: thread.gitBranch,
           linkedDirectories: enrichment.linkedDirectories,
           observedGitBranch: enrichment.observedGitBranch,
-          source: "codex" as const
+          source: "codex" as const,
         };
-      })
-    );
+      },
+      {
+        concurrency: THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
+        maxUnread: THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD,
+      },
+    )) {
+      enrichedThreads.push(enrichedThread);
+    }
 
-    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
+    return enrichedThreads;
   }
 
   async listSkills(params?: {
