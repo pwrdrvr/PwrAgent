@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
@@ -17,7 +18,7 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
-import { CodexAuthProfileSelect } from "./CodexAuthProfileSelect";
+import { CodexAuthProfileCreateButton } from "./CodexAuthProfileSelect";
 
 type CodexPathMode = "auto" | "specified";
 
@@ -169,14 +170,29 @@ export function ModelsSettings(props: {
             source={codexProfileSource}
             error={codex.profiles.error}
             control={
-              <CodexAuthProfileSelect
-                aria-label="Codex auth profile"
-                desktopApi={props.desktopApi}
-                disabled={props.saving}
-                discovery={codex.profiles}
-                value={codex.profile.value}
-                onChange={props.onSaveCodexProfile}
-              />
+              <div
+                className="settings-paths"
+                aria-label="Codex auth profiles"
+              >
+                <div className="settings-inline-actions">
+                  <CodexAuthProfileCreateButton
+                    desktopApi={props.desktopApi}
+                    disabled={props.saving}
+                    existingProfiles={codex.profiles.profiles}
+                    onCreated={props.onSaveCodexProfile}
+                  />
+                </div>
+                {codex.profiles.profiles.map((profile) => (
+                  <CodexProfileRow
+                    key={profile.name || "default"}
+                    profile={profile}
+                    disabled={props.saving}
+                    onUse={(profileName) => {
+                      void props.onSaveCodexProfile(profileName);
+                    }}
+                  />
+                ))}
+              </div>
             }
           />
           <SettingsField
@@ -265,6 +281,40 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function CodexProfileRow(props: {
+  profile: DesktopCodexAuthProfileCandidate;
+  disabled?: boolean;
+  onUse: (profile: string) => void;
+}) {
+  const profile = props.profile;
+  const chips: SettingsPathRowChip[] = [
+    { label: profile.source === "default" ? "default" : "profile", tone: "muted" },
+    {
+      label: profile.hasAuthFile ? "auth" : "no auth",
+      tone: profile.hasAuthFile || !profile.name ? "muted" : "err",
+    },
+  ];
+
+  if (profile.hasConfigFile) {
+    chips.push({ label: "config", tone: "muted" });
+  }
+  if (!profile.exists) {
+    chips.push({ label: "missing", tone: "err" });
+  }
+
+  return (
+    <SettingsPathRow
+      title={profile.displayName}
+      path={profile.codexHome}
+      chips={chips}
+      selected={profile.selected}
+      selectedLabel="Using"
+      disabled={props.disabled || !profile.exists}
+      onUse={() => props.onUse(profile.name)}
+    />
   );
 }
 

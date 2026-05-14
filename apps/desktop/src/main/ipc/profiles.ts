@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import { spawn } from "node:child_process";
 import type {
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -12,6 +14,7 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
 } from "@pwragent/shared";
 import {
+  PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
@@ -22,6 +25,7 @@ import {
   PWRAGENT_PROFILE_ENV,
   deleteProfile,
   ensureProfileExists,
+  ensureNamedProfileExists,
   isValidProfileName,
   readProfilesRegistry,
   resolveActiveProfileName,
@@ -123,6 +127,21 @@ export function openDesktopPwrAgentProfile(
   return { opened: true, profile };
 }
 
+export function createDesktopPwrAgentProfile(
+  request: CreateDesktopPwrAgentProfileRequest,
+): CreateDesktopPwrAgentProfileResponse {
+  const profile = request.profile.trim();
+  if (!isValidProfileName(profile)) {
+    throw new Error(`Invalid profile name "${profile}".`);
+  }
+  const result = ensureNamedProfileExists(profile);
+  return {
+    profile,
+    profileDir: result.profileDir,
+    created: result.created,
+  };
+}
+
 export function setDefaultDesktopPwrAgentProfile(
   request: SetDefaultDesktopPwrAgentProfileRequest,
 ): SetDefaultDesktopPwrAgentProfileResponse {
@@ -188,6 +207,16 @@ export function registerProfilesIpcHandlers(): void {
       openDesktopPwrAgentProfile(request),
   );
 
+  ipcMain.removeHandler(PROFILES_CREATE_CHANNEL);
+  ipcMain.handle(
+    PROFILES_CREATE_CHANNEL,
+    async (
+      _event,
+      request: CreateDesktopPwrAgentProfileRequest,
+    ): Promise<CreateDesktopPwrAgentProfileResponse> =>
+      createDesktopPwrAgentProfile(request),
+  );
+
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
   ipcMain.handle(
     PROFILES_SET_DEFAULT_CHANNEL,
@@ -222,6 +251,7 @@ export function registerProfilesIpcHandlers(): void {
 export function disposeProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_LIST_CHANNEL);
   ipcMain.removeHandler(PROFILES_OPEN_CHANNEL);
+  ipcMain.removeHandler(PROFILES_CREATE_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);

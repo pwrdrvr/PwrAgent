@@ -12,6 +12,7 @@ export type PwrAgentProfilesState = {
   loading: boolean;
   profiles: DesktopPwrAgentProfileSummary[];
   deleteProfile: (profile: string) => Promise<void>;
+  createProfile: (profile: string) => Promise<void>;
   openProfile: (profile: string) => Promise<void>;
   refresh: () => Promise<void>;
   setCodexProfile: (profile: string, codexProfile: string) => Promise<void>;
@@ -54,6 +55,15 @@ export function usePwrAgentProfiles(
     [desktopApi, refresh],
   );
 
+  const createProfile = useCallback(
+    async (profile: string) => {
+      if (!desktopApi?.createPwrAgentProfile) return;
+      await desktopApi.createPwrAgentProfile({ profile });
+      await refresh();
+    },
+    [desktopApi, refresh],
+  );
+
   const setDefaultProfile = useCallback(
     async (profile: string) => {
       if (!desktopApi?.setDefaultPwrAgentProfile) return;
@@ -86,6 +96,7 @@ export function usePwrAgentProfiles(
 
   return {
     activeProfile: response?.activeProfile,
+    createProfile,
     defaultProfile: response?.defaultProfile,
     deleteProfile,
     error,

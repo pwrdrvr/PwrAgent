@@ -21,6 +21,7 @@ export function ProfilesSettings(props: {
   const profiles = usePwrAgentProfiles(props.desktopApi);
   const [deleteCandidate, setDeleteCandidate] =
     useState<DesktopPwrAgentProfileSummary | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [busyProfile, setBusyProfile] = useState<string>();
 
@@ -45,6 +46,15 @@ export function ProfilesSettings(props: {
         eyebrow="Profiles"
         title="PwrAgent profiles"
         help="Profiles isolate PwrAgent settings, state, worktrees, and encrypted secrets. Launches with --profile or PWRAGENT_PROFILE still override the startup default."
+        action={
+          <button
+            className="button button--secondary"
+            type="button"
+            onClick={() => setCreateOpen(true)}
+          >
+            Add profile
+          </button>
+        }
       />
 
       <SettingsSection
@@ -120,6 +130,20 @@ export function ProfilesSettings(props: {
             void runProfileAction(profileName, async () => {
               await profiles.deleteProfile(profileName);
               setDeleteCandidate(null);
+            });
+          }}
+        />
+      ) : null}
+
+      {createOpen ? (
+        <ProfileCreateDialog
+          busy={busyProfile === "__create__"}
+          existingProfiles={profiles.profiles}
+          onCancel={() => setCreateOpen(false)}
+          onCreate={(profile) => {
+            void runProfileAction("__create__", async () => {
+              await profiles.createProfile(profile);
+              setCreateOpen(false);
             });
           }}
         />
@@ -237,6 +261,68 @@ function ProfileDeleteDialog(props: {
             onClick={props.onConfirm}
           >
             Delete profile
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileCreateDialog(props: {
+  busy: boolean;
+  existingProfiles: DesktopPwrAgentProfileSummary[];
+  onCancel: () => void;
+  onCreate: (profile: string) => void;
+}) {
+  const [profileName, setProfileName] = useState("");
+  const normalizedName = profileName.trim();
+  const validName = /^[a-z0-9][a-z0-9_-]{0,31}$/.test(normalizedName);
+  const exists = props.existingProfiles.some(
+    (profile) => profile.name === normalizedName,
+  );
+  const canCreate = Boolean(normalizedName && validName && !exists);
+
+  return (
+    <div className="settings-confirm-modal" role="presentation">
+      <div
+        aria-labelledby="create-profile-heading"
+        aria-modal="true"
+        className="settings-confirm-dialog settings-profile-create-dialog"
+        role="dialog"
+      >
+        <h2 id="create-profile-heading">Add PwrAgent profile</h2>
+        <p>Create an isolated PwrAgent profile with its own config, state, and secrets.</p>
+        <input
+          aria-label="PwrAgent profile name"
+          className="settings-input"
+          placeholder="work"
+          value={profileName}
+          onChange={(event) => setProfileName(event.currentTarget.value)}
+        />
+        {!validName && normalizedName ? (
+          <p className="settings-row__error">
+            Use lowercase letters, numbers, dashes, or underscores.
+          </p>
+        ) : null}
+        {exists ? (
+          <p className="settings-row__error">That profile already exists.</p>
+        ) : null}
+        <div className="settings-confirm-dialog__actions">
+          <button
+            className="button button--secondary"
+            disabled={props.busy}
+            type="button"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="button button--primary"
+            disabled={props.busy || !canCreate}
+            type="button"
+            onClick={() => props.onCreate(normalizedName)}
+          >
+            Add profile
           </button>
         </div>
       </div>

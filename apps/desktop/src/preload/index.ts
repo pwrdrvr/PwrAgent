@@ -97,6 +97,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
@@ -200,6 +202,7 @@ import {
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   PRELOAD_LOG_CHANNEL,
+  PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
@@ -289,6 +292,10 @@ const desktopApi = Object.freeze({
     request: OpenDesktopPwrAgentProfileRequest,
   ): Promise<OpenDesktopPwrAgentProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_OPEN_CHANNEL, request),
+  createPwrAgentProfile: async (
+    request: CreateDesktopPwrAgentProfileRequest,
+  ): Promise<CreateDesktopPwrAgentProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_CREATE_CHANNEL, request),
   setDefaultPwrAgentProfile: async (
     request: SetDefaultDesktopPwrAgentProfileRequest,
   ): Promise<SetDefaultDesktopPwrAgentProfileResponse> =>

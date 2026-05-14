@@ -589,6 +589,16 @@ export type OpenDesktopPwrAgentProfileResponse = {
   reason?: "active";
 };
 
+export type CreateDesktopPwrAgentProfileRequest = {
+  profile: string;
+};
+
+export type CreateDesktopPwrAgentProfileResponse = {
+  profile: string;
+  profileDir: string;
+  created: boolean;
+};
+
 export type SetDefaultDesktopPwrAgentProfileRequest = {
   profile: string;
 };

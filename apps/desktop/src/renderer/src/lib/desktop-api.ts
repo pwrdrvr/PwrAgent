@@ -104,6 +104,8 @@ import type {
   CodexEnvironmentSetupProgressEvent,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
+  CreateDesktopPwrAgentProfileRequest,
+  CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
@@ -161,6 +163,9 @@ export type DesktopApi = {
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
   ) => Promise<OpenDesktopPwrAgentProfileResponse>;
+  createPwrAgentProfile?: (
+    request: CreateDesktopPwrAgentProfileRequest,
+  ) => Promise<CreateDesktopPwrAgentProfileResponse>;
   setDefaultPwrAgentProfile?: (
     request: SetDefaultDesktopPwrAgentProfileRequest,
   ) => Promise<SetDefaultDesktopPwrAgentProfileResponse>;

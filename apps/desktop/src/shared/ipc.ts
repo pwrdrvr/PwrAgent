@@ -156,6 +156,7 @@ export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const PROFILES_LIST_CHANNEL = "profiles:list";
 export const PROFILES_OPEN_CHANNEL = "profiles:open";
+export const PROFILES_CREATE_CHANNEL = "profiles:create";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
 export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";

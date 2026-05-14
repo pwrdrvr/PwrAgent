@@ -384,7 +384,7 @@ describe("SettingsScreen", () => {
     // are NOT currently selected (the selected one shows a "Using"
     // chip instead).
     const useButtons = screen.getAllByRole("button", { name: "Use" });
-    expect(useButtons).toHaveLength(1);
+    expect(useButtons).toHaveLength(2);
     fireEvent.click(useButtons[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -396,10 +396,8 @@ describe("SettingsScreen", () => {
       });
     });
     expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByRole("option", { name: "work" })).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Codex auth profile" }), {
-      target: { value: "work" },
-    });
+    expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
+    fireEvent.click(useButtons[1]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -1403,10 +1401,19 @@ describe("SettingsScreen", () => {
       opened: true,
       profile,
     }));
+    const createPwrAgentProfile = vi.fn(async ({ profile }: { profile: string }) => {
+      profileNames = [...profileNames, profile];
+      return {
+        profile,
+        profileDir: `/home/example/.pwragent/profiles/${profile}`,
+        created: true,
+      };
+    });
     const setPwrAgentProfileCodexProfile = vi.fn(
       async (request: { profile: string; codexProfile: string }) => request,
     );
     const desktopApi = {
+      createPwrAgentProfile,
       deletePwrAgentProfile,
       listPwrAgentProfiles,
       openPwrAgentProfile,
@@ -1419,9 +1426,24 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         initialSection="profiles"
         settings={createSettingsState()}
-        onClose={() => undefined}
+      onClose={() => undefined}
       />,
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    const createDialog = await screen.findByRole("dialog", {
+      name: "Add PwrAgent profile",
+    });
+    fireEvent.change(
+      within(createDialog).getByRole("textbox", {
+        name: "PwrAgent profile name",
+      }),
+      { target: { value: "work" } },
+    );
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Add profile" }));
+    await waitFor(() => {
+      expect(createPwrAgentProfile).toHaveBeenCalledWith({ profile: "work" });
+    });
 
     expect(await screen.findByText("scratch")).toBeInTheDocument();
     expect(screen.getByText("/home/example/.pwragent/profiles/dev")).toBeInTheDocument();

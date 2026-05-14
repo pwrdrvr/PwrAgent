@@ -76,6 +76,39 @@ export function CodexAuthProfileSelect(props: {
   );
 }
 
+export function CodexAuthProfileCreateButton(props: {
+  desktopApi?: DesktopApi;
+  disabled?: boolean;
+  existingProfiles: DesktopCodexAuthProfileCandidate[];
+  label?: string;
+  onCreated: (profile: string) => Promise<void>;
+}) {
+  const [createOpen, setCreateOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={() => setCreateOpen(true)}
+      >
+        {props.label ?? "Create Codex profile"}
+      </button>
+      {createOpen ? (
+        <CodexAuthProfileCreateDialog
+          desktopApi={props.desktopApi}
+          existingProfiles={props.existingProfiles}
+          onCancel={() => setCreateOpen(false)}
+          onCreated={async (profile) => {
+            await props.onCreated(profile);
+            setCreateOpen(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function CodexAuthProfileDetails(props: {
   profile: DesktopCodexAuthProfileCandidate;
 }) {

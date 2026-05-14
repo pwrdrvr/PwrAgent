@@ -3778,7 +3778,8 @@ textarea,
   min-width: 0;
 }
 
-.settings-codex-profile-dialog .settings-input {
+.settings-codex-profile-dialog .settings-input,
+.settings-profile-create-dialog .settings-input {
   margin-top: 12px;
 }
 
