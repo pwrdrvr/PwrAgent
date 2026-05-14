@@ -344,7 +344,7 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
-  it("protects dirty local changes separately when moving a worktree branch to local", async () => {
+  it("rejects moving a worktree branch to local when local has dirty changes", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);
     await writeFile(path.join(repoPath, "local-only.txt"), "local dirty\n", "utf8");
@@ -352,22 +352,25 @@ describe("GitWorkspaceHandoffService", () => {
     await git(repoPath, ["worktree", "add", worktreePath, "feature/handoff"]);
 
     const service = new GitWorkspaceHandoffService();
-    const result = await service.handoff({
-      backend: "codex",
-      threadId: "thread-1",
-      direction: "worktree-to-local",
-      repositoryPath: repoPath,
-      sourcePath: worktreePath,
-      sourceBranch: "feature/handoff",
-      now: 3000,
-    });
+    await expect(
+      service.handoff({
+        backend: "codex",
+        threadId: "thread-1",
+        direction: "worktree-to-local",
+        repositoryPath: repoPath,
+        sourcePath: worktreePath,
+        sourceBranch: "feature/handoff",
+        now: 3000,
+      }),
+    ).rejects.toThrow(/Local has dirty tracked or untracked changes/);
 
-    expect(result.destinationStash).toMatchObject({
-      applied: false,
-      dropped: false,
-    });
-    expect(await pathExists(path.join(repoPath, "local-only.txt"))).toBe(false);
-    expect(await git(repoPath, ["stash", "list"])).toContain("destination");
+    expect(await pathExists(worktreePath)).toBe(true);
+    expect(await pathExists(path.join(repoPath, "local-only.txt"))).toBe(true);
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("main");
+    expect(await git(worktreePath, ["branch", "--show-current"])).toBe(
+      "feature/handoff",
+    );
+    expect(await git(repoPath, ["stash", "list"])).toBe("");
   });
 
   it("fails before stashing when the target branch is checked out in another worktree", async () => {

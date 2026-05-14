@@ -159,10 +159,7 @@ function ensureBranchNotCheckedOutElsewhere(params: {
 async function createNamedStashIfDirty(
   options: StashOptions,
 ): Promise<ThreadWorkspaceHandoffStashSummary | undefined> {
-  const status = trim(
-    (await runGit(options.path, ["status", "--porcelain", "--untracked-files=normal"]))
-      .stdout,
-  );
+  const status = await getDirtyStatus(options.path);
   if (!status) {
     return undefined;
   }
@@ -179,6 +176,21 @@ async function createNamedStashIfDirty(
     applied: false,
     dropped: false,
   };
+}
+
+async function getDirtyStatus(workspacePath: string): Promise<string> {
+  return trim(
+    (await runGit(workspacePath, ["status", "--porcelain", "--untracked-files=normal"]))
+      .stdout,
+  );
+}
+
+async function assertLocalCleanForDestinationHandoff(repositoryPath: string): Promise<void> {
+  if (await getDirtyStatus(repositoryPath)) {
+    throw new Error(
+      "Local has dirty tracked or untracked changes. Commit, stash, or discard them before handing a worktree back to Local.",
+    );
+  }
 }
 
 async function dropStashByCommit(cwd: string, commit: string): Promise<void> {
@@ -530,19 +542,11 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
+    await assertLocalCleanForDestinationHandoff(context.repositoryPath);
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    const destinationStash = await createNamedStashIfDirty({
-      path: context.repositoryPath,
-      message: this.buildStashMessage(context, "destination"),
-    });
-    if (destinationStash) {
-      warnings.push(
-        "Local had dirty changes; they were saved in a separate stash and not applied to the moved branch.",
-      );
-    }
 
     await runGit(context.sourcePath, ["switch", "--detach"]);
     await runGit(context.repositoryPath, ["switch", context.branch]);
@@ -576,7 +580,6 @@ export class GitWorkspaceHandoffService {
       linkedDirectory,
       archivedSourceWorktree,
       sourceStash: appliedSourceStash,
-      destinationStash,
       warnings,
       completedAt: context.now,
     };
@@ -589,19 +592,11 @@ export class GitWorkspaceHandoffService {
       "Ignored files are not preserved by workspace handoff.",
       "Local will be left on a detached HEAD at the moved worktree commit.",
     ];
+    await assertLocalCleanForDestinationHandoff(context.repositoryPath);
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    const destinationStash = await createNamedStashIfDirty({
-      path: context.repositoryPath,
-      message: this.buildStashMessage(context, "destination"),
-    });
-    if (destinationStash) {
-      warnings.push(
-        "Local had dirty changes; they were saved in a separate stash and not applied to the moved detached HEAD.",
-      );
-    }
 
     await runGit(context.repositoryPath, ["switch", "--detach", context.headSha]);
     const appliedSourceStash = await applyVerifyAndDropStash(
@@ -634,7 +629,6 @@ export class GitWorkspaceHandoffService {
       linkedDirectory,
       archivedSourceWorktree,
       sourceStash: appliedSourceStash,
-      destinationStash,
       warnings,
       completedAt: context.now,
     };
