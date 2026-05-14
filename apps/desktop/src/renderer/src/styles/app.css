@@ -3793,6 +3793,10 @@ textarea,
   font-size: 12px;
 }
 
+.settings-codex-profile-dialog__status code {
+  color: var(--text-primary);
+}
+
 @media (max-width: 760px) {
   .settings-profile-row,
   .settings-profile-row__actions,

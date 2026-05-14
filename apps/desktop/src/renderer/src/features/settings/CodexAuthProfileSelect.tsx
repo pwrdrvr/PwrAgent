@@ -155,6 +155,7 @@ function CodexAuthProfileCreateDialog(props: {
   const [step, setStep] = useState<CreationStep>("form");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
   const normalizedName = profileName.trim();
   const existingNames = new Set(props.existingProfiles.map((profile) => profile.name));
@@ -173,12 +174,15 @@ function CodexAuthProfileCreateDialog(props: {
     if (!canSubmit) return;
     setBusy(true);
     setError(undefined);
+    setLoginUrl(undefined);
     setStatusDetail(undefined);
     try {
       await props.desktopApi!.createCodexAuthProfile!({ profile: normalizedName });
-      await props.desktopApi!.startCodexAuthProfileLogin!({
+      const login = await props.desktopApi!.startCodexAuthProfileLogin!({
         profile: normalizedName,
       });
+      setLoginUrl(login.loginUrl);
+      setStatusDetail(login.loginUrl ? undefined : login.detail);
       setStep("waiting");
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -242,10 +246,15 @@ function CodexAuthProfileCreateDialog(props: {
         ) : (
           <>
             <p>
-              Waiting for Codex login to finish for{" "}
-              <strong>{normalizedName}</strong>. Complete the browser login, then
+              A browser window should open for{" "}
+              <strong>{normalizedName}</strong>. Complete the Codex login, then
               check status here.
             </p>
+            {loginUrl ? (
+              <p className="settings-codex-profile-dialog__status">
+                Open <code>{loginUrl}</code>
+              </p>
+            ) : null}
             {statusDetail ? (
               <p className="settings-codex-profile-dialog__status">
                 {statusDetail}

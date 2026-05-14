@@ -537,6 +537,8 @@ export type StartDesktopCodexAuthProfileLoginResponse = {
   codexHome: string;
   started: boolean;
   pid?: number;
+  loginUrl?: string;
+  detail?: string;
 };
 
 export type CheckDesktopCodexAuthProfileStatusRequest = {
