@@ -221,6 +221,34 @@ describe("image normalization", () => {
     });
   });
 
+  it("normalizes extension-inferred JPEG files with empty blob MIME types", async () => {
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 640,
+        height: 480,
+        draw: vi.fn(),
+      })),
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array([1, 2, 3])], "screenshot.jpg"),
+      { dependencies, maxPatchCount: 1536 },
+    );
+
+    expect(dependencies.encodeCanvas).toHaveBeenCalledWith(
+      expect.anything(),
+      "image/jpeg",
+      expect.any(Number),
+    );
+    expect(normalized).toMatchObject({
+      dataUrl: "data:image/jpeg;base64,AQID",
+      height: 480,
+      mimeType: "image/jpeg",
+      size: 3,
+      width: 640,
+    });
+  });
+
   it("routes HEIC decode failures through the fallback and normalizes the result", async () => {
     const decode = vi
       .fn<ImageNormalizationDependencies["decodeImage"]>()

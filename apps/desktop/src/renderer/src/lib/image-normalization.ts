@@ -247,10 +247,12 @@ async function normalizeBlob(params: {
       maxShortEdge: params.maxShortEdge,
     });
     const sourceMimeType = normalizeSourceMimeType(params.originalMimeType);
+    const blobMimeType = normalizeSourceMimeType(params.blob.type);
     if (
       dimensions.width === decoded.width &&
       dimensions.height === decoded.height &&
-      (sourceMimeType === "image/jpeg" || sourceMimeType === "image/png")
+      (sourceMimeType === "image/jpeg" || sourceMimeType === "image/png") &&
+      blobMimeType === sourceMimeType
     ) {
       return {
         conversionPath: params.conversionPath,
