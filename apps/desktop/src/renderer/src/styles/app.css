@@ -2197,25 +2197,34 @@ textarea,
 }
 
 .directory-row__launchpad-button {
-  width: 32px;
-  height: 32px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  cursor: pointer;
   padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 20px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 16px;
   line-height: 1;
 }
 
-.directory-row__launchpad-button:hover {
+.directory-row__launchpad-button:hover,
+.directory-row__launchpad-button:focus-visible {
+  border-color: var(--accent-border);
   background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .directory-row__launchpad-button.has-draft {
   border-color: var(--accent-border);
-  background: var(--bg-row-active);
-  color: var(--accent);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
 }
 
 .directory-row__details {

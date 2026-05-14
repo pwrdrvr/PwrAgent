@@ -11,7 +11,12 @@ import {
   isPinnedThread,
   moveThreadKey,
 } from "@pwragent/shared";
-import { FolderIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
+import {
+  FolderIcon,
+  NewThreadIcon,
+  UnlinkedDotIcon,
+  WorkspaceIcon,
+} from "../../icons";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
@@ -314,7 +319,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
                 }}
               >
-                +
+                <NewThreadIcon size={16} />
               </button>
             </div>
 
