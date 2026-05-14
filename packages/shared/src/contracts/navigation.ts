@@ -234,6 +234,15 @@ export type NavigationDirectoryGitStatusUpdatedNotification = {
   };
 };
 
+export type RefreshDirectoryGitStatusesRequest = {
+  directoryKeys: string[];
+  force?: boolean;
+};
+
+export type RefreshDirectoryGitStatusesResponse = {
+  scheduledCount: number;
+};
+
 export function buildThreadIdentityKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,

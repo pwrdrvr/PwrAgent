@@ -185,6 +185,18 @@ CREATE INDEX IF NOT EXISTS idx_messaging_runtime_lease_status_expires
   ON messaging_runtime_lease(status, expires_at);
 `;
 
+const DIRECTORY_GIT_STATUS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS directory_git_status (
+  directory_key        TEXT PRIMARY KEY,
+  directory_path       TEXT,
+  directory_updated_at INTEGER,
+  fetched_at           INTEGER NOT NULL,
+  payload              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_directory_git_status_fetched
+  ON directory_git_status(fetched_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -380,6 +392,7 @@ export class StateDb {
 function ensureCurrentSchema(db: BetterSqlite3.Database): void {
   db.transaction(() => {
     db.exec(SCHEMA_V4);
+    db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

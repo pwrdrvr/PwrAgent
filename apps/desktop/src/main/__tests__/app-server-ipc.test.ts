@@ -175,6 +175,8 @@ const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =
     }
   })(),
 );
+const readDirectoryGitStatusCache = vi.fn(async () => ({}));
+const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
 const publishLocalEvent = vi.fn(async () => undefined);
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
@@ -201,6 +203,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
     markThreadSeen,
+    readDirectoryGitStatusCache,
+    writeDirectoryGitStatusCacheEntry,
   }),
 }));
 
@@ -236,6 +240,9 @@ describe("app server ipc", () => {
     reconcileNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
+    readDirectoryGitStatusCache.mockClear();
+    readDirectoryGitStatusCache.mockResolvedValue({});
+    writeDirectoryGitStatusCacheEntry.mockClear();
     publishLocalEvent.mockClear();
     markThreadSeen.mockClear();
   });
@@ -654,5 +661,129 @@ describe("app server ipc", () => {
         executionMode: "default",
       },
     });
+  });
+
+  it("uses cached directory git status without refreshing unchanged directories", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    readDirectoryGitStatusCache.mockResolvedValueOnce({
+      "directory:/repo/app": {
+        directoryKey: "directory:/repo/app",
+        directoryPath: "/repo/app",
+        directoryUpdatedAt: 2000,
+        fetchedAt: 1000,
+        gitStatus: directoryGitStatus,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+    expect(response).toEqual(
+      expect.objectContaining({
+        directories: [
+          expect.objectContaining({
+            key: "directory:/repo/app",
+            gitStatus: directoryGitStatus,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("refreshes cached directory git status when explicitly requested", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+      NAVIGATION_SNAPSHOT_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    readDirectoryGitStatusCache.mockResolvedValueOnce({
+      "directory:/repo/app": {
+        directoryKey: "directory:/repo/app",
+        directoryPath: "/repo/app",
+        directoryUpdatedAt: 2000,
+        fetchedAt: 1000,
+        gitStatus: directoryGitStatus,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)?.(
+        {},
+        {
+          directoryKeys: ["directory:/repo/app"],
+        },
+      ),
+    ).resolves.toEqual({ scheduledCount: 1 });
+
+    await vi.waitFor(() => {
+      expect(readDirectoryStatusEntries).toHaveBeenCalled();
+    });
+    expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ key: "directory:/repo/app" }),
+    ]);
+  });
+
+  it("caps automatic startup directory git status refreshes", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const directories = Array.from({ length: 6 }, (_, index) => ({
+      key: `directory:/repo/app-${index}`,
+      kind: "directory" as const,
+      label: `app-${index}`,
+      path: `/repo/app-${index}`,
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1000 + index,
+    }));
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1234,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread one",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+      ],
+      inboxThreadKeys: [],
+      directories,
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(readDirectoryStatusEntries).toHaveBeenCalled();
+    });
+
+    expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toHaveLength(4);
+    expect(
+      (readDirectoryStatusEntries.mock.calls[0]?.[0] as Array<{ key: string }>)
+        .map((directory) => directory.key),
+    ).toEqual([
+      "directory:/repo/app-5",
+      "directory:/repo/app-4",
+      "directory:/repo/app-3",
+      "directory:/repo/app-2",
+    ]);
   });
 });

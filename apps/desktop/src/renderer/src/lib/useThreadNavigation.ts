@@ -65,6 +65,19 @@ function sortNavigationDirectories(
   return [...directories].sort(compareNavigationDirectoriesByLabel);
 }
 
+function directoryKeysForThread(
+  directories: NavigationSnapshot["directories"],
+  threadKey?: string,
+): string[] {
+  if (!threadKey) {
+    return [];
+  }
+
+  return directories
+    .filter((directory) => directory.path && directory.threadKeys.includes(threadKey))
+    .map((directory) => directory.key);
+}
+
 function formatArchiveCleanupFailure(
   cleanup: ArchiveThreadCleanupResult[]
 ): string | undefined {
@@ -1907,7 +1920,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       directory.threadKeys.includes(selectedThreadKey)
     );
   }, [directories, selectedItemKey, selectedThreadKey]);
-
   const selectedLaunchpad = useMemo(() => {
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (!launchpadDirectoryKey) {
@@ -1980,9 +1992,29 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     };
   }, [markThreadSeen, pendingSeenThreadKey, retainedUnreadThread, selectedThread]);
 
+  const refreshThreadDirectoryGitStatuses = useCallback(
+    (threadKey: string): void => {
+      if (!desktopApi?.refreshDirectoryGitStatuses) {
+        return;
+      }
+
+      const directoryKeys = directoryKeysForThread(directories, threadKey);
+      if (directoryKeys.length === 0) {
+        return;
+      }
+
+      void desktopApi.refreshDirectoryGitStatuses({
+        directoryKeys,
+        force: true,
+      });
+    },
+    [desktopApi?.refreshDirectoryGitStatuses, directories]
+  );
+
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     releaseRetainedUnreadThread(threadKey);
+    refreshThreadDirectoryGitStatuses(threadKey);
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
     setArchiveThreadError(undefined);
@@ -1993,7 +2025,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
       setRetainedUnreadThread(thread);
     }
-  }, [releaseRetainedUnreadThread]);
+  }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
 
   const createThread = useCallback(
     async (

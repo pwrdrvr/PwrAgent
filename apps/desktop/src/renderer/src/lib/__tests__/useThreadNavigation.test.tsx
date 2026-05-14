@@ -107,6 +107,68 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("refreshes selected thread directory git status on demand", async () => {
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      refreshDirectoryGitStatuses,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    expect(refreshDirectoryGitStatuses).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(refreshDirectoryGitStatuses).toHaveBeenCalledWith({
+        directoryKeys: ["directory:/repo/app"],
+        force: true,
+      });
+    });
+  });
+
   it("keeps a selected unread marker until another item is selected", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,
