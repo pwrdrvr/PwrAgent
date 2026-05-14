@@ -70,6 +70,7 @@ export function discoverCodexAuthProfiles(options?: {
       exists: fs.existsSync(defaultCodexHome),
       selected: selectedProfile === "",
       hasAuthFile: fileExists(path.join(defaultCodexHome, "auth.json")),
+      accountEmail: readCodexAuthEmail(defaultCodexHome),
       hasConfigFile: fileExists(path.join(defaultCodexHome, "config.toml")),
     },
   ];
@@ -124,6 +125,7 @@ function buildDirectoryProfile(
     exists: fs.existsSync(codexHome),
     selected: selectedProfile === name,
     hasAuthFile: fileExists(path.join(codexHome, "auth.json")),
+    accountEmail: readCodexAuthEmail(codexHome),
     hasConfigFile: fileExists(path.join(codexHome, "config.toml")),
   };
 }
@@ -134,4 +136,54 @@ function fileExists(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function readCodexAuthEmail(codexHome: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(codexHome, "auth.json"), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    const idToken = getNestedString(parsed, ["tokens", "id_token"]);
+    if (!idToken) return undefined;
+    return extractEmailFromJwt(idToken);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractEmailFromJwt(token: string): string | undefined {
+  const payload = token.split(".")[1];
+  if (!payload) return undefined;
+
+  try {
+    const decoded = Buffer.from(normalizeBase64Url(payload), "base64").toString("utf8");
+    const claims = JSON.parse(decoded) as unknown;
+    const email = getNestedString(claims, ["email"])?.trim();
+    if (!email || email.length > 320 || !email.includes("@")) return undefined;
+    return email;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBase64Url(value: string): string {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const remainder = normalized.length % 4;
+  return remainder === 0
+    ? normalized
+    : `${normalized}${"=".repeat(4 - remainder)}`;
+}
+
+function getNestedString(value: unknown, pathParts: string[]): string | undefined {
+  let current = value;
+  for (const pathPart of pathParts) {
+    if (
+      typeof current !== "object"
+      || current === null
+      || !Object.prototype.hasOwnProperty.call(current, pathPart)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[pathPart];
+  }
+  return typeof current === "string" ? current : undefined;
 }

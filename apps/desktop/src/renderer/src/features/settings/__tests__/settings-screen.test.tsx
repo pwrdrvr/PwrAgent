@@ -185,6 +185,7 @@ function createSnapshot(
               name: "work",
               displayName: "work",
               codexHome: "/home/example/.codex/profiles/work",
+              accountEmail: "work@example.com",
               source: "directory",
               exists: true,
               selected: false,
@@ -397,6 +398,7 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getAllByText("System default").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("/home/example/.codex/profiles/work")).toBeInTheDocument();
+    expect(screen.getByText("work@example.com")).toBeInTheDocument();
     fireEvent.click(useButtons[1]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

@@ -315,7 +315,14 @@ function CodexProfileRow(props: {
 
   return (
     <SettingsPathRow
-      title={profile.displayName}
+      title={
+        <span className="settings-pathrow__title-line">
+          <span>{profile.displayName}</span>
+          {profile.accountEmail ? (
+            <span className="settings-pathrow__meta">{profile.accountEmail}</span>
+          ) : null}
+        </span>
+      }
       path={profile.codexHome}
       chips={chips}
       selected={profile.selected}

@@ -56,6 +56,33 @@ describe("Codex auth profile discovery", () => {
     ]);
   });
 
+  it("reads the account email from Codex auth tokens when present", () => {
+    const root = createTempRoot();
+    const codexHome = path.join(root, "codex");
+    const profileHome = path.join(codexHome, "profiles", "work");
+    fs.mkdirSync(profileHome, { recursive: true });
+    fs.writeFileSync(
+      path.join(profileHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          id_token: createUnsignedJwt({ email: "work@example.com" }),
+        },
+      }),
+      "utf8",
+    );
+
+    const discovery = discoverCodexAuthProfiles({
+      configuredProfile: "work",
+      env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+    });
+
+    expect(discovery.profiles[1]).toMatchObject({
+      name: "work",
+      accountEmail: "work@example.com",
+    });
+  });
+
   it("adds the configured profile even when the directory does not exist yet", () => {
     const root = createTempRoot();
     const codexHome = path.join(root, "codex");
@@ -104,3 +131,19 @@ describe("Codex auth profile discovery", () => {
     ).toBe(false);
   });
 });
+
+function createUnsignedJwt(payload: Record<string, unknown>): string {
+  return [
+    encodeJwtPart({ alg: "none", typ: "JWT" }),
+    encodeJwtPart(payload),
+    "",
+  ].join(".");
+}
+
+function encodeJwtPart(value: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(value), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/u, "");
+}
