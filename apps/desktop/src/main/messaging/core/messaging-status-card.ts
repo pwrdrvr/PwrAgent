@@ -542,7 +542,7 @@ export function buildBranchPickerPage(params: {
     const branchNumber = pageStart + index + 1;
     return {
       id: params.branchActionId,
-      label: `${branchNumber}. ${branch}`,
+      label: `${branchNumber}. ${formatHandoffBranchChoiceLabel(branch)}`,
       fallbackText: String(branchNumber),
       style: "secondary" as const,
       priority: 100 + index,
@@ -583,6 +583,10 @@ export function buildBranchPickerPage(params: {
     pageSize,
     totalPages,
   };
+}
+
+function formatHandoffBranchChoiceLabel(branch: string): string {
+  return branch === "HEAD" ? "Detached HEAD" : branch;
 }
 
 export function buildHandoffBranchPickerIntent(params: {
@@ -706,7 +710,7 @@ export function buildHandoffConfirmationIntent(params: {
     `Working directory: ${params.context.workingDirectoryPath}`,
     `Branch: ${params.context.branch ?? unavailable()}`,
     params.leaveLocalBranch
-      ? `Leave Local on: ${params.leaveLocalBranch}`
+      ? `Leave Local on: ${formatHandoffBranchChoiceLabel(params.leaveLocalBranch)}`
       : undefined,
     params.strategy ? `Strategy: ${params.strategy}` : undefined,
   ]
@@ -793,7 +797,9 @@ export function handoffRequestFromValue(
     threadId: value.threadId,
     direction: value.direction,
     strategy:
-      value.strategy === "move-branch" || value.strategy === "detached-changes"
+      value.strategy === "move-branch" ||
+      value.strategy === "detached-changes" ||
+      value.strategy === "new-branch"
         ? value.strategy
         : undefined,
     repositoryPath: value.repositoryPath,
@@ -801,6 +807,8 @@ export function handoffRequestFromValue(
     sourceBranch: typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
     leaveLocalBranch:
       typeof value.leaveLocalBranch === "string" ? value.leaveLocalBranch : undefined,
+    newBranchName:
+      typeof value.newBranchName === "string" ? value.newBranchName : undefined,
   };
 }
 

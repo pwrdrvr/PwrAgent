@@ -7630,13 +7630,14 @@ function handoffContextForBinding(
     []
   ).filter(
     (candidate, index, branches) =>
-      candidate !== branch && branches.indexOf(candidate) === index,
+      candidate !== "HEAD" && candidate !== branch && branches.indexOf(candidate) === index,
   );
+  const leaveLocalBranchChoices = ["HEAD", ...leaveLocalBranches];
 
   return {
     backend: binding.backend,
     branch,
-    leaveLocalBranches,
+    leaveLocalBranches: leaveLocalBranchChoices,
     projectLabel: localDirectory.label,
     repositoryPath: localDirectory.path,
     threadId: binding.threadId,
@@ -7694,6 +7695,15 @@ function validateHandoffRequest(
   }
   if (request.direction === "local-to-worktree") {
     if (request.strategy === "detached-changes") {
+      return { valid: true };
+    }
+    if (request.strategy === "new-branch") {
+      if (!request.newBranchName?.trim()) {
+        return {
+          valid: false,
+          reason: "Choose the new branch name before handoff.",
+        };
+      }
       return { valid: true };
     }
     if (!request.leaveLocalBranch) {

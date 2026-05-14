@@ -18,6 +18,7 @@ import { computeWorktreePath } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
+const DETACHED_HEAD_LEAVE_LOCAL_BRANCH = "HEAD";
 
 type GitResult = {
   stdout: string;
@@ -38,6 +39,7 @@ type HandoffParams = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
+  newBranchName?: string;
   now?: number;
 };
 
@@ -157,10 +159,7 @@ function ensureBranchNotCheckedOutElsewhere(params: {
 async function createNamedStashIfDirty(
   options: StashOptions,
 ): Promise<ThreadWorkspaceHandoffStashSummary | undefined> {
-  const status = trim(
-    (await runGit(options.path, ["status", "--porcelain", "--untracked-files=normal"]))
-      .stdout,
-  );
+  const status = await getDirtyStatus(options.path);
   if (!status) {
     return undefined;
   }
@@ -179,6 +178,21 @@ async function createNamedStashIfDirty(
   };
 }
 
+async function getDirtyStatus(workspacePath: string): Promise<string> {
+  return trim(
+    (await runGit(workspacePath, ["status", "--porcelain", "--untracked-files=normal"]))
+      .stdout,
+  );
+}
+
+async function assertLocalCleanForDestinationHandoff(repositoryPath: string): Promise<void> {
+  if (await getDirtyStatus(repositoryPath)) {
+    throw new Error(
+      "Local has dirty tracked or untracked changes. Commit, stash, or discard them before handing a worktree back to Local.",
+    );
+  }
+}
+
 async function dropStashByCommit(cwd: string, commit: string): Promise<void> {
   const stashList = (
     await runGit(cwd, ["stash", "list", "--format=%H%x00%gd"])
@@ -193,6 +207,23 @@ async function dropStashByCommit(cwd: string, commit: string): Promise<void> {
   }
 
   await runGit(cwd, ["stash", "drop", match]);
+}
+
+async function validateBranchName(cwd: string, branch: string): Promise<void> {
+  try {
+    await runGit(cwd, ["check-ref-format", "--branch", branch]);
+  } catch {
+    throw new Error(`Invalid branch name: ${branch}`);
+  }
+}
+
+async function branchExists(cwd: string, branch: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function applyVerifyAndDropStash(
@@ -292,6 +323,9 @@ export class GitWorkspaceHandoffService {
     if (strategy === "detached-changes") {
       return await this.handoffLocalChangesToDetachedWorktree(params, context);
     }
+    if (strategy === "new-branch") {
+      return await this.handoffLocalChangesToNewBranchWorktree(params, context);
+    }
 
     if (context.branch === "HEAD") {
       throw new Error("Local-to-worktree handoff requires a named source branch.");
@@ -303,11 +337,15 @@ export class GitWorkspaceHandoffService {
       worktrees: context.worktrees,
     });
 
-    const leaveLocalBranch = sanitizeBranchName(params.leaveLocalBranch ?? "");
+    const rawLeaveLocalBranch = params.leaveLocalBranch?.trim() ?? "";
+    const leaveLocalDetached = rawLeaveLocalBranch === DETACHED_HEAD_LEAVE_LOCAL_BRANCH;
+    const leaveLocalBranch = leaveLocalDetached
+      ? DETACHED_HEAD_LEAVE_LOCAL_BRANCH
+      : sanitizeBranchName(rawLeaveLocalBranch);
     if (!leaveLocalBranch) {
       throw new Error("Choose a branch to leave in Local before handoff.");
     }
-    if (leaveLocalBranch && leaveLocalBranch === context.branch) {
+    if (!leaveLocalDetached && leaveLocalBranch === context.branch) {
       throw new Error("Local cannot be left on the same branch being moved.");
     }
 
@@ -321,11 +359,19 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
+    if (leaveLocalDetached) {
+      warnings.push("Local was left on a detached HEAD at the moved branch commit.");
+    }
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
+    await runGit(
+      context.sourcePath,
+      leaveLocalDetached
+        ? ["switch", "--detach", context.headSha]
+        : ["switch", leaveLocalBranch],
+    );
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     await runGit(context.repositoryPath, ["worktree", "add", targetPath, context.branch]);
@@ -344,6 +390,78 @@ export class GitWorkspaceHandoffService {
       strategy: "move-branch",
       workMode: "worktree",
       branch: context.branch,
+      repositoryPath: context.repositoryPath,
+      targetPath,
+      linkedDirectory,
+      sourceStash: appliedSourceStash,
+      warnings,
+      completedAt: context.now,
+    };
+  }
+
+  private async handoffLocalChangesToNewBranchWorktree(
+    params: HandoffParams,
+    context: HandoffContext,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const baseSha = context.headSha;
+    const newBranchName = (params.newBranchName ?? "").trim();
+    if (!newBranchName) {
+      throw new Error("Choose a new branch name for handoff.");
+    }
+    if (newBranchName === context.branch) {
+      throw new Error("New branch name must differ from the current branch.");
+    }
+    await validateBranchName(context.repositoryPath, newBranchName);
+    if (await branchExists(context.repositoryPath, newBranchName)) {
+      throw new Error(`Branch ${newBranchName} already exists.`);
+    }
+
+    const storage = await this.resolveStorage();
+    const targetPath = await computeWorktreePath({
+      backend: context.backend,
+      repoRoot: context.repositoryPath,
+      storage,
+      homeDir: this.homeDir,
+      timestamp: context.now,
+    });
+
+    const warnings = [
+      "Ignored files are not preserved by workspace handoff.",
+      `The new worktree starts from ${context.branch} at the current commit.`,
+    ];
+    const sourceStash = await createNamedStashIfDirty({
+      path: context.sourcePath,
+      message: this.buildStashMessage(context, "source"),
+    });
+    if (!sourceStash) {
+      warnings.push("No dirty non-ignored changes were available to move.");
+    }
+
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await runGit(context.repositoryPath, [
+      "worktree",
+      "add",
+      "-b",
+      newBranchName,
+      targetPath,
+      baseSha,
+    ]);
+    const appliedSourceStash = await applyVerifyAndDropStash(targetPath, sourceStash);
+
+    const linkedDirectory = this.buildLinkedDirectory({
+      context,
+      kind: "worktree",
+      targetPath,
+    });
+
+    return {
+      backend: context.backend,
+      threadId: context.threadId,
+      direction: "local-to-worktree",
+      strategy: "new-branch",
+      workMode: "worktree",
+      branch: newBranchName,
+      baseSha,
       repositoryPath: context.repositoryPath,
       targetPath,
       linkedDirectory,
@@ -424,19 +542,11 @@ export class GitWorkspaceHandoffService {
     });
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
+    await assertLocalCleanForDestinationHandoff(context.repositoryPath);
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    const destinationStash = await createNamedStashIfDirty({
-      path: context.repositoryPath,
-      message: this.buildStashMessage(context, "destination"),
-    });
-    if (destinationStash) {
-      warnings.push(
-        "Local had dirty changes; they were saved in a separate stash and not applied to the moved branch.",
-      );
-    }
 
     await runGit(context.sourcePath, ["switch", "--detach"]);
     await runGit(context.repositoryPath, ["switch", context.branch]);
@@ -470,7 +580,6 @@ export class GitWorkspaceHandoffService {
       linkedDirectory,
       archivedSourceWorktree,
       sourceStash: appliedSourceStash,
-      destinationStash,
       warnings,
       completedAt: context.now,
     };
@@ -483,19 +592,11 @@ export class GitWorkspaceHandoffService {
       "Ignored files are not preserved by workspace handoff.",
       "Local will be left on a detached HEAD at the moved worktree commit.",
     ];
+    await assertLocalCleanForDestinationHandoff(context.repositoryPath);
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    const destinationStash = await createNamedStashIfDirty({
-      path: context.repositoryPath,
-      message: this.buildStashMessage(context, "destination"),
-    });
-    if (destinationStash) {
-      warnings.push(
-        "Local had dirty changes; they were saved in a separate stash and not applied to the moved detached HEAD.",
-      );
-    }
 
     await runGit(context.repositoryPath, ["switch", "--detach", context.headSha]);
     const appliedSourceStash = await applyVerifyAndDropStash(
@@ -528,7 +629,6 @@ export class GitWorkspaceHandoffService {
       linkedDirectory,
       archivedSourceWorktree,
       sourceStash: appliedSourceStash,
-      destinationStash,
       warnings,
       completedAt: context.now,
     };

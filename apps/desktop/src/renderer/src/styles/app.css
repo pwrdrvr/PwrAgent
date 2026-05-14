@@ -7477,6 +7477,32 @@ textarea,
   overflow-wrap: break-word;
 }
 
+.workspace-handoff-dialog__summary {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.workspace-handoff-dialog__summary div {
+  min-width: 0;
+}
+
+.workspace-handoff-dialog__summary dt {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.workspace-handoff-dialog__summary dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
 .workspace-handoff-dialog__branch-path {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -7569,6 +7595,24 @@ textarea,
   font-weight: 600;
 }
 
+.workspace-handoff-dialog__text-input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.3;
+}
+
+.workspace-handoff-dialog__text-input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: 1px;
+}
+
 .workspace-handoff-dialog__strategy-list {
   display: grid;
   gap: 8px;
@@ -7611,6 +7655,13 @@ textarea,
 
 .workspace-handoff-dialog__error {
   color: var(--danger-text);
+}
+
+.workspace-handoff-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .workspace-handoff-dialog__action {
