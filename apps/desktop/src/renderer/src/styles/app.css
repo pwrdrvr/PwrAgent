@@ -6130,7 +6130,7 @@ textarea,
   background: var(--bg-panel);
   transform: translateX(calc(100% - 48px));
   transition:
-    transform 160ms ease,
+    transform 260ms cubic-bezier(0.2, 0, 0.2, 1),
     border-color 140ms ease,
     background 140ms ease;
   -webkit-app-region: no-drag;
@@ -6292,8 +6292,8 @@ textarea,
   pointer-events: none;
   transform: translateX(12px);
   transition:
-    opacity 140ms ease,
-    transform 160ms ease;
+    opacity 200ms ease,
+    transform 240ms cubic-bezier(0.2, 0, 0.2, 1);
 }
 
 .context-rail.is-open .context-panel {

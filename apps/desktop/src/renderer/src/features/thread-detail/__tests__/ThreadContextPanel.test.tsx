@@ -1,11 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const baseThread: NavigationThreadSummary = {
@@ -79,6 +81,66 @@ const baseBackend: BackendSummary = {
 };
 
 describe("ThreadContextPanel", () => {
+  it("keeps the hover rail open when a transient leave is still inside the opened rail", () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 620,
+      right: 1000,
+      top: 0,
+      width: 380,
+      x: 620,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(rail, { clientX: 980, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(301);
+    });
+
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+  });
+
+  it("hides the hover rail after the mouse leaves the opened rail", () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 620,
+      right: 1000,
+      top: 0,
+      width: 380,
+      x: 620,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(rail, { clientX: 600, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(301);
+    });
+
+    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+  });
+
   it("shows path tooltips on linked directory labels and kind badges", () => {
     render(
       <ThreadContextPanel
