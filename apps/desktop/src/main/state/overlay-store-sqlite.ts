@@ -26,6 +26,28 @@ import {
 } from "@pwragent/agent-core";
 import type { StateDb } from "./state-db.js";
 
+export type DirectoryGitStatusCacheEntry = {
+  directoryKey: string;
+  directoryPath?: string;
+  directoryUpdatedAt?: number;
+  fetchedAt: number;
+  gitStatus?: NavigationDirectoryGitStatus;
+};
+
+function parseDirectoryGitStatusCachePayload(
+  payload: string | null,
+): NavigationDirectoryGitStatus | undefined {
+  if (!payload) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(payload) as NavigationDirectoryGitStatus;
+  } catch {
+    return undefined;
+  }
+}
+
 export class SqliteOverlayStore {
   constructor(private readonly stateDb: StateDb) {}
 
@@ -663,6 +685,61 @@ export class SqliteOverlayStore {
     this.stateDb.raw
       .prepare("DELETE FROM directory_launchpads WHERE directory_path = ?")
       .run(params.directoryKey);
+  }
+
+  async readDirectoryGitStatusCache(): Promise<
+    Record<string, DirectoryGitStatusCacheEntry>
+  > {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT directory_key, directory_path, directory_updated_at, fetched_at, payload
+         FROM directory_git_status`,
+      )
+      .all() as Array<{
+        directory_key: string;
+        directory_path: string | null;
+        directory_updated_at: number | null;
+        fetched_at: number;
+        payload: string | null;
+      }>;
+
+    return Object.fromEntries(
+      rows.map((row) => {
+        const gitStatus = parseDirectoryGitStatusCachePayload(row.payload);
+        const entry: DirectoryGitStatusCacheEntry = {
+          directoryKey: row.directory_key,
+          ...(row.directory_path ? { directoryPath: row.directory_path } : {}),
+          ...(row.directory_updated_at !== null
+            ? { directoryUpdatedAt: row.directory_updated_at }
+            : {}),
+          fetchedAt: row.fetched_at,
+          ...(gitStatus ? { gitStatus } : {}),
+        };
+        return [entry.directoryKey, entry];
+      }),
+    );
+  }
+
+  async writeDirectoryGitStatusCacheEntry(
+    entry: DirectoryGitStatusCacheEntry,
+  ): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO directory_git_status(
+           directory_key,
+           directory_path,
+           directory_updated_at,
+           fetched_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.directoryKey,
+        entry.directoryPath ?? null,
+        entry.directoryUpdatedAt ?? null,
+        entry.fetchedAt,
+        entry.gitStatus ? JSON.stringify(entry.gitStatus) : null,
+      );
   }
 
   private getThread(threadKey: string): ThreadOverlayState | undefined {

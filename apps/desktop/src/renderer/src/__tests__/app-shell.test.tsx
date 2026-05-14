@@ -56,12 +56,26 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
   );
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("App", () => {
   afterEach(() => {
     cleanup();
   });
 
-  it("does not show Settings while the startup settings read is pending", async () => {
+  it("shows the thread shell while the startup settings read is pending", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),
       backends: [],
@@ -96,19 +110,15 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(
-      screen.getByRole("main", { name: "Starting PwrAgent" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Loading PwrAgent...");
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("complementary", { name: "Threads" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
-    expect(listBackends).not.toHaveBeenCalled();
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(1);
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("blocks the app shell when desktop settings config is malformed", async () => {
@@ -292,8 +302,42 @@ describe("App", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
     expect(screen.queryByRole("complementary", { name: "Threads" })).not.toBeInTheDocument();
-    expect(listBackends).not.toHaveBeenCalled();
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("starts loading navigation before settings discovery completes", async () => {
+    const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: () => settings.promise,
+        listBackends: vi.fn(async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        })),
+        getNavigationSnapshot,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
   });
 
   it("renders the live thread shell with transcript history", async () => {

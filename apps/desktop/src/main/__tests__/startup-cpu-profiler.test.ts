@@ -5,6 +5,7 @@ vi.mock("electron", () => ({
   app: {
     getAppPath: vi.fn(() => "/repo/apps/desktop"),
     getVersion: vi.fn(() => "0.1.0"),
+    quit: vi.fn(),
   },
 }));
 
@@ -17,6 +18,7 @@ function createEnabledConfig() {
     outputRoot: "/repo/.local",
     postLoadDurationMs: 5000,
     hardTimeoutMs: 15000,
+    quitOnComplete: false,
   };
 }
 
@@ -155,6 +157,41 @@ describe("StartupCpuProfiler", () => {
         status: "completed",
       },
     });
+  });
+
+  it("quits the app after capture when requested by profiling config", async () => {
+    const { app } = await import("electron");
+    const session = createSession();
+    const { window, emitWebContents } = createWindowTarget();
+
+    const { StartupCpuProfiler } = await import("../diagnostics/startup-cpu-profiler");
+    const profiler = new StartupCpuProfiler({
+      config: {
+        ...createEnabledConfig(),
+        quitOnComplete: true,
+      },
+      now: () => new Date("2026-04-19T13:30:00.000Z"),
+      createSession: vi.fn(async () => ({
+        ok: true as const,
+        session,
+      })),
+      createMainProfiler: vi.fn(() => ({
+        start: vi.fn(async () => true),
+        stop: vi.fn(async () => true),
+      })),
+      createRendererProfiler: vi.fn(() => ({
+        start: vi.fn(async () => true),
+        stop: vi.fn(async () => true),
+      })),
+      analyzeSession: vi.fn(async () => ({ ok: true })),
+    });
+
+    await profiler.start();
+    profiler.attachWindow(window as never);
+    emitWebContents("did-finish-load");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(app.quit).toHaveBeenCalledTimes(1);
   });
 
   it("stops on the hard timeout and skips analysis when no profiles were captured", async () => {

@@ -988,6 +988,45 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("can list cheap thread summaries without directory enrichment", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async () => ({
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "local" as const,
+        },
+      ],
+    }));
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+
+    const threads = await client.listThreads({ enrichDirectories: false });
+    const primaryThread = threads.find((thread) => thread.id === "thread-2");
+
+    expect(threadDirectoryEnricher).not.toHaveBeenCalled();
+    expect(primaryThread).toMatchObject({
+      id: "thread-2",
+      projectKey: "/Users/huntharo/pwrdrvr/PwrAgent",
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+    });
+
+    await client.close();
+  });
+
   it("derives a title from preview when Codex returns the placeholder name", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

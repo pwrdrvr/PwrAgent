@@ -1,4 +1,11 @@
-import { useCallback, useState, type CSSProperties, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+  type PointerEvent,
+} from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
 import {
   SettingsScreen,
@@ -8,7 +15,7 @@ import {
   useDesktopSettings,
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
-import { ThreadView } from "./features/thread-detail/ThreadView";
+import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
@@ -23,10 +30,6 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
-
-  if (desktopApi?.readSettings && !settings.snapshot && !settings.error) {
-    return <AppStartupScreen />;
-  }
 
   if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
     return (
@@ -51,21 +54,6 @@ export function App() {
   return <DesktopAppShell desktopApi={desktopApi} settings={settings} />;
 }
 
-function AppStartupScreen() {
-  return (
-    <div className="app-shell app-shell--startup">
-      <main className="app-startup" aria-label="Starting PwrAgent">
-        <div className="app-startup__brand" aria-hidden="true">
-          Pwr<span>Agent</span>
-        </div>
-        <p className="app-startup__status" role="status">
-          Loading PwrAgent...
-        </p>
-      </main>
-    </div>
-  );
-}
-
 function DesktopAppShell(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
@@ -80,6 +68,9 @@ function DesktopAppShell(props: {
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSection | undefined
   >(undefined);
+  const [threadViewReady, setThreadViewReady] = useState(false);
+  const [ThreadViewComponent, setThreadViewComponent] =
+    useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
   // Spawning / focusing the Messaging Activity window is fire-and-forget
   // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
@@ -91,8 +82,8 @@ function DesktopAppShell(props: {
   const settings = props.settings;
   const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
-  const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
+  const backendSummaries = useBackendSummaries(desktopApi);
   const pullRequests = usePullRequestRefresh({
     desktopApi,
     onRefreshNavigation: navigation.refresh,
@@ -106,15 +97,164 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });
+  useEffect(() => {
+    if (threadViewReady || mainView !== "thread" || navigation.loading) {
+      return;
+    }
+
+    let timeoutId: number | undefined;
+    let secondFrameId: number | undefined;
+    const firstFrameId = window.requestAnimationFrame(() => {
+      secondFrameId = window.requestAnimationFrame(() => {
+        timeoutId = window.setTimeout(() => {
+          setThreadViewReady(true);
+        }, 0);
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrameId);
+      if (secondFrameId !== undefined) {
+        window.cancelAnimationFrame(secondFrameId);
+      }
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [mainView, navigation.loading, threadViewReady]);
+  useEffect(() => {
+    if (!threadViewReady || ThreadViewComponent) {
+      return;
+    }
+
+    let cancelled = false;
+    void import("./features/thread-detail/ThreadView").then((module) => {
+      if (!cancelled) {
+        setThreadViewComponent(() => module.ThreadView);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ThreadViewComponent, threadViewReady]);
+  const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
-    thread: navigation.selectedThread,
+    thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
   const skills = useThreadSkills({
     desktopApi,
     launchpad: navigation.selectedLaunchpad,
-    thread: navigation.selectedThread,
+    thread: loadThreadDetail ? navigation.selectedThread : undefined,
   });
+  const threadViewProps = {
+    activeTurnId: session.activeTurnId,
+    activeTurnStartedAt: session.activeTurnStartedAt,
+    addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+    addOptimisticUserMessage: session.addOptimisticUserMessage,
+    backendError: backendSummaries.error,
+    backends: backendSummaries.backends,
+    applications: settings.snapshot?.applications,
+    archiveThreadError: navigation.archiveThreadError,
+    clearPendingRequest: session.clearPendingRequest,
+    composerDisabled:
+      !navigation.selectedThread ||
+      !backendSummaries.backends.some(
+        (backend) =>
+          backend.kind === navigation.selectedThread?.source &&
+          backend.available
+      ),
+    composerImplementation: settings.composerImplementation,
+    composerDraftStore,
+    desktopApi,
+    launchpadError: navigation.launchpadError,
+    loading: session.loading,
+    loadingMore: session.loadingMore,
+    messageCount: session.messages.length,
+    contextWindow: session.contextWindow,
+    pendingAssistantMessage: session.pendingAssistantMessage,
+    pendingMcpInteraction: session.pendingMcpInteraction,
+    pendingRequest: session.pendingRequest,
+    pendingUserInput: session.pendingUserInput,
+    pendingStatusText: session.pendingStatusText,
+    platform: desktopApi?.platform,
+    selectedDirectory: navigation.selectedDirectory,
+    selectedLaunchpad: navigation.selectedLaunchpad,
+    selectedThread: navigation.selectedThread,
+    suppressBranchDriftDialog: mainView === "settings",
+    directories: navigation.directories,
+    fullAccessRiskWarningDismissed:
+      settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    pickDirectoryError: navigation.pickDirectoryError,
+    pickingDirectory: navigation.pickingDirectory,
+    onSelectDirectoryFromPicker: (directory) => {
+      void navigation.openDirectoryLaunchpad(directory);
+    },
+    onPickAndRegisterDirectory: () => {
+      void navigation.pickAndRegisterDirectory();
+    },
+    onClearPickDirectoryError: navigation.clearPickDirectoryError,
+    setExecutionModeError: navigation.setThreadExecutionModeError,
+    setThreadModelSettingsError: navigation.setThreadModelSettingsError,
+    skillError: skills.error,
+    skillLoading: skills.loading,
+    skills: skills.skills,
+    transcriptEntries: session.entries,
+    transcriptError: session.error,
+    transcriptPagination: session.response?.replay.pagination,
+    updatingExecutionMode: navigation.updatingThreadExecutionMode,
+    worktreeArchiveError: navigation.worktreeArchiveError,
+    onActiveTurnIdChange: session.setActiveTurnId,
+    onArchiveThread: navigation.archiveThread,
+    onArchiveWorktree: navigation.archiveWorktree,
+    onEnsureSkillsLoaded: skills.ensureLoaded,
+    onDismissFullAccessRiskWarning: async () => {
+      const saved = await settings.writeConfig({
+        experimental: {
+          fullAccessRiskWarningDismissed: true,
+        },
+      });
+      if (!saved) {
+        throw new Error("Could not save the Full Access warning preference.");
+      }
+    },
+    onOpenMessagingActivity: openMessagingActivityWindow,
+    onHandoffThreadWorkspace: navigation.selectedThread
+      ? async (request) =>
+          await navigation.handoffThreadWorkspace(
+            navigation.selectedThread!,
+            request
+          )
+      : undefined,
+    onLoadOlder: session.loadOlder,
+    onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
+    onMaterializeLaunchpad: navigation.materializeDirectoryLaunchpad,
+    onPendingStatusChange: session.setPendingStatusText,
+    onRefreshNavigation: navigation.refresh,
+    onSetExecutionMode: navigation.selectedThread
+      ? async (executionMode) =>
+          await navigation.setThreadExecutionMode(
+            navigation.selectedThread!,
+            executionMode
+          )
+      : undefined,
+    onCancelExecutionModeQueue: navigation.selectedThread
+      ? async () =>
+          await navigation.cancelThreadExecutionModeQueue(navigation.selectedThread!)
+      : undefined,
+    onSetThreadModelSettings: navigation.selectedThread
+      ? async (patch) =>
+          await navigation.setThreadModelSettings(navigation.selectedThread!, patch)
+      : undefined,
+    onRestoreWorktree: navigation.restoreWorktree,
+    onTranscriptViewportChange: session.setViewport,
+    onUpdateLaunchpad: navigation.updateDirectoryLaunchpad,
+    onUpdatePendingMcpInteraction: session.updatePendingMcpInteraction,
+    onUpdatePendingUserInput: session.updatePendingUserInput,
+    removeOptimisticMessage: session.removeOptimisticMessage,
+    transcriptViewport: session.viewport,
+  } satisfies ThreadViewProps;
 
   const resizeSidebar = (nextWidth: number): void => {
     setSidebarWidth(Math.min(560, Math.max(280, nextWidth)));
@@ -196,129 +336,7 @@ function DesktopAppShell(props: {
       />
 
       <main className="app-main">
-        <ThreadView
-          activeTurnId={session.activeTurnId}
-          activeTurnStartedAt={session.activeTurnStartedAt}
-          addOptimisticReviewEntry={session.addOptimisticReviewEntry}
-          addOptimisticUserMessage={session.addOptimisticUserMessage}
-          backendError={backendSummaries.error}
-          backends={backendSummaries.backends}
-          applications={settings.snapshot?.applications}
-          clearPendingRequest={session.clearPendingRequest}
-          composerDisabled={
-            !navigation.selectedThread ||
-            !backendSummaries.backends.some(
-              (backend) =>
-                backend.kind === navigation.selectedThread?.source &&
-                backend.available
-            )
-          }
-          composerImplementation={settings.composerImplementation}
-          composerDraftStore={composerDraftStore}
-          desktopApi={desktopApi}
-          launchpadError={navigation.launchpadError}
-          loading={session.loading}
-          loadingMore={session.loadingMore}
-          messageCount={session.messages.length}
-          contextWindow={session.contextWindow}
-          pendingAssistantMessage={session.pendingAssistantMessage}
-          pendingMcpInteraction={session.pendingMcpInteraction}
-          pendingRequest={session.pendingRequest}
-          pendingUserInput={session.pendingUserInput}
-          pendingStatusText={session.pendingStatusText}
-          platform={desktopApi?.platform}
-          selectedDirectory={navigation.selectedDirectory}
-          selectedLaunchpad={navigation.selectedLaunchpad}
-          selectedThread={navigation.selectedThread}
-          archiveThreadError={navigation.archiveThreadError}
-          suppressBranchDriftDialog={mainView === "settings"}
-          directories={navigation.directories}
-          fullAccessRiskWarningDismissed={
-            settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ??
-            false
-          }
-          pickDirectoryError={navigation.pickDirectoryError}
-          pickingDirectory={navigation.pickingDirectory}
-          onSelectDirectoryFromPicker={(directory) => {
-            void navigation.openDirectoryLaunchpad(directory);
-          }}
-          onPickAndRegisterDirectory={() => {
-            void navigation.pickAndRegisterDirectory();
-          }}
-          onClearPickDirectoryError={navigation.clearPickDirectoryError}
-          setExecutionModeError={navigation.setThreadExecutionModeError}
-          setThreadModelSettingsError={navigation.setThreadModelSettingsError}
-          skillError={skills.error}
-          skillLoading={skills.loading}
-          skills={skills.skills}
-          transcriptEntries={session.entries}
-          transcriptError={session.error}
-          transcriptPagination={session.response?.replay.pagination}
-          updatingExecutionMode={navigation.updatingThreadExecutionMode}
-          worktreeArchiveError={navigation.worktreeArchiveError}
-          onActiveTurnIdChange={session.setActiveTurnId}
-          onArchiveThread={navigation.archiveThread}
-          onArchiveWorktree={navigation.archiveWorktree}
-          onEnsureSkillsLoaded={skills.ensureLoaded}
-          onDismissFullAccessRiskWarning={async () => {
-            const saved = await settings.writeConfig({
-              experimental: {
-                fullAccessRiskWarningDismissed: true,
-              },
-            });
-            if (!saved) {
-              throw new Error("Could not save the Full Access warning preference.");
-            }
-          }}
-          onOpenMessagingActivity={openMessagingActivityWindow}
-          onHandoffThreadWorkspace={
-            navigation.selectedThread
-              ? async (request) =>
-                  await navigation.handoffThreadWorkspace(
-                    navigation.selectedThread!,
-                    request
-                  )
-              : undefined
-          }
-          onLoadOlder={session.loadOlder}
-          onLiveTranscriptEntry={session.upsertLiveTranscriptEntry}
-          onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
-          onPendingStatusChange={session.setPendingStatusText}
-          onRefreshNavigation={navigation.refresh}
-          onSetExecutionMode={
-            navigation.selectedThread
-              ? async (executionMode) =>
-                  await navigation.setThreadExecutionMode(
-                    navigation.selectedThread!,
-                    executionMode
-                  )
-              : undefined
-          }
-          onCancelExecutionModeQueue={
-            navigation.selectedThread
-              ? async () =>
-                  await navigation.cancelThreadExecutionModeQueue(
-                    navigation.selectedThread!
-                  )
-              : undefined
-          }
-          onSetThreadModelSettings={
-            navigation.selectedThread
-              ? async (patch) =>
-                  await navigation.setThreadModelSettings(
-                    navigation.selectedThread!,
-                    patch
-                  )
-              : undefined
-          }
-          onRestoreWorktree={navigation.restoreWorktree}
-          onTranscriptViewportChange={session.setViewport}
-          onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
-          onUpdatePendingMcpInteraction={session.updatePendingMcpInteraction}
-          onUpdatePendingUserInput={session.updatePendingUserInput}
-          removeOptimisticMessage={session.removeOptimisticMessage}
-          transcriptViewport={session.viewport}
-        />
+        {ThreadViewComponent ? <ThreadViewComponent {...threadViewProps} /> : null}
       </main>
 
       {mainView === "settings" ? (

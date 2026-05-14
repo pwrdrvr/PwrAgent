@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GitDirectoryService,
   computeWorktreePath,
@@ -185,6 +185,63 @@ describe("GitDirectoryService", () => {
       expect.arrayContaining(["main", "release", "older"]),
     );
     expect(status?.handoffBranches).toEqual(["recent", "older"]);
+  });
+
+  it("streams directory status lookups with bounded concurrency", async () => {
+    const service = new GitDirectoryService({
+      statusConcurrency: 2,
+      statusMaxUnread: 2,
+    });
+    let active = 0;
+    let maxActive = 0;
+    vi.spyOn(service, "readDirectoryStatus").mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return {
+        currentBranch: "main",
+        syncState: "in-sync",
+      };
+    });
+
+    const results = [];
+    for await (const entry of service.readDirectoryStatusEntries([
+      {
+        key: "directory:/repo/one",
+        kind: "directory",
+        label: "one",
+        path: "/repo/one",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      },
+      {
+        key: "directory:/repo/two",
+        kind: "directory",
+        label: "two",
+        path: "/repo/two",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      },
+      {
+        key: "directory:/repo/three",
+        kind: "directory",
+        label: "three",
+        path: "/repo/three",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      },
+    ])) {
+      results.push(entry);
+    }
+
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(results).toHaveLength(3);
+    expect(results.map((entry) => entry.directoryKey).sort()).toEqual([
+      "directory:/repo/one",
+      "directory:/repo/three",
+      "directory:/repo/two",
+    ]);
   });
 
   it("creates a detached in-repo worktree at <hash>/<project-folder> from the selected base branch", async () => {

@@ -8,6 +8,7 @@ import type {
   ArchiveThreadCleanupResult,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
+  NavigationDirectoryGitStatusUpdatedNotification,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -62,6 +63,19 @@ function sortNavigationDirectories(
   directories: NavigationSnapshot["directories"]
 ): NavigationSnapshot["directories"] {
   return [...directories].sort(compareNavigationDirectoriesByLabel);
+}
+
+function directoryKeysForThread(
+  directories: NavigationSnapshot["directories"],
+  threadKey?: string,
+): string[] {
+  if (!threadKey) {
+    return [];
+  }
+
+  return directories
+    .filter((directory) => directory.path && directory.threadKeys.includes(threadKey))
+    .map((directory) => directory.key);
 }
 
 function formatArchiveCleanupFailure(
@@ -345,8 +359,20 @@ function reconcileNavigationSnapshot(
       thread,
     ])
   );
+  const previousByDirectoryKey = new Map(
+    previous.directories.map((directory) => [directory.key, directory])
+  );
   return {
     ...next,
+    directories: next.directories.map((directory) => {
+      if (Object.prototype.hasOwnProperty.call(directory, "gitStatus")) {
+        return directory;
+      }
+      const previousDirectory = previousByDirectoryKey.get(directory.key);
+      return previousDirectory?.gitStatus
+        ? { ...directory, gitStatus: previousDirectory.gitStatus }
+        : directory;
+    }),
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id)
@@ -356,6 +382,36 @@ function reconcileNavigationSnapshot(
         : thread;
     }),
   };
+}
+
+function applyDirectoryGitStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: NavigationDirectoryGitStatusUpdatedNotification["params"],
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (JSON.stringify(directory.gitStatus ?? null) === JSON.stringify(params.gitStatus)) {
+      return directory;
+    }
+
+    changed = true;
+    const next = { ...directory };
+    if (params.gitStatus) {
+      next.gitStatus = params.gitStatus;
+    } else {
+      delete next.gitStatus;
+    }
+    return next;
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
 }
 
 function updateThreadReactionsInSnapshot(
@@ -1498,7 +1554,17 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     }
 
     return desktopApi.onAgentEvent((event) => {
-      const method = event.notification.method;
+      const method = event.notification.method as string;
+      if (method === "navigation/directoryGitStatus/updated") {
+        const params = event.notification
+          .params as NavigationDirectoryGitStatusUpdatedNotification["params"];
+        setState((current) => ({
+          ...current,
+          response: applyDirectoryGitStatusUpdate(current.response, params),
+        }));
+        return;
+      }
+
       if (method === "thread/name/updated") {
         const { threadId, threadName } = event.notification.params as {
           threadId: string;
@@ -1854,7 +1920,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       directory.threadKeys.includes(selectedThreadKey)
     );
   }, [directories, selectedItemKey, selectedThreadKey]);
-
   const selectedLaunchpad = useMemo(() => {
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (!launchpadDirectoryKey) {
@@ -1927,9 +1992,29 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     };
   }, [markThreadSeen, pendingSeenThreadKey, retainedUnreadThread, selectedThread]);
 
+  const refreshThreadDirectoryGitStatuses = useCallback(
+    (threadKey: string): void => {
+      if (!desktopApi?.refreshDirectoryGitStatuses) {
+        return;
+      }
+
+      const directoryKeys = directoryKeysForThread(directories, threadKey);
+      if (directoryKeys.length === 0) {
+        return;
+      }
+
+      void desktopApi.refreshDirectoryGitStatuses({
+        directoryKeys,
+        force: true,
+      });
+    },
+    [desktopApi?.refreshDirectoryGitStatuses, directories]
+  );
+
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     releaseRetainedUnreadThread(threadKey);
+    refreshThreadDirectoryGitStatuses(threadKey);
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
     setArchiveThreadError(undefined);
@@ -1940,7 +2025,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
       setRetainedUnreadThread(thread);
     }
-  }, [releaseRetainedUnreadThread]);
+  }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
 
   const createThread = useCallback(
     async (

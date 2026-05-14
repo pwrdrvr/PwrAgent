@@ -90,6 +90,7 @@ describe("startup CPU profiling session", () => {
       config: {
         postLoadDurationMs: 5000,
         hardTimeoutMs: 15000,
+        quitOnComplete: false,
       },
       versions: {
         appVersion: "0.1.0",
@@ -217,6 +218,7 @@ describe("startup CPU profiling session", () => {
         PWRAGENT_STARTUP_CPU_PROFILING: "1",
         PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS: "8000",
         PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS: "25000",
+        PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE: "1",
       },
       repoRoot: workspace.path,
     });
@@ -225,6 +227,7 @@ describe("startup CPU profiling session", () => {
       enabled: true,
       postLoadDurationMs: 8000,
       hardTimeoutMs: 25000,
+      quitOnComplete: true,
     });
   });
 

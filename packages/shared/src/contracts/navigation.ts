@@ -225,6 +225,24 @@ export type NavigationDirectorySummary = {
   launchpad?: NavigationLaunchpadDraft;
 };
 
+export type NavigationDirectoryGitStatusUpdatedNotification = {
+  method: "navigation/directoryGitStatus/updated";
+  params: {
+    directoryKey: string;
+    gitStatus: NavigationDirectoryGitStatus | null;
+    fetchedAt: number;
+  };
+};
+
+export type RefreshDirectoryGitStatusesRequest = {
+  directoryKeys: string[];
+  force?: boolean;
+};
+
+export type RefreshDirectoryGitStatusesResponse = {
+  scheduledCount: number;
+};
+
 export function buildThreadIdentityKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
