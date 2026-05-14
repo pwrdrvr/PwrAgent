@@ -2109,6 +2109,70 @@ command = '''printf action-ran > ${outputPath}'''
     }
   });
 
+  it("persists failed existing-thread environment actions before rejecting", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-fail-"));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: path.join(root, "missing"),
+            setupEnabled: false,
+            actions: [
+              {
+                id: "dev-messaging",
+                name: "Dev - Messaging",
+                command: "pnpm dev",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "dev-messaging",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          actionId: "dev-messaging",
+          actionName: "Dev - Messaging",
+          actionCommand: "pnpm dev",
+          actionStatus: "failed",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("captures Codex environment setup output in the thread replay", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
     const environmentsDir = path.join(root, ".codex", "environments");

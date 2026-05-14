@@ -219,7 +219,11 @@ export async function startLocalCodexEnvironmentAction(params: {
     nextRuntime.actionStatus = "started";
   } catch (error) {
     nextRuntime.actionStatus = "failed";
-    throw error;
+    throw new CodexEnvironmentStartupError(
+      error instanceof Error ? error.message : String(error),
+      "action",
+      nextRuntime,
+    );
   }
 
   return nextRuntime;
@@ -239,7 +243,7 @@ function runShellCommand(params: {
   output?: string;
   pid?: number;
 }> {
-  const shell = process.env.SHELL?.trim() || "/bin/sh";
+  const shell = params.env?.SHELL?.trim() || process.env.SHELL?.trim() || "/bin/sh";
   const processId = `pwragent-env-${randomUUID()}`;
   const startedAt = Date.now();
   environmentRuntimeLog.info("codex-environment-command-start", {

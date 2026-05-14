@@ -3348,11 +3348,27 @@ export class DesktopBackendRegistry {
       runtime,
       request.actionId,
     );
-    const nextRuntime = await startLocalCodexEnvironmentAction({
-      actionId: request.actionId,
-      env: this.codexEnvironmentCommandEnv,
-      runtime: runtimeForAction,
-    });
+    let nextRuntime: CodexThreadEnvironmentRuntime;
+    try {
+      nextRuntime = await startLocalCodexEnvironmentAction({
+        actionId: request.actionId,
+        env: this.codexEnvironmentCommandEnv,
+        runtime: runtimeForAction,
+      });
+    } catch (error) {
+      if (
+        error instanceof CodexEnvironmentStartupError &&
+        error.phase === "action"
+      ) {
+        await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: error.runtime,
+        });
+        this.invalidateThreadListCache(request.backend);
+      }
+      throw error;
+    }
     await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
       backend: request.backend,
       threadId: request.threadId,
