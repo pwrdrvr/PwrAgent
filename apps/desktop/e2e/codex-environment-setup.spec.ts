@@ -5,9 +5,12 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
-async function createCodexEnvironmentSetupFixture(): Promise<{
+async function createCodexEnvironmentSetupFixture(params?: {
+  includeExistingThread?: boolean;
+}): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
+  repoDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-setup-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
@@ -43,6 +46,27 @@ script = "printf setup-output && sleep 2"
   );
 
   const fixturePath = path.join(rootDir, "codex-environment-setup.fixture.json");
+  const initialThreads =
+    params?.includeExistingThread === false
+      ? []
+      : [
+          {
+            id: "thread-existing",
+            title: "Existing directory thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [
+              {
+                id: "fixture-repo",
+                label: "FixtureRepo",
+                path: repoDir,
+                kind: "local",
+              },
+            ],
+            updatedAt: 1_000,
+          },
+        ];
   await writeFile(
     fixturePath,
     JSON.stringify(
@@ -69,24 +93,7 @@ script = "printf setup-output && sleep 2"
             id: "thread-list-1",
             kind: "response",
             method: "thread/list",
-            result: [
-              {
-                id: "thread-existing",
-                title: "Existing directory thread",
-                titleSource: "explicit",
-                source: "codex",
-                executionMode: "default",
-                linkedDirectories: [
-                  {
-                    id: "fixture-repo",
-                    label: "FixtureRepo",
-                    path: repoDir,
-                    kind: "local",
-                  },
-                ],
-                updatedAt: 1_000,
-              },
-            ],
+            result: initialThreads,
           },
           {
             id: "thread-read-1",
@@ -177,6 +184,7 @@ script = "printf setup-output && sleep 2"
   );
 
   return {
+    repoDir,
     fixturePath,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
@@ -238,6 +246,81 @@ test("selected Codex environments run setup and show transcript output", async (
     ).toBeVisible();
   } finally {
     await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad keeps selected Codex environment controls after snapshot reload", async () => {
+  const fixture = await createCodexEnvironmentSetupFixture({
+    includeExistingThread: false,
+  });
+  let firstApp: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  let secondApp: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+  let seededHomeRoot: string | undefined;
+
+  try {
+    const directoryKey = `directory:${fixture.repoDir}`;
+    firstApp = await launchElectronApp({
+      fixturePath: fixture.fixturePath,
+    });
+    seededHomeRoot = firstApp.homeRoot;
+
+    await firstApp.window.evaluate(
+      async ({ directoryKey, repoDir }) => {
+        const desktopApi = (window as any).pwragent;
+        await desktopApi.ensureDirectoryLaunchpad({
+          directoryKey,
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          preferredBackend: "codex",
+          currentBranch: "main",
+        });
+        await desktopApi.updateDirectoryLaunchpad({
+          directoryKey,
+          patch: {
+            codexEnvironmentId: "environment",
+            codexEnvironmentExecutionTarget: "local",
+            codexEnvironmentSetupEnabled: true,
+            workMode: "worktree",
+          },
+          stickySettingsChanged: true,
+        });
+      },
+      { directoryKey, repoDir: fixture.repoDir },
+    );
+
+    await firstApp.electronApp.close();
+    firstApp = undefined;
+
+    secondApp = await launchElectronApp({
+      fixturePath: fixture.fixturePath,
+      homeRoot: seededHomeRoot,
+    });
+    seededHomeRoot = undefined;
+
+    const settings = secondApp.window.getByLabel("New thread settings");
+    await expect(
+      secondApp.window.getByRole("textbox", { name: "New thread" }),
+    ).toBeVisible();
+    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute(
+      "data-value",
+      "worktree",
+    );
+    await expect(settings.getByLabel("Codex environment")).toContainText(
+      "Fixture Env",
+    );
+    await expect(settings.getByLabel("Run setup")).toBeChecked();
+  } finally {
+    if (secondApp) {
+      await secondApp.close();
+    }
+    if (firstApp) {
+      await firstApp.close();
+    }
+    if (seededHomeRoot) {
+      await rm(seededHomeRoot, { recursive: true, force: true });
+    }
     await fixture.cleanup();
   }
 });

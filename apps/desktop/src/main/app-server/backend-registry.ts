@@ -115,7 +115,10 @@ import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
 } from "./backend-model-catalog";
-import { listCodexEnvironmentOptions } from "./codex-environment-config";
+import {
+  listCodexEnvironmentOptions,
+  withCodexEnvironmentOptions,
+} from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
   CodexEnvironmentStartupError,
@@ -938,42 +941,6 @@ function defaultLaunchpadWorkMode(
   return request.directoryKind === "directory" && request.directoryPath
     ? defaults.workMode ?? "local"
     : "local";
-}
-
-function withCodexEnvironmentOptions(
-  launchpad: NavigationLaunchpadDraft,
-  options: CodexEnvironmentOption[],
-): NavigationLaunchpadDraft {
-  if (launchpad.backend !== "codex") {
-    return {
-      ...launchpad,
-      codexEnvironmentOptions: [],
-    };
-  }
-
-  if (options.length === 0) {
-    return {
-      ...launchpad,
-      codexEnvironmentId: undefined,
-      codexEnvironmentActionId: undefined,
-      codexEnvironmentOptions: [],
-    };
-  }
-
-  const selectedEnvironment = options.find(
-    (environment) => environment.id === launchpad.codexEnvironmentId,
-  );
-  return {
-    ...launchpad,
-    codexEnvironmentId: selectedEnvironment?.id,
-    codexEnvironmentExecutionTarget:
-      launchpad.codexEnvironmentExecutionTarget ?? "local",
-    codexEnvironmentSetupEnabled:
-      launchpad.codexEnvironmentSetupEnabled ??
-      Boolean(selectedEnvironment?.setupScript),
-    codexEnvironmentActionId: undefined,
-    codexEnvironmentOptions: options,
-  };
 }
 
 function resolveCodexEnvironmentSelection(
