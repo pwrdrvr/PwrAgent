@@ -75,6 +75,11 @@ export default defineConfig(({ command }) => {
     },
     renderer: {
       plugins: [react()],
+      optimizeDeps: {
+        esbuildOptions: {
+          minify: true,
+        },
+      },
       resolve: {
         alias: {
           "@renderer": resolve(__dirname, "src/renderer/src")
