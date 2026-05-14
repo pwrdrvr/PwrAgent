@@ -161,6 +161,7 @@ export type DesktopCodexAuthProfileCandidate = {
   name: string;
   displayName: string;
   codexHome: string;
+  accountEmail?: string;
   source: DesktopCodexAuthProfileSource;
   exists: boolean;
   selected: boolean;
