@@ -19,6 +19,8 @@ export type ProfilesRegistry = {
   profiles: ProfileEntry[];
 };
 
+let cachedProcessActiveProfileName: string | undefined;
+
 export function isValidProfileName(name: string): boolean {
   return PROFILE_NAME_REGEX.test(name) && !RESERVED_NAMES.has(name);
 }
@@ -35,6 +37,23 @@ export function resolvePwragentRoot(options?: {
 }
 
 export function resolveActiveProfileName(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  cliProfile?: string;
+  argv?: readonly string[];
+}): string {
+  if (!options) {
+    cachedProcessActiveProfileName ??= resolveActiveProfileNameUncached();
+    return cachedProcessActiveProfileName;
+  }
+  return resolveActiveProfileNameUncached(options);
+}
+
+export function resetCachedActiveProfileNameForTests(): void {
+  cachedProcessActiveProfileName = undefined;
+}
+
+function resolveActiveProfileNameUncached(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   cliProfile?: string;

@@ -76,4 +76,18 @@ describe("profile IPC helpers", () => {
         ?.default,
     ).toBe(true);
   });
+
+  it("replaces inherited profile launch arguments when opening another profile", async () => {
+    const { replaceProfileLaunchArgs } = await import("../ipc/profiles");
+
+    expect(
+      replaceProfileLaunchArgs(
+        ["/repo/apps/desktop", "--profile", "dev", "--inspect"],
+        "work",
+      ),
+    ).toEqual(["/repo/apps/desktop", "--inspect", "--profile", "work"]);
+    expect(
+      replaceProfileLaunchArgs(["/repo/apps/desktop", "--profile=dev"], "work"),
+    ).toEqual(["/repo/apps/desktop", "--profile", "work"]);
+  });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_ENV,
@@ -9,6 +9,7 @@ import {
   ensureNamedProfileExists,
   readProfileArg,
   readProfilesRegistry,
+  resetCachedActiveProfileNameForTests,
   resolveActiveProfileName,
   resolveDefaultProfileName,
   setDefaultProfileName,
@@ -17,6 +18,8 @@ import {
 const roots: string[] = [];
 
 afterEach(() => {
+  resetCachedActiveProfileNameForTests();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -50,6 +53,22 @@ describe("PwrAgent profiles", () => {
         },
       }),
     ).toBe("work");
+  });
+
+  it("keeps the process active profile stable after the startup default changes", () => {
+    const { env, root } = createRoot();
+    ensureNamedProfileExists("dev", { env });
+    ensureNamedProfileExists("work", { env });
+    setDefaultProfileName("dev", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "");
+
+    expect(resolveActiveProfileName()).toBe("dev");
+
+    setDefaultProfileName("work", { env });
+
+    expect(resolveDefaultProfileName({ env })).toBe("work");
+    expect(resolveActiveProfileName()).toBe("dev");
   });
 
   it("reads --profile arguments from argv", () => {

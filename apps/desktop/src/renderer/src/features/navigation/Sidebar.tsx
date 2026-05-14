@@ -736,7 +736,7 @@ function formatProfileIdentityTooltip(params: {
   if (limits.length) {
     lines.push("Limits:");
     for (const limit of limits.slice(0, 3)) {
-      lines.push(`- ${formatRateLimitTooltipLine(limit)}`);
+      lines.push(formatRateLimitTooltipLine(limit));
     }
   }
   lines.push("Click to open profile menu");
@@ -746,18 +746,49 @@ function formatProfileIdentityTooltip(params: {
 function formatRateLimitTooltipLine(
   limit: NonNullable<BackendSummary["rateLimits"]>[number],
 ): string {
-  const pieces = [limit.name];
+  const remainingText = formatRateLimitRemaining(limit);
+  const resetText = formatRateLimitReset(limit.resetAt);
+  const suffix = resetText ? `, resets ${resetText}` : "";
+  return `${limit.name}: ${remainingText}${suffix}`;
+}
+
+function formatRateLimitRemaining(
+  limit: NonNullable<BackendSummary["rateLimits"]>[number],
+): string {
+  if (typeof limit.usedPercent === "number") {
+    return `${Math.max(0, Math.round(100 - limit.usedPercent))}% left`;
+  }
   if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
-    pieces.push(`${limit.remaining}/${limit.limit} remaining`);
-  } else if (typeof limit.remaining === "number") {
-    pieces.push(`${limit.remaining} remaining`);
-  } else if (typeof limit.usedPercent === "number") {
-    pieces.push(`${limit.usedPercent}% used`);
+    if (limit.limit === 100) {
+      return `${Math.max(0, Math.round(limit.remaining))}% left`;
+    }
+    return `${limit.remaining}/${limit.limit} left`;
   }
-  if (limit.resetAt) {
-    pieces.push(`resets ${new Date(limit.resetAt).toLocaleString()}`);
+  if (typeof limit.remaining === "number") {
+    return `${Math.max(0, Math.round(limit.remaining))}% left`;
   }
-  return pieces.join(" · ");
+  return "unavailable";
+}
+
+function formatRateLimitReset(resetAt: number | undefined): string | undefined {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
+    return undefined;
+  }
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const now = new Date();
+  if (now.toDateString() === date.toDateString()) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
 }
 
 function formatPlatformLabel(platform: string): string {

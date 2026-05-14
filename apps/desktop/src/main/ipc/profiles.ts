@@ -111,7 +111,10 @@ export function openDesktopPwrAgentProfile(
     },
   });
 
-  const args = process.defaultApp ? process.argv.slice(1) : [];
+  const args = replaceProfileLaunchArgs(
+    process.defaultApp ? process.argv.slice(1) : [],
+    profile,
+  );
   const child = spawn(process.execPath, args, {
     detached: true,
     env: {
@@ -123,6 +126,26 @@ export function openDesktopPwrAgentProfile(
   child.unref();
 
   return { opened: true, profile };
+}
+
+export function replaceProfileLaunchArgs(
+  args: readonly string[],
+  profile: string,
+): string[] {
+  const nextArgs: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--profile") {
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--profile=")) {
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+  nextArgs.push("--profile", profile);
+  return nextArgs;
 }
 
 export function createDesktopPwrAgentProfile(

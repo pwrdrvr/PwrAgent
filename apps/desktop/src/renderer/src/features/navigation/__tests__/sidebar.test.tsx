@@ -257,7 +257,7 @@ describe("Sidebar", () => {
     expect(tooltip).toHaveTextContent("Codex account: work@example.com");
     expect(tooltip).toHaveTextContent("Plan: pro");
     expect(tooltip).toHaveTextContent("5h limit");
-    expect(tooltip).toHaveTextContent("85/100 remaining");
+    expect(tooltip).toHaveTextContent("85% left");
   });
 
   it("keeps recents to a single worktree indicator on the directory chip", () => {

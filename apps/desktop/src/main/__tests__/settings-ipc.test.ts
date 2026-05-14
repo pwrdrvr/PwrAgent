@@ -449,6 +449,61 @@ describe("settings ipc", () => {
     disposeSettingsIpcHandlers();
   });
 
+  it("keeps the newest Codex login process tracked when restarting login", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+            },
+          },
+        },
+      })),
+    } as unknown as DesktopSettingsService;
+    const loginUrl =
+      "https://auth.openai.com/oauth/authorize?client_id=codex&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";
+    const children: Array<ReturnType<typeof createMockSpawnChild>> = [];
+    childProcessMocks.spawn.mockImplementation(() => {
+      const child = createMockSpawnChild((spawnedChild) => {
+        queueMicrotask(() => {
+          spawnedChild.stdout.emit("data", `If your browser did not open:\n${loginUrl}\n`);
+        });
+      });
+      child.pid = 321 + children.length;
+      children.push(child);
+      return child;
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+      {},
+      { profile: "work" },
+    );
+    await handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+      {},
+      { profile: "work" },
+    );
+    expect(children[0]?.kill).toHaveBeenCalledOnce();
+
+    children[0]?.emit("close", 0);
+    disposeSettingsIpcHandlers();
+
+    expect(children[1]?.kill).toHaveBeenCalledOnce();
+  });
+
   it("treats Codex login exit without a link as authenticated when status passes", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);

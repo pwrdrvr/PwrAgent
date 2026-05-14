@@ -236,7 +236,9 @@ async function startCodexProfileLoginProcess(params: {
       }
     });
     child.on("close", (code) => {
-      activeCodexLoginProcesses.delete(params.profile);
+      if (activeCodexLoginProcesses.get(params.profile) === child) {
+        activeCodexLoginProcesses.delete(params.profile);
+      }
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
