@@ -1,7 +1,4 @@
-import type {
-  DesktopMessagingImageProfile,
-  DesktopSettingsSnapshot,
-} from "@pwragent/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -10,42 +7,45 @@ import {
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 
-const IMAGE_PROFILE_OPTIONS: Array<{
+const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   description: string;
   label: string;
-  value: DesktopMessagingImageProfile;
+  value: number;
 }> = [
   {
-    description: "Lowest bandwidth. Images are downscaled aggressively.",
-    label: "Low",
-    value: "low",
+    description:
+      "Caps square images at about 1024 32px patches before model-specific multipliers.",
+    label: "1024 patches",
+    value: 1024,
   },
   {
-    description: "Default. Matches desktop paste behavior.",
-    label: "Medium",
-    value: "medium",
+    description:
+      "Default. Keeps current paste behavior and fits patch-based model budgets.",
+    label: "1536 patches",
+    value: 1536,
   },
   {
-    description: "Higher fidelity with larger uploads.",
-    label: "High",
-    value: "high",
+    description:
+      "Allows roughly a 2048 x 2048 square image before model-specific multipliers.",
+    label: "4096 patches",
+    value: 4096,
   },
   {
-    description: "Preserve the inbound image dimensions.",
-    label: "Actual",
-    value: "actual",
+    description: "Preserves pasted image dimensions before upload.",
+    label: "Actual size",
+    value: 0,
   },
 ];
 
 export function GeneralSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
-  onImageProfileChange: (value: DesktopMessagingImageProfile) => Promise<void>;
+  onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
 }) {
-  const imageProfile = props.snapshot.messaging.attachments.imageProfile;
-  const overridden = imageProfile.source === "env";
-  const activeOption = IMAGE_PROFILE_OPTIONS.find(
-    (option) => option.value === imageProfile.value,
+  const pastedImageMaxPatches =
+    props.snapshot.imageUploads.pastedImageMaxPatches;
+  const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
+    (option) => option.value === pastedImageMaxPatches.value,
   );
 
   return (
@@ -58,39 +58,44 @@ export function GeneralSettings(props: {
 
       <SettingsSection
         eyebrow="General"
-        title="Image uploads"
-        chip={sourceBadge(imageProfile)}
-        chipKind={overridden ? "warn" : "default"}
+        title="Pasted images"
+        chip={sourceBadge(pastedImageMaxPatches)}
       >
         <div className="settings-fields">
           <SettingsField
-            label="Image upload profile"
-            sub="Normalize inbound messaging images before forwarding them to the model."
+            label="Image patch budget"
+            sub="Resize pasted desktop images before upload to control image-token usage."
             help={
-              overridden
-                ? "Overridden by PWRAGENT_MESSAGING_ATTACHMENT_IMAGE_PROFILE; clear the environment variable to edit this from settings."
-                : activeOption?.description
+              <>
+                {activeOption?.description ??
+                  "Custom patch budget for pasted images."}{" "}
+                Patch-based models count 32 x 32 pixel blocks before
+                model-specific multipliers; tile-based models use their own
+                image resizing rules.
+              </>
             }
-            error={imageProfile.error}
-            source={sourceBadge(imageProfile)}
+            error={pastedImageMaxPatches.error}
+            source={sourceBadge(pastedImageMaxPatches)}
             control={
               <div
                 className="settings-segmented"
                 role="radiogroup"
-                aria-label="Image upload profile"
+                aria-label="Pasted image patch budget"
               >
-                {IMAGE_PROFILE_OPTIONS.map((option) => (
+                {PASTED_IMAGE_PATCH_OPTIONS.map((option) => (
                   <button
                     key={option.value}
-                    aria-checked={imageProfile.value === option.value}
+                    aria-checked={pastedImageMaxPatches.value === option.value}
                     className={`settings-segmented__button${
-                      imageProfile.value === option.value ? " is-active" : ""
+                      pastedImageMaxPatches.value === option.value
+                        ? " is-active"
+                        : ""
                     }`}
-                    disabled={props.saving || overridden}
+                    disabled={props.saving}
                     role="radio"
                     type="button"
                     onClick={() => {
-                      void props.onImageProfileChange(option.value);
+                      void props.onPastedImageMaxPatchesChange(option.value);
                     }}
                   >
                     {option.label}

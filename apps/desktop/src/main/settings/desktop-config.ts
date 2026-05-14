@@ -15,6 +15,7 @@ import {
   isDesktopWorktreeStorageLocation,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
+import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
   applyTomlEdits,
@@ -49,6 +50,9 @@ export type DesktopSettingsConfig = {
       enabled?: boolean;
       model?: string;
     };
+  };
+  imageUploads?: {
+    pastedImageMaxPatches?: number;
   };
   messaging?: {
     enabled?: boolean;
@@ -312,6 +316,21 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "diff_condensation", "model"],
       patch.experimental.diffCondensation.model,
     );
+  }
+
+  if (patch.imageUploads?.pastedImageMaxPatches !== undefined) {
+    const pastedImageMaxPatches = patch.imageUploads.pastedImageMaxPatches;
+    if (pastedImageMaxPatches === DEFAULT_PASTED_IMAGE_MAX_PATCHES) {
+      edits.push({
+        op: "delete",
+        path: ["image_uploads", "pasted_image_max_patches"],
+      });
+    } else {
+      set(
+        ["image_uploads", "pasted_image_max_patches"],
+        pastedImageMaxPatches,
+      );
+    }
   }
 
   if (patch.messaging?.inputDebounceMs !== undefined) {
@@ -641,6 +660,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
+  const imageUploads = tables["image_uploads"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -665,6 +685,11 @@ function normalizeDesktopConfig(
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),
       },
+    },
+    imageUploads: {
+      pastedImageMaxPatches: readNumber(
+        imageUploads?.pasted_image_max_patches,
+      ),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
@@ -825,6 +850,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   if (config.experimental && hasDefinedValue(config.experimental)) {
     pruned.experimental = config.experimental;
+  }
+
+  if (config.imageUploads && hasDefinedValue(config.imageUploads)) {
+    pruned.imageUploads = config.imageUploads;
   }
 
   const attachments = config.messaging?.attachments;

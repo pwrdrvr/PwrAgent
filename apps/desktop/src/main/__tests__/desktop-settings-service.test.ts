@@ -36,6 +36,9 @@ describe("DesktopSettingsService", () => {
         "input_debounce_ms = 750",
         'tool_update_mode = "show_more"',
         "",
+        "[image_uploads]",
+        "pasted_image_max_patches = 4096",
+        "",
         "[messaging.attachments]",
         'image_profile = "high"',
         "",
@@ -98,6 +101,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.fullAccessWarning).toEqual({
       value: "always",
+      source: "config",
+    });
+    expect(snapshot.imageUploads.pastedImageMaxPatches).toEqual({
+      value: 4096,
       source: "config",
     });
     expect(snapshot.messaging.attachments.imageProfile).toEqual({
@@ -198,6 +205,49 @@ describe("DesktopSettingsService", () => {
     expect(afterDefault).not.toContain("image_profile");
     expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
       value: "medium",
+      source: "default",
+    });
+  });
+
+  it("defaults the pasted image patch budget and only persists non-default values", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.imageUploads.pastedImageMaxPatches).toEqual({
+      value: 1536,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      imageUploads: {
+        pastedImageMaxPatches: 1024,
+      },
+    });
+
+    const afterCompact = fs.readFileSync(configPath, "utf8");
+    expect(afterCompact).toContain("[image_uploads]");
+    expect(afterCompact).toContain("pasted_image_max_patches = 1024");
+    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+      value: 1024,
+      source: "config",
+    });
+
+    await service.writeConfigPatch({
+      imageUploads: {
+        pastedImageMaxPatches: 1536,
+      },
+    });
+
+    const afterDefault = fs.readFileSync(configPath, "utf8");
+    expect(afterDefault).not.toContain("pasted_image_max_patches");
+    expect((await service.readSettings()).imageUploads.pastedImageMaxPatches).toEqual({
+      value: 1536,
       source: "default",
     });
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   calculateBoundedImageDimensions,
+  calculatePatchBoundedImageDimensions,
   chooseNormalizedImageMimeType,
   normalizeImageFile,
   type ImageNormalizationDependencies,
@@ -8,6 +9,7 @@ import {
 
 function makeDependencies(params: {
   decode?: ImageNormalizationDependencies["decodeImage"];
+  encode?: ImageNormalizationDependencies["encodeCanvas"];
   hasAlpha?: boolean;
   outputBytes?: number[];
 }): ImageNormalizationDependencies {
@@ -26,9 +28,13 @@ function makeDependencies(params: {
         height: 1024,
         draw: vi.fn(),
       })),
-    encodeCanvas: vi.fn(async (_canvas, mimeType) =>
-      new Blob([new Uint8Array(params.outputBytes ?? [1, 2, 3])], { type: mimeType }),
-    ),
+    encodeCanvas:
+      params.encode ??
+      vi.fn(async (_canvas, mimeType) =>
+        new Blob([new Uint8Array(params.outputBytes ?? [1, 2, 3])], {
+          type: mimeType,
+        }),
+      ),
     hasAlpha: vi.fn(() => Boolean(params.hasAlpha)),
     readBlobAsDataUrl: vi.fn(async (blob) => `data:${blob.type};base64,AQID`),
   };
@@ -61,6 +67,23 @@ describe("image normalization", () => {
       width: 1024,
       height: 1536,
     });
+  });
+
+  it("caps images by a patch budget when provided", () => {
+    expect(
+      calculatePatchBoundedImageDimensions({
+        width: 2048,
+        height: 2048,
+        maxPatchCount: 1024,
+      }),
+    ).toEqual({ width: 1024, height: 1024 });
+    expect(
+      calculatePatchBoundedImageDimensions({
+        width: 2048,
+        height: 2048,
+        maxPatchCount: 0,
+      }),
+    ).toEqual({ width: 2048, height: 2048 });
   });
 
   it("does not upscale small images", () => {
@@ -119,6 +142,82 @@ describe("image normalization", () => {
       },
       size: 3,
       width: 1536,
+    });
+  });
+
+  it("passes the pasted image patch budget into normalization", async () => {
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 2048,
+        height: 2048,
+        draw: vi.fn(),
+      })),
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array([1])], "screenshot.png", { type: "image/png" }),
+      { dependencies, maxPatchCount: 1024 },
+    );
+
+    expect(normalized.width).toBe(1024);
+    expect(normalized.height).toBe(1024);
+  });
+
+  it("retries JPEG encoding when a resized output is larger than the source", async () => {
+    const encodeCanvas = vi.fn(async (_canvas, mimeType, quality) => {
+      const size = quality >= 0.85 ? 140 : 90;
+      return new Blob([new Uint8Array(size)], { type: mimeType });
+    });
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 2048,
+        height: 2048,
+        draw: vi.fn(),
+      })),
+      encode: encodeCanvas,
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array(100)], "photo.jpeg", { type: "image/jpeg" }),
+      { dependencies, maxPatchCount: 1024 },
+    );
+
+    expect(normalized.size).toBe(90);
+    expect(encodeCanvas).toHaveBeenCalledWith(
+      expect.anything(),
+      "image/jpeg",
+      expect.closeTo(0.85),
+    );
+    expect(encodeCanvas).toHaveBeenCalledWith(
+      expect.anything(),
+      "image/jpeg",
+      0.84,
+    );
+  });
+
+  it("preserves JPEG bytes when dimensions already fit", async () => {
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 640,
+        height: 480,
+        draw: vi.fn(),
+      })),
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array([1, 2, 3])], "screenshot.jpeg", {
+        type: "image/jpeg",
+      }),
+      { dependencies, maxPatchCount: 1536 },
+    );
+
+    expect(dependencies.encodeCanvas).not.toHaveBeenCalled();
+    expect(normalized).toMatchObject({
+      dataUrl: "data:image/jpeg;base64,AQID",
+      height: 480,
+      mimeType: "image/jpeg",
+      size: 3,
+      width: 640,
     });
   });
 

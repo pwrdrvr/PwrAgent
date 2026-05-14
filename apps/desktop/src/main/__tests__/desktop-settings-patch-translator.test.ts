@@ -20,6 +20,39 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
   });
 });
 
+describe("desktopSettingsPatchToEdits — image uploads", () => {
+  it("writes non-default pasted image patch budgets", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        imageUploads: {
+          pastedImageMaxPatches: 4096,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["image_uploads", "pasted_image_max_patches"],
+        value: 4096,
+      },
+    ]);
+  });
+
+  it("removes the pasted image patch budget when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        imageUploads: {
+          pastedImageMaxPatches: 1536,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["image_uploads", "pasted_image_max_patches"],
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — messaging attachments", () => {
   it("writes non-default image upload profiles", () => {
     expect(

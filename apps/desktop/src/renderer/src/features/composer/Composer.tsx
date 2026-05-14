@@ -98,6 +98,7 @@ type ComposerProps = {
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
+  pastedImageMaxPatches?: number;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -2399,6 +2400,7 @@ export function Composer(props: ComposerProps) {
 
           const normalized = await normalizeImageFile(file, {
             fallback: props.desktopApi?.normalizeImageForUpload,
+            maxPatchCount: props.pastedImageMaxPatches,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
             fileName: file.name || fallbackName,

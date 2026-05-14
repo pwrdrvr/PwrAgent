@@ -793,6 +793,7 @@ export type ThreadViewProps = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  pastedImageMaxPatches?: number;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -1811,6 +1812,7 @@ export function ThreadView(props: ThreadViewProps) {
               disabled={!launchpadBackend?.available}
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
+              pastedImageMaxPatches={props.pastedImageMaxPatches}
               fullAccessRiskWarningDismissed={
                 props.fullAccessRiskWarningDismissed
               }
@@ -1970,6 +1972,7 @@ export function ThreadView(props: ThreadViewProps) {
             pendingUserInputActive={Boolean(
               props.pendingUserInput || props.pendingMcpInteraction
             )}
+            pastedImageMaxPatches={props.pastedImageMaxPatches}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

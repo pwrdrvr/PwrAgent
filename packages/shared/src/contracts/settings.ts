@@ -132,6 +132,10 @@ export type DesktopMessagingAttachmentSettingsSnapshot = {
   maxAttachmentCount: DesktopSettingsValue<number>;
 };
 
+export type DesktopImageUploadSettingsSnapshot = {
+  pastedImageMaxPatches: DesktopSettingsValue<number>;
+};
+
 export type DesktopCodexCandidateSource =
   | "env"
   | "config"
@@ -300,6 +304,7 @@ export type DesktopSettingsSnapshot = {
       model: DesktopSettingsValue<string>;
     };
   };
+  imageUploads: DesktopImageUploadSettingsSnapshot;
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
     allowFullAccessEscalation: DesktopSettingsValue<boolean>;
@@ -405,6 +410,9 @@ export type DesktopSettingsConfigPatch = {
       /** "auto" or a specific model id. Empty string is coerced to "auto". */
       model?: string;
     };
+  };
+  imageUploads?: {
+    pastedImageMaxPatches?: number;
   };
   messaging?: {
     enabled?: boolean;

@@ -223,12 +223,10 @@ function SettingsSectionBody(props: {
       <GeneralSettings
         saving={props.settings.saving}
         snapshot={props.snapshot}
-        onImageProfileChange={async (
-          imageProfile: DesktopMessagingImageProfile,
-        ) => {
+        onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
           await props.settings.writeConfig({
-            messaging: {
-              attachments: { imageProfile },
+            imageUploads: {
+              pastedImageMaxPatches,
             },
           });
         }}
@@ -275,6 +273,15 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             messaging: {
               inputDebounceMs,
+            },
+          });
+        }}
+        onImageProfileChange={async (
+          imageProfile: DesktopMessagingImageProfile,
+        ) => {
+          await props.settings.writeConfig({
+            messaging: {
+              attachments: { imageProfile },
             },
           });
         }}

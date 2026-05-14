@@ -334,8 +334,8 @@ The debounce setting can also be written as `input_debounce_ms` under
 `[messaging]` in the desktop config TOML. Use `0` to disable the pre-start wait
 while keeping active-turn queueing enabled.
 
-The image upload profile is available in Settings under General -> Image
-uploads. Its TOML equivalent is `image_profile` under
+The messaging image upload profile is available in Settings under Messaging ->
+General. Its TOML equivalent is `image_profile` under
 `[messaging.attachments]`; the default `medium` is omitted from the config file
 when saved from Settings.
 

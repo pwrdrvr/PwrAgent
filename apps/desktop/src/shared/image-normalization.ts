@@ -9,6 +9,7 @@ export type ImageUploadQualityProfileSettings = {
 
 export const DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE: ImageUploadQualityProfile =
   "medium";
+export const DEFAULT_PASTED_IMAGE_MAX_PATCHES = 1536;
 
 export const IMAGE_UPLOAD_QUALITY_PROFILES: Record<
   ImageUploadQualityProfile,

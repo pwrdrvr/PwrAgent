@@ -15,6 +15,7 @@ import {
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
+import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import {
   applyDesktopSettingsPatch,
   readDesktopSettingsConfig,
@@ -293,6 +294,11 @@ export class DesktopSettingsService {
             config.experimental?.diffCondensation?.model,
           ),
         },
+      },
+      imageUploads: {
+        pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
+          config.imageUploads?.pastedImageMaxPatches,
+        ),
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
@@ -837,6 +843,19 @@ export class DesktopSettingsService {
       value: configValue ?? "medium",
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
+    };
+  }
+
+  private resolvePastedImageMaxPatches(
+    configValue: number | undefined,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.max(0, Math.floor(configValue))
+        : undefined;
+    return {
+      value: normalized ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
+      source: normalized === undefined ? "default" : "config",
     };
   }
 

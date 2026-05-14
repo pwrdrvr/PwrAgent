@@ -166,6 +166,9 @@ describe("App", () => {
           model: { value: "auto", source: "default" },
         },
       },
+      imageUploads: {
+        pastedImageMaxPatches: { value: 1536, source: "default" },
+      },
       messaging: {
         enabled: { value: true, source: "default" },
         allowFullAccessEscalation: { value: true, source: "default" },
