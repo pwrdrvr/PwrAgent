@@ -192,6 +192,107 @@ script = "printf setup-output && sleep 2"
   };
 }
 
+async function createNoCodexEnvironmentsFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  fixturePath: string;
+}> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-no-env-"));
+  const repoDir = path.join(rootDir, "NoEnvRepo");
+  await mkdir(repoDir, { recursive: true });
+  await writeFile(path.join(repoDir, ".codex"), "not a directory\n", "utf8");
+
+  execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-B", "main"], { cwd: repoDir, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=pwragent-tests@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Seed no-env fixture repo",
+    ],
+    { cwd: repoDir, stdio: "ignore" },
+  );
+
+  const fixturePath = path.join(rootDir, "codex-no-environments.fixture.json");
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "codex-no-environments",
+          threadId: "thread-no-env",
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: {
+                name: "Replay Codex",
+                version: "1.0.0",
+              },
+              methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [
+              {
+                id: "thread-no-env",
+                title: "No environment thread",
+                titleSource: "explicit",
+                source: "codex",
+                executionMode: "default",
+                linkedDirectories: [
+                  {
+                    id: "no-env-repo",
+                    label: "NoEnvRepo",
+                    path: repoDir,
+                    kind: "local",
+                  },
+                ],
+                updatedAt: 1_000,
+              },
+            ],
+          },
+          {
+            id: "thread-read-1",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [],
+              messages: [],
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  return {
+    fixturePath,
+    cleanup: async () => {
+      await rm(rootDir, { recursive: true, force: true });
+    },
+  };
+}
+
 test("selected Codex environments run setup and show transcript output", async () => {
   const fixture = await createCodexEnvironmentSetupFixture();
   const app = await launchElectronApp({
@@ -322,6 +423,32 @@ test("directory launchpad keeps selected Codex environment controls after snapsh
     if (seededHomeRoot) {
       await rm(seededHomeRoot, { recursive: true, force: true });
     }
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad opens without an environment picker when no environments are available", async () => {
+  const fixture = await createNoCodexEnvironmentsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for NoEnvRepo" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "NoEnvRepo" }),
+    ).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
+    await expect(app.window.getByLabel("Codex environment")).toHaveCount(0);
+    await expect(
+      app.window.getByText(/Error invoking remote method|ENOTDIR/),
+    ).toHaveCount(0);
+  } finally {
+    await app.close();
     await fixture.cleanup();
   }
 });

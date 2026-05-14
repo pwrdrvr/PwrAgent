@@ -48,7 +48,8 @@ export async function listCodexEnvironmentOptions(
     }
     entries = await readdir(environmentsDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode === "ENOENT" || errorCode === "ENOTDIR") {
       return [];
     }
     throw error;
