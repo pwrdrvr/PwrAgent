@@ -1528,7 +1528,7 @@ export class MessagingController {
           queueEntryId: started.queueEntryId ?? started.turnId,
           requestedExecutionMode: turnSettings.executionMode ?? "unset",
         });
-        return true;
+        return "queued";
       }
       turnStarted = true;
       this.logger.info?.("messaging turn started", {
