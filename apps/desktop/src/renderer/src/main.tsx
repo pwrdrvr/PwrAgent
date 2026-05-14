@@ -1,14 +1,22 @@
-import React, { type ReactElement } from "react";
+import React, { Suspense, lazy, type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
-import { ChangelogWindow } from "./features/changelog/ChangelogWindow";
-import { LogsWindow } from "./features/logs/LogsWindow";
-import { MessagingActivityWindow } from "./features/messaging-activity/MessagingActivityWindow";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();
+
+const ChangelogWindow = lazy(async () => ({
+  default: (await import("./features/changelog/ChangelogWindow")).ChangelogWindow,
+}));
+const LogsWindow = lazy(async () => ({
+  default: (await import("./features/logs/LogsWindow")).LogsWindow,
+}));
+const MessagingActivityWindow = lazy(async () => ({
+  default: (await import("./features/messaging-activity/MessagingActivityWindow"))
+    .MessagingActivityWindow,
+}));
 
 /**
  * Routes recognized by `chooseRoot` below. The Messaging Activity
@@ -47,6 +55,8 @@ function chooseRoot(): ReactElement {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RendererErrorBoundary>{chooseRoot()}</RendererErrorBoundary>
+    <RendererErrorBoundary>
+      <Suspense fallback={null}>{chooseRoot()}</Suspense>
+    </RendererErrorBoundary>
   </React.StrictMode>,
 );
