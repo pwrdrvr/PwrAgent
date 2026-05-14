@@ -1,9 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type {
-  LinkedDirectorySummary,
-  PrSummary,
-} from "@pwragent/shared";
+import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +11,16 @@ const FALLBACK_DEFAULT_BRANCHES = [
   "develop",
   "trunk",
 ] as const;
+
+type LocalBranchAtHead = {
+  name: string;
+  upstream?: string;
+};
+
+type DefaultBranchInfo = {
+  names: Set<string>;
+  upstreams: Set<string>;
+};
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths
@@ -70,57 +77,124 @@ async function resolvePrLookupBranches(params: {
   branch: string;
   cwd: string;
 }): Promise<string[]> {
+  const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
+
   if (params.branch !== "HEAD") {
-    return [params.branch];
+    return defaultBranchInfo.names.has(params.branch) ? [] : [params.branch];
   }
 
   const branchesAtHead = await readLocalBranchesPointingAtHead(params.cwd);
-  const defaultBranch = await readDefaultBranch(params.cwd);
-  if (defaultBranch && branchesAtHead.includes(defaultBranch)) {
-    return [defaultBranch];
+  if (branchesAtHead.some((branch) => isDefaultBranch(branch, defaultBranchInfo))) {
+    return [];
   }
-  return branchesAtHead.length > 0 ? branchesAtHead : ["HEAD"];
+
+  return uniqueNonEmpty(
+    branchesAtHead
+      .filter((branch) => branch.name !== "HEAD")
+      .map((branch) => branch.name),
+  );
 }
 
-async function readLocalBranchesPointingAtHead(cwd: string): Promise<string[]> {
+function isDefaultBranch(
+  branch: LocalBranchAtHead,
+  defaultBranchInfo: DefaultBranchInfo,
+): boolean {
+  return (
+    defaultBranchInfo.names.has(branch.name) ||
+    Boolean(branch.upstream && defaultBranchInfo.upstreams.has(branch.upstream))
+  );
+}
+
+async function readLocalBranchesPointingAtHead(
+  cwd: string,
+): Promise<LocalBranchAtHead[]> {
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      [
-        "for-each-ref",
-        "--points-at",
-        "HEAD",
-        "--format=%(refname:short)",
-        "refs/heads",
-      ],
-      {
-        cwd,
-        maxBuffer: 64 * 1024,
-        timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
-      },
-    );
-    return uniqueNonEmpty(
-      stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line && line !== "HEAD"),
-    );
+    return await readBranchesPointingAtHead(cwd);
   } catch {
     return [];
   }
 }
 
-async function readDefaultBranch(cwd: string): Promise<string | undefined> {
-  const remoteHead = await readGitLine(cwd, [
-    "symbolic-ref",
-    "refs/remotes/origin/HEAD",
-    "--short",
-  ]);
-  const normalizedRemoteHead = remoteHead?.replace(/^origin\//, "").trim();
-  if (normalizedRemoteHead) {
-    return normalizedRemoteHead;
-  }
+async function readBranchesPointingAtHead(
+  cwd: string,
+): Promise<LocalBranchAtHead[]> {
+  const { stdout } = await execFileAsync(
+    "git",
+    [
+      "for-each-ref",
+      "--points-at",
+      "HEAD",
+      "--format=%(refname:short)%09%(upstream:short)",
+      "refs/heads",
+    ],
+    {
+      cwd,
+      maxBuffer: 64 * 1024,
+      timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+    },
+  );
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name = "", upstream = ""] = line.split("\t");
+      return {
+        name: name.trim(),
+        upstream: upstream.trim() || undefined,
+      };
+    })
+    .filter((branch) => branch.name);
+}
 
+async function readDefaultBranchInfo(cwd: string): Promise<DefaultBranchInfo> {
+  try {
+    const upstreams = await readRemoteDefaultUpstreams(cwd);
+    const names = remoteDefaultBranchNames(upstreams);
+
+    if (names.size === 0) {
+      const fallbackDefaultBranch = await readFallbackDefaultBranchName(cwd);
+      if (fallbackDefaultBranch) {
+        names.add(fallbackDefaultBranch);
+      }
+    }
+
+    return { names, upstreams };
+  } catch {
+    return { names: new Set(), upstreams: new Set() };
+  }
+}
+
+async function readRemoteDefaultUpstreams(cwd: string): Promise<Set<string>> {
+  const { stdout } = await execFileAsync("git", ["remote"], {
+    cwd,
+    maxBuffer: 64 * 1024,
+    timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
+  });
+  const remotes = uniqueNonEmpty(stdout.split(/\r?\n/));
+  const upstreams = await Promise.all(
+    remotes.map(async (remote) => {
+      const remoteHead = await readGitLine(cwd, [
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        `refs/remotes/${remote}/HEAD`,
+      ]);
+      return remoteHead ?? "";
+    }),
+  );
+  return new Set(uniqueNonEmpty(upstreams));
+}
+
+function remoteDefaultBranchNames(defaultUpstreams: Set<string>): Set<string> {
+  return new Set(
+    [...defaultUpstreams].map((upstream) => upstream.replace(/^[^/]+\//, "")),
+  );
+}
+
+async function readFallbackDefaultBranchName(
+  cwd: string,
+): Promise<string | undefined> {
   for (const branch of FALLBACK_DEFAULT_BRANCHES) {
     const localBranch = await readGitLine(cwd, [
       "for-each-ref",
