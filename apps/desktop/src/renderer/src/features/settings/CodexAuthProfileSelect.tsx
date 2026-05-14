@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   DesktopCodexAuthProfileCandidate,
   DesktopCodexAuthProfileDiscoverySnapshot,
@@ -186,6 +186,7 @@ function CodexAuthProfileCreateDialog(props: {
   const [error, setError] = useState<string>();
   const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
+  const authenticatedRef = useRef(false);
   const normalizedName = profileName.trim();
   const existingNames = new Set(props.existingProfiles.map((profile) => profile.name));
   const nameExists = Boolean(normalizedName) && existingNames.has(normalizedName);
@@ -212,9 +213,19 @@ function CodexAuthProfileCreateDialog(props: {
       });
       setLoginUrl(login.loginUrl);
       setStatusDetail(login.loginUrl ? undefined : login.detail);
+      if (login.authenticated) {
+        authenticatedRef.current = true;
+        setStep("authenticated");
+        setError(undefined);
+        setStatusDetail(undefined);
+        await props.onCreated(normalizedName);
+        return;
+      }
       setStep("waiting");
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if (!authenticatedRef.current) {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
     } finally {
       setBusy(false);
     }
@@ -243,7 +254,9 @@ function CodexAuthProfileCreateDialog(props: {
         profile: normalizedName,
       });
       if (status.authenticated) {
+        authenticatedRef.current = true;
         setStep("authenticated");
+        setError(undefined);
         setStatusDetail(undefined);
         await props.onCreated(normalizedName);
       } else if (status.detail) {
@@ -407,6 +420,7 @@ function CodexAuthProfileLoginDialog(props: {
   const [authenticated, setAuthenticated] = useState(false);
   const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
+  const authenticatedRef = useRef(false);
   const canLogin = Boolean(
     props.desktopApi?.startCodexAuthProfileLogin
       && props.desktopApi.checkCodexAuthProfileStatus
@@ -425,9 +439,17 @@ function CodexAuthProfileLoginDialog(props: {
       });
       setLoginUrl(login.loginUrl);
       setStatusDetail(login.loginUrl ? undefined : login.detail);
+      if (login.authenticated) {
+        authenticatedRef.current = true;
+        setAuthenticated(true);
+        setError(undefined);
+        setStatusDetail(undefined);
+      }
       setStarted(true);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if (!authenticatedRef.current) {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
     } finally {
       setBusy(false);
     }
@@ -462,7 +484,9 @@ function CodexAuthProfileLoginDialog(props: {
         profile: props.profile,
       });
       if (status.authenticated) {
+        authenticatedRef.current = true;
         setAuthenticated(true);
+        setError(undefined);
         setStatusDetail(undefined);
       } else if (status.detail) {
         setStatusDetail(status.detail);

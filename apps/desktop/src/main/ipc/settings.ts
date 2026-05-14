@@ -240,12 +240,27 @@ async function startCodexProfileLoginProcess(params: {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
-        reject(
-          new Error(
-            output.trim()
-              || `Codex login exited before emitting a login link (code ${code ?? "unknown"}).`,
-          ),
-        );
+        void (async () => {
+          const status = await collectCodexStatus(params.command, params.codexHome);
+          if (status.code === 0) {
+            resolve({
+              profile: params.profile,
+              codexHome: params.codexHome,
+              started: false,
+              pid: child.pid,
+              authenticated: true,
+              ...(status.detail ? { detail: status.detail } : {}),
+            });
+            return;
+          }
+          reject(
+            new Error(
+              output.trim()
+                || status.detail
+                || `Codex login exited before emitting a login link (code ${code ?? "unknown"}).`,
+            ),
+          );
+        })();
       }
     });
   });

@@ -512,6 +512,40 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("shows authenticated when Codex login exits after auth already exists", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;
+    const settings = createSettingsState(snapshot);
+    const startCodexAuthProfileLogin = vi.fn(async () => ({
+      profile: "work",
+      codexHome: "/home/example/.codex/profiles/work",
+      started: false,
+      authenticated: true,
+    }));
+    const desktopApi = {
+      startCodexAuthProfileLogin,
+      checkCodexAuthProfileStatus: vi.fn(),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Log in to Codex profile",
+    });
+    await waitFor(() => {
+      expect(dialog).toHaveTextContent("work is logged in.");
+    });
+    expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
+  });
+
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.gh = {

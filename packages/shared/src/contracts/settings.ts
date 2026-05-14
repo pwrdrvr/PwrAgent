@@ -536,6 +536,7 @@ export type StartDesktopCodexAuthProfileLoginResponse = {
   profile: string;
   codexHome: string;
   started: boolean;
+  authenticated?: boolean;
   pid?: number;
   loginUrl?: string;
   detail?: string;

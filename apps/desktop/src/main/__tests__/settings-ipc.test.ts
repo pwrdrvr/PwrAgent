@@ -54,6 +54,37 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
   })),
 }));
 
+function createMockSpawnChild(
+  schedule: (child: EventEmitter & {
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  }) => void,
+): EventEmitter & {
+  kill: ReturnType<typeof vi.fn>;
+  pid: number;
+  stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    kill: ReturnType<typeof vi.fn>;
+    pid: number;
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  };
+  child.pid = 321;
+  child.kill = vi.fn();
+  child.stdout = new EventEmitter() as EventEmitter & {
+    setEncoding: ReturnType<typeof vi.fn>;
+  };
+  child.stderr = new EventEmitter() as EventEmitter & {
+    setEncoding: ReturnType<typeof vi.fn>;
+  };
+  child.stdout.setEncoding = vi.fn();
+  child.stderr.setEncoding = vi.fn();
+  schedule(child);
+  return child;
+}
+
 vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -376,26 +407,11 @@ describe("settings ipc", () => {
     const loginUrl =
       "https://auth.openai.com/oauth/authorize?client_id=codex&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";
     childProcessMocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        kill: ReturnType<typeof vi.fn>;
-        pid: number;
-        stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-        stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-      };
-      child.pid = 321;
-      child.kill = vi.fn();
-      child.stdout = new EventEmitter() as EventEmitter & {
-        setEncoding: ReturnType<typeof vi.fn>;
-      };
-      child.stderr = new EventEmitter() as EventEmitter & {
-        setEncoding: ReturnType<typeof vi.fn>;
-      };
-      child.stdout.setEncoding = vi.fn();
-      child.stderr.setEncoding = vi.fn();
-      queueMicrotask(() => {
-        child.stdout.emit("data", `If your browser did not open, navigate to:\n${loginUrl}\n`);
+      return createMockSpawnChild((child) => {
+        queueMicrotask(() => {
+          child.stdout.emit("data", `If your browser did not open, navigate to:\n${loginUrl}\n`);
+        });
       });
-      return child;
     });
     const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
       "../ipc/settings"
@@ -429,6 +445,82 @@ describe("settings ipc", () => {
       }),
     );
     expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(loginUrl);
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("treats Codex login exit without a link as authenticated when status passes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const service = {
+      readSettings: vi.fn(async () => ({
+        models: {
+          codex: {
+            discovery: {
+              selectedCommand: "/Applications/Codex.app/Contents/Resources/codex",
+            },
+          },
+        },
+      })),
+    } as unknown as DesktopSettingsService;
+    childProcessMocks.spawn.mockImplementation((_command: string, args: string[]) => {
+      if (args.join(" ") === "login status") {
+        return createMockSpawnChild((child) => {
+          queueMicrotask(() => {
+            child.stdout.emit("data", "Logged in as user@example.com");
+            child.emit("close", 0);
+          });
+        });
+      }
+      return createMockSpawnChild((child) => {
+        queueMicrotask(() => {
+          child.emit("close", 0);
+        });
+      });
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL)?.(
+        {},
+        { profile: "work" },
+      ),
+    ).resolves.toMatchObject({
+      authenticated: true,
+      codexHome: path.join(codexHome, "profiles", "work"),
+      profile: "work",
+      started: false,
+    });
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "/Applications/Codex.app/Contents/Resources/codex",
+      ["login"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: path.join(codexHome, "profiles", "work"),
+        }),
+      }),
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "/Applications/Codex.app/Contents/Resources/codex",
+      ["login", "status"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: path.join(codexHome, "profiles", "work"),
+        }),
+      }),
+    );
 
     disposeSettingsIpcHandlers();
   });
