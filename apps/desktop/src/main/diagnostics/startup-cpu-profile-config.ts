@@ -11,7 +11,6 @@ export type StartupCpuProfileConfig =
       outputRoot: string;
       postLoadDurationMs: number;
       hardTimeoutMs: number;
-      quitOnComplete: boolean;
     };
 
 function isEnabled(value: string | undefined): boolean {
@@ -60,6 +59,5 @@ export function resolveStartupCpuProfileConfig(options?: {
       env.PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS,
       DEFAULT_HARD_TIMEOUT_MS,
     ),
-    quitOnComplete: isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILE_QUIT_ON_COMPLETE),
   };
 }

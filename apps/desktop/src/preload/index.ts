@@ -71,8 +71,6 @@ import type {
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
-  RefreshDirectoryGitStatusesRequest,
-  RefreshDirectoryGitStatusesResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -195,7 +193,6 @@ import {
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
-  NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -520,13 +517,6 @@ const desktopApi = Object.freeze({
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, request),
-  refreshDirectoryGitStatuses: async (
-    request: RefreshDirectoryGitStatusesRequest,
-  ): Promise<RefreshDirectoryGitStatusesResponse> =>
-    await ipcRenderer.invoke(
-      NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
-      request,
-    ),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await ipcRenderer.invoke(NAVIGATION_GET_GH_STATUS_CHANNEL, request),
   ensureDirectoryLaunchpad: async (

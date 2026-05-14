@@ -935,28 +935,6 @@ async function resolveThreadProjectKey(
   return projectKey || undefined;
 }
 
-function buildProjectKeyLinkedDirectories(
-  projectKey: string | undefined
-): LinkedDirectorySummary[] {
-  const directoryPath = projectKey?.trim();
-  if (!directoryPath) {
-    return [];
-  }
-
-  const resolvedPath = path.isAbsolute(directoryPath)
-    ? directoryPath
-    : path.resolve(directoryPath);
-
-  return [
-    {
-      id: resolvedPath,
-      label: path.basename(resolvedPath) || resolvedPath,
-      path: resolvedPath,
-      kind: "local",
-    },
-  ];
-}
-
 function normalizeConversationRole(
   value: string | undefined
 ): "user" | "assistant" | undefined {
@@ -3929,7 +3907,6 @@ export class CodexAppServerClient {
 
   async listThreads(params?: {
     archived?: boolean;
-    enrichDirectories?: boolean;
     filter?: string;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
@@ -3948,9 +3925,7 @@ export class CodexAppServerClient {
         filter: params?.filter,
         requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(archivedThreads, {
-        enrichDirectories: params?.enrichDirectories ?? true,
-      });
+      return await this.enrichThreads(archivedThreads);
     }
 
     const activeThreads = await requestThreadListPages({
@@ -3966,9 +3941,7 @@ export class CodexAppServerClient {
     });
     this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
 
-    return await this.enrichThreads(threads, {
-      enrichDirectories: params?.enrichDirectories ?? true,
-    });
+    return await this.enrichThreads(threads);
   }
 
   private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
@@ -4037,21 +4010,7 @@ export class CodexAppServerClient {
 
   private async enrichThreads(
     threads: RawCodexThreadSummary[],
-    options: { enrichDirectories: boolean },
   ): Promise<AppServerThreadSummary[]> {
-    if (!options.enrichDirectories) {
-      return threads.map((thread) => {
-        const projectKey = thread.projectKey?.trim() || undefined;
-        return {
-          ...thread,
-          projectKey,
-          gitBranch: thread.gitBranch,
-          linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
-          source: "codex" as const,
-        };
-      });
-    }
-
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const projectKey = await resolveThreadProjectKey(thread);

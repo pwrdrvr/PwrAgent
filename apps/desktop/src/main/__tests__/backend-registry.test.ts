@@ -511,8 +511,6 @@ class MockBackendClient {
     ownerId?: string;
   };
   lastListThreadsParams?: {
-    archived?: boolean;
-    enrichDirectories?: boolean;
     filter?: string;
   };
 
@@ -562,7 +560,6 @@ class MockBackendClient {
 
   async listThreads(params?: {
     archived?: boolean;
-    enrichDirectories?: boolean;
     filter?: string;
   }, diagnostics?: { callerReason?: string; ownerId?: string }): Promise<AppServerThreadSummary[]> {
     this.listThreadsCallCount += 1;
@@ -1235,9 +1232,6 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.listThreadsCallCount).toBe(1);
-    expect(codexClient.lastListThreadsParams).toMatchObject({
-      enrichDirectories: false,
-    });
     expect(grokClient.listThreadsCallCount).toBe(1);
     expect(grokClient.lastListThreadsDiagnostics).toMatchObject({
       callerReason: "navigation-snapshot",
@@ -1245,76 +1239,6 @@ describe("DesktopBackendRegistry", () => {
     expect(grokClient.lastListThreadsDiagnostics?.ownerId).toMatch(
       /^backend-thread-list-cache-/,
     );
-
-    await registry.close();
-  });
-
-  it("keeps cheap navigation lists separate from directory-enriched thread lists", async () => {
-    const codexClient = new MockBackendClient({
-      threads: [
-        {
-          id: "thread-1",
-          title: "Codex thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-        },
-      ],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      grokClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    await registry.listThreads({
-      backend: "codex",
-      callerReason: "startup-prewarm",
-    });
-    expect(codexClient.lastListThreadsParams).toMatchObject({
-      enrichDirectories: false,
-    });
-
-    await registry.listThreads({
-      backend: "codex",
-      callerReason: "workspace-handoff",
-    });
-
-    expect(codexClient.listThreadsCallCount).toBe(2);
-    expect(codexClient.lastListThreadsParams).toMatchObject({
-      enrichDirectories: true,
-    });
-
-    await registry.close();
-  });
-
-  it("uses cheap thread summaries for selected-thread branch drift checks", async () => {
-    const codexClient = new MockBackendClient({
-      threads: [
-        {
-          id: "thread-1",
-          title: "Codex thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          projectKey: "/repo/app",
-        },
-      ],
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      grokClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    await registry.listThreads({
-      backend: "codex",
-      callerReason: "branch-drift",
-    });
-
-    expect(codexClient.lastListThreadsParams).toMatchObject({
-      enrichDirectories: false,
-    });
 
     await registry.close();
   });
@@ -3688,10 +3612,7 @@ command = "pnpm dev"
       }),
     ]);
     expect(codexClient.listThreadsCallCount).toBe(1);
-    expect(codexClient.lastListThreadsParams).toEqual({
-      enrichDirectories: true,
-      filter: "thread",
-    });
+    expect(codexClient.lastListThreadsParams).toEqual({ filter: "thread" });
 
     await registry.close();
   });

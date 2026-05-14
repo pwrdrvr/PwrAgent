@@ -766,7 +766,7 @@ function activityContainsDiff(
   });
 }
 
-export type ThreadViewProps = {
+type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   addOptimisticReviewEntry?: (displayText: string) => string;

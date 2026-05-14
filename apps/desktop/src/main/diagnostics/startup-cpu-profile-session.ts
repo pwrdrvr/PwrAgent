@@ -40,7 +40,6 @@ type StartupCpuProfileManifest = {
   config: {
     postLoadDurationMs: number;
     hardTimeoutMs: number;
-    quitOnComplete: boolean;
   };
   versions: StartupCpuProfileVersions;
 };
@@ -135,7 +134,6 @@ export async function createStartupCpuProfileSession(options: {
     config: {
       postLoadDurationMs: options.config.postLoadDurationMs,
       hardTimeoutMs: options.config.hardTimeoutMs,
-      quitOnComplete: options.config.quitOnComplete,
     },
     versions: options.versions,
   };

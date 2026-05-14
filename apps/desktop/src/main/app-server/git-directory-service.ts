@@ -1,7 +1,6 @@
 import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
   AppServerThreadSummary,
   AppServerBackendKind,
@@ -319,15 +318,8 @@ type CachedDirectoryStatus = {
   status?: NavigationDirectoryGitStatus;
 };
 
-export type DirectoryGitStatusEntry = {
-  directoryKey: string;
-  gitStatus?: NavigationDirectoryGitStatus;
-};
-
 type GitDirectoryServiceOptions = {
   cacheTtlMs?: number;
-  statusConcurrency?: number;
-  statusMaxUnread?: number;
   codexHome?: string;
   resolveWorktreeStorage?: () =>
     | DesktopWorktreeStorageLocation
@@ -338,8 +330,6 @@ type GitDirectoryServiceOptions = {
 export class GitDirectoryService {
   private readonly statusCache = new Map<string, CachedDirectoryStatus>();
   private readonly cacheTtlMs: number;
-  private readonly statusConcurrency: number;
-  private readonly statusMaxUnread: number;
   private readonly codexHome?: string;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
   private readonly homeDir: string;
@@ -348,11 +338,6 @@ export class GitDirectoryService {
     const normalized: GitDirectoryServiceOptions =
       typeof options === "number" ? { cacheTtlMs: options } : options;
     this.cacheTtlMs = normalized.cacheTtlMs ?? 3_000;
-    this.statusConcurrency = normalized.statusConcurrency ?? 4;
-    this.statusMaxUnread = Math.max(
-      normalized.statusMaxUnread ?? 8,
-      this.statusConcurrency,
-    );
     this.codexHome = normalized.codexHome;
     this.homeDir = normalized.homeDir ?? os.homedir();
     const resolveStorage = normalized.resolveWorktreeStorage;
@@ -363,27 +348,13 @@ export class GitDirectoryService {
   async readDirectoryStatuses(
     directories: NavigationDirectorySummary[],
   ): Promise<Record<string, NavigationDirectoryGitStatus | undefined>> {
-    const statuses: Record<string, NavigationDirectoryGitStatus | undefined> = {};
-    for await (const entry of this.readDirectoryStatusEntries(directories)) {
-      statuses[entry.directoryKey] = entry.gitStatus;
-    }
-    return statuses;
-  }
-
-  readDirectoryStatusEntries(
-    directories: NavigationDirectorySummary[],
-  ): AsyncIterable<DirectoryGitStatusEntry> {
-    return new IterableMapper(
-      directories,
-      async (directory): Promise<DirectoryGitStatusEntry> => ({
-        directoryKey: directory.key,
-        gitStatus: await this.readDirectoryStatus(directory),
-      }),
-      {
-        concurrency: this.statusConcurrency,
-        maxUnread: this.statusMaxUnread,
-      },
+    const statuses = await Promise.all(
+      directories.map(async (directory) => [
+        directory.key,
+        await this.readDirectoryStatus(directory),
+      ] as const),
     );
+    return Object.fromEntries(statuses);
   }
 
   async readDirectoryStatus(

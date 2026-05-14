@@ -265,10 +265,6 @@ export class StartupCpuProfiler {
         status,
       },
     });
-
-    if (this.config.quitOnComplete) {
-      app.quit();
-    }
   }
 
   private clearPostLoadTimer(): void {
