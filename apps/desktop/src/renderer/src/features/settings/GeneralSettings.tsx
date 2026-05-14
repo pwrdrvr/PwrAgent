@@ -20,7 +20,7 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   },
   {
     description:
-      "Default. Keeps current paste behavior and fits patch-based model budgets.",
+      "Default. Limits large pasted images to roughly 1536 image patches before model-specific multipliers.",
     label: "1536 patches",
     value: 1536,
   },
@@ -70,8 +70,9 @@ export function GeneralSettings(props: {
                 {activeOption?.description ??
                   "Custom patch budget for pasted images."}{" "}
                 Patch-based models count 32 x 32 pixel blocks before
-                model-specific multipliers; tile-based models use their own
-                image resizing rules.
+                model-specific multipliers. Images within 20% of the selected
+                patch budget are left unchanged to avoid marginal re-encodes.
+                Tile-based models use their own image resizing rules.
               </>
             }
             error={pastedImageMaxPatches.error}
