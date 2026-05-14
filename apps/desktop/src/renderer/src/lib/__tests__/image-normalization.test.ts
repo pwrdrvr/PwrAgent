@@ -155,12 +155,69 @@ describe("image normalization", () => {
     });
 
     const normalized = await normalizeImageFile(
-      new File([new Uint8Array([1])], "screenshot.png", { type: "image/png" }),
+      new File([new Uint8Array([1, 2, 3, 4])], "screenshot.png", {
+        type: "image/png",
+      }),
       { dependencies, maxPatchCount: 1024 },
     );
 
     expect(normalized.width).toBe(1024);
     expect(normalized.height).toBe(1024);
+  });
+
+  it("does not let resized PNG encoding grow beyond the source size", async () => {
+    const encodeCanvas = vi.fn(async (canvas, mimeType) => {
+      const size = canvas.width < 1024 ? 90 : 140;
+      return new Blob([new Uint8Array(size)], { type: mimeType });
+    });
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 2048,
+        height: 2048,
+        draw: vi.fn(),
+      })),
+      encode: encodeCanvas,
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array(100)], "screenshot.png", { type: "image/png" }),
+      { dependencies, maxPatchCount: 1024 },
+    );
+
+    expect(normalized).toMatchObject({
+      height: 972,
+      mimeType: "image/png",
+      size: 90,
+      width: 972,
+    });
+    expect(encodeCanvas).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves source PNG bytes when every resized encoding is larger", async () => {
+    const encodeCanvas = vi.fn(async (_canvas, mimeType) =>
+      new Blob([new Uint8Array(140)], { type: mimeType }),
+    );
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 2048,
+        height: 2048,
+        draw: vi.fn(),
+      })),
+      encode: encodeCanvas,
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array(100)], "screenshot.png", { type: "image/png" }),
+      { dependencies, maxPatchCount: 1024 },
+    );
+
+    expect(normalized).toMatchObject({
+      dataUrl: "data:image/png;base64,AQID",
+      height: 2048,
+      mimeType: "image/png",
+      size: 100,
+      width: 2048,
+    });
   });
 
   it("retries JPEG encoding when a resized output is larger than the source", async () => {
