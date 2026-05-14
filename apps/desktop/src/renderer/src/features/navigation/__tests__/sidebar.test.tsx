@@ -205,6 +205,18 @@ describe("Sidebar", () => {
                 remaining: 85,
                 limit: 100,
               },
+              {
+                name: "Weekly limit",
+                usedPercent: 40,
+              },
+              {
+                name: "GPT-5.3-Codex-Spark 5h limit",
+                usedPercent: 2,
+              },
+              {
+                name: "GPT-5.3-Codex-Spark Weekly limit",
+                usedPercent: 3,
+              },
             ],
           },
         ]}
@@ -258,6 +270,9 @@ describe("Sidebar", () => {
     expect(tooltip).toHaveTextContent("Plan: pro");
     expect(tooltip).toHaveTextContent("5h limit");
     expect(tooltip).toHaveTextContent("85% left");
+    expect(tooltip).toHaveTextContent("Weekly limit: 60% left");
+    expect(tooltip).toHaveTextContent("Spark 5h limit: 98% left");
+    expect(tooltip).toHaveTextContent("Spark Weekly limit: 97% left");
   });
 
   it("keeps recents to a single worktree indicator on the directory chip", () => {
