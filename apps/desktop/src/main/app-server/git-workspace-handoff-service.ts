@@ -404,7 +404,7 @@ export class GitWorkspaceHandoffService {
     context: HandoffContext,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const baseSha = context.headSha;
-    const newBranchName = sanitizeBranchName(params.newBranchName ?? "");
+    const newBranchName = (params.newBranchName ?? "").trim();
     if (!newBranchName) {
       throw new Error("Choose a new branch name for handoff.");
     }

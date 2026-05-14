@@ -217,6 +217,34 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
   });
 
+  it("preserves a valid requested new branch name without sanitizing it", async () => {
+    const repoPath = await createRepo();
+    const requestedBranchName = "feature/foo+bar";
+    await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "new-branch",
+      newBranchName: ` ${requestedBranchName} `,
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 1775,
+    });
+
+    expect(result.branch).toBe(requestedBranchName);
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe(
+      requestedBranchName,
+    );
+    expect(await git(repoPath, ["show-ref", "--verify", `refs/heads/${requestedBranchName}`]))
+      .toMatch(/refs\/heads\/feature\/foo\+bar$/);
+  });
+
   it("rejects new branch handoff when the requested branch already exists", async () => {
     const repoPath = await createRepo();
 
