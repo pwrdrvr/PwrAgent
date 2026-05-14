@@ -7,10 +7,15 @@ import type {
   NavigationSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useThreadNavigation } from "../useThreadNavigation";
 
 describe("useThreadNavigation", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -258,6 +263,370 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    });
+  });
+
+  it("marks the selected thread seen again when a refresh advances it", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const markThreadSeen = vi.fn(
+      async (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+      ) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        seenAt: Date.now(),
+        seenUpdatedAt: request.seenUpdatedAt,
+      })
+    );
+    let refreshed = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: refreshed ? ["codex:thread-read"] : [],
+      threads: [
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: refreshed
+            ? {
+                inInbox: true,
+                reason: "updated-since-seen" as const,
+                lastSeenUpdatedAt: 1_000,
+              }
+            : {
+                inInbox: false,
+                lastSeenUpdatedAt: 1_000,
+              },
+          updatedAt: refreshed ? 2_000 : 1_000,
+        },
+        {
+          id: "thread-other",
+          title: "Other thread",
+          titleSource: "explicit" as const,
+          summary: "Other thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 900,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-read");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 1_000,
+      });
+    });
+
+    refreshed = true;
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-other",
+              turnId: "turn-other",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 2_000,
+      });
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    });
+  });
+
+  it("keeps selected refreshes unread while the window is backgrounded", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const markThreadSeen = vi.fn(
+      async (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+      ) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        seenAt: Date.now(),
+        seenUpdatedAt: request.seenUpdatedAt,
+      })
+    );
+    let refreshed = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: refreshed ? ["codex:thread-read"] : [],
+      threads: [
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: refreshed
+            ? {
+                inInbox: true,
+                reason: "updated-since-seen" as const,
+                lastSeenUpdatedAt: 1_000,
+              }
+            : {
+                inInbox: false,
+                lastSeenUpdatedAt: 1_000,
+              },
+          updatedAt: refreshed ? 2_000 : 1_000,
+        },
+        {
+          id: "thread-other",
+          title: "Other thread",
+          titleSource: "explicit" as const,
+          summary: "Other thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 900,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-read");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 1_000,
+      });
+    });
+
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+
+    refreshed = true;
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-other",
+              turnId: "turn-other",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+    });
+    expect(markThreadSeen).not.toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-read",
+      seenUpdatedAt: 2_000,
+    });
+  });
+
+  it("keeps selected refreshes unread while the thread view is hidden", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const markThreadSeen = vi.fn(
+      async (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
+      ) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        seenAt: Date.now(),
+        seenUpdatedAt: request.seenUpdatedAt,
+      })
+    );
+    let refreshed = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: refreshed ? ["codex:thread-read"] : [],
+      threads: [
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: refreshed
+            ? {
+                inInbox: true,
+                reason: "updated-since-seen" as const,
+                lastSeenUpdatedAt: 1_000,
+              }
+            : {
+                inInbox: false,
+                lastSeenUpdatedAt: 1_000,
+              },
+          updatedAt: refreshed ? 2_000 : 1_000,
+        },
+        {
+          id: "thread-other",
+          title: "Other thread",
+          titleSource: "explicit" as const,
+          summary: "Other thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 900,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { rerender, result } = renderHook(
+      ({ threadViewVisible }: { threadViewVisible: boolean }) =>
+        useThreadNavigation(desktopApi, { threadViewVisible }),
+      {
+        initialProps: {
+          threadViewVisible: true,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-read");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 1_000,
+      });
+    });
+
+    rerender({ threadViewVisible: false });
+
+    refreshed = true;
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-other",
+              turnId: "turn-other",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+    });
+    expect(markThreadSeen).not.toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-read",
+      seenUpdatedAt: 2_000,
+    });
+
+    rerender({ threadViewVisible: true });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-read",
+        seenUpdatedAt: 2_000,
+      });
     });
   });
 
