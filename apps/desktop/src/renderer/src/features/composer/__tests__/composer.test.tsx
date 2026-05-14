@@ -342,6 +342,10 @@ describe("Composer", () => {
         executionTarget: "local" as const,
       },
     }));
+    const setCodexThreadEnvironment = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+    }));
     const thread: NavigationThreadSummary = {
       id: "thread-1",
       title: "Environment commands",
@@ -375,23 +379,32 @@ describe("Composer", () => {
     render(
       <Composer
         backends={[backendSummary("codex")]}
-        desktopApi={{ runCodexEnvironmentAction }}
+        desktopApi={{ runCodexEnvironmentAction, setCodexThreadEnvironment }}
         disabled={false}
         skills={[]}
         thread={thread}
       />,
     );
 
+    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
     expect(screen.getByLabelText("Environment command")).toHaveTextContent(
       "Dev - Messaging",
     );
-    expect(screen.queryByLabelText("Codex environment")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await waitFor(() => {
       expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
         actionId: "dev-messaging",
+      });
+    });
+
+    chooseDropdownOption("Codex environment", "No environment");
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: undefined,
       });
     });
   });
@@ -433,7 +446,47 @@ describe("Composer", () => {
       "No commands",
     );
     expect(screen.getByLabelText("Environment command")).toBeDisabled();
-    expect(screen.queryByLabelText("Codex environment")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+  });
+
+  it("hides thread environment commands when no environment is selected", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Environment commands",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              actions: [
+                {
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Codex environment")).toHaveTextContent(
+      "No environment",
+    );
+    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
   });
 
   it("does not show environment commands on a launchpad", () => {

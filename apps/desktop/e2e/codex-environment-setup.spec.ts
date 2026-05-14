@@ -307,10 +307,11 @@ test("directory launchpad keeps selected Codex environment controls after snapsh
       "data-value",
       "worktree",
     );
-    await expect(settings.getByLabel("Codex environment")).toContainText(
+    const tools = secondApp.window.getByLabel("Composer tools");
+    await expect(tools.getByLabel("Codex environment")).toContainText(
       "Fixture Env",
     );
-    await expect(settings.getByLabel("Run setup")).toBeChecked();
+    await expect(tools.getByLabel("Run setup")).toBeChecked();
   } finally {
     if (secondApp) {
       await secondApp.close();
