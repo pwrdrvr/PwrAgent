@@ -353,15 +353,21 @@ class DesktopAppServerService {
   private async readNavigationSnapshot(
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
+    const startedAt = Date.now();
     const backend: AppServerBackendScope = request.backend ?? "all";
+    const listStartedAt = Date.now();
     const threads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: "navigation-snapshot",
       filter: request.filter,
     });
+    const listDurationMs = Date.now() - listStartedAt;
+    const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const bindingsDurationMs = Date.now() - bindingsStartedAt;
     const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
+    const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
@@ -369,8 +375,11 @@ class DesktopAppServerService {
       queuedExecutionModesByThreadId,
       threads,
     });
+    const overlayDurationMs = Date.now() - overlayStartedAt;
+    const directoryStartedAt = Date.now();
     const directoryStatuses =
       await getDesktopBackendRegistry().readDirectoryStatuses(snapshot.directories);
+    const directoryDurationMs = Date.now() - directoryStartedAt;
     const directories = snapshot.directories.map((directory) => ({
       ...directory,
       gitStatus: directoryStatuses[directory.key],
@@ -386,6 +395,11 @@ class DesktopAppServerService {
       count: snapshot.threads.length,
       inboxCount: snapshot.inboxThreadKeys.length,
       unchanged: snapshot.unchanged && directoriesUnchanged,
+      durationMs: Date.now() - startedAt,
+      listDurationMs,
+      bindingsDurationMs,
+      overlayDurationMs,
+      directoryDurationMs,
     });
 
     return {

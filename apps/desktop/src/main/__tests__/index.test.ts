@@ -41,6 +41,7 @@ const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const getExistingRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
+const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
@@ -202,6 +203,7 @@ const runtimeMessagingLeaseCoordinatorMock = {
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: vi.fn(() => ({
+    listThreads: listThreadsMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
 }));
@@ -274,6 +276,8 @@ describe("bootstrapApp", () => {
     );
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
+    listThreadsMock.mockReset();
+    listThreadsMock.mockResolvedValue([]);
     disposeDesktopMessagingRuntimeMock.mockReset();
     registerMessagingStatusIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();
@@ -364,6 +368,39 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledWith({
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("prewarms the initial thread list after starting the first window", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    listThreadsMock.mockReturnValue(new Promise(() => {}));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(listThreadsMock).toHaveBeenCalledWith({
+      callerReason: "startup-prewarm",
+    });
+  });
+
+  it("logs startup thread list prewarm failures without blocking startup", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    listThreadsMock.mockRejectedValue(new Error("codex unavailable"));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(mainLogWarnMock).toHaveBeenCalledWith(
+      "startup thread list prewarm failed",
+      expect.objectContaining({
+        error: "codex unavailable",
+      }),
+    );
   });
 
   it("logs unexpected background messaging startup failures", async () => {

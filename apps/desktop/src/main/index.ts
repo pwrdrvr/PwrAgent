@@ -71,6 +71,32 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 let mainProcessResourcesDisposed = false;
 
+function prewarmInitialThreadList(): void {
+  const startedAt = Date.now();
+  void getDesktopBackendRegistry()
+    .listThreads({
+      callerReason: "startup-prewarm",
+    })
+    .then((threads) => {
+      if (!isDevelopment) {
+        return;
+      }
+      mainLog.info("startup thread list prewarm completed", {
+        count: threads.length,
+        durationMs: Date.now() - startedAt,
+      });
+    })
+    .catch((error) => {
+      if (!isDevelopment) {
+        return;
+      }
+      mainLog.warn("startup thread list prewarm failed", {
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
 function disposeMainProcessResourcesSync(): void {
   if (mainProcessResourcesDisposed) {
     return;
@@ -248,6 +274,7 @@ export function bootstrapApp(): void {
     createMainWindow({
       startupCpuProfiler,
     });
+    prewarmInitialThreadList();
 
     // Wire up auto-update *after* the window is created so a slow update
     // check does not delay first paint. Skips automatically in dev.
