@@ -75,7 +75,7 @@ describe("App", () => {
     cleanup();
   });
 
-  it("does not show Settings while the startup settings read is pending", async () => {
+  it("shows the thread shell while the startup settings read is pending", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),
       backends: [],
@@ -110,19 +110,15 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(
-      screen.getByRole("main", { name: "Starting PwrAgent" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Loading PwrAgent...");
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("complementary", { name: "Threads" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
-    expect(listBackends).not.toHaveBeenCalled();
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(1);
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("blocks the app shell when desktop settings config is malformed", async () => {

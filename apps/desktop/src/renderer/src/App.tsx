@@ -31,10 +31,6 @@ export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
 
-  if (desktopApi?.readSettings && !settings.snapshot && !settings.error) {
-    return <AppStartupScreen />;
-  }
-
   if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
     return (
       <div className="app-shell app-shell--fatal-settings">
@@ -56,21 +52,6 @@ export function App() {
   }
 
   return <DesktopAppShell desktopApi={desktopApi} settings={settings} />;
-}
-
-function AppStartupScreen() {
-  return (
-    <div className="app-shell app-shell--startup">
-      <main className="app-startup" aria-label="Starting PwrAgent">
-        <div className="app-startup__brand" aria-hidden="true">
-          Pwr<span>Agent</span>
-        </div>
-        <p className="app-startup__status" role="status">
-          Loading PwrAgent...
-        </p>
-      </main>
-    </div>
-  );
 }
 
 function DesktopAppShell(props: {
