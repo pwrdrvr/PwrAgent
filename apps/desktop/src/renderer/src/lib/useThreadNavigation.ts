@@ -916,6 +916,21 @@ function applyLaunchpadUpdate(
   };
 }
 
+function applyLaunchpadUpdateIfMissing(
+  snapshot: NavigationSnapshot | undefined,
+  launchpad: NavigationLaunchpadDraft,
+  defaults: NavigationSnapshot["launchpadDefaults"],
+): NavigationSnapshot | undefined {
+  if (
+    !snapshot ||
+    snapshot.directories.some((directory) => directory.key === launchpad.directoryKey)
+  ) {
+    return snapshot;
+  }
+
+  return applyLaunchpadUpdate(snapshot, launchpad, defaults);
+}
+
 function mergeLaunchpadUpdateResponse(
   current: NavigationLaunchpadDraft | undefined,
   next: NavigationLaunchpadDraft,
@@ -1376,6 +1391,7 @@ export function useThreadNavigation(
     undefined
   );
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
+  const pendingPickedLaunchpadRef = useRef(new Map<string, NavigationLaunchpadDraft>());
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
@@ -2290,6 +2306,7 @@ export function useThreadNavigation(
       setPickDirectoryError(undefined);
       setPickingDirectory(true);
 
+      let pendingPickedDirectoryKey: string | undefined;
       try {
         const pick = await desktopApi.pickDirectoryFromDisk();
         if (pick.canceled) {
@@ -2303,6 +2320,8 @@ export function useThreadNavigation(
           setPickDirectoryError(result.message);
           return;
         }
+        pendingPickedDirectoryKey = result.directoryKey;
+        pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
@@ -2311,16 +2330,37 @@ export function useThreadNavigation(
             result.defaults,
           ),
         }));
-        setSelectedItemKey(buildLaunchpadSelectionKey(result.directoryKey));
+        const selectionKey = buildLaunchpadSelectionKey(result.directoryKey);
+        setSelectedItemKey(selectionKey);
+        await refresh(selectionKey, undefined, true);
+        const pickedLaunchpad =
+          pendingPickedLaunchpadRef.current.get(result.directoryKey) ??
+          result.launchpad;
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdateIfMissing(
+            current.response,
+            pickedLaunchpad,
+            result.defaults,
+          ),
+        }));
+        setSelectedItemKey(selectionKey);
+        await desktopApi.refreshDirectoryGitStatuses?.({
+          directoryKeys: [result.directoryKey],
+          force: true,
+        });
       } catch (error) {
         setPickDirectoryError(
           error instanceof Error ? error.message : String(error),
         );
       } finally {
+        if (pendingPickedDirectoryKey) {
+          pendingPickedLaunchpadRef.current.delete(pendingPickedDirectoryKey);
+        }
         setPickingDirectory(false);
       }
     },
-    [desktopApi],
+    [desktopApi, refresh],
   );
 
   const clearPickDirectoryError = useCallback((): void => {
@@ -2366,6 +2406,15 @@ export function useThreadNavigation(
           ),
         };
       });
+      const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
+      if (pendingPickedLaunchpad) {
+        pendingPickedLaunchpadRef.current.set(directoryKey, {
+          ...pendingPickedLaunchpad,
+          ...patch,
+          directoryKey,
+          updatedAt: Date.now(),
+        });
+      }
 
       try {
         const response = await desktopApi.updateDirectoryLaunchpad({
@@ -2390,6 +2439,18 @@ export function useThreadNavigation(
             response.defaults
           ),
         }));
+        const nextPendingPickedLaunchpad =
+          pendingPickedLaunchpadRef.current.get(directoryKey);
+        if (nextPendingPickedLaunchpad) {
+          pendingPickedLaunchpadRef.current.set(
+            directoryKey,
+            mergeLaunchpadUpdateResponse(
+              nextPendingPickedLaunchpad,
+              response.launchpad,
+              patch,
+            ),
+          );
+        }
       } catch (error) {
         if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
           return;

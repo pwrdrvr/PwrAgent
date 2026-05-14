@@ -2818,22 +2818,48 @@ describe("useThreadNavigation", () => {
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {
+    const launchpadDefaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+
+    function buildSnapshot(
+      directories: NavigationSnapshot["directories"] = [],
+    ): NavigationSnapshot {
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories,
+        launchpadDefaults,
+      };
+    }
+
+    function buildPickedLaunchpad(
+      patch: Partial<NavigationLaunchpadDraft> = {},
+    ): NavigationLaunchpadDraft {
+      return {
+        directoryKey: "directory:/Users/me/repos/PwrAgent",
+        directoryKind: "directory" as const,
+        directoryLabel: "PwrAgent",
+        directoryPath: "/Users/me/repos/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 1,
+        ...patch,
+      };
+    }
+
     function buildBaseDesktopApi(
       overrides: Partial<DesktopApi> = {},
     ): DesktopApi {
       return {
-        getNavigationSnapshot: vi.fn(async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        })),
+        getNavigationSnapshot: vi.fn(async () => buildSnapshot()),
         onAgentEvent: () => () => undefined,
         ...overrides,
       };
@@ -2970,6 +2996,131 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickingDirectory).toBe(false);
       expect(result.current.selectedItemKey).toBe(
         "launchpad:directory:/Users/me/repos/PwrAgent",
+      );
+    });
+
+    it("force-refreshes git status for a newly picked directory", async () => {
+      const launchpad = buildPickedLaunchpad();
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/PwrAgent",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/PwrAgent",
+        directoryKey: launchpad.directoryKey,
+        directoryLabel: "PwrAgent",
+        currentBranch: "main",
+        launchpad,
+        defaults: launchpadDefaults,
+      }));
+      const getNavigationSnapshot = vi
+        .fn()
+        .mockResolvedValueOnce(buildSnapshot())
+        .mockResolvedValueOnce(
+          buildSnapshot([
+            {
+              key: launchpad.directoryKey,
+              kind: "directory" as const,
+              label: "PwrAgent",
+              path: "/Users/me/repos/PwrAgent",
+              threadKeys: [],
+              needsAttentionCount: 0,
+              launchpad,
+            },
+          ]),
+        );
+      const refreshDirectoryGitStatuses = vi.fn(async () => ({
+        scheduledCount: 1,
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        getNavigationSnapshot,
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+        refreshDirectoryGitStatuses,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.pickAndRegisterDirectory();
+      });
+
+      expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
+        directoryKeys: [launchpad.directoryKey],
+        force: true,
+      });
+    });
+
+    it("does not overwrite launchpad edits when the picker refresh is stale", async () => {
+      const launchpad = buildPickedLaunchpad();
+      const refreshSnapshot = createDeferred<NavigationSnapshot>();
+      const pickDirectoryFromDisk = vi.fn(async () => ({
+        canceled: false as const,
+        path: "/Users/me/repos/PwrAgent",
+      }));
+      const registerDirectoryFromDisk = vi.fn(async () => ({
+        ok: true as const,
+        directoryPath: "/Users/me/repos/PwrAgent",
+        directoryKey: launchpad.directoryKey,
+        directoryLabel: "PwrAgent",
+        currentBranch: "main",
+        launchpad,
+        defaults: launchpadDefaults,
+      }));
+      const getNavigationSnapshot = vi
+        .fn()
+        .mockResolvedValueOnce(buildSnapshot())
+        .mockReturnValueOnce(refreshSnapshot.promise);
+      const updateDirectoryLaunchpad = vi.fn(async () => ({
+        launchpad: buildPickedLaunchpad({
+          prompt: "Edited before refresh completes",
+          updatedAt: 2,
+        }),
+        defaults: launchpadDefaults,
+      }));
+      const desktopApi = buildBaseDesktopApi({
+        getNavigationSnapshot,
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+        refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+        updateDirectoryLaunchpad,
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      let pick!: Promise<void>;
+      act(() => {
+        pick = result.current.pickAndRegisterDirectory();
+      });
+
+      await waitFor(() => {
+        expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+          launchpad.directoryKey,
+        );
+      });
+
+      await act(async () => {
+        await result.current.updateDirectoryLaunchpad(launchpad.directoryKey, {
+          prompt: "Edited before refresh completes",
+        });
+      });
+
+      await waitFor(() => {
+        expect(result.current.selectedLaunchpad?.prompt).toBe(
+          "Edited before refresh completes",
+        );
+      });
+
+      await act(async () => {
+        refreshSnapshot.resolve(buildSnapshot());
+        await pick;
+      });
+
+      expect(result.current.selectedLaunchpad?.prompt).toBe(
+        "Edited before refresh completes",
       );
     });
 

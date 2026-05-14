@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,13 +21,16 @@ async function selectComposerOption(params: {
 async function createDirectoryLaunchpadFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
+  pickedRepoDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-e2e-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   const otherRepoDir = path.join(rootDir, "OtherRepo");
+  const pickedRepoDir = path.join(rootDir, "PickedRepo");
   const worktreeDir = path.join(rootDir, ".pwragent", "worktrees", "mord46hf", "FixtureRepo");
   await mkdir(repoDir, { recursive: true });
   await mkdir(otherRepoDir, { recursive: true });
+  await mkdir(pickedRepoDir, { recursive: true });
 
   execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-B", "main"], { cwd: repoDir, stdio: "ignore" });
@@ -62,6 +65,23 @@ async function createDirectoryLaunchpadFixture(): Promise<{
     ],
     { cwd: otherRepoDir, stdio: "ignore" },
   );
+  execFileSync("git", ["init"], { cwd: pickedRepoDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-B", "main"], { cwd: pickedRepoDir, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=pwragent-tests@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Seed picked fixture repo",
+    ],
+    { cwd: pickedRepoDir, stdio: "ignore" },
+  );
+  const resolvedPickedRepoDir = await realpath(pickedRepoDir);
 
   const fixturePath = path.join(rootDir, "directory-launchpad-workspace.fixture.json");
   await writeFile(
@@ -272,6 +292,7 @@ async function createDirectoryLaunchpadFixture(): Promise<{
 
   return {
     fixturePath,
+    pickedRepoDir: resolvedPickedRepoDir,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -688,6 +709,88 @@ test("directory launchpad does not show workspace application buttons before a t
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     await expect(app.window.getByRole("button", { name: "VS Code" })).toHaveCount(0);
     await expect(app.window.getByRole("button", { name: "Ghostty" })).toHaveCount(0);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("new-thread picker hydrates git status for a newly added directory", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    env: {
+      PWRAGENT_E2E_PICK_DIRECTORY_PATH: fixture.pickedRepoDir,
+    },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    const newThreadButton = app.window
+      .locator(".sidebar__masthead-actions")
+      .getByRole("button", { name: "New thread" });
+    await expect(newThreadButton).toBeEnabled();
+    await newThreadButton.click();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
+
+    await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
+    await app.window.getByRole("button", { name: /Add directory/ }).click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "PickedRepo" }),
+    ).toBeVisible();
+
+    const settings = app.window.getByLabel("New thread settings");
+    const workspaceMode = settings.getByLabel("Workspace mode");
+
+    await expect(workspaceMode).toBeEnabled();
+    await expect(workspaceMode).toContainText("Local (main)");
+    await workspaceMode.click();
+    await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
+    await app.window.getByRole("option", { name: "New worktree" }).click();
+    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("new-thread picker starts a newly added directory in local checkout by default", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    env: {
+      PWRAGENT_E2E_PICK_DIRECTORY_PATH: fixture.pickedRepoDir,
+    },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    const newThreadButton = app.window
+      .locator(".sidebar__masthead-actions")
+      .getByRole("button", { name: "New thread" });
+    await expect(newThreadButton).toBeEnabled();
+    await newThreadButton.click();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
+
+    await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
+    await app.window.getByRole("button", { name: /Add directory/ }).click();
+
+    const settings = app.window.getByLabel("New thread settings");
+    const workspaceMode = settings.getByLabel("Workspace mode");
+    await expect(workspaceMode).toBeEnabled();
+    await expect(workspaceMode).toHaveAttribute("data-value", "local");
+    await expect(workspaceMode).toContainText("Local (main)");
+
+    await app.window
+      .getByRole("textbox", { name: "New thread" })
+      .fill("Start in the picked local checkout");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+
+    await expect
+      .poll(
+        async () =>
+          ((await app.getLastStartTurn()) as { cwd?: string } | undefined)?.cwd,
+      )
+      .toBe(fixture.pickedRepoDir);
   } finally {
     await app.close();
     await fixture.cleanup();
