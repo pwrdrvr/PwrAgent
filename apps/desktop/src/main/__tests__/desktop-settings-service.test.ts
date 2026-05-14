@@ -462,6 +462,31 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("keeps CODEX_HOME fixed to the startup Codex auth profile", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[models.codex]", 'profile = "work"'].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: { CODEX_HOME: path.join(root, "codex") } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({
+      models: { codex: { profile: "personal" } },
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.models.codex.profile.value).toBe("personal");
+    expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(
+      path.join(root, "codex", "profiles", "work"),
+    );
+  });
+
   it("adds login shell PATH entries to the Codex app-server spawn env", () => {
     const service = new DesktopSettingsService({
       env: { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv,

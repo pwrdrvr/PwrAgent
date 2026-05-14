@@ -170,7 +170,7 @@ export function ModelsSettings(props: {
           />
           <SettingsField
             label="Auth profile"
-            sub="Select the Codex home used for auth, config, sessions, skills, and state."
+            sub="Select the Codex home used for auth, config, sessions, skills, and state on the next app launch."
             source={codexProfileSource}
             error={codex.profiles.error}
             control={
@@ -319,7 +319,7 @@ function CodexProfileRow(props: {
       path={profile.codexHome}
       chips={chips}
       selected={profile.selected}
-      selectedLabel="Using"
+      selectedLabel="Next launch"
       disabled={props.disabled || !profile.exists}
       extraAction={
         profile.name && profile.exists && !profile.hasAuthFile ? (

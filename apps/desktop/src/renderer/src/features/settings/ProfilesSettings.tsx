@@ -180,6 +180,9 @@ function PwrAgentProfileRow(props: {
         <div className="settings-profile-row__codex">
           <span className="settings-profile-row__label">Codex auth profile</span>
           {props.codexProfileControl}
+          <span className="settings-profile-row__meta">
+            Applies the next time this PwrAgent profile launches.
+          </span>
         </div>
       </div>
       <div className="settings-pathrow__chips">

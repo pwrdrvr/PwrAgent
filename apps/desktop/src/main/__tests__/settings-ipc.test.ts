@@ -318,6 +318,20 @@ describe("settings ipc", () => {
         patch: {
           models: {
             codex: {
+              profile: "work",
+            },
+          },
+        },
+      },
+    );
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
+
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          models: {
+            codex: {
               path: "codex-next",
             },
           },

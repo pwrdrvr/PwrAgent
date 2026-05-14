@@ -73,7 +73,6 @@ async function refreshModelBackendsIfNeeded(params: {
 }): Promise<void> {
   if (
     params.patch?.models?.codex?.path !== undefined
-    || params.patch?.models?.codex?.profile !== undefined
     || params.secret === "grokApiKey"
   ) {
     await disposeDesktopBackendRegistry();

@@ -143,10 +143,18 @@ export function Sidebar(props: SidebarProps) {
   const runtimeGitRefValue = props.runtimeIdentity
     ? runtimeGitRefCopyValue(props.runtimeIdentity)
     : undefined;
-  const activeProfile = props.activeProfile
+  const currentActiveProfile = props.activeProfile
     ? props.profiles?.find((profile) => profile.active)
       ?? props.profiles?.find((profile) => profile.name === props.activeProfile)
     : undefined;
+  const [startupActiveProfile, setStartupActiveProfile] =
+    useState<DesktopPwrAgentProfileSummary>();
+  useEffect(() => {
+    if (!startupActiveProfile && currentActiveProfile) {
+      setStartupActiveProfile(currentActiveProfile);
+    }
+  }, [currentActiveProfile, startupActiveProfile]);
+  const activeProfile = startupActiveProfile ?? currentActiveProfile;
   const codexBackend = props.backends.find((backend) => backend.kind === "codex");
   const profileLabel = props.activeProfile
     ? formatProfileIdentityLabel(props.activeProfile, activeProfile)

@@ -33,7 +33,6 @@ import {
   resolveProfileDir,
   setDefaultProfileName,
 } from "../profile";
-import { disposeDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   applyDesktopSettingsPatch,
   readDesktopSettingsConfig,
@@ -202,10 +201,6 @@ export async function setDesktopPwrAgentProfileCodexProfile(
   applyDesktopSettingsPatch(resolveDesktopConfigPath({ cliProfile: profile }), {
     models: { codex: { profile: codexProfile } },
   });
-
-  if (profile === resolveActiveProfileName()) {
-    await disposeDesktopBackendRegistry();
-  }
 
   return { profile, codexProfile };
 }

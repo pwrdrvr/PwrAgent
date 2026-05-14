@@ -275,6 +275,92 @@ describe("Sidebar", () => {
     expect(tooltip).toHaveTextContent("Spark Weekly limit: 97% left");
   });
 
+  it("keeps the sidebar Codex profile identity fixed after settings refresh", () => {
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        activeProfile="work"
+        profiles={[
+          {
+            name: "work",
+            displayName: "work",
+            active: true,
+            default: false,
+            profileDir: "/home/example/.pwragent/profiles/work",
+            canDelete: false,
+            codexProfile: {
+              name: "work3",
+              displayName: "work3",
+              codexHome: "/home/example/.codex/profiles/work3",
+              source: "directory",
+              exists: true,
+              selected: true,
+              hasAuthFile: true,
+              hasConfigFile: true,
+            },
+          },
+        ]}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    rerender(
+      <Sidebar
+        backends={backends}
+        activeProfile="work"
+        profiles={[
+          {
+            name: "work",
+            displayName: "work",
+            active: true,
+            default: false,
+            profileDir: "/home/example/.pwragent/profiles/work",
+            canDelete: false,
+            codexProfile: {
+              name: "personal",
+              displayName: "personal",
+              codexHome: "/home/example/.codex/profiles/personal",
+              source: "directory",
+              exists: true,
+              selected: true,
+              hasAuthFile: true,
+              hasConfigFile: true,
+            },
+          },
+        ]}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    })).toHaveTextContent("profile:work, codex:work3");
+  });
+
   it("keeps recents to a single worktree indicator on the directory chip", () => {
     render(
       <Sidebar

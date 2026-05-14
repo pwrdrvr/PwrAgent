@@ -289,6 +289,9 @@ All desktop config and state lives under `~/.pwragent/` (the
   `PWRAGENT_PROFILE=<name>` (defaults to `default` unless a startup
   default is set in Settings -> Profiles). The command-line argument
   wins when both are present.
+- PwrAgent and Codex auth profile identity are process-start choices.
+  Changing the startup PwrAgent profile or the Codex auth profile in
+  Settings affects the next app launch, not the running app-server.
 - For development profile testing from the repo root, run
   `pnpm dev -- --profile work`. The shortcut `pnpm dev:dev` launches
   the desktop app with `--profile dev`.
