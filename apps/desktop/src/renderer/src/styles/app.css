@@ -101,6 +101,39 @@ textarea,
   grid-template-columns: minmax(0, 1fr);
 }
 
+.app-shell--startup {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-startup {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--bg-app);
+}
+
+.app-startup__brand {
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.app-startup__brand span {
+  color: var(--accent);
+}
+
+.app-startup__status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .sidebar {
   display: flex;
   position: relative;
