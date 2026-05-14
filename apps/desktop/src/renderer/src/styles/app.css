@@ -3727,7 +3727,7 @@ textarea,
   box-shadow: var(--shadow-popover);
 }
 
-.settings-confirm-dialog::before {
+.settings-confirm-dialog--danger::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;

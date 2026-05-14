@@ -1548,6 +1548,7 @@ describe("SettingsScreen", () => {
     const createDialog = await screen.findByRole("dialog", {
       name: "Add PwrAgent profile",
     });
+    expect(createDialog).not.toHaveClass("settings-confirm-dialog--danger");
     fireEvent.change(
       within(createDialog).getByRole("textbox", {
         name: "PwrAgent profile name",
@@ -1597,6 +1598,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(scratchRow).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete profile?" });
+    expect(dialog).toHaveClass("settings-confirm-dialog--danger");
     expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete profile" }));
 

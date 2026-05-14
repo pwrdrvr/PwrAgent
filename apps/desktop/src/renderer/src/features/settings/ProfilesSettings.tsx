@@ -235,7 +235,7 @@ function ProfileDeleteDialog(props: {
       <div
         aria-labelledby="delete-profile-heading"
         aria-modal="true"
-        className="settings-confirm-dialog"
+        className="settings-confirm-dialog settings-confirm-dialog--danger"
         role="dialog"
       >
         <h2 id="delete-profile-heading">Delete profile?</h2>
