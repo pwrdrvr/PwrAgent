@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -653,6 +653,41 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
 
     await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad does not show workspace application buttons before a thread exists", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const fakeBinDir = path.join(path.dirname(fixture.fixturePath), "fake-bin");
+  await mkdir(fakeBinDir, { recursive: true });
+  for (const binaryName of ["code", "ghostty"]) {
+    const binaryPath = path.join(fakeBinDir, binaryName);
+    await writeFile(binaryPath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(binaryPath, 0o755);
+  }
+
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    ).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
+    await expect(app.window.getByRole("button", { name: "VS Code" })).toHaveCount(0);
+    await expect(app.window.getByRole("button", { name: "Ghostty" })).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

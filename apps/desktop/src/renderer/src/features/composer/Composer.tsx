@@ -4634,11 +4634,11 @@ function getComposerWorkspaceOpenPath(params: {
   launchpad?: NavigationLaunchpadDraft;
   threadWorkspace?: ThreadWorkspace;
 }): string | undefined {
-  return (
-    params.launchpad?.directoryPath ??
-    params.threadWorkspace?.sourcePath ??
-    params.directory?.path
-  );
+  if (params.launchpad) {
+    return undefined;
+  }
+
+  return params.threadWorkspace?.sourcePath ?? params.directory?.path;
 }
 
 function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | undefined {

@@ -332,6 +332,63 @@ describe("Composer", () => {
     });
   });
 
+  it("does not show workspace application buttons on a launchpad before the thread exists", () => {
+    render(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [
+            {
+              id: "ghostty",
+              kind: "terminal",
+              name: "Ghostty",
+              source: "application",
+              appPath: "/Applications/Ghostty.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "ghostty", source: "config" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "VS Code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ghostty" })).not.toBeInTheDocument();
+  });
+
   it("shows thread environment commands from refreshed environment options", async () => {
     const runCodexEnvironmentAction = vi.fn(async () => ({
       backend: "codex" as const,
