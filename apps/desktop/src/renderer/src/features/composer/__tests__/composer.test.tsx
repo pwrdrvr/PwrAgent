@@ -385,6 +385,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Environment command")).toHaveTextContent(
       "Dev - Messaging",
     );
+    expect(screen.queryByLabelText("Codex environment")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await waitFor(() => {
       expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
@@ -432,6 +433,7 @@ describe("Composer", () => {
       "No commands",
     );
     expect(screen.getByLabelText("Environment command")).toBeDisabled();
+    expect(screen.queryByLabelText("Codex environment")).not.toBeInTheDocument();
   });
 
   it("does not show environment commands on a launchpad", () => {

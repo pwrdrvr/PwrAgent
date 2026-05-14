@@ -2539,32 +2539,6 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const setThreadCodexEnvironment = async (environmentId: string): Promise<void> => {
-    if (
-      !props.thread ||
-      props.thread.source !== "codex" ||
-      !props.desktopApi?.setCodexThreadEnvironment
-    ) {
-      return;
-    }
-
-    setSendError(undefined);
-    props.onPendingStatusChange?.("Updating environment");
-    try {
-      await props.desktopApi.setCodexThreadEnvironment({
-        backend: props.thread.source,
-        threadId: props.thread.id,
-        environmentId: environmentId || undefined,
-      });
-      setSelectedThreadCodexActionId("");
-      await props.onRefreshNavigation?.();
-    } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
-    } finally {
-      props.onPendingStatusChange?.(undefined);
-    }
-  };
-
   const applyExecutionModeSelection = (
     executionMode: ThreadExecutionMode,
   ): void => {
@@ -3787,26 +3761,6 @@ export function Composer(props: ComposerProps) {
             <span className="composer__fixed-value" aria-label="Provider">
               {formatBackendLabel(props.thread.source)}
             </span>
-          ) : null}
-
-          {props.thread && threadCodexEnvironmentOptions.length > 0 ? (
-            <ComposerDropdown
-              ariaLabel="Codex environment"
-              compact
-              disabled={!props.desktopApi?.setCodexThreadEnvironment}
-              icon={FileCodeIcon}
-              value={props.thread.codexEnvironmentRuntime?.environmentId ?? ""}
-              options={[
-                { label: "No environment", value: "" },
-                ...threadCodexEnvironmentOptions.map((environment) => ({
-                  label: environment.name,
-                  value: environment.id,
-                })),
-              ]}
-              onChange={(value) => {
-                void setThreadCodexEnvironment(value);
-              }}
-            />
           ) : null}
 
           {props.thread?.codexEnvironmentRuntime ? (
