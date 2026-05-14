@@ -114,6 +114,63 @@ describe("startup CPU analysis", () => {
     });
   });
 
+  it("aggregates duplicate function frames from repeated optimized nodes", () => {
+    const analysis = analyzeCpuProfile({
+      process: "renderer",
+      profile: {
+        startTime: 0,
+        endTime: 3000,
+        samples: [2, 3, 3],
+        timeDeltas: [1000, 750, 1250],
+        nodes: [
+          {
+            id: 1,
+            callFrame: {
+              functionName: "(root)",
+              scriptId: "0",
+              url: "",
+            },
+            children: [2, 3],
+          },
+          {
+            id: 2,
+            callFrame: {
+              functionName: "formatRelativeTime",
+              scriptId: "1",
+              url: "http://127.0.0.1:5173/src/features/navigation/ThreadRow.tsx",
+              lineNumber: 10,
+              columnNumber: 2,
+            },
+          },
+          {
+            id: 3,
+            callFrame: {
+              functionName: "formatRelativeTime",
+              scriptId: "2",
+              url: "http://127.0.0.1:5173/src/features/navigation/ThreadRow.tsx",
+              lineNumber: 10,
+              columnNumber: 2,
+            },
+          },
+        ],
+      },
+      repoRoot: "/repo",
+      desktopRoot: "/repo/apps/desktop",
+    });
+
+    expect(analysis.topFunctionsBySelf[0]).toMatchObject({
+      functionName: "formatRelativeTime",
+      selfMicros: 3000,
+      totalMicros: 3000,
+      lineNumber: 10,
+    });
+    expect(
+      analysis.topFunctionsBySelf.filter(
+        (entry) => entry.functionName === "formatRelativeTime"
+      )
+    ).toHaveLength(1);
+  });
+
   it("renders a human-readable summary for both processes", () => {
     const main = analyzeCpuProfile({
       process: "main",

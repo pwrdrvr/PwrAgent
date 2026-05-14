@@ -25,6 +25,10 @@ import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
+const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+});
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -693,8 +697,5 @@ function formatRelativeTime(timestamp?: number): string {
     return `${deltaDays}d`;
   }
 
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(timestamp);
+  return absoluteDateFormatter.format(timestamp);
 }

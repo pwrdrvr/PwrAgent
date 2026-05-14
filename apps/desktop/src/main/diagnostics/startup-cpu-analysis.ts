@@ -22,7 +22,9 @@ export type CpuProfile = {
 type CpuProfileProcess = "main" | "renderer";
 
 type RankedFunction = {
+  columnNumber?: number;
   functionName: string;
+  lineNumber?: number;
   sourceBucket: string;
   selfMicros: number;
   totalMicros: number;
@@ -89,7 +91,7 @@ export function analyzeCpuProfile(params: {
     }
   }
 
-  const functionRankings: RankedFunction[] = [];
+  const functionRankings = new Map<string, RankedFunction>();
   const sourceRankings = new Map<string, RankedSource>();
 
   for (const [nodeId, node] of nodeById.entries()) {
@@ -106,12 +108,25 @@ export function analyzeCpuProfile(params: {
     });
 
     const functionName = node.callFrame.functionName?.trim() || "(anonymous)";
-    functionRankings.push({
+    const lineNumber = normalizeLocationNumber(node.callFrame.lineNumber);
+    const columnNumber = normalizeLocationNumber(node.callFrame.columnNumber);
+    const functionKey = [
       functionName,
       sourceBucket,
-      selfMicros,
-      totalMicros,
-    });
+      lineNumber ?? "",
+      columnNumber ?? "",
+    ].join("\u0000");
+    const existingFunction = functionRankings.get(functionKey) ?? {
+      functionName,
+      sourceBucket,
+      ...(lineNumber !== undefined ? { lineNumber } : {}),
+      ...(columnNumber !== undefined ? { columnNumber } : {}),
+      selfMicros: 0,
+      totalMicros: 0,
+    };
+    existingFunction.selfMicros += selfMicros;
+    existingFunction.totalMicros += totalMicros;
+    functionRankings.set(functionKey, existingFunction);
 
     const existingSource = sourceRankings.get(sourceBucket) ?? {
       sourceBucket,
@@ -126,10 +141,10 @@ export function analyzeCpuProfile(params: {
   return {
     process: params.process,
     durationMicros,
-    topFunctionsBySelf: [...functionRankings]
+    topFunctionsBySelf: [...functionRankings.values()]
       .sort((left, right) => right.selfMicros - left.selfMicros)
       .slice(0, 10),
-    topFunctionsByTotal: [...functionRankings]
+    topFunctionsByTotal: [...functionRankings.values()]
       .sort((left, right) => right.totalMicros - left.totalMicros)
       .slice(0, 10),
     topSourcesBySelf: [...sourceRankings.values()]
@@ -139,6 +154,10 @@ export function analyzeCpuProfile(params: {
       .sort((left, right) => right.totalMicros - left.totalMicros)
       .slice(0, 10),
   };
+}
+
+function normalizeLocationNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && value >= 0 ? value : undefined;
 }
 
 export function renderStartupCpuAnalysisSummary(params: {
@@ -159,8 +178,10 @@ export function renderStartupCpuAnalysisSummary(params: {
     lines.push("");
     lines.push("Top functions by self time:");
     for (const entry of result.topFunctionsBySelf.slice(0, 5)) {
+      const location =
+        entry.lineNumber !== undefined ? `:${entry.lineNumber + 1}` : "";
       lines.push(
-        `- \`${entry.functionName}\` in \`${entry.sourceBucket}\` — self ${formatMicros(
+        `- \`${entry.functionName}\` in \`${entry.sourceBucket}${location}\` — self ${formatMicros(
           entry.selfMicros,
         )}, total ${formatMicros(entry.totalMicros)}`,
       );
