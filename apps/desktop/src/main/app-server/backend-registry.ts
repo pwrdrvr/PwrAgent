@@ -195,7 +195,7 @@ type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   listThreads(
-    params?: { archived?: boolean; filter?: string },
+    params?: { archived?: boolean; enrichDirectories?: boolean; filter?: string },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
@@ -868,6 +868,7 @@ type ThreadListCallerReason =
   | "ipc-list-threads"
   | "messaging-navigation-snapshot"
   | "navigation-snapshot"
+  | "startup-prewarm"
   | "title-generation"
   | "workspace-handoff"
   | (string & {});
@@ -879,6 +880,23 @@ type ThreadListCacheState = {
 };
 
 let threadListCacheSequence = 0;
+
+function shouldEnrichThreadDirectories(
+  callerReason?: ThreadListCallerReason,
+): boolean {
+  switch (callerReason) {
+    case "active-turn-branch-adoption":
+    case "branch-drift":
+    case "messaging-navigation-snapshot":
+    case "navigation-snapshot":
+    case "startup-prewarm":
+    case "title-generation":
+    case "turn-cwd":
+      return false;
+    default:
+      return true;
+  }
+}
 
 type MessagingArchiveCleanupStore = Pick<
   MessagingStoreLike,
@@ -1502,9 +1520,15 @@ export class DesktopBackendRegistry {
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
+    enrichDirectories?: boolean;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
-    const cacheKey = this.buildThreadListCacheKey(params);
+    const normalizedParams = {
+      ...params,
+      enrichDirectories:
+        params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
+    };
+    const cacheKey = this.buildThreadListCacheKey(normalizedParams);
     const cached = this.threadListCache.get(cacheKey);
     const now = Date.now();
     if (cached?.threads && (cached.expiresAt ?? 0) > now) {
@@ -1524,7 +1548,7 @@ export class DesktopBackendRegistry {
       return await cached.promise;
     }
 
-    const promise = this.readThreadList(params)
+    const promise = this.readThreadList(normalizedParams)
       .then((threads) => {
         this.threadListCache.set(cacheKey, {
           expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
@@ -1544,6 +1568,7 @@ export class DesktopBackendRegistry {
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
+    enrichDirectories: boolean;
     filter?: string;
   }): Promise<AppServerThreadSummary[]> {
     const diagnostics = {
@@ -1553,6 +1578,7 @@ export class DesktopBackendRegistry {
     if (params.backend === "codex") {
       const threads = await this.listCodexThreads({
         archived: params.archived,
+        enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }, diagnostics);
       this.scheduleThreadListArchiveStateCleanup({
@@ -1587,12 +1613,14 @@ export class DesktopBackendRegistry {
         backend: "codex",
         archived: params.archived,
         callerReason: params.callerReason,
+        enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }),
       this.listThreads({
         backend: "grok",
         archived: params.archived,
         callerReason: params.callerReason,
+        enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }).catch(() => []),
     ]);
@@ -3779,11 +3807,14 @@ export class DesktopBackendRegistry {
   private buildThreadListCacheKey(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
+    enrichDirectories?: boolean;
     filter?: string;
   }): string {
     return JSON.stringify({
       archived: params.archived === true,
       backend: params.backend ?? "all",
+      enrichDirectories:
+        params.backend === "grok" ? undefined : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
     });
   }
@@ -4138,6 +4169,7 @@ export class DesktopBackendRegistry {
 
   private async listCodexThreads(params: {
     archived?: boolean;
+    enrichDirectories?: boolean;
     filter?: string;
   } = {}, diagnostics?: {
     callerReason?: string;

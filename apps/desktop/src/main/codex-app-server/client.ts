@@ -3907,6 +3907,7 @@ export class CodexAppServerClient {
 
   async listThreads(params?: {
     archived?: boolean;
+    enrichDirectories?: boolean;
     filter?: string;
   }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
@@ -3925,7 +3926,9 @@ export class CodexAppServerClient {
         filter: params?.filter,
         requestTimeoutMs: requestParams.timeoutMs,
       });
-      return await this.enrichThreads(archivedThreads);
+      return await this.enrichThreads(archivedThreads, {
+        enrichDirectories: params?.enrichDirectories ?? true,
+      });
     }
 
     const activeThreads = await requestThreadListPages({
@@ -3941,7 +3944,9 @@ export class CodexAppServerClient {
     });
     this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
 
-    return await this.enrichThreads(threads);
+    return await this.enrichThreads(threads, {
+      enrichDirectories: params?.enrichDirectories ?? true,
+    });
   }
 
   private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
@@ -4010,7 +4015,21 @@ export class CodexAppServerClient {
 
   private async enrichThreads(
     threads: RawCodexThreadSummary[],
+    options: { enrichDirectories: boolean },
   ): Promise<AppServerThreadSummary[]> {
+    if (!options.enrichDirectories) {
+      return threads.map((thread) => {
+        const projectKey = thread.projectKey?.trim() || undefined;
+        return {
+          ...thread,
+          projectKey,
+          gitBranch: thread.gitBranch,
+          linkedDirectories: [],
+          source: "codex" as const,
+        };
+      });
+    }
+
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const projectKey = await resolveThreadProjectKey(thread);

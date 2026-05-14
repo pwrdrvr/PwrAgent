@@ -121,10 +121,25 @@ function DesktopAppShell(props: {
       return;
     }
 
-    const frameId = window.requestAnimationFrame(() => {
-      setThreadViewReady(true);
+    let timeoutId: number | undefined;
+    let secondFrameId: number | undefined;
+    const firstFrameId = window.requestAnimationFrame(() => {
+      secondFrameId = window.requestAnimationFrame(() => {
+        timeoutId = window.setTimeout(() => {
+          setThreadViewReady(true);
+        }, 0);
+      });
     });
-    return () => window.cancelAnimationFrame(frameId);
+
+    return () => {
+      window.cancelAnimationFrame(firstFrameId);
+      if (secondFrameId !== undefined) {
+        window.cancelAnimationFrame(secondFrameId);
+      }
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
   }, [mainView, navigation.loading, threadViewReady]);
   useEffect(() => {
     if (!threadViewReady || ThreadViewComponent) {
