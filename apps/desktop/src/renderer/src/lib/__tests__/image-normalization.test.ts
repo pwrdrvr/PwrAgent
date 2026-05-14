@@ -252,6 +252,32 @@ describe("image normalization", () => {
     });
   });
 
+  it("preserves PNG bytes when actual size is selected", async () => {
+    const dependencies = makeDependencies({
+      decode: vi.fn(async () => ({
+        width: 2880,
+        height: 1920,
+        draw: vi.fn(),
+      })),
+    });
+
+    const normalized = await normalizeImageFile(
+      new File([new Uint8Array(329 * 1024)], "screenshot.png", {
+        type: "image/png",
+      }),
+      { dependencies, maxPatchCount: 0 },
+    );
+
+    expect(dependencies.encodeCanvas).not.toHaveBeenCalled();
+    expect(normalized).toMatchObject({
+      dataUrl: "data:image/png;base64,AQID",
+      height: 1920,
+      mimeType: "image/png",
+      size: 329 * 1024,
+      width: 2880,
+    });
+  });
+
   it("retries JPEG encoding when a resized output is larger than the source", async () => {
     const encodeCanvas = vi.fn(async (_canvas, mimeType, quality) => {
       const size = quality >= 0.85 ? 140 : 90;
