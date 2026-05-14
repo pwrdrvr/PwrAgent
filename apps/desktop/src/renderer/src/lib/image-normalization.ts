@@ -11,6 +11,7 @@ export const NORMALIZED_IMAGE_MAX_SHORT_EDGE =
   IMAGE_UPLOAD_QUALITY_PROFILES.medium.maxShortEdge;
 export const NORMALIZED_IMAGE_JPEG_QUALITY =
   IMAGE_UPLOAD_QUALITY_PROFILES.medium.jpegQuality;
+const IMAGE_PATCH_BUDGET_SLOP_FACTOR = 1.2;
 
 export type NormalizedImageMimeType = "image/jpeg" | "image/png";
 
@@ -125,7 +126,7 @@ export function calculatePatchBoundedImageDimensions(params: {
   }
 
   const patchCount = imagePatchCount(width, height);
-  if (patchCount <= maxPatchCount) {
+  if (patchCount <= maxPatchCount * IMAGE_PATCH_BUDGET_SLOP_FACTOR) {
     return { width, height };
   }
 

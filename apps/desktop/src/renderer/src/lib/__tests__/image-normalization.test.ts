@@ -86,6 +86,38 @@ describe("image normalization", () => {
     ).toEqual({ width: 2048, height: 2048 });
   });
 
+  it("leaves images within 20 percent of the patch budget alone", () => {
+    expect(
+      calculatePatchBoundedImageDimensions({
+        width: 1120,
+        height: 1024,
+        maxPatchCount: 1024,
+      }),
+    ).toEqual({ width: 1120, height: 1024 });
+  });
+
+  it("only reduces dimensions and keeps the aspect ratio when patch capping", () => {
+    const dimensions = calculatePatchBoundedImageDimensions({
+      width: 2880,
+      height: 1920,
+      maxPatchCount: 1024,
+    });
+
+    expect(dimensions.width).toBeLessThan(2880);
+    expect(dimensions.height).toBeLessThan(1920);
+    expect(dimensions.width / dimensions.height).toBeCloseTo(2880 / 1920, 2);
+  });
+
+  it("does not upscale images below the selected patch budget", () => {
+    expect(
+      calculatePatchBoundedImageDimensions({
+        width: 800,
+        height: 533,
+        maxPatchCount: 4096,
+      }),
+    ).toEqual({ width: 800, height: 533 });
+  });
+
   it("does not upscale small images", () => {
     expect(calculateBoundedImageDimensions({ width: 640, height: 480 })).toEqual({
       width: 640,
