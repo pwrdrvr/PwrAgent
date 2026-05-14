@@ -188,6 +188,78 @@ describe("Sidebar", () => {
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
+  it("shows the active PwrAgent and Codex profiles with account tooltip details", async () => {
+    render(
+      <Sidebar
+        backends={[
+          {
+            ...backends[0]!,
+            account: {
+              type: "chatgpt",
+              email: "work@example.com",
+              planType: "pro",
+            },
+            rateLimits: [
+              {
+                name: "5h limit",
+                remaining: 85,
+                limit: 100,
+              },
+            ],
+          },
+        ]}
+        activeProfile="work"
+        profiles={[
+          {
+            name: "work",
+            displayName: "work",
+            active: true,
+            default: false,
+            profileDir: "/home/example/.pwragent/profiles/work",
+            canDelete: false,
+            codexProfile: {
+              name: "work3",
+              displayName: "work3",
+              codexHome: "/home/example/.codex/profiles/work3",
+              source: "directory",
+              exists: true,
+              selected: true,
+              hasAuthFile: true,
+              hasConfigFile: true,
+            },
+          },
+        ]}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const profileButton = screen.getByRole("button", {
+      name: "Open PwrAgent profile menu",
+    });
+    expect(profileButton).toHaveTextContent("profile:work, codex:work3");
+
+    fireEvent.mouseEnter(profileButton);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("PwrAgent profile: work");
+    expect(tooltip).toHaveTextContent("Codex profile: work3");
+    expect(tooltip).toHaveTextContent("Codex account: work@example.com");
+    expect(tooltip).toHaveTextContent("Plan: pro");
+    expect(tooltip).toHaveTextContent("5h limit");
+    expect(tooltip).toHaveTextContent("85/100 remaining");
+  });
+
   it("keeps recents to a single worktree indicator on the directory chip", () => {
     render(
       <Sidebar

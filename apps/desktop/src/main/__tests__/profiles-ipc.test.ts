@@ -1,0 +1,79 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  PWRAGENT_HOME_ENV,
+  PWRAGENT_PROFILE_ENV,
+  ensureNamedProfileExists,
+  setDefaultProfileName,
+} from "../profile";
+
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: vi.fn(),
+    removeHandler: vi.fn(),
+  },
+}));
+
+vi.mock("../app-server/backend-registry", () => ({
+  disposeDesktopBackendRegistry: vi.fn(async () => undefined),
+}));
+
+const roots: string[] = [];
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const root of roots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function createRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-profile-ipc-"));
+  roots.push(root);
+  return root;
+}
+
+describe("profile IPC helpers", () => {
+  it("does not move the startup default row when listing profiles", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+    } as NodeJS.ProcessEnv;
+    const activeEnv = {
+      ...env,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env: activeEnv });
+    ensureNamedProfileExists("scratch", { env });
+    ensureNamedProfileExists("work", { env });
+    setDefaultProfileName("scratch", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const {
+      listDesktopPwrAgentProfiles,
+      setDefaultDesktopPwrAgentProfile,
+    } = await import("../ipc/profiles");
+
+    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
+      "dev",
+      "default",
+      "scratch",
+      "work",
+    ]);
+
+    setDefaultDesktopPwrAgentProfile({ profile: "work" });
+
+    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
+      "dev",
+      "default",
+      "scratch",
+      "work",
+    ]);
+    expect(
+      listDesktopPwrAgentProfiles().profiles.find((profile) => profile.name === "work")
+        ?.default,
+    ).toBe(true);
+  });
+});

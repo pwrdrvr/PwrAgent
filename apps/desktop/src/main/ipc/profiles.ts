@@ -65,8 +65,6 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
       .sort((left, right) => {
         if (left.name === activeProfile) return -1;
         if (right.name === activeProfile) return 1;
-        if (left.name === defaultProfile) return -1;
-        if (right.name === defaultProfile) return 1;
         return left.name.localeCompare(right.name);
       })
       .map((profile) => ({
