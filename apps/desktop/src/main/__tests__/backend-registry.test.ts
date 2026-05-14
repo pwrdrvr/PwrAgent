@@ -1396,9 +1396,14 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({
       threads: cheapThreads,
     });
+    const enrichmentStarted = createDeferred<void>();
+    const enrichmentRelease = createDeferred<void>();
     const enrichThreadDirectories = vi.fn(
-      async (threads: AppServerThreadSummary[]) =>
-        threads.map((thread) => enrichedByThreadId.get(thread.id) ?? thread),
+      async (threads: AppServerThreadSummary[]) => {
+        enrichmentStarted.resolve();
+        await enrichmentRelease.promise;
+        return threads.map((thread) => enrichedByThreadId.get(thread.id) ?? thread);
+      },
     );
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock();
@@ -1408,21 +1413,20 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
     });
 
-    await registry.listThreads({
+    let listResolved = false;
+    const listPromise = registry.listThreads({
       backend: "codex",
       callerReason: "startup-prewarm",
     });
+    void listPromise.then(() => {
+      listResolved = true;
+    });
 
-    await expectEventually(
-      async () => {
-        const overlays = await overlayStore.getThreadOverlayStates({
-          backend: "codex",
-          threadIds: ["project-a-worktree-1"],
-        });
-        return overlays["project-a-worktree-1"]?.extraLinkedDirectories[0]?.path;
-      },
-      projectA,
-    );
+    await enrichmentStarted.promise;
+    await flushAsync();
+    expect(listResolved).toBe(false);
+    enrichmentRelease.resolve();
+    await listPromise;
 
     const overlaysByThreadId = await overlayStore.getThreadOverlayStates({
       backend: "codex",

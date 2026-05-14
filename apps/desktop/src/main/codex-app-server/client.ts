@@ -4073,20 +4073,26 @@ export class CodexAppServerClient {
   private async enrichRawThreadDirectories(
     threads: RawCodexThreadSummary[],
   ): Promise<EnrichedCodexThread[]> {
-    const enrichedThreads: EnrichedCodexThread[] = [];
+    const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
 
     for await (const enrichedThread of new IterableMapper(
-      threads,
-      async (thread): Promise<EnrichedCodexThread> => {
+      threads.map((thread, index) => ({ index, thread })),
+      async ({ index, thread }): Promise<{
+        index: number;
+        thread: EnrichedCodexThread;
+      }> => {
         const projectKey = await resolveThreadProjectKey(thread);
         const enrichment = await this.threadDirectoryEnricher(projectKey);
         return {
-          ...thread,
-          projectKey,
-          gitBranch: thread.gitBranch,
-          linkedDirectories: enrichment.linkedDirectories,
-          observedGitBranch: enrichment.observedGitBranch,
-          source: "codex" as const,
+          index,
+          thread: {
+            ...thread,
+            projectKey,
+            gitBranch: thread.gitBranch,
+            linkedDirectories: enrichment.linkedDirectories,
+            observedGitBranch: enrichment.observedGitBranch,
+            source: "codex" as const,
+          },
         };
       },
       {
@@ -4094,10 +4100,12 @@ export class CodexAppServerClient {
         maxUnread: THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD,
       },
     )) {
-      enrichedThreads.push(enrichedThread);
+      enrichedThreads[enrichedThread.index] = enrichedThread.thread;
     }
 
-    return enrichedThreads;
+    return enrichedThreads.filter(
+      (thread): thread is EnrichedCodexThread => Boolean(thread),
+    );
   }
 
   async listSkills(params?: {

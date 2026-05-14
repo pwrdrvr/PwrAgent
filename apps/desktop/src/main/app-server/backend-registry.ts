@@ -1377,7 +1377,6 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
-  private readonly codexDirectoryBackfillProjectKeys = new Set<string>();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly captureStores: ProtocolCaptureStore[] = [];
@@ -4263,11 +4262,13 @@ export class DesktopBackendRegistry {
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
     if (!params.archived && params.enrichDirectories === false) {
-      this.scheduleCodexDirectoryBackfill({
-        diagnostics,
-        overlaysByThreadId,
-        threads: threadsWithPending,
-      });
+      const updatedOverlaysByThreadId =
+        await this.backfillMissingCodexDirectoryRelationships({
+          diagnostics,
+          overlaysByThreadId,
+          threads: threadsWithPending,
+        });
+      Object.assign(overlaysByThreadId, updatedOverlaysByThreadId);
     }
 
     const enrichedThreads = await Promise.all(
@@ -4293,16 +4294,16 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private scheduleCodexDirectoryBackfill(params: {
+  private async backfillMissingCodexDirectoryRelationships(params: {
     diagnostics?: {
       callerReason?: string;
       ownerId?: string;
     };
     overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
     threads: AppServerThreadSummary[];
-  }): void {
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
     if (!this.codexClient.enrichThreadDirectories) {
-      return;
+      return {};
     }
 
     const candidates = params.threads.filter((thread) => {
@@ -4312,41 +4313,21 @@ export class DesktopBackendRegistry {
       }
 
       const projectPath = path.resolve(projectKey!);
-      if (hasCachedWorktreeDirectory(params.overlaysByThreadId[thread.id], projectPath)) {
-        return false;
-      }
-      if (this.codexDirectoryBackfillProjectKeys.has(projectPath)) {
-        return false;
-      }
-
-      return true;
+      return !hasCachedWorktreeDirectory(
+        params.overlaysByThreadId[thread.id],
+        projectPath,
+      );
     });
     if (candidates.length === 0) {
-      return;
+      return {};
     }
 
-    for (const thread of candidates) {
-      this.codexDirectoryBackfillProjectKeys.add(path.resolve(thread.projectKey!.trim()));
-    }
-
-    void this.backfillCodexDirectoryRelationships({
-      candidates,
-      diagnostics: params.diagnostics,
-    });
-  }
-
-  private async backfillCodexDirectoryRelationships(params: {
-    candidates: AppServerThreadSummary[];
-    diagnostics?: {
-      callerReason?: string;
-      ownerId?: string;
-    };
-  }): Promise<void> {
     try {
-      const enrichedThreads = await this.codexClient.enrichThreadDirectories!(
-        params.candidates,
-      );
-      let updatedThreadCount = 0;
+      const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
+      const updatedOverlaysByThreadId: Record<
+        string,
+        ThreadOverlayState | undefined
+      > = {};
 
       for (const thread of enrichedThreads) {
         const directory = buildCachedWorktreeDirectory(thread);
@@ -4354,42 +4335,27 @@ export class DesktopBackendRegistry {
           continue;
         }
 
-        await this.overlayStore.addLinkedDirectory({
-          backend: "codex",
-          threadId: thread.id,
-          directory,
-        });
-        updatedThreadCount += 1;
-      }
-
-      if (updatedThreadCount > 0) {
-        await this.emit({
-          backend: "codex",
-          notification: {
-            method: "navigation/threadDirectories/updated",
-            params: {
-              updatedThreadCount,
-            },
-          } as unknown as AppServerNotification,
-        });
+        updatedOverlaysByThreadId[thread.id] =
+          await this.overlayStore.addLinkedDirectory({
+            backend: "codex",
+            threadId: thread.id,
+            directory,
+          });
       }
 
       logDebug("codexDirectoryBackfill:completed", {
         callerReason: params.diagnostics?.callerReason ?? null,
-        candidateCount: params.candidates.length,
-        updatedThreadCount,
+        candidateCount: candidates.length,
+        updatedThreadCount: Object.keys(updatedOverlaysByThreadId).length,
       });
+
+      return updatedOverlaysByThreadId;
     } catch (error) {
-      for (const thread of params.candidates) {
-        const projectKey = thread.projectKey?.trim();
-        if (projectKey) {
-          this.codexDirectoryBackfillProjectKeys.delete(path.resolve(projectKey));
-        }
-      }
       backendRegistryLog.warn("Codex directory relationship backfill failed", {
         callerReason: params.diagnostics?.callerReason ?? null,
         error: error instanceof Error ? error.message : String(error),
       });
+      return {};
     }
   }
 
