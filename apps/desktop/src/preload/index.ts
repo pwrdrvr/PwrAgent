@@ -34,6 +34,7 @@ import type {
   AppServerReadThreadResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CodexEnvironmentSetupProgressEvent,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -77,6 +78,10 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
+  SetCodexThreadEnvironmentRequest,
+  SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
   RestoreThreadRequest,
@@ -125,6 +130,8 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+  AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -152,6 +159,7 @@ import {
   APP_SERVER_READ_THREAD_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
@@ -412,6 +420,20 @@ const desktopApi = Object.freeze({
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  runCodexEnvironmentAction: async (
+    request: RunCodexEnvironmentActionRequest,
+  ): Promise<RunCodexEnvironmentActionResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+      request,
+    ),
+  setCodexThreadEnvironment: async (
+    request: SetCodexThreadEnvironmentRequest,
+  ): Promise<SetCodexThreadEnvironmentResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+      request,
+    ),
   submitServerRequest: async (
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>
@@ -493,6 +515,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
+    };
+  },
+  onCodexEnvironmentSetupProgress: (
+    callback: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: CodexEnvironmentSetupProgressEvent,
+    ) => callback(payload);
+    ipcRenderer.on(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, listener);
     };
   },
   getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>

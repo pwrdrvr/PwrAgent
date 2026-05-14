@@ -106,6 +106,35 @@ export type WorktreeSnapshotSummary = {
   unavailableReason?: string;
 };
 
+export type CodexEnvironmentExecutionTarget = "local" | "remote";
+
+export type CodexEnvironmentAction = {
+  id: string;
+  name: string;
+  icon?: string;
+  command: string;
+};
+
+export type CodexThreadEnvironmentRuntime = {
+  environmentId: string;
+  environmentName: string;
+  executionTarget: CodexEnvironmentExecutionTarget;
+  cwd?: string;
+  setupEnabled?: boolean;
+  setupStatus?: "skipped" | "completed" | "failed";
+  setupCommand?: string;
+  setupOutput?: string;
+  setupExitCode?: number;
+  setupDurationMs?: number;
+  actions?: CodexEnvironmentAction[];
+  actionId?: string;
+  actionName?: string;
+  actionCommand?: string;
+  actionStatus?: "started" | "failed";
+  actionPid?: number;
+  sourcePath?: string;
+};
+
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
@@ -126,6 +155,7 @@ export type AppServerThreadSummary = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
 };
 

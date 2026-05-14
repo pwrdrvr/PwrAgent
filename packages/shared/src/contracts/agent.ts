@@ -7,6 +7,7 @@ import type {
   AppServerReviewDelivery,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  CodexThreadEnvironmentRuntime,
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type {
@@ -28,12 +29,14 @@ export type StartThreadRequest = {
   fastMode?: boolean;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 export type StartThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 export type StartTurnRequest = {
@@ -248,6 +251,10 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "fastMode"
       | "workMode"
       | "branchName"
+      | "codexEnvironmentId"
+      | "codexEnvironmentExecutionTarget"
+      | "codexEnvironmentSetupEnabled"
+      | "codexEnvironmentActionId"
       | "directoryLabel"
       | "directoryPath"
     >
@@ -284,6 +291,51 @@ export type MaterializeDirectoryLaunchpadResponse = {
   executionMode: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  codexEnvironmentStartupFailure?: {
+    message: string;
+    phase: "setup" | "action";
+    worktreeCleanupAvailable: boolean;
+  };
+};
+
+export type CodexEnvironmentSetupProgressEvent = {
+  directoryKey: string;
+  environmentId: string;
+  environmentName: string;
+  command: string;
+  cwd?: string;
+  phase: "started" | "stdout" | "stderr" | "completed" | "failed";
+  chunk?: string;
+  output?: string;
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+  at: number;
+};
+
+export type RunCodexEnvironmentActionRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  actionId: string;
+};
+
+export type RunCodexEnvironmentActionResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  codexEnvironmentRuntime: CodexThreadEnvironmentRuntime;
+};
+
+export type SetCodexThreadEnvironmentRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  environmentId?: string;
+};
+
+export type SetCodexThreadEnvironmentResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
 };
 
 /**

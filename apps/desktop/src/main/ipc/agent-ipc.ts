@@ -16,6 +16,10 @@ import type {
   QueueThreadExecutionModeResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
+  SetCodexThreadEnvironmentRequest,
+  SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -42,6 +46,8 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+  AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -51,6 +57,7 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
 
@@ -409,10 +416,36 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: MaterializeDirectoryLaunchpadRequest
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
-      return await registry.materializeDirectoryLaunchpad(request);
+      return await registry.materializeDirectoryLaunchpad(request, {
+        onCodexEnvironmentSetupProgress: (progress) => {
+          event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
+        },
+      });
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.handle(
+    AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+    async (
+      _event,
+      request: RunCodexEnvironmentActionRequest,
+    ): Promise<RunCodexEnvironmentActionResponse> => {
+      return await registry.runCodexEnvironmentAction(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+    async (
+      _event,
+      request: SetCodexThreadEnvironmentRequest,
+    ): Promise<SetCodexThreadEnvironmentResponse> => {
+      return await registry.setCodexThreadEnvironment(request);
     },
   );
 
@@ -445,5 +478,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
   ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
+  ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

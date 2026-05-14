@@ -32,6 +32,7 @@ import type {
   BackendAccountSummary,
   BackendModelOption,
   BackendRateLimitSummary,
+  CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -3235,9 +3236,13 @@ function buildThreadStartPayload(params: {
   sandbox?: string;
   serviceTier?: string;
   ephemeral?: boolean;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadStartParams["config"];
 }): CodexThreadStartParams {
-  const base: CodexThreadStartParams = {};
+  const base: CodexThreadStartParams = {
+    experimentalRawEvents: false,
+    persistExtendedHistory: false,
+  };
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
@@ -3266,6 +3271,18 @@ function buildThreadStartPayload(params: {
   if (params.config) {
     base.config = params.config;
   }
+  if (
+    params.codexEnvironmentRuntime?.executionTarget === "remote" &&
+    params.codexEnvironmentRuntime.environmentId &&
+    params.cwd?.trim()
+  ) {
+    base.environments = [
+      {
+        environmentId: params.codexEnvironmentRuntime.environmentId,
+        cwd: params.cwd.trim(),
+      },
+    ];
+  }
 
   return base;
 }
@@ -3281,7 +3298,8 @@ function buildThreadResumePayloads(params: {
   fastMode?: boolean;
 }): CodexThreadResumeParams[] {
   const base: CodexThreadResumeParams = {
-    threadId: params.threadId
+    threadId: params.threadId,
+    persistExtendedHistory: false,
   };
 
   if (params.cwd?.trim()) {
@@ -4126,6 +4144,7 @@ export class CodexAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -4596,7 +4615,7 @@ export class CodexAppServerClient {
             title: "PwrAgent",
             version: this.options.clientVersion ?? "0.0.0",
           },
-          capabilities: { experimentalApi: false }
+          capabilities: { experimentalApi: true }
         };
         const result = await this.connection.request("initialize", initializeParams);
         this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;

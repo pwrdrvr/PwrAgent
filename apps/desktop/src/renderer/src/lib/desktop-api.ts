@@ -72,6 +72,10 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RunCodexEnvironmentActionRequest,
+  RunCodexEnvironmentActionResponse,
+  SetCodexThreadEnvironmentRequest,
+  SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
   RestoreThreadRequest,
@@ -95,6 +99,7 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
+  CodexEnvironmentSetupProgressEvent,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -203,6 +208,12 @@ export type DesktopApi = {
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;
+  runCodexEnvironmentAction?: (
+    request: RunCodexEnvironmentActionRequest,
+  ) => Promise<RunCodexEnvironmentActionResponse>;
+  setCodexThreadEnvironment?: (
+    request: SetCodexThreadEnvironmentRequest,
+  ) => Promise<SetCodexThreadEnvironmentResponse>;
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;
@@ -293,6 +304,9 @@ export type DesktopApi = {
   logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
+  onCodexEnvironmentSetupProgress?: (
+    callback: (event: CodexEnvironmentSetupProgressEvent) => void,
+  ) => () => void;
   getMessagingPlatformStatuses?: () => Promise<MessagingPlatformStatus[]>;
   setMessagingEnabled?: (
     request: SetMessagingEnabledRequest,

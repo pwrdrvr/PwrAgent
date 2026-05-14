@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -75,6 +75,31 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
   }
 }
 
+async function expectEventually<T>(
+  read: () => Promise<T>,
+  expected: T,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastValue: T | undefined;
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastValue = await read();
+      if (lastValue === expected) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (lastError && lastValue === undefined) {
+    throw lastError;
+  }
+  expect(lastValue).toBe(expected);
+}
+
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
@@ -144,6 +169,22 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...overlays.get(key),
         ...settings,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadCodexEnvironmentRuntime: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      codexEnvironmentRuntime?: ThreadOverlayState["codexEnvironmentRuntime"];
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend: settings.backend,
+        threadId: settings.threadId,
+        codexEnvironmentRuntime: settings.codexEnvironmentRuntime,
         extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
       } as ThreadOverlayState;
       overlays.set(key, next);
@@ -870,6 +911,7 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
@@ -1776,6 +1818,433 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps selected Codex environments sticky after materializing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        launchpad: {
+          directoryKey: `directory:${root}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: root,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "hello",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      await expect(
+        overlayStore.getDirectoryLaunchpad({ directoryKey: `directory:${root}` }),
+      ).resolves.toMatchObject({
+        prompt: "",
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces Codex environment options on existing threads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-options-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: 1,
+            projectKey: root,
+            linkedDirectories: [
+              {
+                id: root,
+                kind: "local",
+                label: "repo",
+                path: root,
+              },
+            ],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+        expect.objectContaining({
+          id: "thread-1",
+          codexEnvironmentOptions: [
+            expect.objectContaining({
+              id: "environment",
+              name: "PwrAgnt",
+              actions: [
+                expect.objectContaining({
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets existing Codex threads select a local environment for command actions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-select-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[setup]
+script = "pnpm install"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: 1,
+            projectKey: root,
+            linkedDirectories: [
+              {
+                id: root,
+                kind: "local",
+                label: "repo",
+                path: root,
+              },
+            ],
+          },
+        ],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.setCodexThreadEnvironment({
+          backend: "codex",
+          threadId: "thread-1",
+          environmentId: "environment",
+        }),
+      ).resolves.toMatchObject({
+        backend: "codex",
+        threadId: "thread-1",
+        codexEnvironmentRuntime: {
+          environmentId: "environment",
+          environmentName: "PwrAgnt",
+          executionTarget: "local",
+          cwd: root,
+          setupEnabled: false,
+          setupCommand: "pnpm install",
+          actions: [
+            {
+              id: "dev-messaging",
+              name: "Dev - Messaging",
+              command: "pnpm dev:messaging",
+            },
+          ],
+        },
+      });
+
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          environmentName: "PwrAgnt",
+          actions: [
+            expect.objectContaining({
+              name: "Dev - Messaging",
+            }),
+          ],
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes stale thread environment actions before running a command", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
+    const outputPath = path.join(root, "action.txt");
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = '''printf action-ran > ${outputPath}'''
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: root,
+            setupEnabled: false,
+            actions: [],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "dev-messaging",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          actionName: "Dev - Messaging",
+          actionStatus: "started",
+        },
+      });
+      await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists failed existing-thread environment actions before rejecting", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-fail-"));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: path.join(root, "missing"),
+            setupEnabled: false,
+            actions: [
+              {
+                id: "dev-messaging",
+                name: "Dev - Messaging",
+                command: "pnpm dev",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "dev-messaging",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          actionId: "dev-messaging",
+          actionName: "Dev - Messaging",
+          actionCommand: "pnpm dev",
+          actionStatus: "failed",
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("captures Codex environment setup output in the thread replay", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+
+[setup]
+script = "printf setup-output"
+`,
+      "utf8",
+    );
+
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        launchpad: {
+          directoryKey: `directory:${root}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: root,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentSetupEnabled: true,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      const read = await registry.readThread({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(read.replay.entries[0]).toMatchObject({
+        type: "activity",
+        summary: "Environment setup completed: Repo Environment",
+        details: [
+          {
+            command: {
+              output: "setup-output",
+              exitCode: 0,
+            },
+          },
+        ],
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("updates Codex git metadata when materializing a git-backed launchpad", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-metadata-"));
     const repo = path.join(root, "app");
@@ -1885,6 +2354,171 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.close();
+  });
+
+  it("keeps failed environment setup worktree threads registered without starting the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-failure-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(path.join(repoPath, ".codex", "environments"), { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    await writeFile(
+      path.join(repoPath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Broken Env"
+
+[setup]
+script = "printf setup-failed && exit 42"
+`,
+      "utf8",
+    );
+
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        input: [{ type: "text", text: "start after setup" }],
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentSetupEnabled: true,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response.threadId).toBe("thread-1");
+      expect(response.turnId).toBeUndefined();
+      expect(response.codexEnvironmentStartupFailure).toEqual({
+        message: "Codex environment command exited with 42",
+        phase: "setup",
+        worktreeCleanupAvailable: true,
+      });
+      expect(response.codexEnvironmentRuntime).toMatchObject({
+        environmentName: "Broken Env",
+        setupStatus: "failed",
+        setupExitCode: 42,
+        setupOutput: "setup-failed",
+      });
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+        worktreePath,
+        threadId: "thread-1",
+      });
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps failed environment action worktree threads registered without starting the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-action-failure-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "missing-worktree");
+    await mkdir(path.join(repoPath, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(repoPath, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Broken Action Env"
+
+[[actions]]
+name = "Start dev"
+command = "pnpm dev"
+`,
+      "utf8",
+    );
+
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        input: [{ type: "text", text: "start after setup" }],
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          codexEnvironmentId: "environment",
+          codexEnvironmentActionId: "start-dev",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response.threadId).toBe("thread-1");
+      expect(response.turnId).toBeUndefined();
+      expect(response.codexEnvironmentStartupFailure).toEqual({
+        message: expect.any(String),
+        phase: "action",
+        worktreeCleanupAvailable: true,
+      });
+      expect(response.codexEnvironmentRuntime).toMatchObject({
+        environmentName: "Broken Action Env",
+        actionStatus: "failed",
+        actionName: "Start dev",
+      });
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+        worktreePath,
+        threadId: "thread-1",
+      });
+      expect(codexClient.lastStartTurnParams).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps materialized worktree threads linked as worktrees before the backend list catches up", async () => {

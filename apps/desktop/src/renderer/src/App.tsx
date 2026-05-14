@@ -211,6 +211,7 @@ function DesktopAppShell(props: {
           selectedDirectory={navigation.selectedDirectory}
           selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
+          archiveThreadError={navigation.archiveThreadError}
           suppressBranchDriftDialog={mainView === "settings"}
           directories={navigation.directories}
           fullAccessRiskWarningDismissed={
@@ -237,6 +238,7 @@ function DesktopAppShell(props: {
           updatingExecutionMode={navigation.updatingThreadExecutionMode}
           worktreeArchiveError={navigation.worktreeArchiveError}
           onActiveTurnIdChange={session.setActiveTurnId}
+          onArchiveThread={navigation.archiveThread}
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
           onDismissFullAccessRiskWarning={async () => {

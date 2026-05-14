@@ -30,7 +30,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { EditorIcon, TerminalIcon } from "../../icons";
+import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -97,6 +97,7 @@ type ComposerProps = {
   ) => Promise<void>;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
+  onRefreshNavigation?: () => Promise<void>;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -112,6 +113,10 @@ type ComposerProps = {
         | "fastMode"
         | "workMode"
         | "branchName"
+        | "codexEnvironmentId"
+        | "codexEnvironmentExecutionTarget"
+        | "codexEnvironmentSetupEnabled"
+        | "codexEnvironmentActionId"
         | "directoryLabel"
         | "directoryPath"
         | "imageAttachments"
@@ -162,6 +167,8 @@ type ComposerDropdownOption = {
   label: string;
   value: string;
 };
+
+type ComposerDropdownIcon = (props: { size?: number }) => ReactNode;
 
 type QueuedTurnDraft = {
   id: string;
@@ -753,6 +760,7 @@ function ComposerDropdown(props: {
   ariaLabel: string;
   compact?: boolean;
   disabled?: boolean;
+  icon?: ComposerDropdownIcon;
   id?: string;
   kind?: "branch";
   onChange: (value: string) => void;
@@ -764,6 +772,7 @@ function ComposerDropdown(props: {
   const selectedOption =
     props.options.find((option) => option.value === props.value) ?? props.options[0];
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const Icon = props.icon;
 
   return (
     <div
@@ -789,6 +798,11 @@ function ComposerDropdown(props: {
         value={props.value}
         onClick={() => setOpen((current) => !current)}
       >
+        {Icon ? (
+          <span aria-hidden="true" className="composer-dropdown__icon">
+            <Icon size={13} />
+          </span>
+        ) : null}
         <span className="composer-dropdown__label">
           {selectedOption?.label ?? props.value}
         </span>
@@ -1685,6 +1699,12 @@ export function Composer(props: ComposerProps) {
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
+      props.onPendingStatusChange?.(
+        props.launchpad.codexEnvironmentId &&
+          props.launchpad.codexEnvironmentSetupEnabled
+          ? "Running environment setup"
+          : "Reviewing",
+      );
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -2138,6 +2158,14 @@ export function Composer(props: ComposerProps) {
     if (props.launchpad && props.onMaterializeLaunchpad) {
       const submittedScopeKey = composerScopeKey;
       markComposerDraftSubmitted(submittedScopeKey);
+      props.onPendingStatusChange?.(
+        props.launchpad.codexEnvironmentId &&
+          props.launchpad.codexEnvironmentSetupEnabled
+          ? "Running environment setup"
+          : collaborationMode
+            ? "Planning"
+            : "Thinking",
+      );
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -2150,6 +2178,7 @@ export function Composer(props: ComposerProps) {
         }
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
+        props.onPendingStatusChange?.(undefined);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -2454,6 +2483,10 @@ export function Composer(props: ComposerProps) {
         | "fastMode"
         | "workMode"
         | "branchName"
+        | "codexEnvironmentId"
+        | "codexEnvironmentExecutionTarget"
+        | "codexEnvironmentSetupEnabled"
+        | "codexEnvironmentActionId"
       >
     >
   ): void => {
@@ -2477,6 +2510,58 @@ export function Composer(props: ComposerProps) {
     window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
+  };
+
+  const runThreadCodexEnvironmentAction = async (): Promise<void> => {
+    if (
+      !props.thread ||
+      props.thread.source !== "codex" ||
+      !props.desktopApi?.runCodexEnvironmentAction ||
+      !selectedThreadCodexAction
+    ) {
+      return;
+    }
+
+    setSendError(undefined);
+    props.onPendingStatusChange?.(`Starting ${selectedThreadCodexAction.name}`);
+    try {
+      await props.desktopApi.runCodexEnvironmentAction({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        actionId: selectedThreadCodexAction.id,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      props.onPendingStatusChange?.(undefined);
+    }
+  };
+
+  const setThreadCodexEnvironment = async (environmentId: string): Promise<void> => {
+    if (
+      !props.thread ||
+      props.thread.source !== "codex" ||
+      !props.desktopApi?.setCodexThreadEnvironment
+    ) {
+      return;
+    }
+
+    setSendError(undefined);
+    props.onPendingStatusChange?.("Updating environment");
+    try {
+      await props.desktopApi.setCodexThreadEnvironment({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        environmentId: environmentId || undefined,
+      });
+      setSelectedThreadCodexActionId("");
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      props.onPendingStatusChange?.(undefined);
+    }
   };
 
   const applyExecutionModeSelection = (
@@ -2591,6 +2676,35 @@ export function Composer(props: ComposerProps) {
     launchpadWorkspaceOptions.some((option) => option.value === props.launchpad?.workMode)
       ? props.launchpad.workMode
       : "local";
+  const launchpadCodexEnvironmentOptions =
+    props.launchpad?.backend === "codex"
+      ? props.launchpad.codexEnvironmentOptions ?? []
+      : [];
+  const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
+    (environment) => environment.id === props.launchpad?.codexEnvironmentId,
+  );
+  const threadCodexEnvironmentOptions =
+    props.thread?.source === "codex"
+      ? props.thread.codexEnvironmentOptions ?? []
+      : [];
+  const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
+    (environment) =>
+      environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
+  );
+  const runtimeThreadCodexEnvironmentActions =
+    props.thread?.source === "codex"
+      ? props.thread.codexEnvironmentRuntime?.actions ?? []
+      : [];
+  const threadCodexEnvironmentActions =
+    runtimeThreadCodexEnvironmentActions.length > 0
+      ? runtimeThreadCodexEnvironmentActions
+      : selectedThreadCodexEnvironmentOption?.actions ?? [];
+  const [selectedThreadCodexActionId, setSelectedThreadCodexActionId] =
+    useState<string>("");
+  const selectedThreadCodexAction =
+    threadCodexEnvironmentActions.find(
+      (action) => action.id === selectedThreadCodexActionId,
+    ) ?? threadCodexEnvironmentActions[0];
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
@@ -3478,6 +3592,10 @@ export function Composer(props: ComposerProps) {
                     : undefined,
                   serviceTier: undefined,
                   fastMode: undefined,
+                  codexEnvironmentId: undefined,
+                  codexEnvironmentExecutionTarget: undefined,
+                  codexEnvironmentSetupEnabled: false,
+                  codexEnvironmentActionId: undefined,
                 });
               }}
             />
@@ -3485,6 +3603,64 @@ export function Composer(props: ComposerProps) {
             <span className="composer__fixed-value" aria-label="Provider">
               {formatBackendLabel(props.thread.source)}
             </span>
+          ) : null}
+
+          {props.thread && threadCodexEnvironmentOptions.length > 0 ? (
+            <ComposerDropdown
+              ariaLabel="Codex environment"
+              compact
+              disabled={!props.desktopApi?.setCodexThreadEnvironment}
+              icon={FileCodeIcon}
+              value={props.thread.codexEnvironmentRuntime?.environmentId ?? ""}
+              options={[
+                { label: "No environment", value: "" },
+                ...threadCodexEnvironmentOptions.map((environment) => ({
+                  label: environment.name,
+                  value: environment.id,
+                })),
+              ]}
+              onChange={(value) => {
+                void setThreadCodexEnvironment(value);
+              }}
+            />
+          ) : null}
+
+          {props.thread?.codexEnvironmentRuntime ? (
+            <>
+              <ComposerDropdown
+                ariaLabel="Environment command"
+                compact
+                disabled={
+                  threadCodexEnvironmentActions.length === 0 ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
+                value={selectedThreadCodexAction?.id ?? ""}
+                options={
+                  threadCodexEnvironmentActions.length > 0
+                    ? threadCodexEnvironmentActions.map((action) => ({
+                        label: action.name,
+                        value: action.id,
+                      }))
+                    : [{ label: "No commands", value: "" }]
+                }
+                onChange={(value) => {
+                  setSelectedThreadCodexActionId(value);
+                }}
+              />
+              <button
+                className="composer__action-button"
+                disabled={
+                  !selectedThreadCodexAction ||
+                  !props.desktopApi?.runCodexEnvironmentAction
+                }
+                type="button"
+                onClick={() => {
+                  void runThreadCodexEnvironmentAction();
+                }}
+              >
+                Run
+              </button>
+            </>
           ) : null}
 
           {availableExecutionModes.length > 0 &&
@@ -3534,6 +3710,75 @@ export function Composer(props: ComposerProps) {
               onPickFromDisk={() => {
                 props.onClearPickDirectoryError?.();
                 props.onPickAndRegisterDirectory?.();
+              }}
+            />
+          ) : null}
+
+          {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
+            <ComposerDropdown
+              ariaLabel="Codex environment"
+              compact
+              disabled={launchpadSubmitting}
+              icon={FileCodeIcon}
+              value={props.launchpad.codexEnvironmentId ?? ""}
+              options={[
+                { label: "No environment", value: "" },
+                ...launchpadCodexEnvironmentOptions.map((environment) => ({
+                  label: environment.name,
+                  value: environment.id,
+                })),
+              ]}
+              onChange={(value) => {
+                const environment = launchpadCodexEnvironmentOptions.find(
+                  (candidate) => candidate.id === value,
+                );
+                handleLaunchpadPatch({
+                  codexEnvironmentId: environment?.id,
+                  codexEnvironmentExecutionTarget: environment
+                    ? props.launchpad?.codexEnvironmentExecutionTarget ?? "local"
+                    : undefined,
+                  codexEnvironmentSetupEnabled: Boolean(
+                    environment?.setupScript,
+                  ),
+                  codexEnvironmentActionId: undefined,
+                });
+              }}
+            />
+          ) : null}
+
+          {props.launchpad && selectedCodexEnvironment?.setupScript ? (
+            <label className="composer__checkbox">
+              <input
+                checked={Boolean(props.launchpad.codexEnvironmentSetupEnabled)}
+                disabled={launchpadSubmitting}
+                type="checkbox"
+                onChange={(event) => {
+                  handleLaunchpadPatch({
+                    codexEnvironmentSetupEnabled: event.target.checked,
+                  });
+                }}
+              />
+              <span>Run setup</span>
+            </label>
+          ) : null}
+
+          {props.launchpad && selectedCodexEnvironment?.actions.length ? (
+            <ComposerDropdown
+              ariaLabel="Environment command"
+              compact
+              disabled={launchpadSubmitting}
+              value={props.launchpad.codexEnvironmentActionId ?? ""}
+              options={[
+                { label: "No command", value: "" },
+                ...selectedCodexEnvironment.actions.map((action) => ({
+                  label: action.name,
+                  value: action.id,
+                })),
+              ]}
+              onChange={(value) => {
+                handleLaunchpadPatch({
+                  codexEnvironmentActionId: value || undefined,
+                });
               }}
             />
           ) : null}
@@ -3924,6 +4169,12 @@ export function Composer(props: ComposerProps) {
       ) : null}
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
+      ) : null}
+      {props.launchpad &&
+      launchpadSubmitting &&
+      props.launchpad.codexEnvironmentId &&
+      props.launchpad.codexEnvironmentSetupEnabled ? (
+        <p className="composer__meta">Running environment setup…</p>
       ) : null}
       {props.updatingExecutionMode ? (
         <p className="composer__meta">

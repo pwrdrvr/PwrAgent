@@ -3,6 +3,9 @@ import type {
   AppServerBackendKind,
   AppServerThreadImagePart,
   AppServerThreadSummary,
+  CodexEnvironmentAction,
+  CodexEnvironmentExecutionTarget,
+  CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -58,6 +61,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** GitHub pull requests detected for this thread's linked directories + branch. */
   prs?: PrSummary[];
+  /** Codex environments discovered from the active thread workspace. */
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
   /**
    * Messaging platform conversations bound to this thread. Each binding
    * represents a single conversation (DM, channel, topic, etc.) on one
@@ -134,6 +139,15 @@ export type PrSummary = {
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 export type LaunchpadWorkMode = "local" | "worktree";
 
+export type CodexEnvironmentOption = {
+  id: string;
+  name: string;
+  sourcePath: string;
+  setupScript?: string;
+  cleanupScript?: string;
+  actions: CodexEnvironmentAction[];
+};
+
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
   executionMode: ThreadExecutionMode;
@@ -162,6 +176,11 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   settingsTouchedAt?: number;
   workMode: LaunchpadWorkMode;
   branchName?: string;
+  codexEnvironmentId?: string;
+  codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  codexEnvironmentSetupEnabled?: boolean;
+  codexEnvironmentActionId?: string;
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
   createdAt: number;
   updatedAt: number;
 };
@@ -345,6 +364,7 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   gitBranch?: string;
   observedGitBranch?: string;
+  codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;
