@@ -449,9 +449,17 @@ describe("SettingsScreen", () => {
       status: "authenticated" as const,
       detail: "Logged in",
     }));
+    let focusCallback: (() => void) | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     const desktopApi = {
       startCodexAuthProfileLogin,
       checkCodexAuthProfileStatus,
+      onWindowFocus: vi.fn((callback: () => void) => {
+        focusCallback = callback;
+        return () => {
+          focusCallback = undefined;
+        };
+      }),
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
     render(
@@ -473,13 +481,32 @@ describe("SettingsScreen", () => {
       });
     });
     expect(dialog).toHaveTextContent("work");
+    expect(dialog).not.toHaveTextContent("https://auth.openai.com");
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Check status" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "open the login link again",
+      }),
+    );
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/authorize?client_id=codex",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    await act(async () => {
+      focusCallback?.();
+    });
     await waitFor(() => {
       expect(checkCodexAuthProfileStatus).toHaveBeenCalledWith({
         profile: "work",
       });
     });
+    await waitFor(() => {
+      expect(dialog).toHaveTextContent("work is logged in.");
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     await waitFor(() => {
       expect(settings.refresh).toHaveBeenCalled();
     });

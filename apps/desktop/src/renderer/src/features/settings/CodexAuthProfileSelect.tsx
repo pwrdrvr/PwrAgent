@@ -68,7 +68,6 @@ export function CodexAuthProfileSelect(props: {
           onCreated={async (profile) => {
             await props.onAfterProfilesChanged?.();
             await props.onChange(profile);
-            setCreateOpen(false);
           }}
         />
       ) : null}
@@ -101,7 +100,6 @@ export function CodexAuthProfileCreateButton(props: {
           onCancel={() => setCreateOpen(false)}
           onCreated={async (profile) => {
             await props.onCreated(profile);
-            setCreateOpen(false);
           }}
         />
       ) : null}
@@ -133,10 +131,7 @@ export function CodexAuthProfileLoginButton(props: {
           displayName={props.displayName}
           profile={props.profile}
           onCancel={() => setLoginOpen(false)}
-          onAuthenticated={async () => {
-            await props.onAuthenticated?.();
-            setLoginOpen(false);
-          }}
+          onAuthenticated={props.onAuthenticated}
         />
       ) : null}
     </>
@@ -225,29 +220,57 @@ function CodexAuthProfileCreateDialog(props: {
     }
   };
 
-  const checkStatus = async () => {
-    if (!props.desktopApi?.checkCodexAuthProfileStatus || !normalizedName) {
+  const openLoginLink = () => {
+    if (loginUrl) {
+      window.open(loginUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const checkStatus = async (options?: { auto?: boolean }) => {
+    if (
+      busy
+      || !props.desktopApi?.checkCodexAuthProfileStatus
+      || !normalizedName
+    ) {
       return;
     }
     setBusy(true);
-    setError(undefined);
+    if (!options?.auto) {
+      setError(undefined);
+    }
     try {
       const status = await props.desktopApi.checkCodexAuthProfileStatus({
         profile: normalizedName,
       });
-      setStatusDetail(status.detail);
       if (status.authenticated) {
         setStep("authenticated");
+        setStatusDetail(undefined);
         await props.onCreated(normalizedName);
       } else if (status.detail) {
-        setError(status.detail);
+        setStatusDetail(status.detail);
+        if (!options?.auto) {
+          setError(status.detail);
+        }
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if (!options?.auto) {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (step !== "waiting" || !props.desktopApi?.onWindowFocus) {
+      return undefined;
+    }
+    return props.desktopApi.onWindowFocus(() => {
+      void checkStatus({ auto: true });
+    });
+    // Rebind when the dialog advances between form/waiting/authenticated states.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, props.desktopApi, normalizedName, busy]);
 
   return (
     <div className="settings-confirm-modal" role="presentation">
@@ -277,6 +300,10 @@ function CodexAuthProfileCreateDialog(props: {
               <p className="settings-row__error">That profile already exists.</p>
             ) : null}
           </>
+        ) : step === "authenticated" ? (
+          <p>
+            <strong>{normalizedName}</strong> is logged in.
+          </p>
         ) : (
           <>
             <p>
@@ -286,7 +313,15 @@ function CodexAuthProfileCreateDialog(props: {
             </p>
             {loginUrl ? (
               <p className="settings-codex-profile-dialog__status">
-                Open <code>{loginUrl}</code>
+                If it opened in the wrong browser profile,{" "}
+                <button
+                  className="settings-codex-profile-dialog__link"
+                  type="button"
+                  onClick={openLoginLink}
+                >
+                  open the login link again
+                </button>
+                .
               </p>
             ) : null}
             {statusDetail ? (
@@ -320,6 +355,14 @@ function CodexAuthProfileCreateDialog(props: {
               }}
             >
               Create and log in
+            </button>
+          ) : step === "authenticated" ? (
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={props.onCancel}
+            >
+              Done
             </button>
           ) : (
             <>
@@ -361,6 +404,7 @@ function CodexAuthProfileLoginDialog(props: {
   const [started, setStarted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [authenticated, setAuthenticated] = useState(false);
   const [loginUrl, setLoginUrl] = useState<string>();
   const [statusDetail, setStatusDetail] = useState<string>();
   const canLogin = Boolean(
@@ -395,28 +439,56 @@ function CodexAuthProfileLoginDialog(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const checkStatus = async () => {
-    if (!props.desktopApi?.checkCodexAuthProfileStatus || !props.profile) {
+  const openLoginLink = () => {
+    if (loginUrl) {
+      window.open(loginUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const checkStatus = async (options?: { auto?: boolean }) => {
+    if (
+      busy
+      || !props.desktopApi?.checkCodexAuthProfileStatus
+      || !props.profile
+    ) {
       return;
     }
     setBusy(true);
-    setError(undefined);
+    if (!options?.auto) {
+      setError(undefined);
+    }
     try {
       const status = await props.desktopApi.checkCodexAuthProfileStatus({
         profile: props.profile,
       });
-      setStatusDetail(status.detail);
       if (status.authenticated) {
-        await props.onAuthenticated?.();
+        setAuthenticated(true);
+        setStatusDetail(undefined);
       } else if (status.detail) {
-        setError(status.detail);
+        setStatusDetail(status.detail);
+        if (!options?.auto) {
+          setError(status.detail);
+        }
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if (!options?.auto) {
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (authenticated || !started || !props.desktopApi?.onWindowFocus) {
+      return undefined;
+    }
+    return props.desktopApi.onWindowFocus(() => {
+      void checkStatus({ auto: true });
+    });
+    // Rebind as the login advances; the callback is intentionally one modal action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated, started, props.desktopApi, props.profile, busy]);
 
   return (
     <div className="settings-confirm-modal" role="presentation">
@@ -427,16 +499,32 @@ function CodexAuthProfileLoginDialog(props: {
         role="dialog"
       >
         <h2 id="login-codex-profile-heading">Log in to Codex profile</h2>
-        <p>
-          {started ? "A browser window should open" : "Starting Codex login"} for{" "}
-          <strong>{props.displayName}</strong>. Complete the Codex login, then
-          check status here.
-        </p>
-        {loginUrl ? (
-          <p className="settings-codex-profile-dialog__status">
-            Open <code>{loginUrl}</code>
+        {authenticated ? (
+          <p>
+            <strong>{props.displayName}</strong> is logged in.
           </p>
-        ) : null}
+        ) : (
+          <>
+            <p>
+              {started ? "A browser window should open" : "Starting Codex login"} for{" "}
+              <strong>{props.displayName}</strong>. Complete the Codex login, then
+              check status here.
+            </p>
+            {loginUrl ? (
+              <p className="settings-codex-profile-dialog__status">
+                If it opened in the wrong browser profile,{" "}
+                <button
+                  className="settings-codex-profile-dialog__link"
+                  type="button"
+                  onClick={openLoginLink}
+                >
+                  open the login link again
+                </button>
+                .
+              </p>
+            ) : null}
+          </>
+        )}
         {statusDetail ? (
           <p className="settings-codex-profile-dialog__status">
             {statusDetail}
@@ -448,34 +536,51 @@ function CodexAuthProfileLoginDialog(props: {
           </p>
         ) : null}
         <div className="settings-confirm-dialog__actions">
-          <button
-            className="button button--secondary"
-            disabled={busy}
-            type="button"
-            onClick={props.onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="button button--secondary"
-            disabled={busy || !canLogin}
-            type="button"
-            onClick={() => {
-              void startLogin();
-            }}
-          >
-            Restart login
-          </button>
-          <button
-            className="button button--primary"
-            disabled={busy || !canLogin}
-            type="button"
-            onClick={() => {
-              void checkStatus();
-            }}
-          >
-            Check status
-          </button>
+          {authenticated ? (
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={() => {
+                void (async () => {
+                  await props.onAuthenticated?.();
+                  props.onCancel();
+                })();
+              }}
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                className="button button--secondary"
+                disabled={busy}
+                type="button"
+                onClick={props.onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--secondary"
+                disabled={busy || !canLogin}
+                type="button"
+                onClick={() => {
+                  void startLogin();
+                }}
+              >
+                Restart login
+              </button>
+              <button
+                className="button button--primary"
+                disabled={busy || !canLogin}
+                type="button"
+                onClick={() => {
+                  void checkStatus();
+                }}
+              >
+                Check status
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

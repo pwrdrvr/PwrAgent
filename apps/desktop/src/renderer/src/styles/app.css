@@ -3789,12 +3789,25 @@ textarea,
   border-radius: 6px;
   background: var(--bg-input);
   color: var(--text-muted);
-  font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1.35;
 }
 
-.settings-codex-profile-dialog__status code {
-  color: var(--text-primary);
+.settings-codex-profile-dialog__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-codex-profile-dialog__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 @media (max-width: 760px) {
