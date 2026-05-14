@@ -938,7 +938,6 @@ function mergeLaunchpadUpdateResponse(
   preserveSetting("fastMode");
   preserveSetting("workMode");
   preserveSetting("branchName");
-  preserveSetting("settingsTouchedAt");
   preserveEnvironment("codexEnvironmentId");
   preserveEnvironment("codexEnvironmentExecutionTarget");
   preserveEnvironment("codexEnvironmentSetupEnabled");

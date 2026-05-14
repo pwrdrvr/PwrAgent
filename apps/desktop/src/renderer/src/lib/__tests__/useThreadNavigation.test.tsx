@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
-import type { NavigationLaunchpadDraft, NavigationSnapshot } from "@pwragent/shared";
+import type {
+  NavigationLaunchpadDefaults,
+  NavigationLaunchpadDraft,
+  NavigationSnapshot,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -1571,6 +1575,100 @@ describe("useThreadNavigation", () => {
           name: "PwrAgnt",
         }),
       ],
+    });
+  });
+
+  it("keeps server-confirmed settingsTouchedAt after sticky launchpad updates", async () => {
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const stickyUpdate = createDeferred<{
+      defaults: typeof defaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(stickyUpdate.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: launchpad.directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.workMode).toBe("local");
+    });
+
+    let update: Promise<void> | undefined;
+    act(() => {
+      update = result.current.updateDirectoryLaunchpad(
+        launchpad.directoryKey,
+        {
+          workMode: "worktree",
+        },
+        { stickySettingsChanged: true },
+      );
+    });
+
+    await act(async () => {
+      stickyUpdate.resolve({
+        defaults: {
+          ...defaults,
+          workMode: "worktree",
+        },
+        launchpad: {
+          ...launchpad,
+          workMode: "worktree",
+          settingsTouchedAt: 123_456,
+          updatedAt: 2,
+        },
+      });
+      await update!;
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      workMode: "worktree",
+      settingsTouchedAt: 123_456,
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: launchpad.directoryKey,
+      patch: {
+        workMode: "worktree",
+      },
+      stickySettingsChanged: true,
     });
   });
 
