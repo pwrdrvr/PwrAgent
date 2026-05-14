@@ -97,6 +97,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
+const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
@@ -566,6 +567,9 @@ class DesktopAppServerService {
       if (!cached) {
         return true;
       }
+      if (!isFreshDirectoryGitStatusCacheEntry(cached)) {
+        return true;
+      }
       return (directory.latestUpdatedAt ?? 0) > (cached.directoryUpdatedAt ?? 0);
     });
 
@@ -585,6 +589,55 @@ class DesktopAppServerService {
       .slice(0, remaining);
   }
 
+  private async refreshLaunchpadDirectoryGitStatus(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadRequest> {
+    const directoryPath = request.directoryPath?.trim();
+    if (!directoryPath) {
+      return request;
+    }
+
+    const cachedDirectory = this.lastDirectoriesByKey.get(request.directoryKey);
+    const directory: NavigationSnapshot["directories"][number] = {
+      key: request.directoryKey,
+      kind: request.directoryKind,
+      label: request.directoryLabel,
+      path: directoryPath,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      ...(cachedDirectory?.latestUpdatedAt !== undefined
+        ? { latestUpdatedAt: cachedDirectory.latestUpdatedAt }
+        : {}),
+    };
+
+    try {
+      const registry = getDesktopBackendRegistry();
+      for await (const entry of registry.readDirectoryStatusEntries([directory])) {
+        const fetchedAt = Date.now();
+        await this.writeDirectoryGitStatusEntry({
+          directory,
+          directoryKey: entry.directoryKey,
+          fetchedAt,
+          gitStatus: entry.gitStatus,
+        });
+        if (!entry.gitStatus?.currentBranch) {
+          return request;
+        }
+        return {
+          ...request,
+          currentBranch: entry.gitStatus.currentBranch,
+        };
+      }
+    } catch (error) {
+      logDebug("directoryGitStatusRefresh:launchpadRefreshFailed", {
+        directoryKey: request.directoryKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return request;
+  }
+
   private async refreshDirectoryGitStatuses(
     directories: NavigationSnapshot["directories"],
   ): Promise<void> {
@@ -600,30 +653,46 @@ class DesktopAppServerService {
     for await (const entry of registry.readDirectoryStatusEntries(refreshableDirectories)) {
       const directory = directoryByKey.get(entry.directoryKey);
       const fetchedAt = Date.now();
-      const cacheEntry: DirectoryGitStatusCacheEntry = {
+      await this.writeDirectoryGitStatusEntry({
+        directory,
         directoryKey: entry.directoryKey,
-        ...(directory?.path ? { directoryPath: directory.path } : {}),
-        ...(directory?.latestUpdatedAt !== undefined
-          ? { directoryUpdatedAt: directory.latestUpdatedAt }
-          : {}),
         fetchedAt,
-        ...(entry.gitStatus ? { gitStatus: entry.gitStatus } : {}),
-      };
-      this.directoryGitStatusByKey.set(entry.directoryKey, cacheEntry);
-      await this.getOverlayStore().writeDirectoryGitStatusCacheEntry(cacheEntry);
-      const notification: NavigationDirectoryGitStatusUpdatedNotification = {
-        method: "navigation/directoryGitStatus/updated",
-        params: {
-          directoryKey: entry.directoryKey,
-          gitStatus: entry.gitStatus ?? null,
-          fetchedAt,
-        },
-      };
-      await registry.publishLocalEvent({
-        backend: "codex",
-        notification,
-      } as unknown as AgentEvent);
+        gitStatus: entry.gitStatus,
+      });
     }
+  }
+
+  private async writeDirectoryGitStatusEntry(params: {
+    directory?: NavigationSnapshot["directories"][number];
+    directoryKey: string;
+    fetchedAt: number;
+    gitStatus?: NavigationDirectoryGitStatus;
+  }): Promise<void> {
+    const current = this.directoryGitStatusByKey.get(params.directoryKey);
+    const directoryPath = params.directory?.path ?? current?.directoryPath;
+    const directoryUpdatedAt =
+      params.directory?.latestUpdatedAt ?? current?.directoryUpdatedAt;
+    const cacheEntry: DirectoryGitStatusCacheEntry = {
+      directoryKey: params.directoryKey,
+      ...(directoryPath ? { directoryPath } : {}),
+      ...(directoryUpdatedAt !== undefined ? { directoryUpdatedAt } : {}),
+      fetchedAt: params.fetchedAt,
+      ...(params.gitStatus ? { gitStatus: params.gitStatus } : {}),
+    };
+    this.directoryGitStatusByKey.set(params.directoryKey, cacheEntry);
+    await this.getOverlayStore().writeDirectoryGitStatusCacheEntry(cacheEntry);
+    const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+      method: "navigation/directoryGitStatus/updated",
+      params: {
+        directoryKey: params.directoryKey,
+        gitStatus: params.gitStatus ?? null,
+        fetchedAt: params.fetchedAt,
+      },
+    };
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification,
+    } as unknown as AgentEvent);
   }
 
   async markThreadSeen(
@@ -880,7 +949,8 @@ class DesktopAppServerService {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    return await getDesktopBackendRegistry().ensureDirectoryLaunchpad(request);
+    const refreshedRequest = await this.refreshLaunchpadDirectoryGitStatus(request);
+    return await getDesktopBackendRegistry().ensureDirectoryLaunchpad(refreshedRequest);
   }
 
   async updateDirectoryLaunchpad(
@@ -1033,6 +1103,12 @@ class DesktopAppServerService {
     this.focusedDiffServiceModel = modelOverride;
     return this.focusedDiffService;
   }
+}
+
+function isFreshDirectoryGitStatusCacheEntry(
+  entry: DirectoryGitStatusCacheEntry,
+): boolean {
+  return Date.now() - entry.fetchedAt < DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS;
 }
 
 const appServerService = new DesktopAppServerService();

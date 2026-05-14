@@ -935,6 +935,28 @@ async function resolveThreadProjectKey(
   return projectKey || undefined;
 }
 
+function buildProjectKeyLinkedDirectories(
+  projectKey: string | undefined
+): LinkedDirectorySummary[] {
+  const directoryPath = projectKey?.trim();
+  if (!directoryPath) {
+    return [];
+  }
+
+  const resolvedPath = path.isAbsolute(directoryPath)
+    ? directoryPath
+    : path.resolve(directoryPath);
+
+  return [
+    {
+      id: resolvedPath,
+      label: path.basename(resolvedPath) || resolvedPath,
+      path: resolvedPath,
+      kind: "local",
+    },
+  ];
+}
+
 function normalizeConversationRole(
   value: string | undefined
 ): "user" | "assistant" | undefined {
@@ -4024,7 +4046,7 @@ export class CodexAppServerClient {
           ...thread,
           projectKey,
           gitBranch: thread.gitBranch,
-          linkedDirectories: [],
+          linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
           source: "codex" as const,
         };
       });

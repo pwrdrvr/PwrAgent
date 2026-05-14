@@ -1013,7 +1013,14 @@ describe("CodexAppServerClient", () => {
     expect(primaryThread).toMatchObject({
       id: "thread-2",
       projectKey: "/Users/huntharo/pwrdrvr/PwrAgent",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "local",
+        },
+      ],
       source: "codex",
     });
 
