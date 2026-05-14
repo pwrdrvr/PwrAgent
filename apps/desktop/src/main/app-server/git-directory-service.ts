@@ -218,6 +218,20 @@ function resolveDefaultBranch(params: {
   );
 }
 
+function uniqueBranches(branches: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const branch of branches) {
+    const value = sanitizeBranchName(branch ?? "");
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
 function orderHandoffBranches(params: {
   branches: string[];
   currentBranch: string;
@@ -248,6 +262,45 @@ function orderHandoffBranches(params: {
 
 function isProtectedBranch(branch?: string): boolean {
   return !branch || ["main", "master", "develop", "trunk"].includes(branch);
+}
+
+async function resolveVerifiedWorktreeBaseBranch(params: {
+  repoRoot: string;
+  requestedBranch?: string;
+}): Promise<string | undefined> {
+  const [currentBranch, branchesOutput, remoteHead] = await Promise.all([
+    runGit(params.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
+    runGit(params.repoRoot, [
+      "for-each-ref",
+      "refs/heads",
+      "--sort=-committerdate",
+      "--format=%(refname:short)",
+    ]).catch(() => ""),
+    runGit(params.repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+      () => "",
+    ),
+  ]);
+  const branches = parseGitLines(branchesOutput);
+  const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+  const candidates = uniqueBranches([
+    params.requestedBranch,
+    currentBranch,
+    defaultBranch,
+    ...branches,
+  ]);
+
+  for (const branch of candidates) {
+    const commit = await runGit(params.repoRoot, [
+      "rev-parse",
+      "--verify",
+      `${branch}^{commit}`,
+    ]).catch(() => "");
+    if (commit) {
+      return branch;
+    }
+  }
+
+  return undefined;
 }
 
 type CachedDirectoryStatus = {
@@ -475,24 +528,11 @@ export class GitDirectoryService {
       };
     }
 
-    const baseBranch =
-      sanitizeBranchName(launchpad.branchName ?? "") ||
-      sanitizeBranchName(
-        await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-      );
+    const baseBranch = await resolveVerifiedWorktreeBaseBranch({
+      repoRoot,
+      requestedBranch: launchpad.branchName,
+    });
     if (!baseBranch) {
-      return {
-        cwd: directoryPath,
-        workMode: "local",
-      };
-    }
-
-    const baseCommit = await runGit(repoRoot, [
-      "rev-parse",
-      "--verify",
-      `${baseBranch}^{commit}`,
-    ]).catch(() => "");
-    if (!baseCommit) {
       return {
         cwd: directoryPath,
         workMode: "local",

@@ -105,6 +105,36 @@ describe("GitDirectoryService", () => {
     });
   });
 
+  it("creates a worktree from the default branch when the checked-out branch is unborn", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const mainRevision = runGit(repoDir, ["rev-parse", "main"]);
+    runGit(repoDir, ["checkout", "--orphan", "scratch"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const status = await service.readDirectoryStatus({ path: repoDir });
+    expect(status).toMatchObject({
+      branches: expect.arrayContaining(["main"]),
+      defaultBranch: "main",
+      syncState: "untracked",
+    });
+    expect(status).not.toHaveProperty("currentBranch");
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(await realpath(repoDir));
+    expect(workspace.cwd).toBeDefined();
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+  });
+
   it("reports default and available handoff branches", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
