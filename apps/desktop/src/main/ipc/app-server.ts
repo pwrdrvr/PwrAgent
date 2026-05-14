@@ -130,6 +130,7 @@ function getThreadPullRequestsRequestKey(
   request: RefreshThreadPullRequestsRequest,
 ): string {
   return JSON.stringify({
+    lookupVersion: 2,
     backend,
     threadId: request.threadId,
     branch: request.branch.trim(),
