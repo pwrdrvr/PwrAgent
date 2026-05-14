@@ -3946,27 +3946,6 @@ export function Composer(props: ComposerProps) {
             </label>
           ) : null}
 
-          {props.launchpad && selectedCodexEnvironment?.actions.length ? (
-            <ComposerDropdown
-              ariaLabel="Environment command"
-              compact
-              disabled={launchpadSubmitting}
-              value={props.launchpad.codexEnvironmentActionId ?? ""}
-              options={[
-                { label: "No command", value: "" },
-                ...selectedCodexEnvironment.actions.map((action) => ({
-                  label: action.name,
-                  value: action.id,
-                })),
-              ]}
-              onChange={(value) => {
-                handleLaunchpadPatch({
-                  codexEnvironmentActionId: value || undefined,
-                });
-              }}
-            />
-          ) : null}
-
           {props.launchpad ? (
             <ComposerDropdown
               ariaLabel="Workspace mode"

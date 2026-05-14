@@ -434,6 +434,58 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Environment command")).toBeDisabled();
   });
 
+  it("does not show environment commands on a launchpad", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        directory={{
+          key: "directory:/repo/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentId: "environment",
+          codexEnvironmentSetupEnabled: true,
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              setupScript: "pnpm install",
+              actions: [
+                {
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                },
+              ],
+            },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByText("Run setup")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByText("No command")).not.toBeInTheDocument();
+  });
+
   it("shows an orange moon for reported context window usage", () => {
     render(
       <Composer

@@ -963,10 +963,6 @@ function withCodexEnvironmentOptions(
   const selectedEnvironment = options.find(
     (environment) => environment.id === launchpad.codexEnvironmentId,
   );
-  const selectedAction = selectedEnvironment?.actions.find(
-    (action) => action.id === launchpad.codexEnvironmentActionId,
-  );
-
   return {
     ...launchpad,
     codexEnvironmentId: selectedEnvironment?.id,
@@ -975,7 +971,7 @@ function withCodexEnvironmentOptions(
     codexEnvironmentSetupEnabled:
       launchpad.codexEnvironmentSetupEnabled ??
       Boolean(selectedEnvironment?.setupScript),
-    codexEnvironmentActionId: selectedAction?.id,
+    codexEnvironmentActionId: undefined,
     codexEnvironmentOptions: options,
   };
 }
@@ -995,15 +991,10 @@ function resolveCodexEnvironmentSelection(
     return undefined;
   }
 
-  const action = environment.actions.find(
-    (candidate) => candidate.id === launchpad.codexEnvironmentActionId,
-  );
-
   return {
     environment,
     executionTarget: launchpad.codexEnvironmentExecutionTarget ?? "local",
     setupEnabled: Boolean(launchpad.codexEnvironmentSetupEnabled),
-    action,
   };
 }
 
@@ -1041,7 +1032,6 @@ async function resetLaunchpadAfterMaterialize(params: {
       launchpad.codexEnvironmentExecutionTarget ?? "local",
     codexEnvironmentSetupEnabled:
       launchpad.codexEnvironmentSetupEnabled ?? true,
-    codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
     createdAt: now,
     updatedAt: now,
   });

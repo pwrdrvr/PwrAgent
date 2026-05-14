@@ -2515,7 +2515,7 @@ script = "printf setup-failed && exit 42"
     }
   });
 
-  it("keeps failed environment action worktree threads registered without starting the turn", async () => {
+  it("ignores legacy launchpad environment actions until the thread exists", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-action-failure-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "missing-worktree");
@@ -2575,22 +2575,21 @@ command = "pnpm dev"
       });
 
       expect(response.threadId).toBe("thread-1");
-      expect(response.turnId).toBeUndefined();
-      expect(response.codexEnvironmentStartupFailure).toEqual({
-        message: expect.any(String),
-        phase: "action",
-        worktreeCleanupAvailable: true,
-      });
+      expect(response.turnId).toBe("turn-1");
+      expect(response.codexEnvironmentStartupFailure).toBeUndefined();
       expect(response.codexEnvironmentRuntime).toMatchObject({
         environmentName: "Broken Action Env",
-        actionStatus: "failed",
-        actionName: "Start dev",
       });
+      expect(response.codexEnvironmentRuntime?.actionId).toBeUndefined();
+      expect(response.codexEnvironmentRuntime?.actionStatus).toBeUndefined();
       expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
         worktreePath,
         threadId: "thread-1",
       });
-      expect(codexClient.lastStartTurnParams).toBeUndefined();
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        threadId: "thread-1",
+        input: [{ type: "text", text: "start after setup" }],
+      });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });
