@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -38,6 +39,7 @@ type ThreadContextPanelProps = {
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
+  const railRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
@@ -53,19 +55,63 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const pinned = props.pinned;
   const open = pinned || revealed;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
+
+  const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
+    lastMousePositionRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+    };
+  }, []);
+
+  const isMouseInsideRail = useCallback((point: { x: number; y: number }) => {
+    const rail = railRef.current;
+    if (!rail) {
+      return false;
+    }
+
+    const rect = rail.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+
+    return (
+      point.x >= rect.left - 1 &&
+      point.x <= rect.right + 1 &&
+      point.y >= rect.top - 1 &&
+      point.y <= rect.bottom + 1
+    );
+  }, []);
 
   // Debounced reveal/hide prevents flicker from CSS transform transitions
-  // causing spurious mouseenter→mouseleave sequences.
+  // causing spurious mouseenter→mouseleave sequences. The final hit test
+  // keeps the rail open when an inactive window reports a transient leave
+  // during the collapsed-spine → open-panel swap while the cursor is still
+  // inside the opened rail.
   const revealRail = useCallback(() => {
     clearTimeout(hideTimerRef.current);
     setRevealed(true);
   }, []);
 
-  const hideRail = useCallback(() => {
-    clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = setTimeout(() => {
-      setRevealed(false);
-    }, 200);
+  const hideRail = useCallback(
+    (point?: { x: number; y: number }) => {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = setTimeout(() => {
+        const latestPoint = lastMousePositionRef.current ?? point;
+        if (latestPoint && isMouseInsideRail(latestPoint)) {
+          return;
+        }
+
+        setRevealed(false);
+      }, 300);
+    },
+    [isMouseInsideRail]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearTimeout(hideTimerRef.current);
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -135,19 +181,26 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   return (
     <aside
+      ref={railRef}
       aria-label="Thread context"
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
       }${resizing ? " is-resizing" : ""}`}
       style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
-      onMouseEnter={() => {
+      onMouseEnter={(event) => {
+        rememberMousePosition(event);
         if (!pinned) {
           revealRail();
         }
       }}
-      onMouseLeave={() => {
+      onMouseMove={rememberMousePosition}
+      onMouseLeave={(event) => {
+        rememberMousePosition(event);
         if (!pinned) {
-          hideRail();
+          hideRail({
+            x: event.clientX,
+            y: event.clientY,
+          });
         }
       }}
       onFocusCapture={() => {
