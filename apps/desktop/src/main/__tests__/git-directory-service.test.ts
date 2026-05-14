@@ -73,6 +73,89 @@ describe("GitDirectoryService", () => {
     });
   });
 
+  it("falls back to local mode when a worktree launchpad targets an unborn git HEAD", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-git-directory-"));
+    cleanupPaths.push(repoDir);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    const service = new GitDirectoryService();
+
+    await expect(
+      service.prepareLaunchpadWorkspace({
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        workMode: "worktree",
+      }),
+    ).resolves.toEqual({
+      cwd: repoDir,
+      workMode: "local",
+    });
+  });
+
+  it("reports unborn git directories without surfacing raw HEAD errors", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-status-"));
+    cleanupPaths.push(repoDir);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    const service = new GitDirectoryService();
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      branches: [],
+      handoffBranches: [],
+      syncState: "untracked",
+    });
+  });
+
+  it("creates a worktree from the default branch when the checked-out branch is unborn", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const mainRevision = runGit(repoDir, ["rev-parse", "main"]);
+    runGit(repoDir, ["checkout", "--orphan", "scratch"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const status = await service.readDirectoryStatus({ path: repoDir });
+    expect(status).toMatchObject({
+      branches: expect.arrayContaining(["main"]),
+      defaultBranch: "main",
+      syncState: "untracked",
+    });
+    expect(status).not.toHaveProperty("currentBranch");
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(await realpath(repoDir));
+    expect(workspace.cwd).toBeDefined();
+    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+  });
+
+  it("falls back to local mode when an explicit worktree base branch is stale", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "missing-base-branch",
+    });
+
+    expect(workspace).toEqual({
+      cwd: repoDir,
+      workMode: "local",
+    });
+  });
+
   it("reports default and available handoff branches", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

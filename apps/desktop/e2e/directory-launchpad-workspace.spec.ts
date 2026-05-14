@@ -278,6 +278,173 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   };
 }
 
+async function createUnbornHeadLaunchpadFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  fixturePath: string;
+  repoDir: string;
+}> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-launchpad-e2e-"));
+  const repoDir = path.join(rootDir, "PwrTester");
+  await mkdir(repoDir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+
+  const thread = {
+    id: "thread-unborn-existing",
+    title: "Existing unborn repo thread",
+    titleSource: "explicit",
+    summary: "Keeps PwrTester in the directory list",
+    source: "codex",
+    executionMode: "default",
+    linkedDirectories: [
+      {
+        id: "pwrtester",
+        label: "PwrTester",
+        path: repoDir,
+        kind: "local",
+      },
+    ],
+    updatedAt: 1760000000000,
+  };
+  const newThread = {
+    id: "thread-unborn-new",
+    title: "let's just make a dummy README.md file",
+    titleSource: "derived",
+    summary: "Started from an unborn HEAD repo",
+    source: "codex",
+    executionMode: "default",
+    linkedDirectories: [
+      {
+        id: repoDir,
+        label: "PwrTester",
+        path: repoDir,
+        kind: "local",
+      },
+    ],
+    updatedAt: 1760000001000,
+  };
+
+  const fixturePath = path.join(rootDir, "unborn-head-launchpad.fixture.json");
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "directory-launchpad-unborn-head",
+          threadId: "thread-unborn-new",
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: {
+                name: "Replay Codex",
+                version: "1.0.0",
+              },
+              methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [thread],
+          },
+          {
+            id: "thread-read-1",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [
+                {
+                  type: "message",
+                  id: "message-unborn-existing-1",
+                  role: "user",
+                  text: "Keep this repo visible.",
+                },
+              ],
+              messages: [
+                {
+                  id: "message-unborn-existing-1",
+                  role: "user",
+                  text: "Keep this repo visible.",
+                },
+              ],
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+          {
+            id: "thread-start-1",
+            kind: "response",
+            method: "thread/start",
+            result: {
+              threadId: "thread-unborn-new",
+            },
+          },
+          {
+            id: "turn-start-1",
+            kind: "response",
+            method: "turn/start",
+            result: {
+              threadId: "thread-unborn-new",
+              turnId: "turn-unborn-new-1",
+            },
+          },
+          {
+            id: "thread-list-2",
+            kind: "response",
+            method: "thread/list",
+            result: [newThread, thread],
+          },
+          {
+            id: "thread-read-2",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [
+                {
+                  type: "message",
+                  id: "message-unborn-new-1",
+                  role: "user",
+                  text: "let's just make a dummy README.md file",
+                },
+              ],
+              messages: [
+                {
+                  id: "message-unborn-new-1",
+                  role: "user",
+                  text: "let's just make a dummy README.md file",
+                },
+              ],
+              lastUserMessage: "let's just make a dummy README.md file",
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  return {
+    cleanup: async () => {
+      await rm(rootDir, { recursive: true, force: true });
+    },
+    fixturePath,
+    repoDir,
+  };
+}
+
 async function createLocalHandoffSessionFixture(): Promise<{
   cleanup: () => Promise<void>;
   codexHome: string;
@@ -486,6 +653,57 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
 
     await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad starts a local thread from an unborn git HEAD", async () => {
+  const fixture = await createUnbornHeadLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for PwrTester" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "PwrTester" }),
+    ).toBeVisible();
+
+    const directoryKey = `directory:${fixture.repoDir}`;
+    await app.window.evaluate(async (key) => {
+      await (window as any).pwragent.updateDirectoryLaunchpad({
+        directoryKey: key,
+        patch: {
+          workMode: "worktree",
+        },
+        stickySettingsChanged: true,
+      });
+    }, directoryKey);
+
+    await expect(app.window.getByLabel("Workspace mode")).toHaveAttribute(
+      "data-value",
+      "local",
+    );
+    await app.window
+      .getByRole("textbox", { name: "New thread" })
+      .fill("let's just make a dummy README.md file");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "let's just make a dummy README.md file",
+      }),
+    ).toBeVisible();
+    await expect(app.window.getByText("ambiguous argument 'HEAD'")).toHaveCount(0);
+    const startTurn = (await app.getLastStartTurn()) as { cwd?: string } | undefined;
+    expect(startTurn?.cwd).toBe(fixture.repoDir);
   } finally {
     await app.close();
     await fixture.cleanup();
