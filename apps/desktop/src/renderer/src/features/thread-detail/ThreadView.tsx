@@ -605,6 +605,7 @@ type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
@@ -769,6 +770,17 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
+  const suppressBranchDriftDialogRef = useRef(
+    props.suppressBranchDriftDialog ?? false
+  );
+
+  useEffect(() => {
+    suppressBranchDriftDialogRef.current = props.suppressBranchDriftDialog ?? false;
+    if (props.suppressBranchDriftDialog) {
+      setBranchDriftDialog(undefined);
+      setBranchDriftError(undefined);
+    }
+  }, [props.suppressBranchDriftDialog]);
 
   useEffect(() => {
     if (!branchDriftDialog) return;
@@ -839,6 +851,9 @@ export function ThreadView(props: ThreadViewProps) {
     checkedAt?: number,
   ): boolean => {
     if (props.activeTurnId !== undefined) {
+      return false;
+    }
+    if (suppressBranchDriftDialogRef.current) {
       return false;
     }
     return showBranchDriftDialog(thread, expectedBranch, observedBranch, reason, checkedAt);
@@ -923,7 +938,7 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     tryOpenBranchDriftDialog(thread, expectedBranch, observedBranch, "focus");
-  }, [selectedThread, props.activeTurnId]);
+  }, [selectedThread, props.activeTurnId, props.suppressBranchDriftDialog]);
 
   // End-of-turn falling-edge: re-run drift check when an active turn
   // settles on the focused thread. Combined ref guards against

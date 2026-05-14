@@ -211,6 +211,7 @@ function DesktopAppShell(props: {
           selectedDirectory={navigation.selectedDirectory}
           selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
+          suppressBranchDriftDialog={mainView === "settings"}
           directories={navigation.directories}
           fullAccessRiskWarningDismissed={
             settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ??
