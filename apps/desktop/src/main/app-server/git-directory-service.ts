@@ -268,6 +268,16 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
   requestedBranch?: string;
 }): Promise<string | undefined> {
+  const requestedBranch = sanitizeBranchName(params.requestedBranch ?? "");
+  if (requestedBranch) {
+    const commit = await runGit(params.repoRoot, [
+      "rev-parse",
+      "--verify",
+      `${requestedBranch}^{commit}`,
+    ]).catch(() => "");
+    return commit ? requestedBranch : undefined;
+  }
+
   const [currentBranch, branchesOutput, remoteHead] = await Promise.all([
     runGit(params.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
     runGit(params.repoRoot, [
@@ -283,7 +293,6 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   const branches = parseGitLines(branchesOutput);
   const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
   const candidates = uniqueBranches([
-    params.requestedBranch,
     currentBranch,
     defaultBranch,
     ...branches,

@@ -135,6 +135,27 @@ describe("GitDirectoryService", () => {
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
   });
 
+  it("falls back to local mode when an explicit worktree base branch is stale", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "missing-base-branch",
+    });
+
+    expect(workspace).toEqual({
+      cwd: repoDir,
+      workMode: "local",
+    });
+  });
+
   it("reports default and available handoff branches", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
