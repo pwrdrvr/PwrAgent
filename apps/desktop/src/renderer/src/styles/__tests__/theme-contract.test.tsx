@@ -250,6 +250,17 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps focused sticky directory summaries from painting outside the scrollport", () => {
+    const headerRule = extractRuleBody(css, ".directory-row__header");
+
+    expect(headerRule).toContain("position: sticky;");
+    expect(headerRule).toContain("top: 0;");
+    expect(headerRule).toContain("background: var(--bg-sidebar);");
+    expect(css).toMatch(
+      /\.directory-row__summary:focus,\s*\.directory-row__summary:focus-visible\s*\{[\s\S]*?outline-offset:\s*-2px;[\s\S]*?\}/
+    );
+  });
+
   it("keeps thread context menu hover states visible", () => {
     expect(css).toMatch(
       /\.thread-context-menu button:hover,\s*\.thread-context-menu button:focus-visible\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/

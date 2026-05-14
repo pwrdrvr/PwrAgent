@@ -2142,6 +2142,11 @@ textarea,
   padding: 10px 12px;
 }
 
+.directory-row__summary:focus,
+.directory-row__summary:focus-visible {
+  outline-offset: -2px;
+}
+
 .directory-row__summary-main,
 .directory-row__summary-meta,
 .directory-row__title-wrap {
