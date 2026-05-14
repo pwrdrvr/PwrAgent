@@ -73,6 +73,38 @@ describe("GitDirectoryService", () => {
     });
   });
 
+  it("falls back to local mode when a worktree launchpad targets an unborn git HEAD", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-git-directory-"));
+    cleanupPaths.push(repoDir);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    const service = new GitDirectoryService();
+
+    await expect(
+      service.prepareLaunchpadWorkspace({
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        workMode: "worktree",
+      }),
+    ).resolves.toEqual({
+      cwd: repoDir,
+      workMode: "local",
+    });
+  });
+
+  it("reports unborn git directories without surfacing raw HEAD errors", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-status-"));
+    cleanupPaths.push(repoDir);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    const service = new GitDirectoryService();
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      branches: [],
+      handoffBranches: [],
+      syncState: "untracked",
+    });
+  });
+
   it("reports default and available handoff branches", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);

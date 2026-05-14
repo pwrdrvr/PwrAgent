@@ -360,7 +360,7 @@ export class GitDirectoryService {
     }
 
     const [currentBranch, branchesOutput, remoteHead, worktreeList] = await Promise.all([
-      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
       runGit(repoRoot, [
         "for-each-ref",
         "refs/heads",
@@ -378,12 +378,17 @@ export class GitDirectoryService {
       "--symbolic-full-name",
       "@{upstream}",
     ]).catch(() => "");
-    if (!currentBranch) {
-      return undefined;
-    }
-
     const branches = parseGitLines(branchesOutput);
     const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+    if (!currentBranch) {
+      return {
+        defaultBranch,
+        branches,
+        handoffBranches: branches,
+        syncState: "untracked",
+      };
+    }
+
     const handoffBranches = orderHandoffBranches({
       branches,
       currentBranch,
@@ -472,8 +477,28 @@ export class GitDirectoryService {
 
     const baseBranch =
       sanitizeBranchName(launchpad.branchName ?? "") ||
-      sanitizeBranchName(await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])) ||
-      "main";
+      sanitizeBranchName(
+        await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
+      );
+    if (!baseBranch) {
+      return {
+        cwd: directoryPath,
+        workMode: "local",
+      };
+    }
+
+    const baseCommit = await runGit(repoRoot, [
+      "rev-parse",
+      "--verify",
+      `${baseBranch}^{commit}`,
+    ]).catch(() => "");
+    if (!baseCommit) {
+      return {
+        cwd: directoryPath,
+        workMode: "local",
+      };
+    }
+
     const storage = await this.resolveStorage();
     const worktreePath = await computeWorktreePath({
       backend: launchpad.backend,
