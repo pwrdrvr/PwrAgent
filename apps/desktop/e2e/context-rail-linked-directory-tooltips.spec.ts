@@ -11,6 +11,10 @@ test("shows linked directory path tooltips in the context rail", async () => {
       specDir,
       "fixtures/context-rail-linked-directory-tooltips/replay.fixture.json"
     ),
+    windowSize: {
+      width: 1280,
+      height: 820,
+    },
   });
 
   try {
@@ -18,10 +22,22 @@ test("shows linked directory path tooltips in the context rail", async () => {
       .getByRole("button", { name: /Linked directory tooltip thread/i })
       .first()
       .click();
-    await app.window.getByRole("button", { name: "Open context rail" }).click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Linked directory tooltip thread",
+      })
+    ).toBeVisible();
     const contextRail = app.window.getByRole("complementary", {
       name: "Thread context",
     });
+    const openRailButton = app.window.getByRole("button", { name: "Open context rail" });
+    if (await openRailButton.count()) {
+      await openRailButton.click();
+    }
+    await expect(
+      contextRail.getByLabel("Path for PwrAgent", { exact: true })
+    ).toBeVisible();
 
     await contextRail.getByLabel("Path for PwrAgent", { exact: true }).focus();
     await expectVisibleTooltip(app.window, "/repo/PwrAgent");
