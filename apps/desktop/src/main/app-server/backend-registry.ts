@@ -134,7 +134,9 @@ type InitializeResult = {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
-const THREAD_LIST_REUSE_WINDOW_MS = 750;
+// Keep startup prewarm useful through renderer parse/effect scheduling. Thread
+// lifecycle notifications still invalidate this cache when the list changes.
+const THREAD_LIST_REUSE_WINDOW_MS = 5_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 /**

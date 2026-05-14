@@ -91,8 +91,8 @@ function DesktopAppShell(props: {
   const settings = props.settings;
   const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
-  const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
+  const backendSummaries = useBackendSummaries(desktopApi);
   const pullRequests = usePullRequestRefresh({
     desktopApi,
     onRefreshNavigation: navigation.refresh,
