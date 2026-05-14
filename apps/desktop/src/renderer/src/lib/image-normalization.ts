@@ -286,17 +286,6 @@ async function normalizeBlob(params: {
       });
       if (smallerOutput) {
         output = smallerOutput;
-      } else if (canPreserveSourceBlob(blobMimeType, sourceMimeType)) {
-        return await preservedSourceImage({
-          blob: params.blob,
-          conversionPath: params.conversionPath,
-          decoded,
-          dependencies: params.dependencies,
-          fileName: params.fileName,
-          mimeType: sourceMimeType,
-          originalMimeType: params.originalMimeType,
-          originalSize: params.originalSize,
-        });
       }
     }
 

@@ -225,7 +225,7 @@ describe("image normalization", () => {
     expect(encodeCanvas).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves source PNG bytes when every resized encoding is larger", async () => {
+  it("preserves the patch cap when every resized PNG encoding is larger", async () => {
     const encodeCanvas = vi.fn(async (_canvas, mimeType) =>
       new Blob([new Uint8Array(140)], { type: mimeType }),
     );
@@ -245,10 +245,10 @@ describe("image normalization", () => {
 
     expect(normalized).toMatchObject({
       dataUrl: "data:image/png;base64,AQID",
-      height: 2048,
+      height: 1024,
       mimeType: "image/png",
-      size: 100,
-      width: 2048,
+      size: 140,
+      width: 1024,
     });
   });
 
