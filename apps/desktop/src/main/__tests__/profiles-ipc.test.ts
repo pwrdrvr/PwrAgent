@@ -14,6 +14,9 @@ vi.mock("electron", () => ({
     handle: vi.fn(),
     removeHandler: vi.fn(),
   },
+  shell: {
+    trashItem: vi.fn(async () => undefined),
+  },
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -89,5 +92,29 @@ describe("profile IPC helpers", () => {
     expect(
       replaceProfileLaunchArgs(["/repo/apps/desktop", "--profile=dev"], "work"),
     ).toEqual(["/repo/apps/desktop", "--profile", "work"]);
+  });
+
+  it("keeps listing profiles when an inactive profile config is malformed", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    ensureNamedProfileExists("scratch", { env });
+    fs.writeFileSync(
+      path.join(root, "profiles", "scratch", "config.toml"),
+      "[models.codex\nprofile = \"work\"\n",
+      "utf8",
+    );
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+
+    expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
+      "dev",
+      "default",
+      "scratch",
+    ]);
   });
 });

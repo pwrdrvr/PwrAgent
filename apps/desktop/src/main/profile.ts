@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,6 +8,8 @@ export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const RESERVED_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
+const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
+const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;
 
 export type ProfileEntry = {
   name: string;
@@ -17,6 +20,19 @@ export type ProfileEntry = {
 export type ProfilesRegistry = {
   default_profile?: string;
   profiles: ProfileEntry[];
+};
+
+export type ProfileRuntimeHeartbeat = {
+  markerPath: string;
+  stop: () => void;
+};
+
+export type ProfileRuntimeMarker = {
+  instanceId: string;
+  processId: number;
+  profileName: string;
+  startedAt: number;
+  heartbeatAt: number;
 };
 
 let cachedProcessActiveProfileName: string | undefined;
@@ -230,6 +246,15 @@ export function deleteProfile(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): void {
+  const profileDir = assertProfileCanBeDeleted(profileName, options);
+  fs.rmSync(profileDir, { recursive: true, force: true });
+  forgetDeletedProfile(profileName, options);
+}
+
+export function assertProfileCanBeDeleted(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string; now?: number },
+): string {
   if (!isValidProfileName(profileName)) {
     throw new Error(`Invalid profile name "${profileName}".`);
   }
@@ -242,9 +267,20 @@ export function deleteProfile(
     throw new Error("The active profile cannot be deleted.");
   }
 
-  const profileDir = resolveProfileDir(profileName, options);
-  fs.rmSync(profileDir, { recursive: true, force: true });
+  const liveMarkers = findLiveProfileRuntimeMarkers(profileName, options);
+  if (liveMarkers.length > 0) {
+    throw new Error(
+      `Profile "${profileName}" is open in another PwrAgent instance. Close that instance before deleting this profile.`,
+    );
+  }
 
+  return resolveProfileDir(profileName, options);
+}
+
+export function forgetDeletedProfile(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): void {
   const registry = readProfilesRegistry(options);
   registry.profiles = registry.profiles.filter(
     (entry) => entry.name !== profileName,
@@ -253,6 +289,78 @@ export function deleteProfile(
     registry.default_profile = undefined;
   }
   writeProfilesRegistry(registry, options);
+}
+
+export function startProfileRuntimeHeartbeat(
+  profileName = resolveActiveProfileName(),
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: string;
+    instanceId?: string;
+    intervalMs?: number;
+    now?: () => number;
+    processId?: number;
+  },
+): ProfileRuntimeHeartbeat {
+  const now = options?.now ?? Date.now;
+  const processId = options?.processId ?? process.pid;
+  const marker: ProfileRuntimeMarker = {
+    instanceId: options?.instanceId ?? randomUUID(),
+    processId,
+    profileName,
+    startedAt: now(),
+    heartbeatAt: now(),
+  };
+  const markerDir = resolveProfileRuntimeMarkerDir(profileName, options);
+  fs.mkdirSync(markerDir, { recursive: true });
+  const markerPath = path.join(markerDir, `${processId}-${marker.instanceId}.json`);
+  const writeMarker = (): void => {
+    marker.heartbeatAt = now();
+    writeJsonAtomic(markerPath, marker);
+  };
+  writeMarker();
+  const interval = setInterval(
+    writeMarker,
+    options?.intervalMs ?? PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS,
+  );
+  if (interval.unref) interval.unref();
+
+  return {
+    markerPath,
+    stop: () => {
+      clearInterval(interval);
+      fs.rmSync(markerPath, { force: true });
+    },
+  };
+}
+
+export function findLiveProfileRuntimeMarkers(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string; now?: number },
+): ProfileRuntimeMarker[] {
+  const markerDir = resolveProfileRuntimeMarkerDir(profileName, options);
+  if (!fs.existsSync(markerDir)) {
+    return [];
+  }
+  const now = options?.now ?? Date.now();
+  const markers: ProfileRuntimeMarker[] = [];
+  for (const entry of fs.readdirSync(markerDir)) {
+    const markerPath = path.join(markerDir, entry);
+    const marker = readProfileRuntimeMarker(markerPath);
+    if (!marker || marker.profileName !== profileName) {
+      continue;
+    }
+    if (now - marker.heartbeatAt > PROFILE_RUNTIME_HEARTBEAT_TTL_MS) {
+      fs.rmSync(markerPath, { force: true });
+      continue;
+    }
+    if (!isProcessAlive(marker.processId)) {
+      fs.rmSync(markerPath, { force: true });
+      continue;
+    }
+    markers.push(marker);
+  }
+  return markers;
 }
 
 export function updateLastUsed(
@@ -309,6 +417,49 @@ function parseProfilesToml(contents: string): ProfilesRegistry {
 
   if (current?.name) profiles.push(current as ProfileEntry);
   return { default_profile: defaultProfile, profiles };
+}
+
+function resolveProfileRuntimeMarkerDir(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  return path.join(resolveProfileDir(profileName, options), "state", "runtime-instances");
+}
+
+function readProfileRuntimeMarker(markerPath: string): ProfileRuntimeMarker | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<ProfileRuntimeMarker>;
+    if (
+      typeof parsed.instanceId === "string"
+      && typeof parsed.processId === "number"
+      && typeof parsed.profileName === "string"
+      && typeof parsed.startedAt === "number"
+      && typeof parsed.heartbeatAt === "number"
+    ) {
+      return parsed as ProfileRuntimeMarker;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(value)}\n`, "utf8");
+  fs.renameSync(tmpPath, filePath);
+}
+
+function isProcessAlive(processId: number): boolean {
+  if (!Number.isInteger(processId) || processId <= 0) {
+    return false;
+  }
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 function stringifyProfilesToml(registry: ProfilesRegistry): string {

@@ -13,6 +13,7 @@ import {
   resolveActiveProfileName,
   resolveDefaultProfileName,
   setDefaultProfileName,
+  startProfileRuntimeHeartbeat,
 } from "../profile";
 
 const roots: string[] = [];
@@ -113,5 +114,31 @@ describe("PwrAgent profiles", () => {
         },
       }),
     ).toThrow("active profile");
+  });
+
+  it("does not delete a profile with a live runtime heartbeat", () => {
+    const { env } = createRoot();
+    const activeEnv = {
+      ...env,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env: activeEnv });
+    ensureNamedProfileExists("scratch", { env });
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      instanceId: "scratch-instance",
+      intervalMs: 60_000,
+      processId: process.pid,
+    });
+
+    expect(() => deleteProfile("scratch", { env: activeEnv })).toThrow(
+      "open in another PwrAgent instance",
+    );
+
+    heartbeat.stop();
+    deleteProfile("scratch", { env: activeEnv });
+    expect(readProfilesRegistry({ env }).profiles).not.toContainEqual(
+      expect.objectContaining({ name: "scratch" }),
+    );
   });
 });

@@ -3,6 +3,7 @@ import type {
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
@@ -43,6 +44,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 export function SettingsScreen(props: {
   desktopApi?: DesktopApi;
+  profiles?: PwrAgentProfilesState;
   settings: DesktopSettingsState;
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
@@ -184,6 +186,7 @@ export function SettingsScreen(props: {
           ) : snapshot ? (
             <SettingsSectionBody
               desktopApi={props.desktopApi}
+              profiles={props.profiles}
               section={section}
               settings={props.settings}
               snapshot={snapshot}
@@ -202,6 +205,7 @@ export function SettingsScreen(props: {
 
 function SettingsSectionBody(props: {
   desktopApi?: DesktopApi;
+  profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
   snapshot: DesktopSettingsSnapshot;
@@ -379,6 +383,7 @@ function SettingsSectionBody(props: {
     return (
       <ProfilesSettings
         desktopApi={props.desktopApi}
+        profiles={props.profiles}
         snapshot={props.snapshot}
         onSettingsChanged={props.settings.refresh}
       />

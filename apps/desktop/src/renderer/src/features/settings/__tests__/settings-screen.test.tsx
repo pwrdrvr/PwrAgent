@@ -1531,6 +1531,7 @@ describe("SettingsScreen", () => {
       deletePwrAgentProfile,
       listPwrAgentProfiles,
       openPwrAgentProfile,
+      platform: "darwin",
       setDefaultPwrAgentProfile,
       setPwrAgentProfileCodexProfile,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
@@ -1599,14 +1600,86 @@ describe("SettingsScreen", () => {
     fireEvent.click(within(scratchRow).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete profile?" });
     expect(dialog).toHaveClass("settings-confirm-dialog--danger");
+    expect(dialog).toHaveTextContent("Move scratch to Trash.");
+    expect(dialog).toHaveTextContent("Close any other PwrAgent windows using this profile first.");
     expect(dialog).toHaveTextContent("Codex auth homes under ~/.codex are not deleted.");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete profile" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Move profile to Trash" }),
+    );
 
     await waitFor(() => {
       expect(deletePwrAgentProfile).toHaveBeenCalledWith({ profile: "scratch" });
     });
     await waitFor(() => {
       expect(container.querySelector(".settings-confirm-dialog")).toBeNull();
+    });
+  });
+
+  it("uses shared PwrAgent profile state from the app shell", async () => {
+    const setDefaultProfile = vi.fn(async () => undefined);
+    render(
+      <SettingsScreen
+        initialSection="profiles"
+        profiles={{
+          activeProfile: "dev",
+          createProfile: vi.fn(async () => undefined),
+          defaultProfile: "default",
+          deleteProfile: vi.fn(async () => undefined),
+          loading: false,
+          openProfile: vi.fn(async () => undefined),
+          profiles: [
+            {
+              name: "dev",
+              displayName: "dev",
+              active: true,
+              default: false,
+              profileDir: "/home/example/.pwragent/profiles/dev",
+              canDelete: false,
+              codexProfile: {
+                name: "",
+                displayName: "System default",
+                codexHome: "/home/example/.codex",
+                source: "default",
+                exists: true,
+                selected: true,
+                hasAuthFile: true,
+                hasConfigFile: true,
+              },
+            },
+            {
+              name: "work",
+              displayName: "work",
+              active: false,
+              default: false,
+              profileDir: "/home/example/.pwragent/profiles/work",
+              canDelete: true,
+              codexProfile: {
+                name: "",
+                displayName: "System default",
+                codexHome: "/home/example/.codex",
+                source: "default",
+                exists: true,
+                selected: true,
+                hasAuthFile: true,
+                hasConfigFile: true,
+              },
+            },
+          ],
+          refresh: vi.fn(async () => undefined),
+          setCodexProfile: vi.fn(async () => undefined),
+          setDefaultProfile,
+        }}
+        settings={createSettingsState()}
+      />,
+    );
+
+    const workRow = screen
+      .getByText("/home/example/.pwragent/profiles/work")
+      .closest(".settings-profile-row") as HTMLElement;
+    fireEvent.click(within(workRow).getByRole("button", { name: "Use on startup" }));
+
+    await waitFor(() => {
+      expect(setDefaultProfile).toHaveBeenCalledWith("work");
     });
   });
 

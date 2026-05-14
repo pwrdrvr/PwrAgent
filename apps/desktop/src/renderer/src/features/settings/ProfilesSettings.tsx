@@ -5,7 +5,10 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { usePwrAgentProfiles } from "../../lib/usePwrAgentProfiles";
+import {
+  usePwrAgentProfiles,
+  type PwrAgentProfilesState,
+} from "../../lib/usePwrAgentProfiles";
 import {
   SettingsPanelHead,
   SettingsSection,
@@ -15,10 +18,14 @@ import { CodexAuthProfileSelect } from "./CodexAuthProfileSelect";
 
 export function ProfilesSettings(props: {
   desktopApi?: DesktopApi;
+  profiles?: PwrAgentProfilesState;
   snapshot: DesktopSettingsSnapshot;
   onSettingsChanged: () => Promise<void>;
 }) {
-  const profiles = usePwrAgentProfiles(props.desktopApi);
+  const localProfiles = usePwrAgentProfiles(
+    props.profiles ? undefined : props.desktopApi,
+  );
+  const profiles = props.profiles ?? localProfiles;
   const [deleteCandidate, setDeleteCandidate] =
     useState<DesktopPwrAgentProfileSummary | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -122,6 +129,7 @@ export function ProfilesSettings(props: {
 
       {deleteCandidate ? (
         <ProfileDeleteDialog
+          platform={props.desktopApi?.platform}
           profile={deleteCandidate}
           busy={busyProfile === deleteCandidate.name}
           onCancel={() => setDeleteCandidate(null)}
@@ -229,10 +237,13 @@ function PwrAgentProfileRow(props: {
 
 function ProfileDeleteDialog(props: {
   busy: boolean;
+  platform?: string;
   profile: DesktopPwrAgentProfileSummary;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const movingToTrash = props.platform === "darwin";
+  const actionLabel = movingToTrash ? "Move profile to Trash" : "Delete profile";
   return (
     <div className="settings-confirm-modal" role="presentation">
       <div
@@ -242,12 +253,25 @@ function ProfileDeleteDialog(props: {
         role="dialog"
       >
         <h2 id="delete-profile-heading">Delete profile?</h2>
+        {movingToTrash ? (
+          <p>
+            Move <strong>{props.profile.displayName || props.profile.name}</strong>{" "}
+            to Trash. This removes it from PwrAgent and moves its profile folder,
+            including config, SQLite state, worktrees, and encrypted secret
+            records, to the macOS Trash.
+          </p>
+        ) : (
+          <p>
+            Permanently delete{" "}
+            <strong>{props.profile.displayName || props.profile.name}</strong>.
+            This removes its PwrAgent config, SQLite state, worktrees, and
+            encrypted secret records.
+          </p>
+        )}
         <p>
-          Delete <strong>{props.profile.displayName || props.profile.name}</strong>{" "}
-          from this Mac. This removes its PwrAgent config, SQLite state,
-          worktrees, and encrypted secret records.
+          Close any other PwrAgent windows using this profile first. Codex auth
+          homes under ~/.codex are not deleted.
         </p>
-        <p>Codex auth homes under ~/.codex are not deleted.</p>
         <div className="settings-confirm-dialog__actions">
           <button
             className="button button--secondary"
@@ -263,7 +287,7 @@ function ProfileDeleteDialog(props: {
             type="button"
             onClick={props.onConfirm}
           >
-            Delete profile
+            {actionLabel}
           </button>
         </div>
       </div>
@@ -294,7 +318,9 @@ function ProfileCreateDialog(props: {
         role="dialog"
       >
         <h2 id="create-profile-heading">Add PwrAgent profile</h2>
-        <p>Create an isolated PwrAgent profile with its own config, state, and secrets.</p>
+        <p>
+          Create an isolated PwrAgent profile with its own config, state, and secrets.
+        </p>
         <input
           aria-label="PwrAgent profile name"
           className="settings-input"

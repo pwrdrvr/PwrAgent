@@ -1,5 +1,6 @@
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import type {
   CreateDesktopPwrAgentProfileRequest,
   CreateDesktopPwrAgentProfileResponse,
@@ -23,9 +24,11 @@ import {
 } from "../../shared/ipc";
 import {
   PWRAGENT_PROFILE_ENV,
+  assertProfileCanBeDeleted,
   deleteProfile,
   ensureProfileExists,
   ensureNamedProfileExists,
+  forgetDeletedProfile,
   isValidProfileName,
   readProfilesRegistry,
   resolveActiveProfileName,
@@ -80,12 +83,16 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
 }
 
 function readPwrAgentProfileCodexProfile(profileName: string) {
-  const config = readDesktopSettingsConfig(
-    resolveDesktopConfigPath({ cliProfile: profileName }),
-  );
-  const discovery = discoverCodexAuthProfiles({
-    configuredProfile: config.models?.codex?.profile,
-  });
+  let configuredProfile: string | undefined;
+  try {
+    const config = readDesktopSettingsConfig(
+      resolveDesktopConfigPath({ cliProfile: profileName }),
+    );
+    configuredProfile = config.models?.codex?.profile;
+  } catch {
+    configuredProfile = undefined;
+  }
+  const discovery = discoverCodexAuthProfiles({ configuredProfile });
   return discovery.profiles.find((profile) => profile.selected)
     ?? discovery.profiles[0]!;
 }
@@ -172,12 +179,20 @@ export function setDefaultDesktopPwrAgentProfile(
   return { profile: setDefaultProfileName(profile) };
 }
 
-export function deleteDesktopPwrAgentProfile(
+export async function deleteDesktopPwrAgentProfile(
   request: DeleteDesktopPwrAgentProfileRequest,
-): DeleteDesktopPwrAgentProfileResponse {
+): Promise<DeleteDesktopPwrAgentProfileResponse> {
   const profile = request.profile.trim();
-  deleteProfile(profile);
-  return { deleted: true, profile };
+  const profileDir = assertProfileCanBeDeleted(profile);
+  let movedToTrash = false;
+  if (process.platform === "darwin" && fs.existsSync(profileDir)) {
+    await shell.trashItem(profileDir);
+    movedToTrash = true;
+    forgetDeletedProfile(profile);
+  } else {
+    deleteProfile(profile);
+  }
+  return { deleted: true, movedToTrash, profile };
 }
 
 export async function setDesktopPwrAgentProfileCodexProfile(
@@ -250,7 +265,7 @@ export function registerProfilesIpcHandlers(): void {
       _event,
       request: DeleteDesktopPwrAgentProfileRequest,
     ): Promise<DeleteDesktopPwrAgentProfileResponse> =>
-      deleteDesktopPwrAgentProfile(request),
+      await deleteDesktopPwrAgentProfile(request),
   );
 
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);

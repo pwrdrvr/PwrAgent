@@ -616,6 +616,7 @@ export type DeleteDesktopPwrAgentProfileRequest = {
 
 export type DeleteDesktopPwrAgentProfileResponse = {
   deleted: boolean;
+  movedToTrash?: boolean;
   profile: string;
 };
 
