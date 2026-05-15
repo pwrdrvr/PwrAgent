@@ -254,7 +254,7 @@ function runShellCommand(params: {
   });
 
   return new Promise((resolve, reject) => {
-    const child = spawn(shell, ["-ilc", wrapShellCommand(params.command)], {
+    const child = spawn(shell, ["-lc", wrapShellCommand(shell, params.command)], {
       cwd: params.cwd,
       detached: params.mode === "detach",
       env: params.env ?? process.env,
@@ -328,6 +328,23 @@ function runShellCommand(params: {
   });
 }
 
-function wrapShellCommand(command: string): string {
-  return ["set -e", "set -o pipefail 2>/dev/null || true", command].join("\n");
+function wrapShellCommand(shell: string, command: string): string {
+  return [
+    ...shellStartupCommands(shell),
+    '[ -n "${NVM_DIR:-}" ] && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"',
+    '[ -z "${NVM_DIR:-}" ] && [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"',
+    "set -e",
+    command,
+  ].join("\n");
+}
+
+function shellStartupCommands(shell: string): string[] {
+  const shellName = shell.split(/[\\/]/).at(-1) ?? "";
+  if (shellName.includes("zsh")) {
+    return ['[ -s "$HOME/.zshrc" ] && . "$HOME/.zshrc"'];
+  }
+  if (shellName.includes("bash")) {
+    return ['[ -s "$HOME/.bashrc" ] && . "$HOME/.bashrc"'];
+  }
+  return [];
 }

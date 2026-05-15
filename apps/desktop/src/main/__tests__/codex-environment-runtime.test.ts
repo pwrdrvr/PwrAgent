@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -78,7 +78,7 @@ describe("codex environment runtime", () => {
         shellPath,
         [
           "#!/bin/sh",
-          'if [ "$1" != "-ilc" ]; then exit 64; fi',
+          'if [ "$1" != "-lc" ]; then exit 64; fi',
           `printf shell-used > ${JSON.stringify(markerPath)}`,
           'exec /bin/sh -c "$2"',
           "",
@@ -120,17 +120,26 @@ describe("codex environment runtime", () => {
   it("runs setup commands in an interactive login shell so startup-defined functions are available", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-nvm-"));
     const shellPath = path.join(root, "test-shell.sh");
+    const nvmDir = path.join(root, "nvm");
     const outputPath = path.join(root, "setup.txt");
 
     try {
+      await mkdir(nvmDir, { recursive: true });
+      await writeFile(
+        path.join(nvmDir, "nvm.sh"),
+        [
+          "nvm() {",
+          `  printf 'nvm:%s\\n' "$*" >> ${JSON.stringify(outputPath)}`,
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
       await writeFile(
         shellPath,
         [
           "#!/bin/sh",
-          'if [ "$1" != "-ilc" ]; then exit 64; fi',
-          "nvm() {",
-          `  printf 'nvm:%s\\n' "$*" >> ${JSON.stringify(outputPath)}`,
-          "}",
+          'if [ "$1" != "-lc" ]; then exit 64; fi',
           'eval "$2"',
           "",
         ].join("\n"),
@@ -143,6 +152,7 @@ describe("codex environment runtime", () => {
           cwd: root,
           env: {
             ...process.env,
+            NVM_DIR: nvmDir,
             SHELL: shellPath,
           },
           selection: {
@@ -182,7 +192,7 @@ describe("codex environment runtime", () => {
         shellPath,
         [
           "#!/bin/sh",
-          'if [ "$1" != "-ilc" ]; then exit 64; fi',
+          'if [ "$1" != "-lc" ]; then exit 64; fi',
           'exec /bin/sh -c "$2"',
           "",
         ].join("\n"),
