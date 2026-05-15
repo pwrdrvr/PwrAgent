@@ -195,12 +195,13 @@ function LaunchpadEnvironmentSetupPending(props: {
 
 function EnvironmentSetupFailureChoice(props: {
   archiving: boolean;
+  continuing: boolean;
   error?: string;
   environmentName: string;
   hasWorktree: boolean;
   phase: "setup" | "action";
   onCleanup: () => void;
-  onContinue: () => void;
+  onContinue: () => void | Promise<void>;
 }) {
   const label =
     props.phase === "action" ? "Environment action failed" : "Environment setup failed";
@@ -222,7 +223,7 @@ function EnvironmentSetupFailureChoice(props: {
       <div className="environment-setup-choice__actions">
         <button
           className="composer__action-button composer__action-button--danger"
-          disabled={props.archiving}
+          disabled={props.archiving || props.continuing}
           type="button"
           onClick={props.onCleanup}
         >
@@ -230,15 +231,34 @@ function EnvironmentSetupFailureChoice(props: {
         </button>
         <button
           className="composer__action-button"
-          disabled={props.archiving}
+          disabled={props.archiving || props.continuing}
           type="button"
-          onClick={props.onContinue}
+          onClick={() => {
+            void props.onContinue();
+          }}
         >
-          Continue anyway
+          {props.continuing ? "Continuing..." : "Continue anyway"}
         </button>
       </div>
     </section>
   );
+}
+
+function buildInputFromOptimisticUserMessage(
+  optimisticUserMessage: NavigationThreadSummary["optimisticUserMessage"],
+): AppServerTurnInputItem[] {
+  if (!optimisticUserMessage) {
+    return [];
+  }
+
+  const text = optimisticUserMessage.text.trim();
+  return [
+    ...(text ? [{ type: "text" as const, text }] : []),
+    ...(optimisticUserMessage.imageParts ?? []).map((imagePart) => ({
+      type: "image" as const,
+      url: imagePart.url,
+    })),
+  ];
 }
 
 function arePlanEntriesEquivalent(
@@ -927,6 +947,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [setupFailureDismissedThreadKeys, setSetupFailureDismissedThreadKeys] =
     useState<Set<string>>(() => new Set());
   const [setupFailureArchiving, setSetupFailureArchiving] = useState(false);
+  const [setupFailureContinuing, setSetupFailureContinuing] = useState(false);
+  const [setupFailureContinueError, setSetupFailureContinueError] =
+    useState<string>();
   const [launchpadSetupProgress, setLaunchpadSetupProgress] =
     useState<LaunchpadEnvironmentSetupProgress>();
   // Auto-pin the context rail on wide displays (issue #240). Same
@@ -955,6 +978,8 @@ export function ThreadView(props: ThreadViewProps) {
     setExpandedImage(undefined);
     setLaunchpadMaterializing(false);
     setLaunchpadSetupProgress(undefined);
+    setSetupFailureContinuing(false);
+    setSetupFailureContinueError(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
     props.selectedThread?.id,
@@ -1008,15 +1033,71 @@ export function ThreadView(props: ThreadViewProps) {
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
   );
+  const selectedThreadOptimisticLaunchpadInput =
+    buildInputFromOptimisticUserMessage(selectedThread?.optimisticUserMessage);
+  const hasOnlyOptimisticLaunchpadMessage =
+    props.messageCount === 1 && selectedThreadOptimisticLaunchpadInput.length > 0;
   const showSetupFailureChoice = Boolean(
     selectedThread &&
       selectedThreadKey &&
+      (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
+      !props.activeTurnId &&
       (selectedThreadSetupFailed || selectedThreadActionFailed) &&
       !setupFailureDismissedThreadKeys.has(selectedThreadKey),
   );
   const selectedThreadEnvironmentFailurePhase = selectedThreadActionFailed
     ? "action"
     : "setup";
+  const continueAfterSetupFailure = async (): Promise<void> => {
+    if (!selectedThread || !selectedThreadKey) {
+      return;
+    }
+
+    const input = buildInputFromOptimisticUserMessage(
+      selectedThread.optimisticUserMessage,
+    );
+    if (input.length === 0 || !props.desktopApi?.startTurn) {
+      setSetupFailureDismissedThreadKeys((current) => {
+        const next = new Set(current);
+        next.add(selectedThreadKey);
+        return next;
+      });
+      return;
+    }
+
+    setSetupFailureContinueError(undefined);
+    setSetupFailureContinuing(true);
+    props.onPendingStatusChange?.("Thinking");
+    try {
+      const response = await props.desktopApi.startTurn({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        input,
+        executionMode: selectedThread.executionMode,
+        model: selectedThread.model,
+        reasoningEffort: selectedThread.reasoningEffort,
+        serviceTier: selectedThread.serviceTier,
+        fastMode: selectedThread.source === "codex"
+          ? selectedThread.fastMode
+          : undefined,
+      });
+      props.onActiveTurnIdChange?.(response.turnId);
+      setSetupFailureDismissedThreadKeys((current) => {
+        const next = new Set(current);
+        next.add(selectedThreadKey);
+        return next;
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      props.onPendingStatusChange?.(undefined);
+      props.onActiveTurnIdChange?.(undefined);
+      setSetupFailureContinueError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setSetupFailureContinuing(false);
+    }
+  };
 
   useEffect(() => {
     if (!branchDriftDialog) return;
@@ -1855,11 +1936,12 @@ export function ThreadView(props: ThreadViewProps) {
       {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
         <EnvironmentSetupFailureChoice
           archiving={setupFailureArchiving}
+          continuing={setupFailureContinuing}
           environmentName={
             selectedThread.codexEnvironmentRuntime?.environmentName ??
             "Codex environment"
           }
-          error={props.archiveThreadError}
+          error={props.archiveThreadError ?? setupFailureContinueError}
           hasWorktree={Boolean(selectedThreadWorktree)}
           phase={selectedThreadEnvironmentFailurePhase}
           onCleanup={() => {
@@ -1871,13 +1953,7 @@ export function ThreadView(props: ThreadViewProps) {
               setSetupFailureArchiving(false);
             });
           }}
-          onContinue={() => {
-            setSetupFailureDismissedThreadKeys((current) => {
-              const next = new Set(current);
-              next.add(selectedThreadKey);
-              return next;
-            });
-          }}
+          onContinue={continueAfterSetupFailure}
         />
       ) : null}
 

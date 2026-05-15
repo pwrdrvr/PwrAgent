@@ -3537,4 +3537,149 @@ describe("ThreadView", () => {
       consoleErrorSpy.mockRestore();
     }
   });
+
+  it("submits the launchpad prompt when continuing after environment setup failure", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+      turnId: "turn-1",
+    }));
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ startTurn }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupEnabled: true,
+            setupStatus: "failed",
+          },
+          linkedDirectories: [
+            {
+              id: "/repo",
+              kind: "worktree",
+              label: "repo",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/thread-env-failure",
+            },
+          ],
+          optimisticUserMessage: {
+            text: "Fix the failed setup",
+            imageParts: [{ type: "image", url: "data:image/png;base64,abc" }],
+            createdAt: 1_000,
+          },
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onLoadOlder={async () => undefined}
+        onPendingStatusChange={onPendingStatusChange}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-env-failure",
+        input: [
+          { type: "text", text: "Fix the failed setup" },
+          { type: "image", url: "data:image/png;base64,abc" },
+        ],
+        executionMode: "full-access",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: undefined,
+        fastMode: undefined,
+      });
+    });
+    expect(onPendingStatusChange).toHaveBeenCalledWith("Thinking");
+    expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("hides the environment setup failure choice after the thread has messages", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "A new problem I ran into really bit me last night",
+          titleSource: "derived",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupEnabled: true,
+            setupStatus: "failed",
+          },
+          linkedDirectories: [
+            {
+              id: "/repo",
+              kind: "worktree",
+              label: "repo",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/thread-env-failure",
+            },
+          ],
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What is the CWD?",
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Continue anyway" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Environment setup failed"),
+    ).not.toBeInTheDocument();
+  });
 });

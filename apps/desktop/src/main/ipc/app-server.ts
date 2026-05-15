@@ -131,7 +131,15 @@ function directoryStatusesEqual(
 
     const leftStatus = directory.gitStatus;
     const rightStatus = candidate.gitStatus;
-    return JSON.stringify(leftStatus ?? null) === JSON.stringify(rightStatus ?? null);
+    const leftCodexEnvironmentOptions =
+      directory.launchpad?.codexEnvironmentOptions ?? null;
+    const rightCodexEnvironmentOptions =
+      candidate.launchpad?.codexEnvironmentOptions ?? null;
+    return (
+      JSON.stringify(leftStatus ?? null) === JSON.stringify(rightStatus ?? null) &&
+      JSON.stringify(leftCodexEnvironmentOptions) ===
+        JSON.stringify(rightCodexEnvironmentOptions)
+    );
   });
 }
 
