@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
@@ -687,6 +690,109 @@ describe("app server ipc", () => {
         executionMode: "default",
       },
     });
+  });
+
+  it("marks snapshots changed when hydrated launchpad environment options change", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-env-"));
+    const environmentsDir = path.join(root, ".codex", "environments");
+    await mkdir(environmentsDir, { recursive: true });
+    await writeFile(
+      path.join(environmentsDir, "environment.toml"),
+      'name = "Existing environment"\n',
+      "utf8",
+    );
+
+    const launchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: root,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "local" as const,
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce({
+        backend: "all",
+        fetchedAt: 1234,
+        unchanged: false,
+        threads: [],
+        inboxThreadKeys: [],
+        directories: [
+          {
+            key: "directory:/repo/app",
+            kind: "directory" as const,
+            label: "app",
+            path: "/repo/app",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 2000,
+            launchpad,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      } as unknown as Awaited<ReturnType<typeof reconcileNavigationSnapshot>>)
+      .mockResolvedValueOnce({
+        backend: "all",
+        fetchedAt: 5678,
+        unchanged: true,
+        threads: [],
+        inboxThreadKeys: [],
+        directories: [
+          {
+            key: "directory:/repo/app",
+            kind: "directory" as const,
+            label: "app",
+            path: "/repo/app",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 2000,
+            launchpad,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      } as unknown as Awaited<ReturnType<typeof reconcileNavigationSnapshot>>);
+
+    try {
+      registerAppServerIpcHandlers();
+
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await writeFile(
+        path.join(environmentsDir, "new-environment.toml"),
+        'name = "New environment"\n',
+        "utf8",
+      );
+      const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      expect(response).toMatchObject({
+        unchanged: false,
+        directories: [
+          {
+            launchpad: {
+              codexEnvironmentOptions: [
+                { id: "environment" },
+                { id: "new-environment" },
+              ],
+            },
+          },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses cached directory git status without refreshing unchanged directories", async () => {
