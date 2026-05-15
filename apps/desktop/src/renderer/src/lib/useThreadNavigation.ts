@@ -2544,9 +2544,7 @@ export function useThreadNavigation(
           executionMode: response.executionMode,
           workMode: response.workMode,
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
-          optimisticUserMessage: response.codexEnvironmentStartupFailure
-            ? undefined
-            : buildOptimisticUserMessage(input),
+          optimisticUserMessage: buildOptimisticUserMessage(input),
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         setOptimisticThread(optimisticMaterializedThread);

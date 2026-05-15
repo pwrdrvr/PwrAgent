@@ -3537,4 +3537,88 @@ describe("ThreadView", () => {
       consoleErrorSpy.mockRestore();
     }
   });
+
+  it("submits the launchpad prompt when continuing after environment setup failure", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-env-failure",
+      turnId: "turn-1",
+    }));
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ startTurn }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          executionMode: "full-access",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupEnabled: true,
+            setupStatus: "failed",
+          },
+          linkedDirectories: [
+            {
+              id: "/repo",
+              kind: "worktree",
+              label: "repo",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/thread-env-failure",
+            },
+          ],
+          optimisticUserMessage: {
+            text: "Fix the failed setup",
+            imageParts: [{ type: "image", url: "data:image/png;base64,abc" }],
+            createdAt: 1_000,
+          },
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onLoadOlder={async () => undefined}
+        onPendingStatusChange={onPendingStatusChange}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-env-failure",
+        input: [
+          { type: "text", text: "Fix the failed setup" },
+          { type: "image", url: "data:image/png;base64,abc" },
+        ],
+        executionMode: "full-access",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        serviceTier: undefined,
+        fastMode: undefined,
+      });
+    });
+    expect(onPendingStatusChange).toHaveBeenCalledWith("Thinking");
+    expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-1");
+  });
 });

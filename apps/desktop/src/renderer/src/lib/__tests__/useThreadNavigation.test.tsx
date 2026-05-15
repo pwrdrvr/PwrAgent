@@ -1499,6 +1499,114 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.title).not.toBe(threadId);
   });
 
+  it("keeps launchpad input on an environment setup failure thread", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const threadId = "thread-env-failure";
+    const input = [{ type: "text" as const, text: "Fix the failed setup" }];
+    const initialSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "codex" as const,
+            executionMode: "full-access" as const,
+            prompt: "Fix the failed setup",
+            workMode: "worktree" as const,
+            branchName: "main",
+            model: "gpt-5.5",
+            reasoningEffort: "high",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce({
+        ...initialSnapshot,
+        inboxThreadKeys: [`codex:${threadId}`],
+        threads: [
+          {
+            id: threadId,
+            title: "Untitled thread",
+            titleSource: "fallback" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 2,
+            codexEnvironmentRuntime: {
+              environmentId: "environment",
+              environmentName: "PwrAgent",
+              executionTarget: "local" as const,
+              setupEnabled: true,
+              setupStatus: "failed" as const,
+            },
+          },
+        ],
+        directories: [
+          {
+            ...initialSnapshot.directories[0]!,
+            threadKeys: [`codex:${threadId}`],
+            launchpad: undefined,
+          },
+        ],
+      });
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId,
+      executionMode: "full-access" as const,
+      workMode: "worktree" as const,
+      codexEnvironmentStartupFailure: {
+        message: "setup failed",
+        phase: "setup" as const,
+        worktreeCleanupAvailable: true,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(
+        "Fix the failed setup"
+      );
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey, input);
+    });
+
+    expect(result.current.selectedThread?.id).toBe(threadId);
+    expect(result.current.selectedThread?.optimisticUserMessage?.text).toBe(
+      "Fix the failed setup"
+    );
+  });
+
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();
