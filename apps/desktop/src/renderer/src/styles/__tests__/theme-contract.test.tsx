@@ -250,6 +250,26 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps thread card reaction emoji the same size as picker emoji", () => {
+    const baseChipIndex = css.indexOf(".thread-row__chip {");
+    const reactionChipIndex = css.indexOf(
+      ".thread-row__chip.thread-row__chip--reaction {"
+    );
+    expect(baseChipIndex).toBeGreaterThanOrEqual(0);
+    expect(reactionChipIndex).toBeGreaterThan(baseChipIndex);
+
+    const threadReactionRule = extractRuleBody(
+      css,
+      ".thread-row__chip.thread-row__chip--reaction"
+    );
+    const pickerReactionRule = extractRuleBody(css, ".reaction-picker__option");
+
+    expect(threadReactionRule).toContain("font-size: 16px;");
+    expect(pickerReactionRule).toContain("font-size: 16px;");
+    expect(threadReactionRule).toContain("font-variant-emoji: emoji;");
+    expect(pickerReactionRule).toContain("font-variant-emoji: emoji;");
+  });
+
   it("keeps focused sticky directory summaries from painting outside the scrollport", () => {
     const headerRule = extractRuleBody(css, ".directory-row__header");
 
