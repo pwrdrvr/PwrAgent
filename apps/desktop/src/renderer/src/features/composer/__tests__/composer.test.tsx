@@ -4648,6 +4648,47 @@ describe("Composer", () => {
     });
   });
 
+  it("hydrates a mounted blank composer when durable drafts load after mount", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.hydrationVersion = 0;
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Build Codex client",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const renderComposer = () => (
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={thread}
+      />
+    );
+    const { rerender } = render(renderComposer());
+    const input = screen.getByLabelText("Reply");
+    expect(input).toHaveValue("");
+
+    draftStore.set("thread:codex:thread-1", {
+      draft: "Hydrated durable draft after startup",
+      editorDocument: undefined,
+      imageAttachments: [],
+      skillTokens: [],
+    });
+    draftStore.hydrationVersion = 1;
+    rerender(renderComposer());
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Hydrated durable draft after startup");
+    });
+  });
+
   it("does not collapse pasted GitHub paragraph gaps when deleting a trailing blank line", async () => {
     const heading =
       "feat(navigation): replace Inbox tab with user-curated Pins tab (drag-to-pin, reorderable, with auto-switch on drag)";

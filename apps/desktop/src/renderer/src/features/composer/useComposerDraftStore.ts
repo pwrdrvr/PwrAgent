@@ -37,6 +37,7 @@ export type ComposerPendingSteerSnapshot = {
 export type ComposerDraftStore = {
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
+  hydrationVersion?: number;
   deletePendingSteer(scopeKey: string): void;
   deleteQueuedTurn(scopeKey: string): void;
   getPendingSteer(scopeKey: string): ComposerPendingSteerSnapshot | undefined;

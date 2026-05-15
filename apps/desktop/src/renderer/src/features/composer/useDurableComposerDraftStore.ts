@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerBackendKind,
@@ -24,6 +30,7 @@ export function useDurableComposerDraftStore(
 ): ComposerDraftStore {
   const saveTimersRef = useRef(new Map<string, number>());
   const createdAtRef = useRef(new Map<string, number>());
+  const [hydrationVersion, setHydrationVersion] = useState(0);
 
   useEffect(() => {
     if (!desktopApi?.listComposerDraftLatest) {
@@ -36,11 +43,16 @@ export function useDurableComposerDraftStore(
         if (cancelled) {
           return;
         }
+        let hydratedAny = false;
         for (const draft of response.drafts) {
           if (!baseStore.get(draft.scopeKey)) {
             baseStore.set(draft.scopeKey, snapshotFromDraftRecord(draft));
             createdAtRef.current.set(draft.scopeKey, draft.createdAt);
+            hydratedAny = true;
           }
+        }
+        if (hydratedAny) {
+          setHydrationVersion((current) => current + 1);
         }
       })
       .catch((error) => {
@@ -64,6 +76,7 @@ export function useDurableComposerDraftStore(
   return useMemo(
     () => ({
       ...baseStore,
+      hydrationVersion,
       delete: (scopeKey) => {
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
@@ -130,7 +143,7 @@ export function useDurableComposerDraftStore(
         saveTimersRef.current.set(scopeKey, timer);
       },
     }),
-    [baseStore, desktopApi],
+    [baseStore, desktopApi, hydrationVersion],
   );
 }
 

@@ -909,6 +909,7 @@ export function Composer(props: ComposerProps) {
       : "empty";
   const localDraftStore = useComposerDraftStore();
   const draftStore = props.draftStore ?? localDraftStore;
+  const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurns = props.thread
     ? draftStore.getQueuedTurns(composerScopeKey)
@@ -1480,6 +1481,29 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
   }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
+
+  useEffect(() => {
+    const saved = draftStore.get(composerScopeKey);
+    if (!saved) {
+      return;
+    }
+    const latest = latestDraftSnapshotRef.current;
+    if (latest.scopeKey !== composerScopeKey) {
+      return;
+    }
+    if (
+      latest.snapshot.draft.trim() ||
+      latest.snapshot.skillTokens.length > 0 ||
+      latest.snapshot.imageAttachments.length > 0
+    ) {
+      return;
+    }
+
+    setDraft(saved.draft);
+    setEditorDocument(saved.editorDocument);
+    setImageAttachments(saved.imageAttachments);
+    setSkillTokens(saved.skillTokens);
+  }, [composerScopeKey, draftStore, draftStoreHydrationVersion]);
 
   useEffect(() => {
     setActiveSkillIndex(0);

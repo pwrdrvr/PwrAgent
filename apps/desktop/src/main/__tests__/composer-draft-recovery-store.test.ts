@@ -96,6 +96,77 @@ describe("ComposerDraftRecoveryStore", () => {
       }),
     ).toEqual([]);
   });
+
+  it("does not return same-id thread drafts from a different backend", () => {
+    store.recordHistory(
+      buildDraft({
+        backend: "grok",
+        scopeKey: "thread:grok:thread-1",
+        status: "sent",
+        text: "Grok backend draft with the same local thread id.",
+      }),
+    );
+    store.recordHistory(
+      buildDraft({
+        backend: "codex",
+        scopeKey: "thread:codex:thread-1",
+        status: "sent",
+        text: "Codex backend draft with the same local thread id.",
+      }),
+    );
+
+    expect(
+      store.listCandidates({
+        backend: "codex",
+        includeSent: true,
+        threadId: "thread-1",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        text: "Codex backend draft with the same local thread id.",
+      }),
+    ]);
+  });
+
+  it("queries scoped journal rows before applying the global cap", () => {
+    store.recordHistory(
+      buildDraft({
+        contentHash: "target",
+        scopeKey: "thread:codex:older-thread",
+        status: "sent",
+        text: "Older scoped draft that should still be recoverable.",
+        threadId: "older-thread",
+        updatedAt: 1,
+      }),
+    );
+    for (let index = 0; index < 100; index += 1) {
+      store.recordHistory(
+        buildDraft({
+          contentHash: `other-${index}`,
+          scopeKey: `thread:codex:newer-thread-${index}`,
+          status: "sent",
+          text: `Newer draft in another thread ${index}.`,
+          threadId: `newer-thread-${index}`,
+          updatedAt: 100 + index,
+        }),
+      );
+    }
+
+    expect(
+      store.listCandidates({
+        backend: "codex",
+        includeSent: true,
+        scopeKey: "thread:codex:older-thread",
+        threadId: "older-thread",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        scopeKey: "thread:codex:older-thread",
+        text: "Older scoped draft that should still be recoverable.",
+      }),
+    ]);
+  });
 });
 
 function buildDraft(

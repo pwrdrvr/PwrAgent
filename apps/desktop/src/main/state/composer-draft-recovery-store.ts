@@ -100,23 +100,56 @@ export class ComposerDraftRecoveryStore {
     request: ListComposerDraftRecoveryCandidatesRequest = {},
   ): ComposerDraftRecoveryCandidate[] {
     const limit = clampLimit(request.limit);
-    const latestRows = this.stateDb.raw
-      .prepare(
-        `SELECT scope_key, scope_kind, status, updated_at, payload
-         FROM composer_draft_latest
-         ORDER BY updated_at DESC
-         LIMIT ?`,
-      )
-      .all(Math.max(limit * 2, limit)) as DraftLatestRow[];
-    const journalRows = this.stateDb.raw
-      .prepare(
-        `SELECT id, scope_key, scope_kind, status, content_hash, char_count,
-                created_at, updated_at, payload
-         FROM composer_draft_journal
-         ORDER BY updated_at DESC, id DESC
-         LIMIT ?`,
-      )
-      .all(Math.max(limit * 4, limit)) as DraftJournalRow[];
+    const scopeKeys = getRequestedScopeKeys(request);
+    const scopeKeyParams = getScopeKeyParams(scopeKeys);
+    const latestLimit = Math.max(limit * 2, limit);
+    const journalLimit = Math.max(limit * 4, limit);
+    const latestRows =
+      scopeKeys.length > 0
+        ? (this.stateDb.raw
+            .prepare(
+              `SELECT scope_key, scope_kind, status, updated_at, payload
+               FROM composer_draft_latest
+               WHERE
+                 (? IS NOT NULL AND scope_key = ?)
+                 OR (? IS NOT NULL AND scope_key = ?)
+                 OR (? IS NOT NULL AND scope_key = ?)
+               ORDER BY updated_at DESC
+               LIMIT ?`,
+            )
+            .all(...scopeKeyParams, latestLimit) as DraftLatestRow[])
+        : (this.stateDb.raw
+            .prepare(
+              `SELECT scope_key, scope_kind, status, updated_at, payload
+               FROM composer_draft_latest
+               ORDER BY updated_at DESC
+               LIMIT ?`,
+            )
+            .all(latestLimit) as DraftLatestRow[]);
+    const journalRows =
+      scopeKeys.length > 0
+        ? (this.stateDb.raw
+            .prepare(
+              `SELECT id, scope_key, scope_kind, status, content_hash, char_count,
+                      created_at, updated_at, payload
+               FROM composer_draft_journal
+               WHERE
+                 (? IS NOT NULL AND scope_key = ?)
+                 OR (? IS NOT NULL AND scope_key = ?)
+                 OR (? IS NOT NULL AND scope_key = ?)
+               ORDER BY updated_at DESC, id DESC
+               LIMIT ?`,
+            )
+            .all(...scopeKeyParams, journalLimit) as DraftJournalRow[])
+        : (this.stateDb.raw
+            .prepare(
+              `SELECT id, scope_key, scope_kind, status, content_hash, char_count,
+                      created_at, updated_at, payload
+               FROM composer_draft_journal
+               ORDER BY updated_at DESC, id DESC
+               LIMIT ?`,
+            )
+            .all(journalLimit) as DraftJournalRow[]);
 
     const candidates: ComposerDraftRecoveryCandidate[] = [];
     for (const row of latestRows) {
@@ -262,6 +295,9 @@ function matchesRecoveryRequest(
   candidate: ComposerDraftRecoveryCandidate,
   request: ListComposerDraftRecoveryCandidatesRequest,
 ): boolean {
+  if (request.backend && candidate.backend !== request.backend) {
+    return false;
+  }
   if (request.scopeKey && candidate.scopeKey === request.scopeKey) {
     return true;
   }
@@ -271,10 +307,28 @@ function matchesRecoveryRequest(
   if (request.directoryKey && candidate.directoryKey === request.directoryKey) {
     return true;
   }
-  if (request.backend && candidate.backend !== request.backend) {
-    return false;
-  }
   return !request.scopeKey && !request.threadId && !request.directoryKey;
+}
+
+function getRequestedScopeKeys(
+  request: ListComposerDraftRecoveryCandidatesRequest,
+): string[] {
+  const scopeKeys = new Set<string>();
+  if (request.scopeKey) {
+    scopeKeys.add(request.scopeKey);
+  }
+  if (request.backend && request.threadId) {
+    scopeKeys.add(`thread:${request.backend}:${request.threadId}`);
+  }
+  if (request.directoryKey) {
+    scopeKeys.add(`launchpad:${request.directoryKey}`);
+  }
+  return [...scopeKeys];
+}
+
+function getScopeKeyParams(scopeKeys: string[]): Array<string | null> {
+  const [first = null, second = null, third = null] = scopeKeys;
+  return [first, first, second, second, third, third];
 }
 
 function scoreCandidate(
