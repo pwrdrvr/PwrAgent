@@ -30,6 +30,7 @@ import {
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
+const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
 type ThreadContextPanelProps = {
   backendError?: string;
@@ -66,6 +67,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const pinned = props.pinned;
   const open = pinned || revealed;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const revealIntentRef = useRef(0);
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
 
@@ -110,11 +113,37 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     [isMouseInsideRail]
   );
 
+  const clearRevealTimer = useCallback(() => {
+    revealIntentRef.current += 1;
+    clearTimeout(revealTimerRef.current);
+    revealTimerRef.current = undefined;
+  }, []);
+
+  const isHoverStillInsideRail = useCallback(
+    async (point?: { x: number; y: number }): Promise<boolean> => {
+      const readPointerSnapshot = props.desktopApi?.getWindowPointerSnapshot;
+      if (readPointerSnapshot) {
+        try {
+          return isScreenCursorInsideRail(await readPointerSnapshot());
+        } catch {
+          // Cursor polling is a best-effort Electron affordance. Fall back
+          // to the latest renderer mouse position when the bridge is absent
+          // or briefly unavailable.
+        }
+      }
+
+      const latestPoint = lastMousePositionRef.current ?? point;
+      return Boolean(latestPoint && isMouseInsideRail(latestPoint));
+    },
+    [isMouseInsideRail, isScreenCursorInsideRail, props.desktopApi?.getWindowPointerSnapshot]
+  );
+
   const hideRailNow = useCallback(() => {
     clearTimeout(hideTimerRef.current);
+    clearRevealTimer();
     outsideRailSinceRef.current = undefined;
     setRevealed(false);
-  }, []);
+  }, [clearRevealTimer]);
 
   // Debounced reveal/hide prevents flicker from CSS transform transitions
   // causing spurious mouseenter→mouseleave sequences. The final hit test
@@ -123,13 +152,40 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // inside the opened rail.
   const revealRail = useCallback(() => {
     clearTimeout(hideTimerRef.current);
+    clearRevealTimer();
     outsideRailSinceRef.current = undefined;
     setRevealed(true);
-  }, []);
+  }, [clearRevealTimer]);
+
+  const revealRailAfterHoverIntent = useCallback(
+    (point: { x: number; y: number }) => {
+      clearTimeout(hideTimerRef.current);
+      clearRevealTimer();
+      outsideRailSinceRef.current = undefined;
+
+      const intent = revealIntentRef.current;
+      revealTimerRef.current = setTimeout(() => {
+        revealTimerRef.current = undefined;
+        void (async () => {
+          if (revealIntentRef.current !== intent) {
+            return;
+          }
+
+          if (await isHoverStillInsideRail(point)) {
+            if (revealIntentRef.current === intent) {
+              revealRail();
+            }
+          }
+        })();
+      }, HOVER_RAIL_REVEAL_DELAY_MS);
+    },
+    [clearRevealTimer, isHoverStillInsideRail, revealRail]
+  );
 
   const hideRail = useCallback(
     (point?: { x: number; y: number }) => {
       clearTimeout(hideTimerRef.current);
+      clearRevealTimer();
       hideTimerRef.current = setTimeout(() => {
         const latestPoint = lastMousePositionRef.current ?? point;
         if (latestPoint && isMouseInsideRail(latestPoint)) {
@@ -139,12 +195,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         hideRailNow();
       }, 300);
     },
-    [hideRailNow, isMouseInsideRail]
+    [clearRevealTimer, hideRailNow, isMouseInsideRail]
   );
 
   useEffect(() => {
     return () => {
       clearTimeout(hideTimerRef.current);
+      clearTimeout(revealTimerRef.current);
+      revealIntentRef.current += 1;
     };
   }, []);
 
@@ -299,7 +357,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       onMouseEnter={(event) => {
         rememberMousePosition(event);
         if (!pinned) {
-          revealRail();
+          revealRailAfterHoverIntent({
+            x: event.clientX,
+            y: event.clientY,
+          });
         }
       }}
       onMouseMove={rememberMousePosition}
@@ -351,6 +412,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             if (pinned) {
               updatePinned(false);
               clearTimeout(hideTimerRef.current);
+              clearRevealTimer();
               setRevealed(false);
               return;
             }

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 
+const HOVER_RAIL_REVEAL_DELAY_MS = 350;
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -80,8 +82,14 @@ const baseBackend: BackendSummary = {
   ],
 };
 
+const advanceHoverRevealDelay = async (): Promise<void> => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(HOVER_RAIL_REVEAL_DELAY_MS + 1);
+  });
+};
+
 describe("ThreadContextPanel", () => {
-  it("hides the hover rail when document mouse movement resumes outside the rail", () => {
+  it("waits for hover intent before revealing the rail", async () => {
     vi.useFakeTimers();
     render(
       <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
@@ -101,6 +109,82 @@ describe("ThreadContextPanel", () => {
     } as DOMRect);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+
+    await advanceHoverRevealDelay();
+
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+  });
+
+  it("does not reveal the rail after a drive-by hover", () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 620,
+      right: 1000,
+      top: 0,
+      width: 380,
+      x: 620,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS - 25);
+    });
+    fireEvent.mouseLeave(rail, { clientX: 600, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS + 1);
+    });
+
+    expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+  });
+
+  it("reveals immediately when the collapsed rail is clicked", () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS - 25);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
+  });
+
+  it("hides the hover rail when document mouse movement resumes outside the rail", async () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    vi.spyOn(rail, "getBoundingClientRect").mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 620,
+      right: 1000,
+      top: 0,
+      width: 380,
+      x: 620,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     fireEvent.mouseMove(document, { clientX: 600, clientY: 120 });
@@ -113,19 +197,34 @@ describe("ThreadContextPanel", () => {
 
   it("polls the window pointer and closes when the cursor remains outside the rail", async () => {
     vi.useFakeTimers();
-    const getWindowPointerSnapshot = vi.fn(async () => ({
-      contentBounds: {
-        height: 800,
-        width: 1000,
-        x: 100,
-        y: 100,
-      },
-      cursor: {
-        x: 700,
-        y: 220,
-      },
-      windowFocused: false,
-    }));
+    const getWindowPointerSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        contentBounds: {
+          height: 800,
+          width: 1000,
+          x: 100,
+          y: 100,
+        },
+        cursor: {
+          x: 1080,
+          y: 220,
+        },
+        windowFocused: false,
+      })
+      .mockResolvedValue({
+        contentBounds: {
+          height: 800,
+          width: 1000,
+          x: 100,
+          y: 100,
+        },
+        cursor: {
+          x: 700,
+          y: 220,
+        },
+        windowFocused: false,
+      });
 
     render(
       <ThreadContextPanel
@@ -150,6 +249,7 @@ describe("ThreadContextPanel", () => {
     } as DOMRect);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     await act(async () => {
@@ -199,6 +299,7 @@ describe("ThreadContextPanel", () => {
     } as DOMRect);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     await act(async () => {
@@ -209,7 +310,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
   });
 
-  it("keeps the hover rail open when a transient leave is still inside the opened rail", () => {
+  it("keeps the hover rail open when a transient leave is still inside the opened rail", async () => {
     vi.useFakeTimers();
     render(
       <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
@@ -229,6 +330,7 @@ describe("ThreadContextPanel", () => {
     } as DOMRect);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     fireEvent.mouseLeave(rail, { clientX: 980, clientY: 120 });
@@ -239,7 +341,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
   });
 
-  it("hides the hover rail after the mouse leaves the opened rail", () => {
+  it("hides the hover rail after the mouse leaves the opened rail", async () => {
     vi.useFakeTimers();
     render(
       <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
@@ -259,6 +361,7 @@ describe("ThreadContextPanel", () => {
     } as DOMRect);
 
     fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     fireEvent.mouseLeave(rail, { clientX: 600, clientY: 120 });
