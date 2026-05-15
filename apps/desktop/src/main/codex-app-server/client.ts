@@ -1244,10 +1244,11 @@ function buildMessageContent(record: Record<string, unknown>): {
 function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
   const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
+  const timestampKeys = ["createdAt", "created_at", "timestamp", "time"];
 
-  const visit = (node: unknown): void => {
+  const visit = (node: unknown, inheritedCreatedAt?: number): void => {
     if (Array.isArray(node)) {
-      node.forEach((entry) => visit(entry));
+      node.forEach((entry) => visit(entry, inheritedCreatedAt));
       return;
     }
 
@@ -1255,6 +1256,10 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     if (!record) {
       return;
     }
+    const recordCreatedAt = normalizeEpochTimestamp(
+      pickNumber(record, timestampKeys)
+    );
+    const createdAt = recordCreatedAt ?? inheritedCreatedAt;
 
     const role = normalizeConversationRole(
       pickString(record, ["role", "author", "speaker", "source", "type"])
@@ -1272,9 +1277,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
         role,
         text: content.text,
         ...(content.parts ? { parts: content.parts } : {}),
-        createdAt: normalizeEpochTimestamp(
-          pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
-        )
+        createdAt
       });
     }
 
@@ -1288,13 +1291,14 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       "results",
       "turns",
       "events",
+      "payload",
       "item",
       "message",
       "thread",
       "response",
       "result"
     ]) {
-      visit(record[key]);
+      visit(record[key], createdAt);
     }
   };
 

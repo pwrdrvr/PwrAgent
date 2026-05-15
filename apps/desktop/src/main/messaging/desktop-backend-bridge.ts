@@ -106,6 +106,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       limit: 20,
       threadId: request.threadId,
     });
+    for (let index = response.replay.entries.length - 1; index >= 0; index -= 1) {
+      const entry = response.replay.entries[index];
+      if (entry?.type !== "message" || entry.role !== "assistant") {
+        continue;
+      }
+      const text = entry.text.trim();
+      if (!text) {
+        continue;
+      }
+      return {
+        text,
+        ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
+      };
+    }
     for (let index = response.replay.messages.length - 1; index >= 0; index -= 1) {
       const message = response.replay.messages[index];
       if (message?.role !== "assistant") {
