@@ -1987,6 +1987,7 @@ export function ThreadView(props: ThreadViewProps) {
         <ThreadContextPanel
           backendError={props.backendError}
           backends={props.backends}
+          desktopApi={props.desktopApi}
           onPinnedChange={setContextRailPinned}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}

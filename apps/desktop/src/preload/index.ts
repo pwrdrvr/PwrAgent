@@ -226,8 +226,10 @@ import {
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
+  WINDOW_POINTER_SNAPSHOT_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
+import type { WindowPointerSnapshot } from "../shared/window-pointer";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -574,6 +576,8 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(WINDOW_FOCUS_SYNC_CHANNEL, listener);
     };
   },
+  getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>
+    await ipcRenderer.invoke(WINDOW_POINTER_SNAPSHOT_CHANNEL),
   onAgentEvent: (callback: (event: AgentEvent) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) =>
       callback(payload);

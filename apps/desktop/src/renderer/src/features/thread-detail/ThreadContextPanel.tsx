@@ -17,8 +17,10 @@ import type {
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import { FolderIcon, WorktreeIcon } from "../../icons";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   formatBackendAccountText,
@@ -26,9 +28,13 @@ import {
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
 
+const HOVER_RAIL_POINTER_POLL_MS = 500;
+const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
+
 type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
+  desktopApi?: Pick<DesktopApi, "getWindowPointerSnapshot">;
   onPinnedChange?: (pinned: boolean) => void;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -61,12 +67,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const open = pinned || revealed;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
+  const outsideRailSinceRef = useRef<number | undefined>(undefined);
 
   const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
     lastMousePositionRef.current = {
       x: event.clientX,
       y: event.clientY,
     };
+    outsideRailSinceRef.current = undefined;
   }, []);
 
   const isMouseInsideRail = useCallback((point: { x: number; y: number }) => {
@@ -88,6 +96,26 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     );
   }, []);
 
+  const isScreenCursorInsideRail = useCallback(
+    (snapshot: WindowPointerSnapshot) => {
+      if (snapshot.contentBounds.width <= 0 || snapshot.contentBounds.height <= 0) {
+        return false;
+      }
+
+      return isMouseInsideRail({
+        x: snapshot.cursor.x - snapshot.contentBounds.x,
+        y: snapshot.cursor.y - snapshot.contentBounds.y,
+      });
+    },
+    [isMouseInsideRail]
+  );
+
+  const hideRailNow = useCallback(() => {
+    clearTimeout(hideTimerRef.current);
+    outsideRailSinceRef.current = undefined;
+    setRevealed(false);
+  }, []);
+
   // Debounced reveal/hide prevents flicker from CSS transform transitions
   // causing spurious mouseenter→mouseleave sequences. The final hit test
   // keeps the rail open when an inactive window reports a transient leave
@@ -95,6 +123,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // inside the opened rail.
   const revealRail = useCallback(() => {
     clearTimeout(hideTimerRef.current);
+    outsideRailSinceRef.current = undefined;
     setRevealed(true);
   }, []);
 
@@ -107,10 +136,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           return;
         }
 
-        setRevealed(false);
+        hideRailNow();
       }, 300);
     },
-    [isMouseInsideRail]
+    [hideRailNow, isMouseInsideRail]
   );
 
   useEffect(() => {
@@ -118,6 +147,81 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       clearTimeout(hideTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (pinned || !revealed) {
+      return;
+    }
+
+    const handleDocumentMouseMove = (event: globalThis.MouseEvent): void => {
+      const point = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+      lastMousePositionRef.current = point;
+
+      if (isMouseInsideRail(point)) {
+        outsideRailSinceRef.current = undefined;
+        return;
+      }
+
+      hideRail(point);
+    };
+
+    document.addEventListener("mousemove", handleDocumentMouseMove, true);
+    return () => {
+      document.removeEventListener("mousemove", handleDocumentMouseMove, true);
+    };
+  }, [hideRail, isMouseInsideRail, pinned, revealed]);
+
+  useEffect(() => {
+    const readPointerSnapshot = props.desktopApi?.getWindowPointerSnapshot;
+    if (pinned || !revealed || !readPointerSnapshot) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkPointer = async (): Promise<void> => {
+      try {
+        const snapshot = await readPointerSnapshot();
+        if (cancelled) {
+          return;
+        }
+
+        if (isScreenCursorInsideRail(snapshot)) {
+          outsideRailSinceRef.current = undefined;
+          return;
+        }
+
+        const now = Date.now();
+        const outsideSince = outsideRailSinceRef.current ?? now;
+        outsideRailSinceRef.current = outsideSince;
+        if (now - outsideSince >= HOVER_RAIL_OFF_TARGET_CLOSE_MS) {
+          hideRailNow();
+        }
+      } catch {
+        // Cursor polling is a best-effort Electron affordance; renderer
+        // mousemove and mouseleave still cover the normal browser path.
+      }
+    };
+
+    void checkPointer();
+    const intervalId = window.setInterval(() => {
+      void checkPointer();
+    }, HOVER_RAIL_POINTER_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    hideRailNow,
+    isScreenCursorInsideRail,
+    pinned,
+    props.desktopApi?.getWindowPointerSnapshot,
+    revealed,
+  ]);
 
   useLayoutEffect(() => {
     if (!tooltip || tooltip.left !== undefined) {
