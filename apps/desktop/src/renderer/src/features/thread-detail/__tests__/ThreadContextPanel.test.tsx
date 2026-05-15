@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 
-const HOVER_RAIL_REVEAL_DELAY_MS = 250;
+const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
 afterEach(() => {
   cleanup();
