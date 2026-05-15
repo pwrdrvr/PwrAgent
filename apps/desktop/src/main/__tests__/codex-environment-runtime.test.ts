@@ -67,6 +67,72 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("strips parent Electron runtime variables from detached actions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
+    const shellPath = path.join(root, "test-shell.sh");
+    const outputPath = path.join(root, "env.txt");
+
+    try {
+      await writeFile(
+        shellPath,
+        [
+          "#!/bin/sh",
+          'if [ "$1" != "-lc" ]; then exit 64; fi',
+          'exec /bin/sh -c "$2"',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(shellPath, 0o755);
+
+      await expect(
+        startLocalCodexEnvironmentAction({
+          actionId: "start-dev",
+          env: {
+            ...process.env,
+            ELECTRON_RENDERER_URL: "http://127.0.0.1:5173",
+            ELECTRON_RUN_AS_NODE: "1",
+            PWRAGENT_TEST_HYDRATED_ENV: "hydrated",
+            SHELL: shellPath,
+            VITE_DEV_SERVER_URL: "http://127.0.0.1:5174",
+          },
+          runtime: {
+            environmentId: "env",
+            environmentName: "Env",
+            executionTarget: "local",
+            cwd: root,
+            actions: [
+              {
+                id: "start-dev",
+                name: "Start dev",
+                command: [
+                  `printf 'renderer=%s\\n' "\${ELECTRON_RENDERER_URL-unset}" > ${JSON.stringify(outputPath)}`,
+                  `printf 'run_as_node=%s\\n' "\${ELECTRON_RUN_AS_NODE-unset}" >> ${JSON.stringify(outputPath)}`,
+                  `printf 'vite=%s\\n' "\${VITE_DEV_SERVER_URL-unset}" >> ${JSON.stringify(outputPath)}`,
+                  `printf 'hydrated=%s\\n' "$PWRAGENT_TEST_HYDRATED_ENV" >> ${JSON.stringify(outputPath)}`,
+                ].join("\n"),
+              },
+            ],
+          },
+        }),
+      ).resolves.toMatchObject({
+        actionStatus: "started",
+      });
+
+      await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
+        [
+          "renderer=unset",
+          "run_as_node=unset",
+          "vite=unset",
+          "hydrated=hydrated",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("chooses the command shell from the provided hydrated environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-shell-"));
     const shellPath = path.join(root, "test-shell.sh");

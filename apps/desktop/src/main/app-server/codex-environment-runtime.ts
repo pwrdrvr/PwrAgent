@@ -243,7 +243,8 @@ function runShellCommand(params: {
   output?: string;
   pid?: number;
 }> {
-  const shell = params.env?.SHELL?.trim() || process.env.SHELL?.trim() || "/bin/sh";
+  const commandEnv = sanitizeLocalEnvironmentCommandEnv(params.env ?? process.env);
+  const shell = commandEnv.SHELL?.trim() || process.env.SHELL?.trim() || "/bin/sh";
   const processId = `pwragent-env-${randomUUID()}`;
   const startedAt = Date.now();
   environmentRuntimeLog.info("codex-environment-command-start", {
@@ -257,7 +258,7 @@ function runShellCommand(params: {
     const child = spawn(shell, ["-lc", wrapShellCommand(shell, params.command)], {
       cwd: params.cwd,
       detached: params.mode === "detach",
-      env: params.env ?? process.env,
+      env: commandEnv,
       stdio: params.mode === "detach" ? "ignore" : "pipe",
     });
 
@@ -326,6 +327,28 @@ function runShellCommand(params: {
       );
     });
   });
+}
+
+function sanitizeLocalEnvironmentCommandEnv(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const sanitized = { ...env };
+  for (const key of Object.keys(sanitized)) {
+    if (isParentElectronRuntimeEnvKey(key)) {
+      delete sanitized[key];
+    }
+  }
+  return sanitized;
+}
+
+function isParentElectronRuntimeEnvKey(key: string): boolean {
+  return (
+    key.startsWith("ELECTRON_") ||
+    key === "VITE_DEV_SERVER_URL" ||
+    key.startsWith("MAIN_VITE_") ||
+    key.startsWith("PRELOAD_VITE_") ||
+    key.startsWith("RENDERER_VITE_")
+  );
 }
 
 function wrapShellCommand(shell: string, command: string): string {
