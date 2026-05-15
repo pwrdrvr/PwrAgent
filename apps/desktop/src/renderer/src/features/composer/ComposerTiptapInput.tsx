@@ -1597,6 +1597,14 @@ export const ComposerTiptapInput = forwardRef<
     get selectionStart() {
       return selectionIndexRef.current;
     },
+    get skillTokenCount() {
+      return editor
+        ? readTiptapContent(editor, readMode).skillTokens.length
+        : props.skillTokens.length;
+    },
+    get value() {
+      return editor ? readTiptapContent(editor, readMode).value : props.value;
+    },
     setSelectionRange: (start: number) => {
       if (!editor) {
         return;

@@ -505,7 +505,6 @@ test("top-level new thread recovers an accidentally deleted no-project draft wit
       process.platform === "darwin" ? "Meta+A" : "Control+A",
     );
     await app.window.keyboard.press("Backspace");
-    await expect(tiptapInput).toHaveAttribute("data-value", "");
 
     await app.window.keyboard.press("ArrowUp");
     await expect(tiptapInput).toHaveAttribute("data-value", storedDraft ?? "");

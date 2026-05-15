@@ -3198,9 +3198,13 @@ export function Composer(props: ComposerProps) {
     }
 
     if (!hasAutocomplete) {
+      const liveHasComposerContent = Boolean(
+        (inputRef.current?.value ?? draft).trim() ||
+          (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
+      );
       if (
         event.key === "ArrowUp" &&
-        (!hasComposerContent ||
+        (!liveHasComposerContent ||
           recoveryCycleRef.current?.scopeKey === composerScopeKey) &&
         imageAttachments.length === 0
       ) {
