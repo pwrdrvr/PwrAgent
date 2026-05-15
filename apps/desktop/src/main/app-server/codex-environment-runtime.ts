@@ -254,7 +254,7 @@ function runShellCommand(params: {
   });
 
   return new Promise((resolve, reject) => {
-    const child = spawn(shell, ["-lc", params.command], {
+    const child = spawn(shell, ["-ilc", wrapShellCommand(params.command)], {
       cwd: params.cwd,
       detached: params.mode === "detach",
       env: params.env ?? process.env,
@@ -326,4 +326,8 @@ function runShellCommand(params: {
       );
     });
   });
+}
+
+function wrapShellCommand(command: string): string {
+  return ["set -e", "set -o pipefail 2>/dev/null || true", command].join("\n");
 }

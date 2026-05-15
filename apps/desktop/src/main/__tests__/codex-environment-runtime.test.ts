@@ -78,6 +78,7 @@ describe("codex environment runtime", () => {
         shellPath,
         [
           "#!/bin/sh",
+          'if [ "$1" != "-ilc" ]; then exit 64; fi',
           `printf shell-used > ${JSON.stringify(markerPath)}`,
           'exec /bin/sh -c "$2"',
           "",
@@ -111,6 +112,116 @@ describe("codex environment runtime", () => {
 
       await expect(readFile(markerPath, "utf8")).resolves.toBe("shell-used");
       await expect(readFile(outputPath, "utf8")).resolves.toBe("setup");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs setup commands in an interactive login shell so startup-defined functions are available", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-nvm-"));
+    const shellPath = path.join(root, "test-shell.sh");
+    const outputPath = path.join(root, "setup.txt");
+
+    try {
+      await writeFile(
+        shellPath,
+        [
+          "#!/bin/sh",
+          'if [ "$1" != "-ilc" ]; then exit 64; fi',
+          "nvm() {",
+          `  printf 'nvm:%s\\n' "$*" >> ${JSON.stringify(outputPath)}`,
+          "}",
+          'eval "$2"',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(shellPath, 0o755);
+
+      await expect(
+        applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            ...process.env,
+            SHELL: shellPath,
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: [
+                "nvm use --silent",
+                `printf done >> ${JSON.stringify(outputPath)}`,
+              ].join("\n"),
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+        }),
+      ).resolves.toMatchObject({
+        setupStatus: "completed",
+      });
+
+      await expect(readFile(outputPath, "utf8")).resolves.toBe(
+        "nvm:use --silent\ndone",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails setup immediately when an earlier script command exits non-zero", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-strict-"));
+    const shellPath = path.join(root, "test-shell.sh");
+    const outputPath = path.join(root, "setup.txt");
+
+    try {
+      await writeFile(
+        shellPath,
+        [
+          "#!/bin/sh",
+          'if [ "$1" != "-ilc" ]; then exit 64; fi',
+          'exec /bin/sh -c "$2"',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(shellPath, 0o755);
+
+      await expect(
+        applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            ...process.env,
+            SHELL: shellPath,
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: [
+                `printf before > ${JSON.stringify(outputPath)}`,
+                "false",
+                `printf after >> ${JSON.stringify(outputPath)}`,
+              ].join("\n"),
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+        }),
+      ).rejects.toMatchObject({
+        runtime: {
+          setupStatus: "failed",
+          setupExitCode: 1,
+          setupOutput: "",
+        },
+      });
+
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("before");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
