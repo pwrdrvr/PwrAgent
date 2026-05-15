@@ -82,7 +82,9 @@ function DesktopAppShell(props: {
   const settings = props.settings;
   const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
-  const navigation = useThreadNavigation(desktopApi);
+  const navigation = useThreadNavigation(desktopApi, {
+    threadViewVisible: mainView === "thread",
+  });
   const backendSummaries = useBackendSummaries(desktopApi);
   const pullRequests = usePullRequestRefresh({
     desktopApi,

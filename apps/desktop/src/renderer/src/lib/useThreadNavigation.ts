@@ -32,6 +32,18 @@ const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 30_000;
 
+function isRendererViewForeground(): boolean {
+  if (typeof document === "undefined") {
+    return true;
+  }
+
+  if (document.visibilityState !== "visible") {
+    return false;
+  }
+
+  return typeof document.hasFocus !== "function" ? true : document.hasFocus();
+}
+
 type NavigationState = {
   loading: boolean;
   refreshing: boolean;
@@ -1192,7 +1204,14 @@ function buildOptimisticUserMessage(
   };
 }
 
-export function useThreadNavigation(desktopApi?: DesktopApi): {
+type UseThreadNavigationOptions = {
+  threadViewVisible?: boolean;
+};
+
+export function useThreadNavigation(
+  desktopApi?: DesktopApi,
+  options: UseThreadNavigationOptions = {}
+): {
   browseMode: BrowseMode;
   createThread: (
     backend?: AppServerBackendKind,
@@ -1304,6 +1323,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
+  const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("inbox");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
@@ -1336,9 +1356,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     loading: true,
     refreshing: false,
   });
+  const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const manuallySelectedThreadKeysRef = useRef(new Set<string>());
+  const submittedSeenUpdatedAtByThreadKeyRef = useRef(new Map<string, number | undefined>());
   const refreshInFlightRef = useRef(false);
   const queuedRefreshRef = useRef<
     | {
@@ -1560,6 +1583,27 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       if (scheduledRefreshTimerRef.current !== undefined) {
         clearTimeout(scheduledRefreshTimerRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return;
+    }
+
+    const updateForegroundState = () => {
+      setViewForeground(isRendererViewForeground());
+    };
+
+    updateForegroundState();
+    window.addEventListener("focus", updateForegroundState);
+    window.addEventListener("blur", updateForegroundState);
+    document.addEventListener("visibilitychange", updateForegroundState);
+
+    return () => {
+      window.removeEventListener("focus", updateForegroundState);
+      window.removeEventListener("blur", updateForegroundState);
+      document.removeEventListener("visibilitychange", updateForegroundState);
     };
   }, []);
 
@@ -2000,6 +2044,15 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     let cancelled = false;
 
     async function markSeen(): Promise<void> {
+      const threadKey = buildThreadIdentityKey(
+        threadToMarkSeen.source,
+        threadToMarkSeen.id
+      );
+      submittedSeenUpdatedAtByThreadKeyRef.current.set(
+        threadKey,
+        threadToMarkSeen.updatedAt
+      );
+
       try {
         await markThreadSeenRequest({
           backend: threadToMarkSeen.source,
@@ -2007,10 +2060,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           seenUpdatedAt: threadToMarkSeen.updatedAt,
         });
         if (!cancelled) {
-          const threadKey = buildThreadIdentityKey(
-            threadToMarkSeen.source,
-            threadToMarkSeen.id
-          );
           if (
             !retainedUnreadThread ||
             buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id) !==
@@ -2059,8 +2108,55 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [desktopApi?.refreshDirectoryGitStatuses, directories]
   );
 
+  useEffect(() => {
+    if (
+      !selectedThread ||
+      selectedThread.inbox.reason !== "updated-since-seen" ||
+      !viewForeground ||
+      !threadViewVisible
+    ) {
+      return;
+    }
+
+    const threadKey = buildThreadIdentityKey(
+      selectedThread.source,
+      selectedThread.id
+    );
+    if (!manuallySelectedThreadKeysRef.current.has(threadKey)) {
+      return;
+    }
+    const retainedThreadKey = retainedUnreadThread
+      ? buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id)
+      : undefined;
+
+    if (
+      retainedThreadKey === threadKey &&
+      retainedUnreadThread?.updatedAt !== selectedThread.updatedAt
+    ) {
+      setRetainedUnreadThread(selectedThread);
+    }
+
+    if (
+      pendingSeenThreadKey === threadKey ||
+      selectedThread.inbox.lastSeenUpdatedAt === selectedThread.updatedAt ||
+      submittedSeenUpdatedAtByThreadKeyRef.current.get(threadKey) ===
+        selectedThread.updatedAt
+    ) {
+      return;
+    }
+
+    setPendingSeenThreadKey(threadKey);
+  }, [
+    pendingSeenThreadKey,
+    retainedUnreadThread,
+    selectedThread,
+    threadViewVisible,
+    viewForeground,
+  ]);
+
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    manuallySelectedThreadKeysRef.current.add(threadKey);
     releaseRetainedUnreadThread(threadKey);
     refreshThreadDirectoryGitStatuses(threadKey);
     setCreateThreadError(undefined);
