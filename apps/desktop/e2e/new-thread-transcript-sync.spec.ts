@@ -461,6 +461,60 @@ test("top-level new thread rereads the created thread until the assistant reply 
   }
 });
 
+test("top-level new thread recovers an accidentally deleted no-project draft with ArrowUp", async () => {
+  const fixture = await createNewThreadTranscriptFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "New thread" }).click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "New thread" }),
+    ).toBeVisible();
+
+    const deletedDraft = [
+      "Somebody once told me",
+      "",
+      "",
+      "The world is gonna roll me",
+      "",
+      "",
+      "I ain't the sharpest tool in the shed",
+      "",
+      "",
+      "```",
+      "// This is a tool",
+      "```",
+      "",
+      "",
+      "- This is",
+      "- Not exactly a tool",
+    ].join("\n");
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+
+    await textbox.fill(deletedDraft);
+    await expect(tiptapInput).toHaveAttribute("data-value", /Somebody once told me/);
+    const storedDraft = await tiptapInput.getAttribute("data-value");
+    expect(storedDraft).toContain("The world is gonna roll me");
+    expect(storedDraft).toContain("// This is a tool");
+    expect(storedDraft).toContain("- Not exactly a tool");
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Backspace");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+
+    await app.window.keyboard.press("ArrowUp");
+    await expect(tiptapInput).toHaveAttribute("data-value", storedDraft ?? "");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("does not move focus back to a new thread after the user selects another thread", async () => {
   const fixture = await createNewThreadFocusFixture();
   const app = await launchElectronApp({

@@ -1030,7 +1030,9 @@ export function Composer(props: ComposerProps) {
     draft.length,
   );
   const isDraftStoreScope = (scopeKey: string): boolean =>
-    scopeKey.startsWith("thread:") || scopeKey.startsWith("launchpad:");
+    scopeKey === "empty" ||
+    scopeKey.startsWith("thread:") ||
+    scopeKey.startsWith("launchpad:");
   const canonicalDraft = useMemo(
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]

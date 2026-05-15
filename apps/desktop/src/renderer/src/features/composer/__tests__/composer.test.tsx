@@ -4781,6 +4781,68 @@ describe("Composer", () => {
     });
   });
 
+  it("recovers an accidentally deleted no-project draft from the empty composer scope", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [];
+    draftStore.recordHistory = vi.fn((scopeKey, snapshot, status) => {
+      recoveryCandidates.unshift({
+        scopeKey,
+        scopeKind: "empty",
+        text: snapshot.draft,
+        editorDocument: snapshot.editorDocument,
+        skillTokens: snapshot.skillTokens,
+        imageAttachments: snapshot.imageAttachments,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: `h-empty-${recoveryCandidates.length + 1}`,
+        charCount: snapshot.draft.length,
+      });
+    });
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+    const deletedDraft =
+      "Somebody once told me\n\n\n\n" +
+      "The world is gonna roll me\n\n\n\n" +
+      "I ain't the sharpest tool in the shed\n\n\n\n" +
+      "```\n// This is a tool\n```\n\n\n\n" +
+      "- This is\n- Not exactly a tool";
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: deletedDraft } });
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+
+    expect(draftStore.recordHistory).toHaveBeenCalledWith(
+      "empty",
+      expect.objectContaining({ draft: deletedDraft }),
+      "abandoned",
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+  });
+
   it("hydrates a mounted blank composer when durable drafts load after mount", async () => {
     const draftStore = createComposerDraftStore();
     draftStore.hydrationVersion = 0;
