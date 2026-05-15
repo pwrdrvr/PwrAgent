@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 
-const HOVER_RAIL_REVEAL_DELAY_MS = 175;
+const HOVER_RAIL_REVEAL_DELAY_MS = 250;
 
 afterEach(() => {
   cleanup();
@@ -145,6 +145,23 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.queryByText("Auto-hide")).not.toBeInTheDocument();
+  });
+
+  it("reveals immediately when the collapsed rail is clicked", () => {
+    vi.useFakeTimers();
+    render(
+      <ThreadContextPanel backends={[baseBackend]} pinned={false} thread={baseThread} />
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_RAIL_REVEAL_DELAY_MS - 25);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+
+    expect(screen.getByText("Auto-hide")).toBeInTheDocument();
   });
 
   it("hides the hover rail when document mouse movement resumes outside the rail", async () => {

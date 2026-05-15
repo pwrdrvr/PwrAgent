@@ -30,7 +30,7 @@ import {
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
-const HOVER_RAIL_REVEAL_DELAY_MS = 175;
+const HOVER_RAIL_REVEAL_DELAY_MS = 250;
 
 type ThreadContextPanelProps = {
   backendError?: string;
