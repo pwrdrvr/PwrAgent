@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
-import type { NavigationSnapshot } from "@pwragent/shared";
+import type {
+  NavigationLaunchpadDefaults,
+  NavigationLaunchpadDraft,
+  NavigationSnapshot,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -1304,7 +1308,7 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const launchpad = {
+    const launchpad: NavigationLaunchpadDraft = {
       directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       directoryKind: "directory" as const,
       directoryLabel: "PwrAgent",
@@ -1362,7 +1366,7 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       executionMode: "default" as const,
     };
-    const launchpad = {
+    const launchpad: NavigationLaunchpadDraft = {
       directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       directoryKind: "directory" as const,
       directoryLabel: "PwrAgent",
@@ -1463,6 +1467,209 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
+  });
+
+  it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
+      directoryKind: "directory" as const,
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "local" as const,
+      branchName: "main",
+      codexEnvironmentId: "environment",
+      codexEnvironmentExecutionTarget: "local" as const,
+      codexEnvironmentSetupEnabled: true,
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/Users/huntharo/github/PwrAgent/.codex/environments/environment.toml",
+          setupScript: "pnpm install",
+          actions: [
+            {
+              id: "dev",
+              name: "Dev",
+              command: "pnpm dev",
+            },
+          ],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const promptUpdate = createDeferred<{
+      defaults: typeof defaults;
+      launchpad: typeof launchpad;
+    }>();
+    const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(promptUpdate.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: launchpad.directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.codexEnvironmentId).toBe("environment");
+    });
+
+    let update: Promise<void> | undefined;
+    act(() => {
+      update = result.current.updateDirectoryLaunchpad(launchpad.directoryKey, {
+        prompt: "typing",
+      });
+    });
+
+    await act(async () => {
+      promptUpdate.resolve({
+        defaults,
+        launchpad: {
+          ...launchpad,
+          prompt: "typing",
+          codexEnvironmentId: undefined,
+          codexEnvironmentExecutionTarget: undefined,
+          codexEnvironmentSetupEnabled: undefined,
+          codexEnvironmentOptions: [],
+          updatedAt: 2,
+        },
+      });
+      await update!;
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      prompt: "typing",
+      codexEnvironmentId: "environment",
+      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentSetupEnabled: true,
+      codexEnvironmentOptions: [
+        expect.objectContaining({
+          id: "environment",
+          name: "PwrAgnt",
+        }),
+      ],
+    });
+  });
+
+  it("keeps server-confirmed settingsTouchedAt after sticky launchpad updates", async () => {
+    const defaults: NavigationLaunchpadDefaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const stickyUpdate = createDeferred<{
+      defaults: typeof defaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const updateDirectoryLaunchpad = vi.fn().mockReturnValueOnce(stickyUpdate.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: launchpad.directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.workMode).toBe("local");
+    });
+
+    let update: Promise<void> | undefined;
+    act(() => {
+      update = result.current.updateDirectoryLaunchpad(
+        launchpad.directoryKey,
+        {
+          workMode: "worktree",
+        },
+        { stickySettingsChanged: true },
+      );
+    });
+
+    await act(async () => {
+      stickyUpdate.resolve({
+        defaults: {
+          ...defaults,
+          workMode: "worktree",
+        },
+        launchpad: {
+          ...launchpad,
+          workMode: "worktree",
+          settingsTouchedAt: 123_456,
+          updatedAt: 2,
+        },
+      });
+      await update!;
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      workMode: "worktree",
+      settingsTouchedAt: 123_456,
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: launchpad.directoryKey,
+      patch: {
+        workMode: "worktree",
+      },
+      stickySettingsChanged: true,
+    });
   });
 
   it("opens masthead new-thread drafts inside the Workspaces directory", async () => {

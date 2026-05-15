@@ -904,6 +904,49 @@ function applyLaunchpadUpdate(
   };
 }
 
+function mergeLaunchpadUpdateResponse(
+  current: NavigationLaunchpadDraft | undefined,
+  next: NavigationLaunchpadDraft,
+  patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
+): NavigationLaunchpadDraft {
+  if (!current || current.directoryKey !== next.directoryKey) {
+    return next;
+  }
+
+  const merged: NavigationLaunchpadDraft = { ...next };
+  const backendChanged = "backend" in patch;
+  const environmentChanged = backendChanged || "codexEnvironmentId" in patch;
+  const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
+    key: Key,
+  ): void => {
+    if (!backendChanged && !(key in patch)) {
+      merged[key] = current[key] as NavigationLaunchpadDraft[Key];
+    }
+  };
+  const preserveEnvironment = <Key extends keyof NavigationLaunchpadDraft>(
+    key: Key,
+  ): void => {
+    if (!environmentChanged && !(key in patch)) {
+      merged[key] = current[key] as NavigationLaunchpadDraft[Key];
+    }
+  };
+
+  preserveSetting("executionMode");
+  preserveSetting("model");
+  preserveSetting("reasoningEffort");
+  preserveSetting("serviceTier");
+  preserveSetting("fastMode");
+  preserveSetting("workMode");
+  preserveSetting("branchName");
+  preserveEnvironment("codexEnvironmentId");
+  preserveEnvironment("codexEnvironmentExecutionTarget");
+  preserveEnvironment("codexEnvironmentSetupEnabled");
+  preserveEnvironment("codexEnvironmentActionId");
+  preserveEnvironment("codexEnvironmentOptions");
+
+  return merged;
+}
+
 function applyLaunchpadReset(
   snapshot: NavigationSnapshot | undefined,
   directoryKey: string,
@@ -2236,7 +2279,13 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           ...current,
           response: applyLaunchpadUpdate(
             current.response,
-            response.launchpad,
+            mergeLaunchpadUpdateResponse(
+              current.response?.directories.find(
+                (directory) => directory.key === directoryKey
+              )?.launchpad,
+              response.launchpad,
+              patch,
+            ),
             response.defaults
           ),
         }));

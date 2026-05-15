@@ -61,6 +61,7 @@ import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
+import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -145,6 +146,33 @@ function applyDirectoryGitStatus(
     delete next.gitStatus;
   }
   return next;
+}
+
+async function hydrateDirectoryLaunchpads(
+  directories: NavigationSnapshot["directories"],
+): Promise<NavigationSnapshot["directories"]> {
+  return await Promise.all(
+    directories.map(async (directory) => {
+      if (!directory.launchpad) {
+        return directory;
+      }
+
+      try {
+        return {
+          ...directory,
+          launchpad: await hydrateLaunchpadCodexEnvironmentOptions(
+            directory.launchpad,
+          ),
+        };
+      } catch (error) {
+        logDebug("getNavigationSnapshot:launchpad-environments-failed", {
+          directoryKey: directory.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return directory;
+      }
+    }),
+  );
 }
 
 function getNavigationSnapshotRequestKey(
@@ -424,13 +452,15 @@ class DesktopAppServerService {
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
     }
-    const directories = snapshot.directories.map((directory) => {
-      const cached = this.directoryGitStatusByKey.get(directory.key);
-      if (!cached) {
-        return directory;
-      }
-      return applyDirectoryGitStatus(directory, cached.gitStatus);
-    });
+    const directories = await hydrateDirectoryLaunchpads(
+      snapshot.directories.map((directory) => {
+        const cached = this.directoryGitStatusByKey.get(directory.key);
+        if (!cached) {
+          return directory;
+        }
+        return applyDirectoryGitStatus(directory, cached.gitStatus);
+      }),
+    );
     const directoryDurationMs = Date.now() - directoryStartedAt;
     const previousDirectories = this.previousDirectoriesByBackend.get(backend);
     const directoriesUnchanged = previousDirectories

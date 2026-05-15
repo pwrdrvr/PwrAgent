@@ -115,7 +115,10 @@ import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
 } from "./backend-model-catalog";
-import { listCodexEnvironmentOptions } from "./codex-environment-config";
+import {
+  listCodexEnvironmentOptions,
+  withCodexEnvironmentOptions,
+} from "./codex-environment-config";
 import {
   applyLocalCodexEnvironmentSelection,
   CodexEnvironmentStartupError,
@@ -940,46 +943,6 @@ function defaultLaunchpadWorkMode(
     : "local";
 }
 
-function withCodexEnvironmentOptions(
-  launchpad: NavigationLaunchpadDraft,
-  options: CodexEnvironmentOption[],
-): NavigationLaunchpadDraft {
-  if (launchpad.backend !== "codex") {
-    return {
-      ...launchpad,
-      codexEnvironmentOptions: [],
-    };
-  }
-
-  if (options.length === 0) {
-    return {
-      ...launchpad,
-      codexEnvironmentId: undefined,
-      codexEnvironmentActionId: undefined,
-      codexEnvironmentOptions: [],
-    };
-  }
-
-  const selectedEnvironment = options.find(
-    (environment) => environment.id === launchpad.codexEnvironmentId,
-  );
-  const selectedAction = selectedEnvironment?.actions.find(
-    (action) => action.id === launchpad.codexEnvironmentActionId,
-  );
-
-  return {
-    ...launchpad,
-    codexEnvironmentId: selectedEnvironment?.id,
-    codexEnvironmentExecutionTarget:
-      launchpad.codexEnvironmentExecutionTarget ?? "local",
-    codexEnvironmentSetupEnabled:
-      launchpad.codexEnvironmentSetupEnabled ??
-      Boolean(selectedEnvironment?.setupScript),
-    codexEnvironmentActionId: selectedAction?.id,
-    codexEnvironmentOptions: options,
-  };
-}
-
 function resolveCodexEnvironmentSelection(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
@@ -995,15 +958,10 @@ function resolveCodexEnvironmentSelection(
     return undefined;
   }
 
-  const action = environment.actions.find(
-    (candidate) => candidate.id === launchpad.codexEnvironmentActionId,
-  );
-
   return {
     environment,
     executionTarget: launchpad.codexEnvironmentExecutionTarget ?? "local",
     setupEnabled: Boolean(launchpad.codexEnvironmentSetupEnabled),
-    action,
   };
 }
 
@@ -1041,7 +999,6 @@ async function resetLaunchpadAfterMaterialize(params: {
       launchpad.codexEnvironmentExecutionTarget ?? "local",
     codexEnvironmentSetupEnabled:
       launchpad.codexEnvironmentSetupEnabled ?? true,
-    codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
     createdAt: now,
     updatedAt: now,
   });

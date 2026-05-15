@@ -1,6 +1,9 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { CodexEnvironmentOption } from "@pwragent/shared";
+import type {
+  CodexEnvironmentOption,
+  NavigationLaunchpadDraft,
+} from "@pwragent/shared";
 
 type RawAction = {
   name?: string;
@@ -45,7 +48,8 @@ export async function listCodexEnvironmentOptions(
     }
     entries = await readdir(environmentsDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const errorCode = (error as NodeJS.ErrnoException).code;
+    if (errorCode === "ENOENT" || errorCode === "ENOTDIR") {
       return [];
     }
     throw error;
@@ -78,6 +82,51 @@ export async function listCodexEnvironmentOptions(
   }
 
   return options;
+}
+
+export function withCodexEnvironmentOptions(
+  launchpad: NavigationLaunchpadDraft,
+  options: CodexEnvironmentOption[],
+): NavigationLaunchpadDraft {
+  if (launchpad.backend !== "codex") {
+    return {
+      ...launchpad,
+      codexEnvironmentOptions: [],
+    };
+  }
+
+  if (options.length === 0) {
+    return {
+      ...launchpad,
+      codexEnvironmentId: undefined,
+      codexEnvironmentActionId: undefined,
+      codexEnvironmentOptions: [],
+    };
+  }
+
+  const selectedEnvironment = options.find(
+    (environment) => environment.id === launchpad.codexEnvironmentId,
+  );
+  return {
+    ...launchpad,
+    codexEnvironmentId: selectedEnvironment?.id,
+    codexEnvironmentExecutionTarget:
+      launchpad.codexEnvironmentExecutionTarget ?? "local",
+    codexEnvironmentSetupEnabled:
+      launchpad.codexEnvironmentSetupEnabled ??
+      Boolean(selectedEnvironment?.setupScript),
+    codexEnvironmentActionId: undefined,
+    codexEnvironmentOptions: options,
+  };
+}
+
+export async function hydrateLaunchpadCodexEnvironmentOptions(
+  launchpad: NavigationLaunchpadDraft,
+): Promise<NavigationLaunchpadDraft> {
+  return withCodexEnvironmentOptions(
+    launchpad,
+    await listCodexEnvironmentOptions(launchpad.directoryPath),
+  );
 }
 
 export function parseCodexEnvironmentToml(

@@ -41,6 +41,7 @@ type LaunchResult = {
 export async function launchElectronApp(params: {
   fixturePath: string;
   env?: Record<string, string | undefined>;
+  homeRoot?: string;
   windowSize?: {
     width: number;
     height: number;
@@ -54,7 +55,9 @@ export async function launchElectronApp(params: {
    */
   preLaunchHook?: (homeRoot: string) => void | Promise<void>;
 }): Promise<LaunchResult> {
-  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
+  const homeRoot =
+    params.homeRoot ??
+    await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
   if (params.preLaunchHook) {
     await params.preLaunchHook(homeRoot);
   }
