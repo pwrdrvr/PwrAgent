@@ -201,6 +201,9 @@ type BackendClient = {
     params?: { archived?: boolean; enrichDirectories?: boolean; filter?: string },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
+  enrichThreadDirectories?(
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
@@ -366,6 +369,75 @@ function buildWorktreeLinkedDirectory(params: {
       worktreePath,
     },
   ];
+}
+
+function isLikelyToolManagedWorktreePath(projectKey: string | undefined): boolean {
+  const normalized = projectKey?.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return /[\\/](?:\.codex[\\/]worktrees|\.pwrag(?:ent|nt)[\\/]worktrees|\.worktrees)[\\/]/.test(
+    normalized,
+  );
+}
+
+function hasCachedWorktreeDirectory(
+  overlay: ThreadOverlayState | undefined,
+  projectPath: string,
+): boolean {
+  return Boolean(
+    overlay?.extraLinkedDirectories.some((directory) => {
+      if (directory.id !== projectPath) {
+        return false;
+      }
+      return Boolean(directory.worktreePath?.trim());
+    }),
+  );
+}
+
+function pathContainsOrEquals(parentPath: string, childPath: string): boolean {
+  const relativePath = path.relative(parentPath, childPath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
+function buildCachedWorktreeDirectory(
+  thread: AppServerThreadSummary,
+): LinkedDirectorySummary | undefined {
+  const projectKey = thread.projectKey?.trim();
+  if (!projectKey) {
+    return undefined;
+  }
+
+  const projectPath = path.resolve(projectKey);
+  const directory = thread.linkedDirectories.find((candidate) => {
+    const worktreePath = candidate.worktreePath?.trim();
+    if (!worktreePath) {
+      return false;
+    }
+    return pathContainsOrEquals(path.resolve(worktreePath), projectPath);
+  });
+  if (!directory) {
+    return undefined;
+  }
+
+  const repositoryPath = path.resolve(directory.path);
+  const worktreePath = path.resolve(directory.worktreePath!);
+  if (repositoryPath === projectPath) {
+    return undefined;
+  }
+
+  return {
+    ...directory,
+    id: projectPath,
+    kind: "worktree",
+    label: directory.label || path.basename(repositoryPath) || repositoryPath,
+    path: repositoryPath,
+    worktreePath,
+  };
 }
 
 function normalizeLinkedDirectoryKind(
@@ -4155,6 +4227,15 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
+    if (!params.archived && params.enrichDirectories === false) {
+      const updatedOverlaysByThreadId =
+        await this.backfillMissingCodexDirectoryRelationships({
+          diagnostics,
+          overlaysByThreadId,
+          threads: threadsWithPending,
+        });
+      Object.assign(overlaysByThreadId, updatedOverlaysByThreadId);
+    }
 
     const enrichedThreads = await Promise.all(
       threadsWithPending.map(async (thread) => {
@@ -4177,6 +4258,71 @@ export class DesktopBackendRegistry {
     return enrichedThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
+  }
+
+  private async backfillMissingCodexDirectoryRelationships(params: {
+    diagnostics?: {
+      callerReason?: string;
+      ownerId?: string;
+    };
+    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
+    threads: AppServerThreadSummary[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    if (!this.codexClient.enrichThreadDirectories) {
+      return {};
+    }
+
+    const candidates = params.threads.filter((thread) => {
+      const projectKey = thread.projectKey?.trim();
+      if (!isLikelyToolManagedWorktreePath(projectKey)) {
+        return false;
+      }
+
+      const projectPath = path.resolve(projectKey!);
+      return !hasCachedWorktreeDirectory(
+        params.overlaysByThreadId[thread.id],
+        projectPath,
+      );
+    });
+    if (candidates.length === 0) {
+      return {};
+    }
+
+    try {
+      const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
+      const updatedOverlaysByThreadId: Record<
+        string,
+        ThreadOverlayState | undefined
+      > = {};
+
+      for (const thread of enrichedThreads) {
+        const directory = buildCachedWorktreeDirectory(thread);
+        if (!directory) {
+          continue;
+        }
+
+        updatedOverlaysByThreadId[thread.id] =
+          await this.overlayStore.addLinkedDirectory({
+            backend: "codex",
+            threadId: thread.id,
+            directory,
+          });
+      }
+
+      logDebug("codexDirectoryBackfill:completed", {
+        callerReason: params.diagnostics?.callerReason ?? null,
+        candidateCount: candidates.length,
+        updatedThreadCount: Object.keys(updatedOverlaysByThreadId).length,
+      });
+
+      return updatedOverlaysByThreadId;
+    } catch (error) {
+      backendRegistryLog.warn("Codex directory relationship backfill failed", {
+        callerReason: params.diagnostics?.callerReason ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
   }
 
   private withPendingStartedThreads(

@@ -21,6 +21,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
+import { buildNavigationSnapshot } from "@pwragent/agent-core";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
@@ -331,6 +332,34 @@ function createOverlayStoreMock(params?: {
         gitBranch: gitBranch ?? current.gitBranch,
         observedGitBranch: gitBranch ?? current.observedGitBranch,
         extraLinkedDirectories: [directory],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    addLinkedDirectory: async ({
+      backend,
+      threadId,
+      directory,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      directory: ThreadOverlayState["extraLinkedDirectories"][number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        extraLinkedDirectories: [
+          ...current.extraLinkedDirectories.filter(
+            (candidate) => candidate.id !== directory.id,
+          ),
+          directory,
+        ],
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -1284,6 +1313,174 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.lastListThreadsParams).toMatchObject({
       enrichDirectories: true,
     });
+
+    await registry.close();
+  });
+
+  it("backfills Codex worktree parent directories so directory view shows one project", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const worktree1 = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
+    const worktree2 = "/Users/huntharo/.codex/worktrees/wt2/ProjectA";
+    const nestedWorktreeCwd = `${worktree2}/apps`;
+    const cheapThreads: AppServerThreadSummary[] = [
+      {
+        id: "project-a-local",
+        title: "ProjectA local",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: projectA,
+        createdAt: 3_000,
+        updatedAt: 3_000,
+        linkedDirectories: [
+          {
+            id: projectA,
+            label: "ProjectA",
+            path: projectA,
+            kind: "local",
+          },
+        ],
+      },
+      {
+        id: "project-a-worktree-1",
+        title: "ProjectA worktree 1",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: worktree1,
+        createdAt: 2_000,
+        updatedAt: 2_000,
+        linkedDirectories: [
+          {
+            id: worktree1,
+            label: "ProjectA",
+            path: worktree1,
+            kind: "local",
+          },
+        ],
+      },
+      {
+        id: "project-a-worktree-2",
+        title: "ProjectA worktree 2",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: nestedWorktreeCwd,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        linkedDirectories: [
+          {
+            id: nestedWorktreeCwd,
+            label: "ProjectA",
+            path: nestedWorktreeCwd,
+            kind: "local",
+          },
+        ],
+      },
+    ];
+    const enrichedByThreadId = new Map<string, AppServerThreadSummary>(
+      cheapThreads.map((thread) => [
+        thread.id,
+        thread.projectKey === projectA
+          ? thread
+          : {
+              ...thread,
+              linkedDirectories: [
+                {
+                  id: projectA,
+                  label: "ProjectA",
+                  path: projectA,
+                  worktreePath:
+                    thread.id === "project-a-worktree-2"
+                      ? worktree2
+                      : thread.projectKey,
+                  kind: "worktree" as const,
+                },
+              ],
+            },
+      ]),
+    );
+    const codexClient = new MockBackendClient({
+      threads: cheapThreads,
+    });
+    const enrichmentStarted = createDeferred<void>();
+    const enrichmentRelease = createDeferred<void>();
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) => {
+        enrichmentStarted.resolve();
+        await enrichmentRelease.promise;
+        return threads.map((thread) => enrichedByThreadId.get(thread.id) ?? thread);
+      },
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    let listResolved = false;
+    const listPromise = registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+    void listPromise.then(() => {
+      listResolved = true;
+    });
+
+    await enrichmentStarted.promise;
+    await flushAsync();
+    expect(listResolved).toBe(false);
+    enrichmentRelease.resolve();
+    await listPromise;
+
+    const overlaysByThreadId = await overlayStore.getThreadOverlayStates({
+      backend: "codex",
+      threadIds: cheapThreads.map((thread) => thread.id),
+    });
+    const overlayByThreadKey = Object.fromEntries(
+      Object.entries(overlaysByThreadId).map(([threadId, overlay]) => [
+        `codex:${threadId}`,
+        overlay,
+      ]),
+    );
+    const snapshot = buildNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 4_000,
+      firstSnapshot: false,
+      overlayByThreadKey,
+      previousKnownThreadKeys: [],
+      threads: cheapThreads,
+      unchanged: false,
+    });
+
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    expect(
+      overlaysByThreadId["project-a-worktree-2"]?.extraLinkedDirectories[0],
+    ).toMatchObject({
+      id: nestedWorktreeCwd,
+      path: projectA,
+      worktreePath: worktree2,
+      kind: "worktree",
+    });
+    expect(snapshot.directories).toEqual([
+      expect.objectContaining({
+        key: `directory:${projectA}`,
+        label: "ProjectA",
+        path: projectA,
+        threadKeys: [
+          "codex:project-a-local",
+          "codex:project-a-worktree-1",
+          "codex:project-a-worktree-2",
+        ],
+      }),
+    ]);
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+      filter: "force-new-cache-key",
+    });
+
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
 
     await registry.close();
   });

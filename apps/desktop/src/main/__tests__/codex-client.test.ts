@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
 const codexClientLogError = vi.hoisted(() => vi.fn());
@@ -1023,6 +1024,57 @@ describe("CodexAppServerClient", () => {
       ],
       source: "codex",
     });
+
+    await client.close();
+  });
+
+  it("preserves thread order while enriching directories concurrently", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
+      if (projectKey?.includes("slow")) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      return {
+        linkedDirectories: [
+          {
+            id: projectKey ?? "missing",
+            label: path.basename(projectKey ?? "missing"),
+            path: projectKey ?? "missing",
+            kind: "local" as const,
+          },
+        ],
+      };
+    });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+    const threads: AppServerThreadSummary[] = [
+      {
+        id: "slow-thread",
+        title: "Slow thread",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/slow",
+        linkedDirectories: [],
+      },
+      {
+        id: "fast-thread",
+        title: "Fast thread",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/fast",
+        linkedDirectories: [],
+      },
+    ];
+
+    const enriched = await client.enrichThreadDirectories(threads);
+
+    expect(enriched.map((thread) => thread.id)).toEqual([
+      "slow-thread",
+      "fast-thread",
+    ]);
 
     await client.close();
   });
