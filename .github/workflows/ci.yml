@@ -9,6 +9,7 @@ on:
       - opened
       - synchronize
       - reopened
+      - labeled
 
 permissions:
   contents: read
@@ -16,6 +17,7 @@ permissions:
 jobs:
   install-deps:
     name: Install Dependencies
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:live-agent-core' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,6 +33,7 @@ jobs:
 
   lint:
     name: Lint
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -73,6 +76,7 @@ jobs:
 
   build:
     name: Build
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -92,6 +96,7 @@ jobs:
 
   test:
     name: Test
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     steps:
@@ -115,6 +120,7 @@ jobs:
 
   desktop-e2e:
     name: Desktop E2E
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' }}
     runs-on: ubuntu-latest
     needs: install-deps
     timeout-minutes: 20
@@ -162,12 +168,15 @@ jobs:
         timeout-minutes: 10
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL_NAME: ${{ github.event.label.name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          live_agent_core_label="ci:live-agent-core"
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             base="$PR_BASE_SHA"
@@ -181,19 +190,24 @@ jobs:
             base="$(git rev-list --max-parents=0 "$head")"
           fi
 
-          git diff --name-only "$base" "$head" > changed-files.txt
-
           relevant=false
           matched_path=""
-          while IFS= read -r path; do
-            case "$path" in
-              packages/agent-core/*|packages/shared/src/contracts/normalized-app-server.ts|packages/shared/src/contracts/navigation.ts|packages/shared/src/thread-titles.ts|packages/shared/src/index.ts|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc|.github/workflows/ci.yml)
-                relevant=true
-                matched_path="$path"
-                break
-                ;;
-            esac
-          done < changed-files.txt
+          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "labeled" && "$EVENT_LABEL_NAME" == "$live_agent_core_label" ]]; then
+            relevant=true
+            matched_path="pull request label: $live_agent_core_label"
+          else
+            git diff --name-only "$base" "$head" > changed-files.txt
+
+            while IFS= read -r path; do
+              case "$path" in
+                packages/agent-core/src/app-server/*|packages/agent-core/src/config/*|packages/agent-core/src/persistence/*|packages/agent-core/src/providers/*|packages/agent-core/src/testing/*|packages/agent-core/src/tools/*|packages/agent-core/src/__tests__/grok-live.test.ts|packages/agent-core/package.json|packages/shared/src/contracts/normalized-app-server.ts|packages/shared/src/contracts/navigation.ts|packages/shared/src/thread-titles.ts|packages/shared/src/index.ts|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc)
+                  relevant=true
+                  matched_path="$path"
+                  break
+                  ;;
+              esac
+            done < changed-files.txt
+          fi
 
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
 
@@ -206,7 +220,7 @@ jobs:
               echo
               echo "Skipped live agent-core smoke test because no agent-core inputs changed."
               echo
-              echo "Relevant inputs: \`packages/agent-core/**\`, shared files imported by agent-core, root dependency/test config, and this workflow."
+              echo "Relevant inputs: live app-server/provider/config/tool paths, the live test itself, shared files imported by the live path, root dependency/test config, or the \`ci:live-agent-core\` PR label."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
