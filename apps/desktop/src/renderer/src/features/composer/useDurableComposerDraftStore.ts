@@ -33,13 +33,37 @@ type PendingDraftSave = {
   timer: number;
 };
 
+type LocalRecoveryCandidate = ComposerDraftRecoveryCandidate & {
+  localSequence: number;
+};
+
 export function useDurableComposerDraftStore(
   baseStore: ComposerDraftStore,
   desktopApi?: DesktopApi,
 ): ComposerDraftStore {
   const pendingSavesRef = useRef(new Map<string, PendingDraftSave>());
   const createdAtRef = useRef(new Map<string, number>());
+  const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
+  const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
+
+  const rememberLocalRecoveryCandidate = useCallback(
+    (record: ComposerDraftSnapshotRecord): void => {
+      const nextCandidate = {
+        ...record,
+        localSequence: localRecoverySequenceRef.current,
+      };
+      localRecoverySequenceRef.current += 1;
+      const dedupeKey = getRecoveryCandidateKey(nextCandidate);
+      localRecoveryCandidatesRef.current = [
+        nextCandidate,
+        ...localRecoveryCandidatesRef.current.filter(
+          (candidate) => getRecoveryCandidateKey(candidate) !== dedupeKey,
+        ),
+      ].slice(0, 80);
+    },
+    [],
+  );
 
   const flushPendingSave = useCallback(
     (scopeKey: string, pending: PendingDraftSave): void => {
@@ -51,6 +75,9 @@ export function useDurableComposerDraftStore(
         "unsent",
         createdAtRef,
       );
+      if (shouldRecordHistory(pending.snapshot, "unsent")) {
+        rememberLocalRecoveryCandidate(record);
+      }
       void pending
         .saveComposerDraft({
           draft: record,
@@ -60,7 +87,7 @@ export function useDurableComposerDraftStore(
           console.warn("Failed to save composer draft", error);
         });
     },
-    [],
+    [rememberLocalRecoveryCandidate],
   );
 
   useEffect(() => {
@@ -125,7 +152,14 @@ export function useDurableComposerDraftStore(
         const response = await desktopApi?.listComposerDraftRecoveryCandidates?.(
           request,
         );
-        return response?.candidates ?? [];
+        const localCandidates = localRecoveryCandidatesRef.current
+          .filter((candidate) => matchesLocalRecoveryRequest(candidate, request))
+          .map(({ localSequence: _localSequence, ...candidate }) => candidate);
+        return mergeRecoveryCandidates(
+          localCandidates,
+          response?.candidates ?? [],
+          request,
+        );
       },
       recordHistory: (
         scopeKey: string,
@@ -139,6 +173,7 @@ export function useDurableComposerDraftStore(
           return;
         }
         const record = buildDraftRecord(scopeKey, snapshot, status, createdAtRef);
+        rememberLocalRecoveryCandidate(record);
         void desktopApi.recordComposerDraftHistory({ draft: record }).catch((error) => {
           console.warn("Failed to record composer draft history", error);
         });
@@ -168,7 +203,13 @@ export function useDurableComposerDraftStore(
         });
       },
     }),
-    [baseStore, desktopApi, flushPendingSave, hydrationVersion],
+    [
+      baseStore,
+      desktopApi,
+      flushPendingSave,
+      hydrationVersion,
+      rememberLocalRecoveryCandidate,
+    ],
   );
 }
 
@@ -258,6 +299,94 @@ function shouldRecordHistory(
     return true;
   }
   return snapshot.draft.trim().length >= HISTORY_TEXT_THRESHOLD;
+}
+
+function mergeRecoveryCandidates(
+  localCandidates: ComposerDraftRecoveryCandidate[],
+  durableCandidates: ComposerDraftRecoveryCandidate[],
+  request: ListComposerDraftRecoveryCandidatesRequest,
+): ComposerDraftRecoveryCandidate[] {
+  const seen = new Set<string>();
+  const limit = clampRecoveryLimit(request.limit);
+  return [...localCandidates, ...durableCandidates]
+    .filter((candidate) => {
+      const key = getRecoveryCandidateKey(candidate);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => {
+      const leftScore = scoreRecoveryCandidate(left, request);
+      const rightScore = scoreRecoveryCandidate(right, request);
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+      return right.updatedAt - left.updatedAt;
+    })
+    .slice(0, limit);
+}
+
+function clampRecoveryLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return 20;
+  }
+  return Math.max(1, Math.min(50, Math.floor(limit)));
+}
+
+function getRecoveryCandidateKey(
+  candidate: Pick<
+    ComposerDraftRecoveryCandidate,
+    "contentHash" | "scopeKey" | "status"
+  >,
+): string {
+  return `${candidate.scopeKey}:${candidate.status}:${candidate.contentHash}`;
+}
+
+function matchesLocalRecoveryRequest(
+  candidate: ComposerDraftRecoveryCandidate,
+  request: ListComposerDraftRecoveryCandidatesRequest,
+): boolean {
+  if (candidate.status === "sent" && !request.includeSent) {
+    return false;
+  }
+  if (request.backend && candidate.backend !== request.backend) {
+    return false;
+  }
+  if (request.scopeKey && candidate.scopeKey === request.scopeKey) {
+    return true;
+  }
+  if (request.threadId && candidate.threadId === request.threadId) {
+    return true;
+  }
+  if (request.directoryKey && candidate.directoryKey === request.directoryKey) {
+    return true;
+  }
+  return !request.scopeKey && !request.threadId && !request.directoryKey;
+}
+
+function scoreRecoveryCandidate(
+  candidate: ComposerDraftRecoveryCandidate,
+  request: ListComposerDraftRecoveryCandidatesRequest,
+): number {
+  let score = 0;
+  if (request.scopeKey && candidate.scopeKey === request.scopeKey) {
+    score += 100;
+  }
+  if (request.threadId && candidate.threadId === request.threadId) {
+    score += 60;
+  }
+  if (request.directoryKey && candidate.directoryKey === request.directoryKey) {
+    score += 40;
+  }
+  if (candidate.status === "unsent") {
+    score += 20;
+  }
+  if (candidate.status === "sent") {
+    score -= 10;
+  }
+  return score;
 }
 
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {

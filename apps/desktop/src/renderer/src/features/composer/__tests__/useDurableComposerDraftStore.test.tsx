@@ -75,6 +75,60 @@ describe("useDurableComposerDraftStore", () => {
       }),
     );
   });
+
+  it("returns just-recorded sent prompts before durable history finishes", async () => {
+    type RecordHistoryResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["recordComposerDraftHistory"]>>
+    >;
+    let resolveRecordHistory:
+      | ((response: RecordHistoryResponse) => void)
+      | undefined;
+    const recordComposerDraftHistory = vi.fn<
+      NonNullable<DesktopApi["recordComposerDraftHistory"]>
+    >(
+      () =>
+        new Promise((resolve) => {
+          resolveRecordHistory = resolve;
+        }),
+    );
+    const listComposerDraftRecoveryCandidates = vi.fn<
+      NonNullable<DesktopApi["listComposerDraftRecoveryCandidates"]>
+    >(async () => ({ candidates: [] }));
+    const desktopApi = {
+      listComposerDraftRecoveryCandidates,
+      recordComposerDraftHistory,
+    } as Partial<DesktopApi> as DesktopApi;
+    const { result } = renderHook(() =>
+      useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+    );
+
+    act(() => {
+      result.current.recordHistory?.(
+        "thread:codex:thread-1",
+        buildSnapshot("Short prompt"),
+        "sent",
+      );
+    });
+
+    const candidates = await result.current.listRecoveryCandidates?.({
+      backend: "codex",
+      includeSent: true,
+      scopeKey: "thread:codex:thread-1",
+      threadId: "thread-1",
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        scopeKey: "thread:codex:thread-1",
+        status: "sent",
+        text: "Short prompt",
+      }),
+    ]);
+
+    const draft = recordComposerDraftHistory.mock.calls[0]?.[0].draft;
+    expect(draft).toBeDefined();
+    resolveRecordHistory?.({ candidate: draft! });
+  });
 });
 
 function buildSnapshot(draft: string): ComposerDraftSnapshot {
