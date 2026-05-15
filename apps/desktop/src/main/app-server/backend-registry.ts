@@ -3939,12 +3939,21 @@ export class DesktopBackendRegistry {
   private buildThreadListCacheKey(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
   }): string {
+    const codexDirectoryBackfill =
+      params.backend === "grok" ||
+      params.archived ||
+      params.enrichDirectories !== false
+        ? undefined
+        : shouldBackfillCodexDirectoryRelationships(params.callerReason);
+
     return JSON.stringify({
       archived: params.archived === true,
       backend: params.backend ?? "all",
+      codexDirectoryBackfill,
       enrichDirectories:
         params.backend === "grok" ? undefined : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",

@@ -1485,6 +1485,81 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not let non-backfilling cheap list cache suppress navigation backfill", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const worktreePath = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
+    const cheapThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: worktreePath,
+          label: "ProjectA",
+          path: worktreePath,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [cheapThread],
+    });
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) =>
+        threads.map((thread) => ({
+          ...thread,
+          linkedDirectories: [
+            {
+              id: projectA,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath,
+              kind: "worktree" as const,
+            },
+          ],
+        })),
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "branch-drift",
+    });
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    expect(codexClient.listThreadsCallCount).toBe(2);
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: worktreePath,
+          path: projectA,
+          worktreePath,
+          kind: "worktree",
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("repairs a selected Codex worktree thread with a single-thread directory enrichment", async () => {
     const projectA = "/Users/example/ProjectA";
     const worktreePath = "/Users/example/.codex/worktrees/worktree-1/ProjectA";
