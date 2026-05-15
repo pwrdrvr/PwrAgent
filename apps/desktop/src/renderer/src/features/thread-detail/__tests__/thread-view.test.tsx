@@ -3555,7 +3555,7 @@ describe("ThreadView", () => {
         desktopApi={{ startTurn }}
         loading={false}
         loadingMore={false}
-        messageCount={0}
+        messageCount={1}
         selectedThread={{
           id: "thread-env-failure",
           title: "Untitled thread",
@@ -3620,5 +3620,66 @@ describe("ThreadView", () => {
     });
     expect(onPendingStatusChange).toHaveBeenCalledWith("Thinking");
     expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("hides the environment setup failure choice after the thread has messages", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-env-failure",
+          title: "A new problem I ran into really bit me last night",
+          titleSource: "derived",
+          source: "codex",
+          executionMode: "full-access",
+          updatedAt: Date.now(),
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgent",
+            executionTarget: "local",
+            setupEnabled: true,
+            setupStatus: "failed",
+          },
+          linkedDirectories: [
+            {
+              id: "/repo",
+              kind: "worktree",
+              label: "repo",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/thread-env-failure",
+            },
+          ],
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen",
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What is the CWD?",
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Continue anyway" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Environment setup failed"),
+    ).not.toBeInTheDocument();
   });
 });

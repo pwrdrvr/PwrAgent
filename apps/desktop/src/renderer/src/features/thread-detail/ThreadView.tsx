@@ -1033,9 +1033,15 @@ export function ThreadView(props: ThreadViewProps) {
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
   );
+  const selectedThreadOptimisticLaunchpadInput =
+    buildInputFromOptimisticUserMessage(selectedThread?.optimisticUserMessage);
+  const hasOnlyOptimisticLaunchpadMessage =
+    props.messageCount === 1 && selectedThreadOptimisticLaunchpadInput.length > 0;
   const showSetupFailureChoice = Boolean(
     selectedThread &&
       selectedThreadKey &&
+      (props.messageCount === 0 || hasOnlyOptimisticLaunchpadMessage) &&
+      !props.activeTurnId &&
       (selectedThreadSetupFailed || selectedThreadActionFailed) &&
       !setupFailureDismissedThreadKeys.has(selectedThreadKey),
   );
