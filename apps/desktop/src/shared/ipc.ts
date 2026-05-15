@@ -132,6 +132,7 @@ export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
   "image-upload:normalization-log";
 export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
+export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";

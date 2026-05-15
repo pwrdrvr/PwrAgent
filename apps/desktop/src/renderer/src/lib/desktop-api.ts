@@ -138,6 +138,7 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
+import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -389,6 +390,7 @@ export type DesktopApi = {
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;
+  getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   platform?: string;
   versions?: {
     chrome?: string;

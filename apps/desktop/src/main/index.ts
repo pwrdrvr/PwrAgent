@@ -43,6 +43,10 @@ import {
   disposeSettingsIpcHandlers,
   registerSettingsIpcHandlers,
 } from "./ipc/settings";
+import {
+  disposeWindowPointerIpcHandlers,
+  registerWindowPointerIpcHandlers,
+} from "./ipc/window-pointer";
 import { getMainLogger, initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import {
@@ -110,6 +114,7 @@ function disposeMainProcessResourcesSync(): void {
   disposePreloadLogIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeWindowPointerIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
@@ -219,6 +224,7 @@ export function bootstrapApp(): void {
     registerProfilesIpcHandlers();
     registerRendererErrorIpcHandlers();
     registerSettingsIpcHandlers();
+    registerWindowPointerIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
