@@ -2231,6 +2231,90 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes the snapshot when thread directory metadata is repaired", async () => {
+    const listeners = new Set<(event: any) => void>();
+    let navigationSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "/Users/example/.codex/worktrees/wt1/ProjectA",
+              label: "ProjectA",
+              path: "/Users/example/.codex/worktrees/wt1/ProjectA",
+              kind: "local",
+            },
+          ],
+          inbox: { inInbox: true, reason: "new-thread" },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    navigationSnapshot = {
+      ...navigationSnapshot,
+      directories: [
+        {
+          key: "directory:/Users/example/ProjectA",
+          kind: "directory",
+          label: "ProjectA",
+          path: "/Users/example/ProjectA",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+      ],
+    };
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "navigation/threadDirectories/updated",
+            params: {
+              reason: "selected-thread",
+              threadIds: ["thread-1"],
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(result.current.directories[0]?.label).toBe("ProjectA");
+    });
+  });
+
   it("removes a revoked messaging binding from the thread row after onMessagingBindingsChanged fires", async () => {
     const bindingsListeners = new Set<(event: { at: number }) => void>();
     let navigationCallCount = 0;

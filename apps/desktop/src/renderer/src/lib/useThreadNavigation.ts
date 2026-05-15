@@ -1608,6 +1608,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         return;
       }
 
+      if (method === "navigation/threadDirectories/updated") {
+        scheduleRefresh();
+        return;
+      }
+
       if (method === "thread/name/updated") {
         const { threadId, threadName } = event.notification.params as {
           threadId: string;
