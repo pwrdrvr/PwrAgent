@@ -1594,7 +1594,6 @@ textarea,
      (🅐 🅑 …) take this color, and secondary made them look alpha'd
      down compared to the colored emoji. Picker uses --text-primary too. */
   color: var(--text-primary);
-  font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
@@ -1901,6 +1900,16 @@ textarea,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-row__chip.thread-row__chip--reaction {
+  min-width: 24px;
+  justify-content: center;
+  padding: 0 4px;
+  font-size: 16px;
+  /* Match .reaction-picker__option so symbol-block reactions render
+     with the same visual weight in the picker and on the thread card. */
+  font-variant-emoji: emoji;
 }
 
 .thread-row__chip.thread-row__chip--add-reaction {
