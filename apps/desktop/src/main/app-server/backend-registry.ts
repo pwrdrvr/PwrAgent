@@ -3541,6 +3541,11 @@ export class DesktopBackendRegistry {
           codexEnvironmentRuntime: error.runtime,
         });
         this.invalidateThreadListCache(request.backend);
+        await this.emitCodexEnvironmentRuntimeUpdated({
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: error.runtime,
+        });
       }
       throw error;
     }
@@ -3550,6 +3555,11 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime: nextRuntime,
     });
     this.invalidateThreadListCache(request.backend);
+    await this.emitCodexEnvironmentRuntimeUpdated({
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime: nextRuntime,
+    });
 
     return {
       backend: request.backend,
@@ -3599,6 +3609,11 @@ export class DesktopBackendRegistry {
         codexEnvironmentRuntime: undefined,
       });
       this.invalidateThreadListCache(request.backend);
+      await this.emitCodexEnvironmentRuntimeUpdated({
+        backend: request.backend,
+        threadId: request.threadId,
+        codexEnvironmentRuntime: undefined,
+      });
       return {
         backend: request.backend,
         threadId: request.threadId,
@@ -3634,12 +3649,34 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     this.invalidateThreadListCache(request.backend);
+    await this.emitCodexEnvironmentRuntimeUpdated({
+      backend: request.backend,
+      threadId: request.threadId,
+      codexEnvironmentRuntime,
+    });
 
     return {
       backend: request.backend,
       threadId: request.threadId,
       codexEnvironmentRuntime,
     };
+  }
+
+  private async emitCodexEnvironmentRuntimeUpdated(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  }): Promise<void> {
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/codexEnvironment/updated",
+        params: {
+          threadId: params.threadId,
+          codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+        },
+      },
+    });
   }
 
   async materializeDirectoryLaunchpad(

@@ -754,6 +754,39 @@ function applyThreadModelSettingsUpdate(
     : snapshot;
 }
 
+function applyThreadCodexEnvironmentUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
 function applyThreadExecutionModeUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -1822,6 +1855,28 @@ export function useThreadNavigation(
         // Pull the snapshot so the matching `applied` / `cancelled`
         // transition entry shows up in the transcript.
         scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/codexEnvironment/updated") {
+        const { threadId, codexEnvironmentRuntime } = event.notification
+          .params as {
+          threadId: string;
+          codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadCodexEnvironmentUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            codexEnvironmentRuntime,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? { ...current, codexEnvironmentRuntime }
+            : current
+        );
         return;
       }
 

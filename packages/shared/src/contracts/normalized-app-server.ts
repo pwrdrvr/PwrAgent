@@ -854,6 +854,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/codexEnvironment/updated";
+      params: {
+        threadId: string;
+        codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+      };
+    }
+  | {
       method: "navigation/threadDirectories/updated";
       params: {
         reason: "selected-thread" | "full-reconcile";

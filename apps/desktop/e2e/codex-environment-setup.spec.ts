@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function createCodexEnvironmentSetupFixture(params?: {
+  includeExistingRunningSteps?: boolean;
   includeExistingThread?: boolean;
 }): Promise<{
   cleanup: () => Promise<void>;
@@ -67,6 +68,40 @@ script = "printf setup-output && sleep 2"
             updatedAt: 1_000,
           },
         ];
+  const existingRunningSteps = params?.includeExistingRunningSteps
+    ? [
+        {
+          id: "existing-thread-status-active",
+          kind: "notification" as const,
+          notification: {
+            method: "thread/status/changed" as const,
+            params: {
+              threadId: "thread-existing",
+              status: {
+                type: "active" as const,
+                activeFlags: [],
+              },
+            },
+          },
+        },
+        {
+          id: "existing-thread-turn-started",
+          kind: "notification" as const,
+          notification: {
+            method: "turn/started" as const,
+            params: {
+              threadId: "thread-existing",
+              turnId: "turn-existing-1",
+              turn: {
+                id: "turn-existing-1",
+                status: "in_progress" as const,
+                startedAt: 1_500,
+              },
+            },
+          },
+        },
+      ]
+    : [];
   await writeFile(
     fixturePath,
     JSON.stringify(
@@ -108,6 +143,7 @@ script = "printf setup-output && sleep 2"
               },
             },
           },
+          ...existingRunningSteps,
           {
             id: "thread-start-1",
             kind: "response",
@@ -130,6 +166,7 @@ script = "printf setup-output && sleep 2"
             kind: "response",
             method: "thread/list",
             result: [
+              ...initialThreads,
               {
                 id: "thread-env",
                 title: "hello env",
@@ -345,6 +382,40 @@ test("selected Codex environments run setup and show transcript output", async (
         .getByRole("region", { name: "Transcript" })
         .getByText("setup-output", { exact: true }),
     ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("existing running thread keeps selected Codex environment after pending state clears", async () => {
+  const fixture = await createCodexEnvironmentSetupFixture({
+    includeExistingRunningSteps: true,
+  });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Existing directory thread/ })
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),
+    ).toBeVisible();
+
+    await app.advance({ stepId: "existing-thread-status-active" });
+    await app.advance({ stepId: "existing-thread-turn-started" });
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+
+    const environmentDropdown = app.window.getByLabel("Codex environment");
+    await expect(environmentDropdown).toHaveAttribute("data-value", "");
+    await environmentDropdown.click();
+    await app.window.getByRole("option", { name: "Fixture Env" }).click();
+
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+    await expect(environmentDropdown).toHaveAttribute("data-value", "environment");
+    await expect(environmentDropdown).toContainText("Fixture Env");
   } finally {
     await app.close();
     await fixture.cleanup();
