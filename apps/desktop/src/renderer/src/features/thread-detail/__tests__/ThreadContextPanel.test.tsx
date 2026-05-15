@@ -153,7 +153,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_001);
+      await vi.advanceTimersByTimeAsync(1_701);
     });
 
     expect(getWindowPointerSnapshot).toHaveBeenCalled();
@@ -202,7 +202,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Auto-hide")).toBeInTheDocument();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(2_000);
     });
 
     expect(getWindowPointerSnapshot).toHaveBeenCalled();
