@@ -1083,7 +1083,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
     const contextRail = app.window.getByRole("complementary", {
       name: "Thread context",
     });
-    await contextRail.hover();
+    await contextRail.getByRole("button", { name: "Open context rail" }).click();
     await expect(
       contextRail.getByLabel("Path for worktree FixtureRepo", { exact: true }),
     ).toBeVisible();
