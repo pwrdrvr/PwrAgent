@@ -43,6 +43,10 @@ type ComposerTiptapInputProps = {
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
+  selectionRequest?: {
+    id: string;
+    index: number;
+  };
   skillTokens: ComposerSkillToken[];
   value: string;
 };
@@ -1034,6 +1038,7 @@ export const ComposerTiptapInput = forwardRef<
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const appliedSelectionRequestIdRef = useRef<string | undefined>(undefined);
   const deletedSingleSkillRef = useRef<DeletedSingleSkillState | undefined>(
     undefined,
   );
@@ -1553,6 +1558,23 @@ export const ComposerTiptapInput = forwardRef<
   ]);
 
   useEffect(() => {
+    if (
+      !editor ||
+      !props.selectionRequest ||
+      appliedSelectionRequestIdRef.current === props.selectionRequest.id
+    ) {
+      return;
+    }
+
+    appliedSelectionRequestIdRef.current = props.selectionRequest.id;
+    selectionIndexRef.current = props.selectionRequest.index;
+    editor.commands.focus();
+    editor.commands.setTextSelection(
+      getPositionAtDraftIndex(editor, props.selectionRequest.index, readMode),
+    );
+  }, [editor, props.selectionRequest, readMode]);
+
+  useEffect(() => {
     if (!editor) {
       return;
     }
@@ -1629,6 +1651,13 @@ export const ComposerTiptapInput = forwardRef<
       data-value={props.value}
       onKeyDownCapture={(event) => {
         if (!editor || event.defaultPrevented) {
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          if (event.defaultPrevented) {
+            event.stopPropagation();
+          }
           return;
         }
         if (

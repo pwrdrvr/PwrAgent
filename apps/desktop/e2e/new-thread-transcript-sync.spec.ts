@@ -461,7 +461,7 @@ test("top-level new thread rereads the created thread until the assistant reply 
   }
 });
 
-test("top-level new thread recovers an accidentally deleted no-project draft with ArrowUp", async () => {
+test("top-level new thread cycles deleted no-project drafts only from the recovery caret", async () => {
   const fixture = await createNewThreadTranscriptFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -491,8 +491,27 @@ test("top-level new thread recovers an accidentally deleted no-project draft wit
       "- This is",
       "- Not exactly a tool",
     ].join("\n");
+    const earlierDraft = [
+      "Earlier coherent draft",
+      "",
+      "This one should be the second recovery candidate after the newest deleted draft is restored.",
+      "",
+      "It is intentionally long enough to qualify as a complete abandoned draft rather than a tiny intermediate edit.",
+    ].join("\n");
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     const textbox = app.window.getByRole("textbox", { name: "New thread" });
+
+    await textbox.fill(earlierDraft);
+    await expect(tiptapInput).toHaveAttribute("data-value", /Earlier coherent draft/);
+    const storedEarlierDraft = await tiptapInput.getAttribute("data-value");
+    expect(storedEarlierDraft).toContain(
+      "This one should be the second recovery candidate after the newest deleted draft is restored.",
+    );
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Backspace");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
 
     await textbox.fill(deletedDraft);
     await expect(tiptapInput).toHaveAttribute("data-value", /Somebody once told me/);
@@ -508,6 +527,41 @@ test("top-level new thread recovers an accidentally deleted no-project draft wit
 
     await app.window.keyboard.press("ArrowUp");
     await expect(tiptapInput).toHaveAttribute("data-value", storedDraft ?? "");
+    await expect
+      .poll(async () =>
+        await textbox.evaluate(
+          (node) =>
+            (node as HTMLElement & { selectionStart: number }).selectionStart,
+        )
+      )
+      .toBe(0);
+
+    await app.window.keyboard.press("ArrowUp");
+    await expect(tiptapInput).toHaveAttribute("data-value", storedEarlierDraft ?? "");
+    await expect
+      .poll(async () =>
+        await textbox.evaluate(
+          (node) =>
+            (node as HTMLElement & { selectionStart: number }).selectionStart,
+        )
+      )
+      .toBe(0);
+
+    await textbox.evaluate((node, selectionIndex) => {
+      (node as HTMLElement & {
+        setSelectionRange: (start: number, end: number) => void;
+      }).setSelectionRange(selectionIndex, selectionIndex);
+    }, storedEarlierDraft?.length ?? earlierDraft.length);
+    await expect
+      .poll(async () =>
+        await textbox.evaluate(
+          (node) =>
+            (node as HTMLElement & { selectionStart: number }).selectionStart,
+        )
+      )
+      .toBe(storedEarlierDraft?.length ?? earlierDraft.length);
+    await app.window.keyboard.press("ArrowUp");
+    await expect(tiptapInput).toHaveAttribute("data-value", storedEarlierDraft ?? "");
   } finally {
     await app.close();
     await fixture.cleanup();

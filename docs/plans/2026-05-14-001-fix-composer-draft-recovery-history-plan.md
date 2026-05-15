@@ -301,6 +301,9 @@ flowchart TB
 - When the composer is blank and the caret is at the start, intercept ArrowUp to request recovery candidates.
 - Candidate order should be current-scope unsent drafts first, then current-directory/thread related unsent drafts, then recent sent prompts for the same thread/directory/backend, then broader recent sent prompts if still useful.
 - Restoring a candidate should restore the full snapshot: text, editor document, skill tokens, and image metadata.
+- Restoring a candidate must place the caret at draft index `0`, not at the end. While the caret remains exactly at `0..0`, repeated ArrowUp continues cycling through recovery candidates.
+- Once the caret leaves `0..0` in a restored draft, the active recovery cycle is over. ArrowUp must return to normal editor navigation and must not cycle drafts again until the composer is fully blank.
+- Recovery-history rows should represent coherent drafts, not every edit step. Record them at explicit boundaries: successful send, queue/steer handoff, lifecycle flush of a complete unsent draft, or whole-composer deletion that transitions from non-empty to empty.
 - Provide a small quiet inline status or accessible announcement indicating which candidate was restored and how to cycle, without adding persistent explanatory copy.
 - Do not override ArrowUp when the composer has content, autocomplete is open, or the caret is not at the start.
 - Add a clear path to return to blank after cycling, either by cycling past the last candidate or using normal select/delete behavior.
@@ -313,6 +316,8 @@ flowchart TB
 - Happy path: blank launchpad composer + ArrowUp restores the most recent unsent launchpad draft for that directory.
 - Happy path: blank thread reply composer + ArrowUp restores the most recent unsent reply draft for that thread.
 - Happy path: blank composer + repeated ArrowUp cycles from unsent candidates into recent sent candidates.
+- Happy path: after ArrowUp restores a candidate, the caret is at the top-left/start position and a second ArrowUp cycles to the next candidate.
+- Edge case: after a restored candidate's caret moves away from the start position, ArrowUp does not cycle recovery candidates again while that draft remains non-empty.
 - Edge case: nonblank composer + ArrowUp preserves normal editor navigation and does not replace content.
 - Edge case: autocomplete open + ArrowUp moves autocomplete selection, not recovery.
 - Edge case: restored candidate with skill tokens rehydrates the Tiptap mention nodes and serializes to the same canonical draft on send.
@@ -393,7 +398,7 @@ flowchart TB
 | Durable writes on every keystroke hurt responsiveness. | Debounce normal typing writes, dedupe by content hash, and flush at lifecycle boundaries. |
 | Recovery store grows without bound. | Add per-profile caps, max-age retention, and GC from `StateDb.cleanupExpired`. |
 | Draft rows contain sensitive user text. | Keep storage profile-local, avoid extra copies beyond retention, document privacy implication in PR notes, and provide explicit clear behavior. |
-| ArrowUp recovery conflicts with editor navigation or autocomplete. | Trigger only when blank, caret is at start, and autocomplete is closed. |
+| ArrowUp recovery conflicts with editor navigation or autocomplete. | Trigger when blank, or while an active recovery cycle has focus at `0..0`; clear the cycle as soon as the caret leaves that position. |
 | Sent-message recovery could surprise users by resurrecting already-sent content. | Scope it behind blank-composer ArrowUp and order unsent drafts before sent candidates. |
 | Persisting image data URLs increases DB size. | Store current attachment metadata as-is initially, measure row size, and cap retention; do not expand binary support in this plan. |
 | Main/renderer contracts drift or violate boundaries. | Put shared request/response types in `@pwragent/shared` and keep SQLite access in main only. |
