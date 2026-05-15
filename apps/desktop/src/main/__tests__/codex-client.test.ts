@@ -1894,6 +1894,72 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("inherits envelope timestamps for nested thread/read messages", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-envelope-messages", {
+      events: [
+        {
+          type: "response_item",
+          timestamp: "2026-05-15T14:10:43.491Z",
+          payload: {
+            id: "final-response-item",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Final answer from the raw session envelope.",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-envelope-messages",
+    });
+
+    expect(replay.messages).toEqual([
+      {
+        id: "final-response-item",
+        role: "assistant",
+        text: "Final answer from the raw session envelope.",
+        createdAt: Date.parse("2026-05-15T14:10:43.491Z"),
+        parts: [
+          {
+            type: "text",
+            text: "Final answer from the raw session envelope.",
+          },
+        ],
+      },
+    ]);
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "final-response-item",
+        role: "assistant",
+        text: "Final answer from the raw session envelope.",
+        createdAt: Date.parse("2026-05-15T14:10:43.491Z"),
+        parts: [
+          {
+            type: "text",
+            text: "Final answer from the raw session envelope.",
+          },
+        ],
+      },
+    ]);
+    expect(replay.lastAssistantMessage).toBe(
+      "Final answer from the raw session envelope."
+    );
+
+    await client.close();
+  });
+
   it("counts added, removed, and updated FileChange variants from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-file-change-counts", {

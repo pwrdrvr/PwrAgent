@@ -1145,6 +1145,52 @@ describe("MessagingController", () => {
     });
   });
 
+  it("reposts the last assistant response after selecting a thread to resume", async () => {
+    const now = Date.UTC(2026, 4, 15, 13, 30);
+    const harness = await createHarness({
+      now: () => now,
+      readThreadLastAssistantReply: async function (
+        this: MessagingBackendBridge,
+      ) {
+        if (typeof this.getNavigationSnapshot !== "function") {
+          throw new Error("backend receiver was not preserved");
+        }
+        return {
+          createdAt: now - 60 * 60_000,
+          text: "Last completed answer.",
+        };
+      },
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    expect(harness.readThreadLastAssistantReply).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: expect.stringMatching(
+            /^Last Bot Reply \(1 hour ago, .+\)\n\nLast completed answer\.$/,
+          ),
+        },
+      ],
+    });
+  });
+
   it("completes binding mutations without throwing when no onBindingChanged listener is configured", async () => {
     // The `onBindingChanged` option is declared optional on
     // `MessagingControllerOptions`. Production wiring always supplies
@@ -4053,6 +4099,25 @@ describe("MessagingController", () => {
       "critical_interactive",
     );
     expect(messagingDeliveryPriority(approvalCleanup)).toBe("routine_status");
+  });
+
+  it("treats resume reposts as routine budget traffic", () => {
+    const resumeRepost = {
+      id: "assistant-resume-repost-1",
+      kind: "message",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      role: "assistant",
+      parts: [{ type: "text", text: "Last Bot Reply\n\nPrevious answer." }],
+    } satisfies MessagingSurfaceIntent;
+
+    const finalAssistant = {
+      ...resumeRepost,
+      id: "assistant-message-1",
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(resumeRepost)).toBe("routine_status");
+    expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
   });
 
   it("does not charge typing activity against the message write budget", () => {
@@ -7069,6 +7134,9 @@ async function createHarness(options?: {
   readThreadLastAssistantMessage?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantMessage"]
   >;
+  readThreadLastAssistantReply?: NonNullable<
+    MessagingBackendBridge["readThreadLastAssistantReply"]
+  >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -7085,6 +7153,7 @@ async function createHarness(options?: {
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
+  readThreadLastAssistantReply: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
@@ -7291,6 +7360,9 @@ async function createHarness(options?: {
   const readThreadLastAssistantMessage = vi.fn(
     options?.readThreadLastAssistantMessage ?? (async () => undefined),
   );
+  const readThreadLastAssistantReply = vi.fn(
+    options?.readThreadLastAssistantReply ?? (async () => undefined),
+  );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
@@ -7308,6 +7380,7 @@ async function createHarness(options?: {
     ...(listSkills ? { listSkills } : {}),
     listBackends,
     materializeDirectoryLaunchpad,
+    readThreadLastAssistantReply,
     readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
@@ -7362,6 +7435,7 @@ async function createHarness(options?: {
     materializeDirectoryLaunchpad,
     onBindingChanged,
     readThreadLastAssistantMessage,
+    readThreadLastAssistantReply,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,

@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   AppServerBackendKind,
+  AppServerThreadReplay,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerThreadStatus,
@@ -32,7 +33,10 @@ import type {
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
 } from "@pwragent/shared";
-import type { MessagingBackendBridge } from "./core/messaging-adapter";
+import type {
+  MessagingBackendBridge,
+  MessagingLastAssistantReply,
+} from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -91,12 +95,34 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<string | undefined> {
+    return (await this.readThreadLastAssistantReply(request))?.text;
+  }
+
+  async readThreadLastAssistantReply(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingLastAssistantReply | undefined> {
     const response = await this.registry.readThread({
       backend: request.backend,
       limit: 20,
       threadId: request.threadId,
     });
-    return response.replay.lastAssistantMessage;
+    const messageReply = findLastAssistantMessageReply(response.replay);
+    if (messageReply) {
+      return messageReply;
+    }
+    const fallbackText = response.replay.lastAssistantMessage?.trim();
+    if (fallbackText) {
+      const createdAt = findLastAssistantEntryCreatedAt(
+        response.replay,
+        fallbackText,
+      );
+      return {
+        text: fallbackText,
+        ...(createdAt ? { createdAt } : {}),
+      };
+    }
+    return findLastAssistantEntryReply(response.replay);
   }
 
   async handoffThreadWorkspace(
@@ -176,4 +202,63 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void {
     return this.registry.onEvent(listener);
   }
+}
+
+function findLastAssistantMessageReply(
+  replay: AppServerThreadReplay,
+): MessagingLastAssistantReply | undefined {
+  for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
+    const message = replay.messages[index];
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const text = message.text.trim();
+    if (!text) {
+      continue;
+    }
+    const createdAt =
+      message.createdAt ?? findLastAssistantEntryCreatedAt(replay, text);
+    return {
+      text,
+      ...(createdAt ? { createdAt } : {}),
+    };
+  }
+  return undefined;
+}
+
+function findLastAssistantEntryReply(
+  replay: AppServerThreadReplay,
+): MessagingLastAssistantReply | undefined {
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (entry?.type !== "message" || entry.role !== "assistant") {
+      continue;
+    }
+    const text = entry.text.trim();
+    if (!text) {
+      continue;
+    }
+    return {
+      text,
+      ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
+    };
+  }
+  return undefined;
+}
+
+function findLastAssistantEntryCreatedAt(
+  replay: AppServerThreadReplay,
+  text: string,
+): number | undefined {
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (
+      entry?.type === "message" &&
+      entry.role === "assistant" &&
+      entry.text.trim() === text
+    ) {
+      return entry.createdAt;
+    }
+  }
+  return undefined;
 }
