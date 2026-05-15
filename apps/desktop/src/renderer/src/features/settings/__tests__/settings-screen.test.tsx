@@ -60,6 +60,9 @@ function createSnapshot(
         model: { value: "auto", source: "default" },
       },
     },
+    imageUploads: {
+      pastedImageMaxPatches: { value: 1536, source: "default" },
+    },
     messaging: {
       enabled: { value: true, source: "default" },
       allowFullAccessEscalation: { value: true, source: "default" },
@@ -282,11 +285,26 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("button", { name: "Applications" })).toHaveAttribute(
+    expect(within(sections).getByRole("button", { name: "General" })).toHaveAttribute(
       "aria-current",
       "page",
     );
 
+    expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "4096 patches" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        imageUploads: {
+          pastedImageMaxPatches: 4096,
+        },
+      });
+    });
+
+    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
     expect(screen.getByRole("heading", { name: "Editor" })).toBeInTheDocument();
     expect(screen.getByText("VS Code")).toBeInTheDocument();
     expect(screen.getByText("/Applications/Visual Studio Code.app")).toBeInTheDocument();
@@ -318,6 +336,20 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "High" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          attachments: {
+            imageProfile: "high",
+          },
+        },
+      });
+    });
     expect(screen.getByRole("radio", { name: "Show Some" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -427,7 +459,7 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
+    fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
       "aria-current",
       "page",
@@ -588,6 +620,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ getGhStatus }}
+        initialSection="applications"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -651,6 +684,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ copyText: copyTextMock }}
+        initialSection="applications"
         settings={settings}
         onClose={() => undefined}
       />,

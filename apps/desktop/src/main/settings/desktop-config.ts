@@ -15,6 +15,7 @@ import {
   isDesktopWorktreeStorageLocation,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
+import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
 import { resolveActiveProfilePath } from "../profile";
 import {
   applyTomlEdits,
@@ -49,6 +50,9 @@ export type DesktopSettingsConfig = {
       enabled?: boolean;
       model?: string;
     };
+  };
+  imageUploads?: {
+    pastedImageMaxPatches?: number;
   };
   messaging?: {
     enabled?: boolean;
@@ -314,6 +318,21 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
+  if (patch.imageUploads?.pastedImageMaxPatches !== undefined) {
+    const pastedImageMaxPatches = patch.imageUploads.pastedImageMaxPatches;
+    if (pastedImageMaxPatches === DEFAULT_PASTED_IMAGE_MAX_PATCHES) {
+      edits.push({
+        op: "delete",
+        path: ["image_uploads", "pasted_image_max_patches"],
+      });
+    } else {
+      set(
+        ["image_uploads", "pasted_image_max_patches"],
+        pastedImageMaxPatches,
+      );
+    }
+  }
+
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
   }
@@ -341,7 +360,14 @@ export function desktopSettingsPatchToEdits(
 
   const attachments = patch.messaging?.attachments;
   if (attachments?.imageProfile !== undefined) {
-    set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+    if (attachments.imageProfile === "medium") {
+      edits.push({
+        op: "delete",
+        path: ["messaging", "attachments", "image_profile"],
+      });
+    } else {
+      set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+    }
   }
   if (attachments?.maxAttachmentBytes !== undefined) {
     set(["messaging", "attachments", "max_attachment_bytes"], attachments.maxAttachmentBytes);
@@ -634,6 +660,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
+  const imageUploads = tables["image_uploads"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -658,6 +685,11 @@ function normalizeDesktopConfig(
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),
       },
+    },
+    imageUploads: {
+      pastedImageMaxPatches: readNumber(
+        imageUploads?.pasted_image_max_patches,
+      ),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
@@ -818,6 +850,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   if (config.experimental && hasDefinedValue(config.experimental)) {
     pruned.experimental = config.experimental;
+  }
+
+  if (config.imageUploads && hasDefinedValue(config.imageUploads)) {
+    pruned.imageUploads = config.imageUploads;
   }
 
   const attachments = config.messaging?.attachments;

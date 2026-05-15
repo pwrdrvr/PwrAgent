@@ -32,6 +32,9 @@ describe("desktop settings contracts", () => {
           model: { value: "auto", source: "default" },
         },
       },
+      imageUploads: {
+        pastedImageMaxPatches: { value: 1536, source: "default" },
+      },
       messaging: {
         enabled: {
           value: true,

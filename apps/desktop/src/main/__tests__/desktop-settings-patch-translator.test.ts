@@ -20,6 +20,72 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
   });
 });
 
+describe("desktopSettingsPatchToEdits — image uploads", () => {
+  it("writes non-default pasted image patch budgets", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        imageUploads: {
+          pastedImageMaxPatches: 4096,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["image_uploads", "pasted_image_max_patches"],
+        value: 4096,
+      },
+    ]);
+  });
+
+  it("removes the pasted image patch budget when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        imageUploads: {
+          pastedImageMaxPatches: 1536,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["image_uploads", "pasted_image_max_patches"],
+      },
+    ]);
+  });
+});
+
+describe("desktopSettingsPatchToEdits — messaging attachments", () => {
+  it("writes non-default image upload profiles", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        messaging: {
+          attachments: { imageProfile: "high" },
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["messaging", "attachments", "image_profile"],
+        value: "high",
+      },
+    ]);
+  });
+
+  it("removes the image upload profile when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        messaging: {
+          attachments: { imageProfile: "medium" },
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["messaging", "attachments", "image_profile"],
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — Mattermost", () => {
   it("emits one set op per defined Mattermost field with the correct snake_case key", () => {
     const edits = desktopSettingsPatchToEdits({

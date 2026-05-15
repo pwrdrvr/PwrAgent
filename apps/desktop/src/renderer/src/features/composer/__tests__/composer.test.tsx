@@ -4726,6 +4726,7 @@ describe("Composer", () => {
           startTurn,
         }}
         disabled={false}
+        pastedImageMaxPatches={1024}
         skills={[]}
         thread={{
           id: "thread-1",
@@ -4754,6 +4755,10 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Describe this screenshot" } });
 
     expect(await screen.findByAltText("screenshot.jpeg")).toBeInTheDocument();
+    expect(normalizeImageFile).toHaveBeenCalledWith(
+      imageFile,
+      expect.objectContaining({ maxPatchCount: 1024 }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 

@@ -1,5 +1,6 @@
 import type {
   DesktopSettingsSnapshot,
+  DesktopMessagingImageProfile,
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -7,6 +8,7 @@ import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
+import { GeneralSettings } from "./GeneralSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
@@ -24,6 +26,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 
 export type SettingsSection =
+  | "general"
   | "experimental"
   | "messaging"
   | "models"
@@ -33,6 +36,7 @@ export type SettingsSection =
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
+  { id: "general", label: "General" },
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
   { id: "worktrees", label: "Worktrees" },
@@ -55,7 +59,7 @@ export function SettingsScreen(props: {
   onOpenMessagingActivity?: () => void;
 }) {
   const [section, setSection] = useState<SettingsSection>(
-    props.initialSection ?? "applications",
+    props.initialSection ?? "general",
   );
   // When the parent re-mounts with a different initialSection (e.g.
   // a future deep-link), follow it.
@@ -214,6 +218,22 @@ function SettingsSectionBody(props: {
     return <AboutSettings desktopApi={props.desktopApi} />;
   }
 
+  if (props.section === "general") {
+    return (
+      <GeneralSettings
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
+          await props.settings.writeConfig({
+            imageUploads: {
+              pastedImageMaxPatches,
+            },
+          });
+        }}
+      />
+    );
+  }
+
   if (props.section === "experimental") {
     return (
       <ExperimentalSettings
@@ -253,6 +273,15 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             messaging: {
               inputDebounceMs,
+            },
+          });
+        }}
+        onImageProfileChange={async (
+          imageProfile: DesktopMessagingImageProfile,
+        ) => {
+          await props.settings.writeConfig({
+            messaging: {
+              attachments: { imageProfile },
             },
           });
         }}

@@ -21,6 +21,7 @@ import {
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
+  type DesktopMessagingImageProfile,
   type DesktopMessagingContactLookupKind,
   type DesktopMessagingContactLookupPlatform,
   type DesktopMessagingContactLookupResponse,
@@ -63,6 +64,7 @@ export function MessagingSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
+  onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
   onFullAccessEscalationChange: (enabled: boolean) => Promise<void>;
@@ -104,6 +106,7 @@ export function MessagingSettings(props: {
   const fullAccessWarning = props.snapshot.messaging.fullAccessWarning;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
+  const imageProfile = props.snapshot.messaging.attachments.imageProfile;
   const runtimeMessaging = props.snapshot.runtime.messaging;
   const masterEnabled = runtimeMessaging.overrideActive
     ? !runtimeMessaging.disabled
@@ -226,6 +229,17 @@ export function MessagingSettings(props: {
             value={fullAccessWarning.value}
             onChange={(policy) => {
               void props.onFullAccessWarningPolicyChange(policy);
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving || imageProfile.source === "env"}
+            label="Inbound image profile"
+            sub="Normalize images received from messaging platforms before forwarding them to the model."
+            options={IMAGE_PROFILE_OPTIONS}
+            source={sourceBadge(imageProfile)}
+            value={imageProfile.value}
+            onChange={(profile) => {
+              void props.onImageProfileChange(profile);
             }}
           />
         </div>
@@ -1348,6 +1362,16 @@ const TOOL_UPDATE_MODE_OPTIONS: Array<{
   { label: "Show Some", value: "show_some" },
   { label: "Show More", value: "show_more" },
   { label: "Show All", value: "show_all" },
+];
+
+const IMAGE_PROFILE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingImageProfile;
+}> = [
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" },
+  { label: "Actual", value: "actual" },
 ];
 
 const FULL_ACCESS_WARNING_POLICY_OPTIONS: Array<{

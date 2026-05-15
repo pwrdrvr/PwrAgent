@@ -74,6 +74,15 @@ graph TD
 | `PWRAGENT_HOME` | Override the root directory (default: `~/.pwragent/`) |
 | `PWRAGENT_PROFILE` | Select a named profile (default: `default`) |
 
+## Desktop Config TOML
+
+Per-profile desktop settings live in `profiles/<name>/config.toml`. Settings
+saved at their defaults are omitted from the file.
+
+The General > Pasted images setting is stored as
+`pasted_image_max_patches` under `[image_uploads]`. The default is `1536`; use
+`0` to preserve pasted image dimensions before upload.
+
 ## sqlite Database (`state.db`)
 
 Single database containing all persistent state. Opened with WAL mode, `synchronous=NORMAL`, `busy_timeout=5000ms`, `auto_vacuum=INCREMENTAL`.

@@ -325,14 +325,19 @@ LINE:
 
 Attachment policy:
 
-- `PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS`
-- `PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` (`low`, `medium`, `high`, or `actual`)
-- `PWRAGNT_MESSAGING_ATTACHMENT_MAX_BYTES`
-- `PWRAGNT_MESSAGING_ATTACHMENT_MAX_COUNT`
+- `PWRAGENT_MESSAGING_INPUT_DEBOUNCE_MS`
+- `PWRAGENT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` (`low`, `medium`, `high`, or `actual`)
+- `PWRAGENT_MESSAGING_ATTACHMENT_MAX_BYTES`
+- `PWRAGENT_MESSAGING_ATTACHMENT_MAX_COUNT`
 
 The debounce setting can also be written as `input_debounce_ms` under
 `[messaging]` in the desktop config TOML. Use `0` to disable the pre-start wait
 while keeping active-turn queueing enabled.
+
+The messaging image upload profile is available in Settings under Messaging ->
+General. Its TOML equivalent is `image_profile` under
+`[messaging.attachments]`; the default `medium` is omitted from the config file
+when saved from Settings.
 
 The authorized ID variables are comma-separated lists and may be empty during
 first-run discovery. Bot tokens are redacted from runtime logs. Telegram also
