@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  isToolManagedWorktreePath,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -947,13 +948,15 @@ function buildProjectKeyLinkedDirectories(
   const resolvedPath = path.isAbsolute(directoryPath)
     ? directoryPath
     : path.resolve(directoryPath);
+  const isWorktree = isToolManagedWorktreePath(resolvedPath);
 
   return [
     {
       id: resolvedPath,
       label: path.basename(resolvedPath) || resolvedPath,
       path: resolvedPath,
-      kind: "local",
+      ...(isWorktree ? { worktreePath: resolvedPath } : {}),
+      kind: isWorktree ? "worktree" : "local",
     },
   ];
 }

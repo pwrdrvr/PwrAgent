@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import {
+  isToolManagedWorktreePath,
   shortenDerivedThreadTitle,
   type AgentEvent,
   type ArchiveWorktreeRequest,
@@ -523,10 +524,15 @@ function shouldRepairCachedDirectoryRelationship(params: {
 function normalizeLinkedDirectoryKind(
   directory: LinkedDirectorySummary,
 ): LinkedDirectorySummary {
-  if (directory.kind === "local" && directory.worktreePath?.trim()) {
+  if (
+    directory.kind === "local" &&
+    (directory.worktreePath?.trim() || isToolManagedWorktreePath(directory.path))
+  ) {
+    const worktreePath = directory.worktreePath?.trim() || directory.path;
     return {
       ...directory,
       kind: "worktree",
+      worktreePath,
     };
   }
 

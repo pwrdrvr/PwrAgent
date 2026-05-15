@@ -11,7 +11,7 @@ import type {
   NavigationLaunchpadDefaults,
   ThreadOverlayState,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, isToolManagedWorktreePath } from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
 
@@ -58,10 +58,15 @@ function dedupeLinkedDirectories(
 function normalizeLinkedDirectoryKind(
   directory: LinkedDirectorySummary,
 ): LinkedDirectorySummary {
-  if (directory.kind === "local" && directory.worktreePath?.trim()) {
+  if (
+    directory.kind === "local" &&
+    (directory.worktreePath?.trim() || isToolManagedWorktreePath(directory.path))
+  ) {
+    const worktreePath = directory.worktreePath?.trim() || directory.path;
     return {
       ...directory,
       kind: "worktree",
+      worktreePath,
     };
   }
 
