@@ -281,6 +281,16 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps long directory names from crowding the count and expand control", () => {
+    const summaryRule = extractRuleBody(css, ".directory-row__summary");
+    const summaryMetaRule = extractRuleBody(css, ".directory-row__summary-meta");
+
+    expect(summaryRule).toContain("display: grid;");
+    expect(summaryRule).toContain("grid-template-columns: minmax(0, 1fr) auto;");
+    expect(summaryRule).toContain("align-items: center;");
+    expect(summaryMetaRule).toContain("flex: 0 0 auto;");
+  });
+
   it("keeps thread context menu hover states visible", () => {
     expect(css).toMatch(
       /\.thread-context-menu button:hover,\s*\.thread-context-menu button:focus-visible\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
