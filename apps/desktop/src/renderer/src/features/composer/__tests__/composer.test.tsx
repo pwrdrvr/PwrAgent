@@ -4648,6 +4648,69 @@ describe("Composer", () => {
     });
   });
 
+  it("falls back to global recovery candidates from a blank composer", async () => {
+    const draftStore = createComposerDraftStore();
+    const globalCandidate: ComposerDraftRecoveryCandidate = {
+      scopeKey: "thread:codex:other-thread",
+      scopeKind: "thread",
+      backend: "codex",
+      threadId: "other-thread",
+      text: "Recovered draft from another composer",
+      skillTokens: [],
+      imageAttachments: [],
+      status: "abandoned",
+      createdAt: 1,
+      updatedAt: 2,
+      contentHash: "h-global",
+      charCount: "Recovered draft from another composer".length,
+    };
+    draftStore.listRecoveryCandidates = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([globalCandidate]);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered draft from another composer");
+    });
+    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        includeSent: true,
+        scopeKey: "thread:codex:thread-1",
+      }),
+    );
+    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
+      2,
+      {
+        includeSent: true,
+        limit: 20,
+      },
+    );
+  });
+
   it("recovers a meaningful unsent draft after the user deletes it", async () => {
     const draftStore = createComposerDraftStore();
     const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [];

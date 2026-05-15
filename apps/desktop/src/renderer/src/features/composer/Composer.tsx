@@ -1149,7 +1149,7 @@ export function Composer(props: ComposerProps) {
 
     let cycle = recoveryCycleRef.current;
     if (!cycle || cycle.scopeKey !== composerScopeKey) {
-      const response = await draftStore
+      let response = await draftStore
         .listRecoveryCandidates({
           backend: props.thread?.source,
           directoryKey: props.launchpad?.directoryKey ?? props.directory?.key,
@@ -1162,6 +1162,20 @@ export function Composer(props: ComposerProps) {
           console.warn("Failed to list composer draft recovery candidates", error);
           return [];
         });
+      if (response.length === 0) {
+        response = await draftStore
+          .listRecoveryCandidates({
+            includeSent: true,
+            limit: 20,
+          })
+          .catch((error) => {
+            console.warn(
+              "Failed to list global composer draft recovery candidates",
+              error,
+            );
+            return [];
+          });
+      }
       const candidates = response
         .map((candidate) => ({
           draft: candidate.text,
