@@ -2520,6 +2520,10 @@ command = "pnpm dev:messaging"
       }),
       overlayStore,
     });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
 
     try {
       await expect(
@@ -2561,6 +2565,25 @@ command = "pnpm dev:messaging"
               name: "Dev - Messaging",
             }),
           ],
+        },
+      });
+
+      expect(
+        events.find(
+          (event) =>
+            event.notification.method === "thread/codexEnvironment/updated",
+        ),
+      ).toMatchObject({
+        backend: "codex",
+        notification: {
+          method: "thread/codexEnvironment/updated",
+          params: {
+            threadId: "thread-1",
+            codexEnvironmentRuntime: {
+              environmentId: "environment",
+              environmentName: "PwrAgnt",
+            },
+          },
         },
       });
     } finally {

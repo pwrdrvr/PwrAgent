@@ -618,7 +618,8 @@ export class MessagingController {
     }
     if (
       event.notification.method === "thread/executionMode/updated" ||
-      event.notification.method === "thread/modelSettings/updated"
+      event.notification.method === "thread/modelSettings/updated" ||
+      event.notification.method === "thread/codexEnvironment/updated"
     ) {
       await this.refreshStatusSurfacesForThread(
         event.backend,

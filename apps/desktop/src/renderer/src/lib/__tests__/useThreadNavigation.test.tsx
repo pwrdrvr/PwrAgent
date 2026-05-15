@@ -2708,6 +2708,90 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("patches the snapshot for thread/codexEnvironment/updated without refetching", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" as const },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.codexEnvironmentRuntime).toBeUndefined();
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/codexEnvironment/updated",
+            params: {
+              threadId: "thread-1",
+              codexEnvironmentRuntime: {
+                environmentId: "environment",
+                environmentName: "Fixture Env",
+                executionTarget: "local",
+                cwd: "/repo/app",
+                setupEnabled: false,
+                setupCommand: "pnpm install",
+                actions: [
+                  {
+                    id: "dev",
+                    name: "Dev",
+                    command: "pnpm dev",
+                  },
+                ],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.selectedThread?.codexEnvironmentRuntime?.environmentId,
+      ).toBe("environment");
+      expect(
+        result.current.selectedThread?.codexEnvironmentRuntime?.environmentName,
+      ).toBe("Fixture Env");
+    });
+    // Push-driven patch — no full snapshot re-fetch.
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshes the snapshot when thread directory metadata is repaired", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationSnapshot: NavigationSnapshot = {

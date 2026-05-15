@@ -2563,7 +2563,6 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         environmentId,
       });
-      await props.onRefreshNavigation?.();
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
