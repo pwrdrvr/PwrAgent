@@ -1833,6 +1833,7 @@ export class MessagingController {
         binding,
       );
       await this.renderBindingStatus(binding);
+      await this.repostLastAssistantMessageForResume(binding);
       return;
     }
 
@@ -2496,6 +2497,53 @@ export class MessagingController {
     );
   }
 
+  private async repostLastAssistantMessageForResume(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
+    if (!readLastAssistantMessage) {
+      return;
+    }
+
+    let text: string | undefined;
+    try {
+      text = await readLastAssistantMessage({
+        backend: binding.backend,
+        threadId: binding.threadId,
+      });
+    } catch (error) {
+      this.logger.debug?.("messaging resume last assistant replay failed", {
+        backend: binding.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+      return;
+    }
+
+    const trimmed = text?.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    await this.deliver(
+      {
+        id: this.newIntentId("assistant-resume-repost"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: trimmed,
+            markdown: "markdown",
+          },
+        ],
+      },
+      binding,
+    );
+  }
+
   private markAssistantMessageDelivered(
     event: AgentEvent,
     binding: MessagingBindingRecord,
@@ -3070,6 +3118,7 @@ export class MessagingController {
         event,
       );
       await this.renderBindingStatus(updatedBinding, event, navigation);
+      await this.repostLastAssistantMessageForResume(updatedBinding);
       return;
     }
 
@@ -5217,6 +5266,7 @@ export class MessagingController {
         event,
       );
       await this.renderBindingStatus(updatedBinding, event);
+      await this.repostLastAssistantMessageForResume(updatedBinding);
       return;
     }
 

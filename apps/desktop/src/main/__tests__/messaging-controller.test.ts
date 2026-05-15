@@ -1145,6 +1145,38 @@ describe("MessagingController", () => {
     });
   });
 
+  it("reposts the last assistant response after selecting a thread to resume", async () => {
+    const harness = await createHarness({
+      readThreadLastAssistantMessage: async () => "Last completed answer.",
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: "Last completed answer.",
+        },
+      ],
+    });
+  });
+
   it("completes binding mutations without throwing when no onBindingChanged listener is configured", async () => {
     // The `onBindingChanged` option is declared optional on
     // `MessagingControllerOptions`. Production wiring always supplies
