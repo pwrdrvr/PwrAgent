@@ -2507,7 +2507,7 @@ export class MessagingController {
 
     let text: string | undefined;
     try {
-      text = await this.options.backend.readThreadLastAssistantMessage({
+      text = await readLastAssistantMessage.call(this.options.backend, {
         backend: binding.backend,
         threadId: binding.threadId,
       });
