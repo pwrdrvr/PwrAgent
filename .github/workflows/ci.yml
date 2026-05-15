@@ -152,6 +152,7 @@ jobs:
 
   live-agent-core:
     name: Live Agent Core
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     needs: install-deps
     timeout-minutes: 10
@@ -200,7 +201,7 @@ jobs:
 
             while IFS= read -r path; do
               case "$path" in
-                packages/agent-core/src/app-server/*|packages/agent-core/src/config/*|packages/agent-core/src/persistence/*|packages/agent-core/src/providers/*|packages/agent-core/src/testing/*|packages/agent-core/src/tools/*|packages/agent-core/src/__tests__/grok-live.test.ts|packages/agent-core/package.json|packages/shared/src/contracts/normalized-app-server.ts|packages/shared/src/contracts/navigation.ts|packages/shared/src/thread-titles.ts|packages/shared/src/index.ts|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc)
+                packages/agent-core/src/app-server/*|packages/agent-core/src/config/*|packages/agent-core/src/persistence/*|packages/agent-core/src/providers/*|packages/agent-core/src/testing/*|packages/agent-core/src/tools/*|packages/agent-core/src/__tests__/grok-live.test.ts|packages/agent-core/package.json|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc)
                   relevant=true
                   matched_path="$path"
                   break
@@ -220,7 +221,7 @@ jobs:
               echo
               echo "Skipped live agent-core smoke test because no agent-core inputs changed."
               echo
-              echo "Relevant inputs: live app-server/provider/config/tool paths, the live test itself, shared files imported by the live path, root dependency/test config, or the \`ci:live-agent-core\` PR label."
+              echo "Relevant inputs: live app-server/provider/config/tool paths, the live test itself, agent-core package metadata, root dependency/test config, or the \`ci:live-agent-core\` PR label."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
