@@ -1147,7 +1147,14 @@ describe("MessagingController", () => {
 
   it("reposts the last assistant response after selecting a thread to resume", async () => {
     const harness = await createHarness({
-      readThreadLastAssistantMessage: async () => "Last completed answer.",
+      readThreadLastAssistantMessage: async function (
+        this: MessagingBackendBridge,
+      ) {
+        if (typeof this.getNavigationSnapshot !== "function") {
+          throw new Error("backend receiver was not preserved");
+        }
+        return "Last completed answer.";
+      },
     });
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
 
