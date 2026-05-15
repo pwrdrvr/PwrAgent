@@ -393,6 +393,14 @@ function hasCachedWorktreeDirectory(
   );
 }
 
+function pathContainsOrEquals(parentPath: string, childPath: string): boolean {
+  const relativePath = path.relative(parentPath, childPath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+  );
+}
+
 function buildCachedWorktreeDirectory(
   thread: AppServerThreadSummary,
 ): LinkedDirectorySummary | undefined {
@@ -407,13 +415,14 @@ function buildCachedWorktreeDirectory(
     if (!worktreePath) {
       return false;
     }
-    return path.resolve(worktreePath) === projectPath;
+    return pathContainsOrEquals(path.resolve(worktreePath), projectPath);
   });
   if (!directory) {
     return undefined;
   }
 
   const repositoryPath = path.resolve(directory.path);
+  const worktreePath = path.resolve(directory.worktreePath!);
   if (repositoryPath === projectPath) {
     return undefined;
   }
@@ -424,7 +433,7 @@ function buildCachedWorktreeDirectory(
     kind: "worktree",
     label: directory.label || path.basename(repositoryPath) || repositoryPath,
     path: repositoryPath,
-    worktreePath: projectPath,
+    worktreePath,
   };
 }
 

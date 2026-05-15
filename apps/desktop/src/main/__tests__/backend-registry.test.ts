@@ -1321,6 +1321,7 @@ describe("DesktopBackendRegistry", () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const worktree1 = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
     const worktree2 = "/Users/huntharo/.codex/worktrees/wt2/ProjectA";
+    const nestedWorktreeCwd = `${worktree2}/apps`;
     const cheapThreads: AppServerThreadSummary[] = [
       {
         id: "project-a-local",
@@ -1361,14 +1362,14 @@ describe("DesktopBackendRegistry", () => {
         title: "ProjectA worktree 2",
         titleSource: "explicit",
         source: "codex",
-        projectKey: worktree2,
+        projectKey: nestedWorktreeCwd,
         createdAt: 1_000,
         updatedAt: 1_000,
         linkedDirectories: [
           {
-            id: worktree2,
+            id: nestedWorktreeCwd,
             label: "ProjectA",
-            path: worktree2,
+            path: nestedWorktreeCwd,
             kind: "local",
           },
         ],
@@ -1386,7 +1387,10 @@ describe("DesktopBackendRegistry", () => {
                   id: projectA,
                   label: "ProjectA",
                   path: projectA,
-                  worktreePath: thread.projectKey,
+                  worktreePath:
+                    thread.id === "project-a-worktree-2"
+                      ? worktree2
+                      : thread.projectKey,
                   kind: "worktree" as const,
                 },
               ],
@@ -1449,6 +1453,14 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    expect(
+      overlaysByThreadId["project-a-worktree-2"]?.extraLinkedDirectories[0],
+    ).toMatchObject({
+      id: nestedWorktreeCwd,
+      path: projectA,
+      worktreePath: worktree2,
+      kind: "worktree",
+    });
     expect(snapshot.directories).toEqual([
       expect.objectContaining({
         key: `directory:${projectA}`,
@@ -1461,6 +1473,14 @@ describe("DesktopBackendRegistry", () => {
         ],
       }),
     ]);
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+      filter: "force-new-cache-key",
+    });
+
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
 
     await registry.close();
   });
