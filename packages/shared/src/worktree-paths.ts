@@ -3,7 +3,7 @@ export function isToolManagedWorktreePath(value: string | undefined): boolean {
     return false;
   }
 
-  return /[\\/]\.(?:codex|pwrag(?:ent|nt))[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(
+  return /[\\/]\.(?:codex|pwrag(?:ent|nt))(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(
     value,
   );
 }

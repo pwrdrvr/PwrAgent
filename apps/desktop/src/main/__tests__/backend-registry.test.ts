@@ -1487,7 +1487,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("does not let non-backfilling cheap list cache suppress navigation backfill", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
-    const worktreePath = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
+    const worktreePath = "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
     const cheapThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -1555,6 +1555,277 @@ describe("DesktopBackendRegistry", () => {
           kind: "worktree",
         }),
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("lets fresh Codex local metadata replace stale overlay worktree relationships", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const staleWorktreePath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
+    const localThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA local",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: projectA,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [localThread],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: staleWorktreePath,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath: staleWorktreePath,
+              kind: "worktree",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          kind: "local",
+        },
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("does not let Codex source metadata replace active handoff workspace overlays", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const localThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA local",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: projectA,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [localThread],
+    });
+    const handoffDirectory: ThreadOverlayState["extraLinkedDirectories"][number] = {
+      id: "pwragent-handoff:codex:thread-1",
+      label: "ProjectA",
+      path: projectA,
+      worktreePath: handoffWorktreePath,
+      kind: "worktree",
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [handoffDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [handoffDirectory],
+    });
+
+    await registry.close();
+  });
+
+  it("does not let Codex source worktree metadata replace active handoff workspace overlays", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const codexWorktreePath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const worktreeThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: codexWorktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          worktreePath: codexWorktreePath,
+          kind: "worktree",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [worktreeThread],
+    });
+    const handoffDirectory: ThreadOverlayState["extraLinkedDirectories"][number] = {
+      id: "pwragent-handoff:codex:thread-1",
+      label: "ProjectA",
+      path: projectA,
+      worktreePath: handoffWorktreePath,
+      kind: "worktree",
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [handoffDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [handoffDirectory],
+    });
+
+    await registry.close();
+  });
+
+  it("does not backfill Codex worktree metadata over active handoff workspace overlays", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const codexWorktreePath =
+      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const cheapThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: codexWorktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: codexWorktreePath,
+          label: "ProjectA",
+          path: codexWorktreePath,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [cheapThread],
+    });
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) =>
+        threads.map((thread) => ({
+          ...thread,
+          linkedDirectories: [
+            {
+              id: projectA,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath: codexWorktreePath,
+              kind: "worktree" as const,
+            },
+          ],
+        })),
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const handoffDirectory: ThreadOverlayState["extraLinkedDirectories"][number] = {
+      id: "pwragent-handoff:codex:thread-1",
+      label: "ProjectA",
+      path: projectA,
+      worktreePath: handoffWorktreePath,
+      kind: "worktree",
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [handoffDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [handoffDirectory],
     });
 
     await registry.close();

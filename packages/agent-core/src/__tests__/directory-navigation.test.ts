@@ -749,4 +749,34 @@ describe("materializeNavigationThreads", () => {
       },
     ]);
   });
+
+  it("normalizes profile-scoped Codex worktree paths even when no repository path is known", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {},
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+              label: "GifGrabber",
+              path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(thread?.linkedDirectories).toEqual([
+      {
+        id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+        label: "GifGrabber",
+        path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+        worktreePath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+        kind: "worktree",
+      },
+    ]);
+  });
 });

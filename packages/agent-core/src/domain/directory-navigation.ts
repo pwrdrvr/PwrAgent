@@ -97,7 +97,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
   }
 
   const codexWorktreeMatch = directory.path.match(
-    /^[\\/].*[\\/]\.codex[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
+    /^[\\/].*[\\/]\.codex(?:[\\/]profiles[\\/][^\\/]+)?[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
   );
   if (codexWorktreeMatch) {
     const canonicalPath = directory.path.replace(/[\\/]+$/, "");

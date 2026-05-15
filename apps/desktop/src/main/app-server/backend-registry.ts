@@ -324,10 +324,19 @@ function resolveLinkedDirectoryCwd(
 function hasHandoffWorkspace(
   directories: AppServerThreadSummary["linkedDirectories"] = [],
 ): boolean {
-  return directories.some(
-    (directory) =>
-      directory.id.startsWith("pwragent-handoff:") ||
-      directory.id.startsWith("pwragnt-handoff:"),  // legacy prefix from pre-rebrand data
+  return directories.some(isHandoffDirectory);
+}
+
+function overlayHasHandoffWorkspace(
+  overlay: ThreadOverlayState | undefined,
+): boolean {
+  return Boolean(overlay?.extraLinkedDirectories.some(isHandoffDirectory));
+}
+
+function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+  return (
+    directory.id.startsWith("pwragent-handoff:") ||
+    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
   );
 }
 
@@ -378,9 +387,7 @@ function isLikelyToolManagedWorktreePath(projectKey: string | undefined): boolea
     return false;
   }
 
-  return /[\\/](?:\.codex[\\/]worktrees|\.pwrag(?:ent|nt)[\\/]worktrees|\.worktrees)[\\/]/.test(
-    normalized,
-  );
+  return isToolManagedWorktreePath(normalized) || /[\\/]\.worktrees[\\/]/.test(normalized);
 }
 
 function hasCachedWorktreeDirectory(
@@ -481,6 +488,10 @@ function buildCachedDirectoryRelationship(
     return undefined;
   }
 
+  if (isLikelyToolManagedWorktreePath(projectKey)) {
+    return undefined;
+  }
+
   const projectPath = path.resolve(projectKey);
   const localDirectory = thread.linkedDirectories.find((candidate) => {
     if (candidate.worktreePath?.trim()) {
@@ -510,14 +521,25 @@ function shouldRepairCachedDirectoryRelationship(params: {
     return false;
   }
 
+  if (overlayHasHandoffWorkspace(params.overlay)) {
+    return false;
+  }
+
   if (params.directory.kind === "worktree") {
     return true;
   }
 
   return Boolean(
-    params.overlay?.extraLinkedDirectories.some(
-      (candidate) => candidate.id === params.directory.id,
-    ),
+    params.overlay?.extraLinkedDirectories.some((candidate) => {
+      if (candidate.id === params.directory.id) {
+        return true;
+      }
+      if (isHandoffDirectory(candidate)) {
+        return false;
+      }
+
+      return path.resolve(candidate.path) === path.resolve(params.directory.path);
+    }),
   );
 }
 
@@ -1479,6 +1501,7 @@ export class DesktopBackendRegistry {
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly attemptedTitleGenerations = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
+  private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
 
@@ -4084,7 +4107,7 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      await this.overlayStore.addLinkedDirectory({
+      await this.overlayStore.replaceWorkspaceLinkedDirectory({
         backend: "codex",
         threadId: params.threadId,
         directory,
@@ -4535,6 +4558,13 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
+    const reconciledOverlaysByThreadId =
+      await this.reconcileCodexDirectoryRelationshipsFromSource({
+        diagnostics,
+        overlaysByThreadId,
+        threads: threadsWithPending,
+      });
+    Object.assign(overlaysByThreadId, reconciledOverlaysByThreadId);
     if (
       !params.archived &&
       params.enrichDirectories === false &&
@@ -4572,6 +4602,49 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async reconcileCodexDirectoryRelationshipsFromSource(params: {
+    diagnostics?: {
+      callerReason?: string;
+      ownerId?: string;
+    };
+    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
+    threads: AppServerThreadSummary[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    const updatedOverlaysByThreadId: Record<
+      string,
+      ThreadOverlayState | undefined
+    > = {};
+
+    for (const thread of params.threads) {
+      const directory = buildCachedDirectoryRelationship(thread);
+      if (!directory) {
+        continue;
+      }
+
+      const overlay = params.overlaysByThreadId[thread.id];
+      if (!shouldRepairCachedDirectoryRelationship({ directory, overlay })) {
+        continue;
+      }
+
+      updatedOverlaysByThreadId[thread.id] =
+        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+          backend: "codex",
+          threadId: thread.id,
+          directory,
+        });
+    }
+
+    const updatedThreadCount = Object.keys(updatedOverlaysByThreadId).length;
+    if (updatedThreadCount > 0) {
+      logDebug("codexDirectorySourceReconcile:completed", {
+        callerReason: params.diagnostics?.callerReason ?? null,
+        updatedThreadCount,
+      });
+    }
+
+    return updatedOverlaysByThreadId;
+  }
+
   private async backfillMissingCodexDirectoryRelationships(params: {
     diagnostics?: {
       callerReason?: string;
@@ -4585,6 +4658,10 @@ export class DesktopBackendRegistry {
     }
 
     const candidates = params.threads.filter((thread) => {
+      if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
+        return false;
+      }
+
       const projectKey = thread.projectKey?.trim();
       if (!isLikelyToolManagedWorktreePath(projectKey)) {
         return false;
@@ -4600,6 +4677,18 @@ export class DesktopBackendRegistry {
       return {};
     }
 
+    logDebug("codexDirectoryBackfill:candidates", {
+      callerReason: params.diagnostics?.callerReason ?? null,
+      candidateCount: candidates.length,
+      candidates: candidates.slice(0, 10).map((thread) => ({
+        threadId: thread.id,
+        projectKey: thread.projectKey,
+        linkedDirectories: thread.linkedDirectories,
+        overlayExtraLinkedDirectories:
+          params.overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
+      })),
+    });
+
     try {
       const enrichedThreads = await this.codexClient.enrichThreadDirectories(candidates);
       const updatedOverlaysByThreadId: Record<
@@ -4608,13 +4697,32 @@ export class DesktopBackendRegistry {
       > = {};
 
       for (const thread of enrichedThreads) {
+        if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
+          continue;
+        }
+
         const directory = buildCachedWorktreeDirectory(thread);
         if (!directory) {
+          const warningKey = `${thread.id}:${thread.projectKey ?? ""}`;
+          if (!this.failedDirectoryRelationshipLogKeys.has(warningKey)) {
+            this.failedDirectoryRelationshipLogKeys.add(warningKey);
+            backendRegistryLog.warn(
+              "Codex directory enrichment did not produce a worktree repository relationship",
+              {
+                callerReason: params.diagnostics?.callerReason ?? null,
+                threadId: thread.id,
+                projectKey: thread.projectKey,
+                linkedDirectories: thread.linkedDirectories,
+                overlayExtraLinkedDirectories:
+                  params.overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
+              },
+            );
+          }
           continue;
         }
 
         updatedOverlaysByThreadId[thread.id] =
-          await this.overlayStore.addLinkedDirectory({
+          await this.overlayStore.replaceWorkspaceLinkedDirectory({
             backend: "codex",
             threadId: thread.id,
             directory,
