@@ -4101,6 +4101,25 @@ describe("MessagingController", () => {
     expect(messagingDeliveryPriority(approvalCleanup)).toBe("routine_status");
   });
 
+  it("treats resume reposts as routine budget traffic", () => {
+    const resumeRepost = {
+      id: "assistant-resume-repost-1",
+      kind: "message",
+      bindingId: "binding-1",
+      createdAt: 1_000,
+      role: "assistant",
+      parts: [{ type: "text", text: "Last Bot Reply\n\nPrevious answer." }],
+    } satisfies MessagingSurfaceIntent;
+
+    const finalAssistant = {
+      ...resumeRepost,
+      id: "assistant-message-1",
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(resumeRepost)).toBe("routine_status");
+    expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
+  });
+
   it("does not charge typing activity against the message write budget", () => {
     const activity = {
       id: "activity-1",

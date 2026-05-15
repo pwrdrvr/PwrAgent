@@ -8071,6 +8071,9 @@ export function messagingDeliveryPriority(
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
     case "message":
+      if (intent.id.startsWith("assistant-resume-repost")) {
+        return "routine_status";
+      }
       if (intent.role === "assistant") {
         return "final_turn";
       }
