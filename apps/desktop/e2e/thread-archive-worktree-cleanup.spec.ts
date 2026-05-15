@@ -134,6 +134,12 @@ async function createArchiveWorktreeFixture(): Promise<{
             result: [thread],
           },
           {
+            id: "thread-list-pre-archive-refresh",
+            kind: "response",
+            method: "thread/list",
+            result: [thread],
+          },
+          {
             id: "thread-archive-1",
             kind: "response",
             method: "thread/archive",
