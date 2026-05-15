@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -24,13 +25,43 @@ import type {
 const DURABLE_SAVE_DEBOUNCE_MS = 200;
 const HISTORY_TEXT_THRESHOLD = 120;
 
+type SaveComposerDraft = NonNullable<DesktopApi["saveComposerDraft"]>;
+
+type PendingDraftSave = {
+  saveComposerDraft: SaveComposerDraft;
+  snapshot: ComposerDraftSnapshot;
+  timer: number;
+};
+
 export function useDurableComposerDraftStore(
   baseStore: ComposerDraftStore,
   desktopApi?: DesktopApi,
 ): ComposerDraftStore {
-  const saveTimersRef = useRef(new Map<string, number>());
+  const pendingSavesRef = useRef(new Map<string, PendingDraftSave>());
   const createdAtRef = useRef(new Map<string, number>());
   const [hydrationVersion, setHydrationVersion] = useState(0);
+
+  const flushPendingSave = useCallback(
+    (scopeKey: string, pending: PendingDraftSave): void => {
+      window.clearTimeout(pending.timer);
+      pendingSavesRef.current.delete(scopeKey);
+      const record = buildDraftRecord(
+        scopeKey,
+        pending.snapshot,
+        "unsent",
+        createdAtRef,
+      );
+      void pending
+        .saveComposerDraft({
+          draft: record,
+          recordHistory: shouldRecordHistory(pending.snapshot, "unsent"),
+        })
+        .catch((error) => {
+          console.warn("Failed to save composer draft", error);
+        });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!desktopApi?.listComposerDraftLatest) {
@@ -66,12 +97,11 @@ export function useDurableComposerDraftStore(
 
   useEffect(() => {
     return () => {
-      for (const timer of saveTimersRef.current.values()) {
-        window.clearTimeout(timer);
+      for (const [scopeKey, pending] of [...pendingSavesRef.current]) {
+        flushPendingSave(scopeKey, pending);
       }
-      saveTimersRef.current.clear();
     };
-  }, []);
+  }, [flushPendingSave]);
 
   return useMemo(
     () => ({
@@ -80,10 +110,10 @@ export function useDurableComposerDraftStore(
       delete: (scopeKey) => {
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
-        const timer = saveTimersRef.current.get(scopeKey);
-        if (timer) {
-          window.clearTimeout(timer);
-          saveTimersRef.current.delete(scopeKey);
+        const pending = pendingSavesRef.current.get(scopeKey);
+        if (pending) {
+          window.clearTimeout(pending.timer);
+          pendingSavesRef.current.delete(scopeKey);
         }
         void desktopApi?.clearComposerDraft?.({ scopeKey }).catch((error) => {
           console.warn("Failed to clear composer draft", error);
@@ -119,31 +149,26 @@ export function useDurableComposerDraftStore(
           return;
         }
 
-        const existingTimer = saveTimersRef.current.get(scopeKey);
-        if (existingTimer) {
-          window.clearTimeout(existingTimer);
+        const existingPending = pendingSavesRef.current.get(scopeKey);
+        if (existingPending) {
+          window.clearTimeout(existingPending.timer);
         }
 
         const saveComposerDraft = desktopApi.saveComposerDraft;
         const timer = window.setTimeout(() => {
-          saveTimersRef.current.delete(scopeKey);
-          const record = buildDraftRecord(
-            scopeKey,
-            snapshot,
-            "unsent",
-            createdAtRef,
-          );
-          void saveComposerDraft({
-            draft: record,
-            recordHistory: shouldRecordHistory(snapshot, "unsent"),
-          }).catch((error) => {
-            console.warn("Failed to save composer draft", error);
-          });
+          const pending = pendingSavesRef.current.get(scopeKey);
+          if (pending) {
+            flushPendingSave(scopeKey, pending);
+          }
         }, DURABLE_SAVE_DEBOUNCE_MS);
-        saveTimersRef.current.set(scopeKey, timer);
+        pendingSavesRef.current.set(scopeKey, {
+          saveComposerDraft,
+          snapshot,
+          timer,
+        });
       },
     }),
-    [baseStore, desktopApi, hydrationVersion],
+    [baseStore, desktopApi, flushPendingSave, hydrationVersion],
   );
 }
 
@@ -221,6 +246,13 @@ function shouldRecordHistory(
 ): boolean {
   if (status === "cleared") {
     return false;
+  }
+  const hasRecoverableContent =
+    snapshot.draft.trim().length > 0 ||
+    snapshot.imageAttachments.length > 0 ||
+    snapshot.skillTokens.length > 0;
+  if (status === "sent") {
+    return hasRecoverableContent;
   }
   if (snapshot.imageAttachments.length > 0 || snapshot.skillTokens.length > 0) {
     return true;
