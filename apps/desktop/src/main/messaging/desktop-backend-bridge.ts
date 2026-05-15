@@ -32,7 +32,10 @@ import type {
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
 } from "@pwragent/shared";
-import type { MessagingBackendBridge } from "./core/messaging-adapter";
+import type {
+  MessagingBackendBridge,
+  MessagingLastAssistantReply,
+} from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -91,12 +94,34 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<string | undefined> {
+    return (await this.readThreadLastAssistantReply(request))?.text;
+  }
+
+  async readThreadLastAssistantReply(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingLastAssistantReply | undefined> {
     const response = await this.registry.readThread({
       backend: request.backend,
       limit: 20,
       threadId: request.threadId,
     });
-    return response.replay.lastAssistantMessage;
+    for (let index = response.replay.messages.length - 1; index >= 0; index -= 1) {
+      const message = response.replay.messages[index];
+      if (message?.role !== "assistant") {
+        continue;
+      }
+      const text = message.text.trim();
+      if (!text) {
+        continue;
+      }
+      return {
+        text,
+        ...(message.createdAt ? { createdAt: message.createdAt } : {}),
+      };
+    }
+    const fallbackText = response.replay.lastAssistantMessage?.trim();
+    return fallbackText ? { text: fallbackText } : undefined;
   }
 
   async handoffThreadWorkspace(

@@ -67,6 +67,11 @@ export type MessagingConversationTitleUpdateResult = {
   updatedAt: number;
 };
 
+export type MessagingLastAssistantReply = {
+  createdAt?: number;
+  text: string;
+};
+
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
@@ -98,6 +103,10 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<string | undefined>;
+  readThreadLastAssistantReply?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<MessagingLastAssistantReply | undefined>;
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;

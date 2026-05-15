@@ -67,7 +67,11 @@ import {
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
-import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
+import type {
+  MessagingAdapter,
+  MessagingBackendBridge,
+  MessagingLastAssistantReply,
+} from "./messaging-adapter.js";
 import {
   buildActivityIntent,
   buildApprovalIntent,
@@ -2500,17 +2504,26 @@ export class MessagingController {
   private async repostLastAssistantMessageForResume(
     binding: MessagingBindingRecord,
   ): Promise<void> {
+    const readLastAssistantReply = this.options.backend.readThreadLastAssistantReply;
     const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
-    if (!readLastAssistantMessage) {
+    if (!readLastAssistantReply && !readLastAssistantMessage) {
       return;
     }
 
-    let text: string | undefined;
+    let reply: MessagingLastAssistantReply | undefined;
     try {
-      text = await readLastAssistantMessage.call(this.options.backend, {
-        backend: binding.backend,
-        threadId: binding.threadId,
-      });
+      if (readLastAssistantReply) {
+        reply = await readLastAssistantReply.call(this.options.backend, {
+          backend: binding.backend,
+          threadId: binding.threadId,
+        });
+      } else if (readLastAssistantMessage) {
+        const text = await readLastAssistantMessage.call(this.options.backend, {
+          backend: binding.backend,
+          threadId: binding.threadId,
+        });
+        reply = text ? { text } : undefined;
+      }
     } catch (error) {
       this.logger.debug?.("messaging resume last assistant replay failed", {
         backend: binding.backend,
@@ -2520,7 +2533,7 @@ export class MessagingController {
       return;
     }
 
-    const trimmed = text?.trim();
+    const trimmed = reply?.text.trim();
     if (!trimmed) {
       return;
     }
@@ -2535,7 +2548,11 @@ export class MessagingController {
         parts: [
           {
             type: "text",
-            text: trimmed,
+            text: formatResumeRepostText({
+              createdAt: reply?.createdAt,
+              now: this.now(),
+              text: trimmed,
+            }),
             markdown: "markdown",
           },
         ],
@@ -8586,6 +8603,63 @@ function messagingLaunchpadMaterializationKey(
   session: MessagingBrowseSessionRecord,
 ): string {
   return `messaging:${session.id}`;
+}
+
+function formatResumeRepostText(params: {
+  createdAt?: number;
+  now: number;
+  text: string;
+}): string {
+  return [
+    formatResumeRepostHeading(params.createdAt, params.now),
+    params.text,
+  ].join("\n\n");
+}
+
+function formatResumeRepostHeading(
+  createdAt: number | undefined,
+  now: number,
+): string {
+  if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) {
+    return "Last Bot Reply";
+  }
+  const relativeAge = formatRelativeAge(createdAt, now);
+  const absoluteTime = formatAbsoluteDateTime(createdAt);
+  return `Last Bot Reply (${relativeAge}, ${absoluteTime})`;
+}
+
+function formatRelativeAge(createdAt: number, now: number): string {
+  const elapsedMs = Math.max(0, now - createdAt);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 1) {
+    return "just now";
+  }
+  if (elapsedMinutes < 60) {
+    return formatAgeUnit(elapsedMinutes, "minute");
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 48) {
+    return formatAgeUnit(elapsedHours, "hour");
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  if (elapsedDays < 14) {
+    return formatAgeUnit(elapsedDays, "day");
+  }
+
+  return formatAgeUnit(Math.floor(elapsedDays / 7), "week");
+}
+
+function formatAgeUnit(value: number, unit: string): string {
+  return `${value} ${unit}${value === 1 ? "" : "s"} ago`;
+}
+
+function formatAbsoluteDateTime(timestamp: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
 }
 
 function parseTextCommand(text: string): string | undefined {

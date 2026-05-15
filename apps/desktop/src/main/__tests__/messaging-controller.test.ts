@@ -1146,14 +1146,19 @@ describe("MessagingController", () => {
   });
 
   it("reposts the last assistant response after selecting a thread to resume", async () => {
+    const now = Date.UTC(2026, 4, 15, 13, 30);
     const harness = await createHarness({
-      readThreadLastAssistantMessage: async function (
+      now: () => now,
+      readThreadLastAssistantReply: async function (
         this: MessagingBackendBridge,
       ) {
         if (typeof this.getNavigationSnapshot !== "function") {
           throw new Error("backend receiver was not preserved");
         }
-        return "Last completed answer.";
+        return {
+          createdAt: now - 60 * 60_000,
+          text: "Last completed answer.",
+        };
       },
     });
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
@@ -1168,7 +1173,7 @@ describe("MessagingController", () => {
       }),
     );
 
-    expect(harness.readThreadLastAssistantMessage).toHaveBeenCalledWith({
+    expect(harness.readThreadLastAssistantReply).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
     });
@@ -1178,7 +1183,9 @@ describe("MessagingController", () => {
       parts: [
         {
           type: "text",
-          text: "Last completed answer.",
+          text: expect.stringMatching(
+            /^Last Bot Reply \(1 hour ago, .+\)\n\nLast completed answer\.$/,
+          ),
         },
       ],
     });
@@ -7108,6 +7115,9 @@ async function createHarness(options?: {
   readThreadLastAssistantMessage?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantMessage"]
   >;
+  readThreadLastAssistantReply?: NonNullable<
+    MessagingBackendBridge["readThreadLastAssistantReply"]
+  >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -7124,6 +7134,7 @@ async function createHarness(options?: {
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
+  readThreadLastAssistantReply: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
@@ -7330,6 +7341,9 @@ async function createHarness(options?: {
   const readThreadLastAssistantMessage = vi.fn(
     options?.readThreadLastAssistantMessage ?? (async () => undefined),
   );
+  const readThreadLastAssistantReply = vi.fn(
+    options?.readThreadLastAssistantReply ?? (async () => undefined),
+  );
   const readThreadStatus = vi.fn(async () => undefined);
   const recordMessagingBindingTransition = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
@@ -7347,6 +7361,7 @@ async function createHarness(options?: {
     ...(listSkills ? { listSkills } : {}),
     listBackends,
     materializeDirectoryLaunchpad,
+    readThreadLastAssistantReply,
     readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
@@ -7401,6 +7416,7 @@ async function createHarness(options?: {
     materializeDirectoryLaunchpad,
     onBindingChanged,
     readThreadLastAssistantMessage,
+    readThreadLastAssistantReply,
     readThreadStatus,
     recordMessagingBindingTransition,
     setThreadExecutionMode,
