@@ -56,6 +56,38 @@ the friendlier version of that same path.
 
 ![Settings → Messaging → Telegram panel](../assets/screenshots/settings-messaging-telegram.png)
 
+## Pairing flow walkthrough
+
+What each step of the **Generate → Approve** flow looks like in
+the Settings → Messaging → Telegram panel. Same mechanic across
+every supported platform; the screenshots below are Telegram for
+illustration. For the conceptual model and the per-platform space
+types you can pair, see
+[Using Codex via Messaging → Pairing](../../using-codex/#pairing--how-you-populate-the-allowlists).
+
+**1. Generate the pairing token.** Click the **Generate** button
+on the Pairing field. PwrAgent shows a short one-time code that
+expires after a few minutes.
+
+![Pairing — generated, code visible](../assets/screenshots/messaging-pairing-frame-1.png)
+
+**2. Send the code to the bot.** Open the bot's DM in Telegram
+and send the code as a regular message. PwrAgent observes the bot
+receiving the code (the actor's resolved name and chat appear in
+the row), and the row prompts you to **Approve**.
+
+![Pairing — observed, approval prompt visible](../assets/screenshots/messaging-pairing-frame-2.png)
+
+**3. Approve.** Click **Approve**. PwrAgent writes the user's
+stable platform ID to the authorized-user list, with the resolved
+display name beside it for your benefit. The approval prompt
+clears and the user appears in **Authorized User IDs**.
+
+![Pairing — approved, user in authorized list with resolved name](../assets/screenshots/messaging-pairing-frame-3.png)
+
+The phase-2 supergroup-pair flow looks the same — generate, post
+the code in the supergroup you want to allowlist, approve.
+
 ## Settings reference
 
 ### Required (above the Test button)
