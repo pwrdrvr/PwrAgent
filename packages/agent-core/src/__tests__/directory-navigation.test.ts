@@ -719,4 +719,34 @@ describe("materializeNavigationThreads", () => {
       },
     ]);
   });
+
+  it("normalizes managed worktree paths even when no repository path is known", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {},
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/worktrees/mp62bt71/PwrAgnt",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/mp62bt71/PwrAgnt",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(thread?.linkedDirectories).toEqual([
+      {
+        id: "/Users/huntharo/.codex/worktrees/mp62bt71/PwrAgnt",
+        label: "PwrAgnt",
+        path: "/Users/huntharo/.codex/worktrees/mp62bt71/PwrAgnt",
+        worktreePath: "/Users/huntharo/.codex/worktrees/mp62bt71/PwrAgnt",
+        kind: "worktree",
+      },
+    ]);
+  });
 });

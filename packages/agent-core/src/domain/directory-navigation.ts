@@ -8,6 +8,7 @@ import type {
 import {
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
+  isToolManagedWorktreePath,
 } from "@pwragent/shared";
 
 type DirectoryDescriptor = Pick<
@@ -53,12 +54,6 @@ function pathFromDirectoryKey(directoryKey: string): string | undefined {
       ? directoryKey.slice("workspace:".length)
       : undefined;
   return directoryPath?.trim() || undefined;
-}
-
-function isToolManagedWorktreePath(value: string): boolean {
-  return /[\\/]\.(?:codex|pwrag(?:ent|nt))[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(
-    value,
-  );
 }
 
 function matchScratchProjectsRoot(value: string): string | undefined {

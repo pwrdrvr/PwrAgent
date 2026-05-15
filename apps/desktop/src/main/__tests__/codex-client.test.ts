@@ -1046,6 +1046,7 @@ describe("CodexAppServerClient", () => {
         ],
       };
     });
+
     const client = new CodexAppServerClient({
       command: "codex",
       threadDirectoryEnricher,
@@ -1074,6 +1075,42 @@ describe("CodexAppServerClient", () => {
     expect(enriched.map((thread) => thread.id)).toEqual([
       "slow-thread",
       "fast-thread",
+    ]);
+
+    await client.close();
+  });
+
+  it("keeps cheap thread summaries from rendering managed worktrees as local", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadDirectoryEnricher = vi.fn(async () => ({
+      linkedDirectories: [],
+    }));
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+
+    const threads = await client.listThreads({
+      enrichDirectories: false,
+      filter: "missing-worktree",
+    });
+
+    expect(threadDirectoryEnricher).not.toHaveBeenCalled();
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-missing-worktree",
+        projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+        linkedDirectories: [
+          {
+            id: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+            label: "web-app",
+            path: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+            worktreePath: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+            kind: "worktree",
+          },
+        ],
+      }),
     ]);
 
     await client.close();
