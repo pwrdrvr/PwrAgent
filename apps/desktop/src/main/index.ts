@@ -23,6 +23,10 @@ import {
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
 import {
+  disposeComposerDraftIpcHandlers,
+  registerComposerDraftIpcHandlers,
+} from "./ipc/composer-drafts";
+import {
   disposeMessagingStatusIpcHandlers,
   registerMessagingStatusIpcHandlers,
 } from "./ipc/messaging-status";
@@ -110,6 +114,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeApplicationIpcHandlers();
   disposeAppMetadataIpcHandlers();
   disposeAppUpdateIpcHandlers();
+  disposeComposerDraftIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposePreloadLogIpcHandlers();
   disposeProfilesIpcHandlers();
@@ -219,6 +224,7 @@ export function bootstrapApp(): void {
     registerApplicationIpcHandlers();
     registerAppMetadataIpcHandlers();
     registerAppUpdateIpcHandlers();
+    registerComposerDraftIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers();

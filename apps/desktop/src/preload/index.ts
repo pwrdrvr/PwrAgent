@@ -99,6 +99,11 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  ClearComposerDraftRequest,
+  ClearComposerDraftResponse,
+  ListComposerDraftLatestResponse,
+  ListComposerDraftRecoveryCandidatesRequest,
+  ListComposerDraftRecoveryCandidatesResponse,
   CreateDesktopPwrAgentProfileRequest,
   CreateDesktopPwrAgentProfileResponse,
   CreateDesktopCodexAuthProfileRequest,
@@ -116,6 +121,10 @@ import type {
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
+  RecordComposerDraftHistoryRequest,
+  RecordComposerDraftHistoryResponse,
+  SaveComposerDraftRequest,
+  SaveComposerDraftResponse,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
@@ -176,6 +185,11 @@ import {
   APPLICATION_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+  COMPOSER_DRAFT_CLEAR_CHANNEL,
+  COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,
+  COMPOSER_DRAFT_LIST_LATEST_CHANNEL,
+  COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
+  COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
@@ -543,6 +557,24 @@ const desktopApi = Object.freeze({
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  saveComposerDraft: async (
+    request: SaveComposerDraftRequest,
+  ): Promise<SaveComposerDraftResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_SAVE_CHANNEL, request),
+  recordComposerDraftHistory: async (
+    request: RecordComposerDraftHistoryRequest,
+  ): Promise<RecordComposerDraftHistoryResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL, request),
+  clearComposerDraft: async (
+    request: ClearComposerDraftRequest,
+  ): Promise<ClearComposerDraftResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_CLEAR_CHANNEL, request),
+  listComposerDraftRecoveryCandidates: async (
+    request: ListComposerDraftRecoveryCandidatesRequest,
+  ): Promise<ListComposerDraftRecoveryCandidatesResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL, request),
+  listComposerDraftLatest: async (): Promise<ListComposerDraftLatestResponse> =>
+    await ipcRenderer.invoke(COMPOSER_DRAFT_LIST_LATEST_CHANNEL),
   pickDirectoryFromDisk: async (): Promise<PickDirectoryFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL),
   registerDirectoryFromDisk: async (

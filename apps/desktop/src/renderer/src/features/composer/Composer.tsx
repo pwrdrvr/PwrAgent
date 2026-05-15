@@ -923,6 +923,12 @@ export function Composer(props: ComposerProps) {
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
+  const recoveryCycleRef = useRef<{
+    candidates: ComposerDraftSnapshot[];
+    index: number;
+    scopeKey: string;
+  } | undefined>(undefined);
+  const recoveringDraftRef = useRef(false);
   const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
   const latestDraftSnapshotRef = useRef<{
     scopeKey: string;
@@ -1058,6 +1064,9 @@ export function Composer(props: ComposerProps) {
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
+    if (!recoveringDraftRef.current) {
+      recoveryCycleRef.current = undefined;
+    }
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
     if (nextSkillTokens) {
@@ -1096,6 +1105,82 @@ export function Composer(props: ComposerProps) {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
     }
+  };
+  const recordComposerDraftHistory = (
+    scopeKey: string,
+    state: ComposerDraftSnapshot,
+    status: "unsent" | "sent" | "abandoned",
+  ): void => {
+    if (!isDraftStoreScope(scopeKey)) {
+      return;
+    }
+    draftStore.recordHistory?.(scopeKey, state, status);
+  };
+  const applyRecoveredComposerDraft = (
+    snapshot: ComposerDraftSnapshot,
+  ): void => {
+    recoveringDraftRef.current = true;
+    deletedSkillTokenHistoryRef.current = [];
+    setDraft(snapshot.draft);
+    setEditorDocument(snapshot.editorDocument);
+    setImageAttachments(snapshot.imageAttachments);
+    setSkillTokens(snapshot.skillTokens);
+    saveComposerDraftSnapshot(composerScopeKey, snapshot);
+    setSendError(undefined);
+    requestAnimationFrame(() => {
+      recoveringDraftRef.current = false;
+      inputRef.current?.focus();
+    });
+  };
+  const recoverPreviousComposerDraft = async (): Promise<void> => {
+    if (!draftStore.listRecoveryCandidates) {
+      return;
+    }
+
+    let cycle = recoveryCycleRef.current;
+    if (!cycle || cycle.scopeKey !== composerScopeKey) {
+      const response = await draftStore
+        .listRecoveryCandidates({
+          backend: props.thread?.source,
+          directoryKey: props.launchpad?.directoryKey ?? props.directory?.key,
+          includeSent: true,
+          limit: 20,
+          scopeKey: composerScopeKey,
+          threadId: props.thread?.id,
+        })
+        .catch((error) => {
+          console.warn("Failed to list composer draft recovery candidates", error);
+          return [];
+        });
+      const candidates = response
+        .map((candidate) => ({
+          draft: candidate.text,
+          editorDocument: candidate.editorDocument as JSONContent | undefined,
+          imageAttachments: candidate.imageAttachments,
+          skillTokens: candidate.skillTokens as ComposerSkillToken[],
+        }))
+        .filter(
+          (candidate) =>
+            candidate.draft.trim() ||
+            candidate.skillTokens.length > 0 ||
+            candidate.imageAttachments.length > 0,
+        );
+      if (candidates.length === 0) {
+        return;
+      }
+      cycle = {
+        candidates,
+        index: 0,
+        scopeKey: composerScopeKey,
+      };
+    }
+
+    const candidate = cycle.candidates[cycle.index % cycle.candidates.length];
+    recoveryCycleRef.current = {
+      ...cycle,
+      index: cycle.index + 1,
+    };
+    applyRecoveredComposerDraft(candidate);
   };
   const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
@@ -1212,6 +1297,10 @@ export function Composer(props: ComposerProps) {
       skillTokens: [],
     };
 
+    const latest = latestDraftSnapshotRef.current;
+    if (latest.scopeKey === scopeKey) {
+      recordComposerDraftHistory(scopeKey, latest.snapshot, "sent");
+    }
     clearComposerDraftSnapshot(scopeKey);
     latestDraftSnapshotRef.current = {
       scopeKey,
@@ -1748,6 +1837,11 @@ export function Composer(props: ComposerProps) {
       if (options?.queued) {
         removeQueuedTurn(options.queued);
       } else {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "sent",
+        );
         clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
         setReviewConfig(undefined);
@@ -1863,6 +1957,11 @@ export function Composer(props: ComposerProps) {
       if (queued) {
         removeQueuedTurn(queued);
       } else {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "sent",
+        );
         clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
         setImageAttachments([]);
@@ -1944,6 +2043,11 @@ export function Composer(props: ComposerProps) {
       text: canonicalDraft,
       imageAttachments,
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -1961,6 +2065,11 @@ export function Composer(props: ComposerProps) {
       imageAttachments: [],
       reviewCommand,
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -2056,6 +2165,11 @@ export function Composer(props: ComposerProps) {
       imageAttachments: pending.imageAttachments,
       status: "pending",
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -2967,6 +3081,9 @@ export function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
     metadata?: ComposerInputChangeMetadata,
   ): void => {
+    if (!recoveringDraftRef.current) {
+      recoveryCycleRef.current = undefined;
+    }
     unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
       pendingProgrammaticComposerChangeRef.current;
@@ -3032,6 +3149,17 @@ export function Composer(props: ComposerProps) {
     }
 
     if (!hasAutocomplete) {
+      if (
+        event.key === "ArrowUp" &&
+        (!hasComposerContent ||
+          recoveryCycleRef.current?.scopeKey === composerScopeKey) &&
+        imageAttachments.length === 0
+      ) {
+        event.preventDefault();
+        void recoverPreviousComposerDraft();
+        return;
+      }
+
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         void submitTurn(event.metaKey ? "steer" : "default");

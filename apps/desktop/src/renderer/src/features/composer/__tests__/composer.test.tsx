@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
+  ComposerDraftRecoveryCandidate,
   NavigationThreadSummary,
   NavigationLaunchpadDraft,
   StartReviewRequest,
@@ -4518,6 +4519,132 @@ describe("Composer", () => {
           ],
         }),
       );
+    });
+  });
+
+  it("keeps post-skill long-form text recoverable across undo and redo", async () => {
+    renderComposerWithRegressionSkills();
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce:plan` },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const longBody = [
+      "This is the first long paragraph after the inserted skill.",
+      "",
+      "This is the second paragraph with enough text to look like a real note.",
+      "",
+      "This is the final sentence before a small accidental deletion.",
+    ].join("\n");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}${longBody}` },
+    });
+    fireEvent.change(input, {
+      target: {
+        value: `${reportedSkillAutocompleteDraftPrefix}${longBody.replace(
+          "small accidental deletion",
+          "small accidental"
+        )}`,
+      },
+    });
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "z", metaKey: true });
+
+    await waitFor(() => {
+      expect(richInput.getAttribute("data-value")).toContain(
+        "This is the second paragraph with enough text",
+      );
+    });
+    expect(richInput).toHaveTextContent(
+      "This is the second paragraph with enough text"
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "y", metaKey: true });
+
+    await waitFor(() => {
+      expect(richInput.getAttribute("data-value")).toContain(
+        "This is the second paragraph with enough text",
+      );
+    });
+    expect(richInput).toHaveTextContent(
+      "This is the second paragraph with enough text"
+    );
+  });
+
+  it("cycles durable draft recovery candidates with ArrowUp from a blank composer", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
+      {
+        scopeKey: "thread:codex:thread-1",
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: "Recovered unsent draft",
+        skillTokens: [],
+        imageAttachments: [],
+        status: "unsent",
+        createdAt: 1,
+        updatedAt: 3,
+        contentHash: "h1",
+        charCount: "Recovered unsent draft".length,
+      },
+      {
+        scopeKey: "thread:codex:thread-1",
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: "Recovered recently sent draft",
+        skillTokens: [],
+        imageAttachments: [],
+        status: "sent",
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: "h2",
+        charCount: "Recovered recently sent draft".length,
+      },
+    ];
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered unsent draft");
+    });
+    expect(draftStore.listRecoveryCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeSent: true,
+        scopeKey: "thread:codex:thread-1",
+      }),
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered recently sent draft");
     });
   });
 

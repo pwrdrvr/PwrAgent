@@ -103,6 +103,11 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  ClearComposerDraftRequest,
+  ClearComposerDraftResponse,
+  ListComposerDraftLatestResponse,
+  ListComposerDraftRecoveryCandidatesRequest,
+  ListComposerDraftRecoveryCandidatesResponse,
   CodexEnvironmentSetupProgressEvent,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
@@ -122,6 +127,10 @@ import type {
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
+  RecordComposerDraftHistoryRequest,
+  RecordComposerDraftHistoryResponse,
+  SaveComposerDraftRequest,
+  SaveComposerDraftResponse,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
@@ -324,6 +333,19 @@ export type DesktopApi = {
   resetDirectoryLaunchpad?: (
     request: ResetDirectoryLaunchpadRequest
   ) => Promise<ResetDirectoryLaunchpadResponse>;
+  saveComposerDraft?: (
+    request: SaveComposerDraftRequest,
+  ) => Promise<SaveComposerDraftResponse>;
+  recordComposerDraftHistory?: (
+    request: RecordComposerDraftHistoryRequest,
+  ) => Promise<RecordComposerDraftHistoryResponse>;
+  clearComposerDraft?: (
+    request: ClearComposerDraftRequest,
+  ) => Promise<ClearComposerDraftResponse>;
+  listComposerDraftRecoveryCandidates?: (
+    request: ListComposerDraftRecoveryCandidatesRequest,
+  ) => Promise<ListComposerDraftRecoveryCandidatesResponse>;
+  listComposerDraftLatest?: () => Promise<ListComposerDraftLatestResponse>;
   /**
    * Project-directory picker (issue #223): two-step flow so the renderer
    * can show inline validation errors. `pickDirectoryFromDisk` opens the

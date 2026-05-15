@@ -2,6 +2,7 @@ export * from "./contracts/normalized-app-server";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
 export * from "./contracts/branch-drift";
+export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
 export * from "./contracts/messaging";
 export * from "./contracts/navigation";

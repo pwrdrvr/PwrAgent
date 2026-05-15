@@ -126,6 +126,13 @@ export const NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL =
   "navigation:pick-directory-from-disk";
 export const NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL =
   "navigation:register-directory-from-disk";
+export const COMPOSER_DRAFT_SAVE_CHANNEL = "composer-draft:save";
+export const COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL =
+  "composer-draft:record-history";
+export const COMPOSER_DRAFT_CLEAR_CHANNEL = "composer-draft:clear";
+export const COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL =
+  "composer-draft:list-candidates";
+export const COMPOSER_DRAFT_LIST_LATEST_CHANNEL = "composer-draft:list-latest";
 export const RENDERER_ERROR_REPORT_CHANNEL = "renderer:error-report";
 export const IMAGE_UPLOAD_FALLBACK_CHANNEL = "image-upload:fallback";
 export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
