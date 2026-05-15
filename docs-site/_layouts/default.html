@@ -20,9 +20,39 @@
         <span class="site-brand__tagline">docs</span>
       </a>
       <nav class="site-nav" aria-label="Top navigation">
-        <a href="{{ '/desktop/' | relative_url }}">Desktop</a>
-        <a href="{{ '/messaging/' | relative_url }}">Messaging</a>
-        <a href="{{ '/settings/' | relative_url }}">Settings</a>
+        <div class="site-nav__group">
+          <a class="site-nav__top" href="{{ '/desktop/' | relative_url }}" aria-haspopup="true">Desktop</a>
+          <ul class="site-nav__dropdown" aria-label="Desktop sections">
+            <li><a href="{{ '/desktop/#sidebar-lenses' | relative_url }}">Sidebar lenses</a></li>
+            <li><a href="{{ '/desktop/#thread-workspaces-local-and-worktree' | relative_url }}">Workspaces &amp; worktrees</a></li>
+            <li><a href="{{ '/desktop/#codex-environments' | relative_url }}">Codex environments</a></li>
+            <li><a href="{{ '/desktop/#per-thread-settings' | relative_url }}">Per-thread settings</a></li>
+            <li><a href="{{ '/desktop/#multiple-profiles' | relative_url }}">Multiple profiles</a></li>
+            <li><a href="{{ '/desktop/#not-yet' | relative_url }}">Not yet / Coming soon</a></li>
+          </ul>
+        </div>
+        <div class="site-nav__group">
+          <a class="site-nav__top" href="{{ '/messaging/' | relative_url }}" aria-haspopup="true">Messaging</a>
+          <ul class="site-nav__dropdown" aria-label="Messaging sections">
+            <li><a href="{{ '/using-codex/' | relative_url }}">Using Codex via Messaging</a></li>
+            <li><a href="{{ '/messaging/pairing/' | relative_url }}">Pairing</a></li>
+            <li><a href="{{ '/providers/' | relative_url }}">Providers (Telegram, Discord, …)</a></li>
+            <li><a href="{{ '/streaming/' | relative_url }}">Streaming responses</a></li>
+            <li><a href="{{ '/webhook-dangers/' | relative_url }}">Webhooks — a security note</a></li>
+            <li><a href="{{ '/rate-limits/' | relative_url }}">Rate limits and budgets</a></li>
+          </ul>
+        </div>
+        <div class="site-nav__group">
+          <a class="site-nav__top" href="{{ '/settings/' | relative_url }}" aria-haspopup="true">Settings</a>
+          <ul class="site-nav__dropdown" aria-label="Settings sections">
+            <li><a href="{{ '/settings/#general' | relative_url }}">General</a></li>
+            <li><a href="{{ '/settings/#application-discovery' | relative_url }}">Applications</a></li>
+            <li><a href="{{ '/settings/#profiles' | relative_url }}">Profiles</a></li>
+            <li><a href="{{ '/settings/#worktrees' | relative_url }}">Worktrees</a></li>
+            <li><a href="{{ '/settings/#models--codex-app-server' | relative_url }}">Models / Codex App Server</a></li>
+            <li><a href="{{ '/settings/#experimental' | relative_url }}">Experimental</a></li>
+          </ul>
+        </div>
         <a class="site-nav__github" href="https://github.com/pwrdrvr/PwrAgent" rel="noopener">GitHub →</a>
       </nav>
     </div>
