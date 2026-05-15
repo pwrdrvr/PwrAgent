@@ -111,6 +111,30 @@ has DMs and group chats; LINE has 1:1 chats, group chats, and
 multi-person rooms. The pairing flow applies to whichever level
 your platform exposes.
 
+#### What each phase looks like
+
+The phase-1 user-pair flow on Telegram, captured end-to-end:
+
+**1. Generate the pairing token.** PwrAgent shows a short
+one-time code in the Pairing field.
+
+![Pairing — generated, code visible](assets/screenshots/messaging-pairing-frame-1.png)
+
+**2. Send the code to the bot.** PwrAgent observes the bot
+receiving the code (the actor's resolved name and chat appear in
+the row), and the row prompts you to **Approve**.
+
+![Pairing — observed, approval prompt visible](assets/screenshots/messaging-pairing-frame-2.png)
+
+**3. Approve.** PwrAgent writes the user's stable platform ID to
+the authorized list (with the resolved display name beside it for
+your benefit) and the prompt clears.
+
+![Pairing — approved, user in authorized list with resolved name](assets/screenshots/messaging-pairing-frame-3.png)
+
+The phase-2 space-pair flow looks the same — generate, post the
+code in the space you want to allowlist, approve.
+
 ### Discovery-mode fallback
 
 If pairing isn't convenient (or you'd rather copy-paste IDs), the
@@ -557,18 +581,17 @@ first** and send those as image attachments. You control which
 pages get sent, the result is predictable across models, and the
 model sees exactly what you intended.
 
-### Image upload profile (TOML / env only)
+### Image upload profile
 
 PwrAgent has a per-config **image upload profile** that controls
 how inbound images are normalized before being forwarded to the
 model: `low`, `medium` *(default — matches desktop paste behavior)*,
-`high`, or `actual`. **The Settings UI does not expose this control
-today** — it can be set only via:
-
-- `attachment_image_profile` under `[messaging]` in your
-  `~/.pwragent/profiles/<name>/config.toml`, or
-- the `PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` environment
-  variable.
+`high`, or `actual`. Set it from **Settings → Messaging** in the
+desktop. The same value can also be written directly under
+`[messaging]` in `~/.pwragent/profiles/<name>/config.toml` as
+`attachment_image_profile`, or via the
+`PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` environment variable —
+useful for headless / scripted setups.
 
 Default (`medium`) is appropriate for the vast majority of uses;
 the other values exist for when you specifically need to trade

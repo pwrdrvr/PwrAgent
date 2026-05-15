@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
+import {
+  findLatestPairingEntryId,
+  markPairingObserved,
+  seedTelegramEnabledConfig,
+  stateDbPathForHomeRoot,
+} from "./fixtures/readme-state-seeding";
 
 // docs-site screenshot capture spec.
 //
@@ -166,6 +172,69 @@ test("settings-models — Settings → Models panel", async () => {
   }
 });
 
+test("settings-profiles — Settings → Profiles panel", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+  });
+
+  try {
+    await openSettingsSection(app.window, {
+      navLabel: "Profiles",
+      regionLabel: "Profile settings",
+    });
+
+    await bringToFront(app.electronApp);
+    captureNative("settings-profiles.png");
+  } finally {
+    await app.close();
+  }
+});
+
+test("settings-general — Settings → General panel", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+  });
+
+  try {
+    await openSettingsSection(app.window, {
+      navLabel: "General",
+      regionLabel: "General settings",
+    });
+
+    await bringToFront(app.electronApp);
+    captureNative("settings-general.png");
+  } finally {
+    await app.close();
+  }
+});
+
+test("settings-experimental — Settings → Experimental panel", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+  });
+
+  try {
+    await openSettingsSection(app.window, {
+      navLabel: "Experimental",
+      regionLabel: "Experimental settings",
+    });
+
+    await bringToFront(app.electronApp);
+    captureNative("settings-experimental.png");
+  } finally {
+    await app.close();
+  }
+});
+
 // ────────────────────── Settings → Messaging → each provider ──────────────────────
 
 const MESSAGING_PLATFORM_SHOTS = [
@@ -202,6 +271,246 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
     }
   });
 }
+
+// ────────────────────── Messaging — Pairing flow (3 frames) ──────────────────────
+
+// Sanitized persona used for the pairing approval / authorized-user
+// row. Matches the README pairing-GIF persona so the docs-site +
+// README screenshots tell a coherent fictional story (no real IDs).
+const PAIRING_PERSONA = {
+  displayName: "Riley Chen",
+  username: "rileychen",
+  telegramPeerId: "5550199999",
+} as const;
+
+/**
+ * Drive the renderer from the main shell into Settings → Messaging
+ * with the Telegram Pairing field scrolled into the center of the
+ * viewport. Used for every frame of the pairing capture so each
+ * frame frames the same surface area.
+ */
+async function navigateToTelegramPairing(page: Page): Promise<void> {
+  await expect(page.getByRole("button", { name: "Open settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Open settings" }).click();
+
+  const messagingNav = page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Messaging" });
+  await messagingNav.click();
+  await expect(
+    page.getByRole("region", { name: "Messaging settings" }),
+  ).toBeVisible();
+
+  const pairingTarget = page
+    .getByRole("radiogroup", { name: /^Telegram pairing target$/i })
+    .first();
+  await pairingTarget.waitFor({ state: "visible" });
+  await pairingTarget.evaluate((node) => {
+    node.scrollIntoView({ behavior: "instant", block: "center" });
+  });
+  await expect(pairingTarget).toBeInViewport();
+}
+
+test("messaging-pairing — frame 1: pairing token generated", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+    preLaunchHook: seedTelegramEnabledConfig,
+  });
+
+  try {
+    await navigateToTelegramPairing(app.window);
+
+    // Click the Telegram-section Generate button. Two `Generate`
+    // buttons render in the panel (one per platform pairing field);
+    // scope to the Telegram section by anchoring on its radiogroup.
+    const telegramGenerateButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: /^Generate$/ });
+    await telegramGenerateButton.click();
+
+    // Wait for the pair code to render. The renderer puts the
+    // generated token inside a `<code>` element under the Pairing
+    // field's `.settings-pairing__message` row.
+    const pairCode = app.window
+      .locator(".settings-pairing__message code")
+      .first();
+    await expect(pairCode).toBeVisible({ timeout: 10_000 });
+
+    await bringToFront(app.electronApp);
+    captureNative("messaging-pairing-frame-1.png");
+  } finally {
+    await app.close();
+  }
+});
+
+test("messaging-pairing — frame 2: observed, approval prompt visible", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+    preLaunchHook: seedTelegramEnabledConfig,
+  });
+
+  try {
+    await navigateToTelegramPairing(app.window);
+
+    // Generate a pairing token first so a row exists in sqlite to
+    // mutate to "observed".
+    const telegramGenerateButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: /^Generate$/ });
+    await telegramGenerateButton.click();
+    await expect(
+      app.window.locator(".settings-pairing__message code").first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Mutate the row directly to "observed" with our sanitized
+    // persona (mimicking the user having sent the pair code to the
+    // bot from a Telegram DM). Reload so PairingTokenField re-fetches
+    // from sqlite.
+    const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
+    const entryId = findLatestPairingEntryId(stateDbPath, "telegram");
+    if (!entryId) {
+      throw new Error(
+        "no telegram pairing entry found after Generate click — runtime may not have written to sqlite",
+      );
+    }
+    markPairingObserved(stateDbPath, entryId, {
+      observedActor: {
+        id: PAIRING_PERSONA.telegramPeerId,
+        username: PAIRING_PERSONA.username,
+        displayName: PAIRING_PERSONA.displayName,
+      },
+      observedChat: {
+        id: PAIRING_PERSONA.telegramPeerId,
+        kind: "dm",
+        title: PAIRING_PERSONA.displayName,
+      },
+    });
+    await app.window.reload();
+    await navigateToTelegramPairing(app.window);
+
+    // Wait for the Approve button to appear (status === "observed"
+    // entries render an Approve action).
+    const telegramApproveButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: "Approve" });
+    await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
+
+    await bringToFront(app.electronApp);
+    captureNative("messaging-pairing-frame-2.png");
+  } finally {
+    await app.close();
+  }
+});
+
+test("messaging-pairing — frame 3: approved, user in authorized list", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+    preLaunchHook: seedTelegramEnabledConfig,
+  });
+
+  try {
+    await navigateToTelegramPairing(app.window);
+
+    // Generate, mark observed, reload — same as frame 2 setup.
+    const telegramGenerateButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: /^Generate$/ });
+    await telegramGenerateButton.click();
+    await expect(
+      app.window.locator(".settings-pairing__message code").first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
+    const entryId = findLatestPairingEntryId(stateDbPath, "telegram");
+    if (!entryId) {
+      throw new Error(
+        "no telegram pairing entry found after Generate click — runtime may not have written to sqlite",
+      );
+    }
+    markPairingObserved(stateDbPath, entryId, {
+      observedActor: {
+        id: PAIRING_PERSONA.telegramPeerId,
+        username: PAIRING_PERSONA.username,
+        displayName: PAIRING_PERSONA.displayName,
+      },
+      observedChat: {
+        id: PAIRING_PERSONA.telegramPeerId,
+        kind: "dm",
+        title: PAIRING_PERSONA.displayName,
+      },
+    });
+    await app.window.reload();
+    await navigateToTelegramPairing(app.window);
+
+    // Click Approve. The IPC handler patches config.toml to add the
+    // user to authorized_users, marks the pairing entry consumed,
+    // and refreshes the settings snapshot. The Approve prompt
+    // disappears and the user appears in the Authorized User IDs
+    // list below.
+    const telegramApproveButton = app.window
+      .locator(".settings-pairing")
+      .filter({
+        has: app.window.getByRole("radiogroup", {
+          name: /^Telegram pairing target$/i,
+        }),
+      })
+      .getByRole("button", { name: "Approve" });
+    await expect(telegramApproveButton).toBeVisible({ timeout: 10_000 });
+    await telegramApproveButton.click();
+
+    // Wait for the Authorized User IDs row to display the user id
+    // input populated with the seeded user.
+    await expect(
+      app.window
+        .locator(`input[value="${PAIRING_PERSONA.telegramPeerId}"]`)
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Re-scroll so the Pairing field stays at center (the
+    // Authorized User IDs field is just below it so this puts both
+    // in frame).
+    await app.window
+      .getByRole("radiogroup", { name: /^Telegram pairing target$/i })
+      .first()
+      .evaluate((node) => {
+        node.scrollIntoView({ behavior: "instant", block: "center" });
+      });
+
+    await bringToFront(app.electronApp);
+    captureNative("messaging-pairing-frame-3.png");
+  } finally {
+    await app.close();
+  }
+});
 
 // ────────────────────── Desktop — Recents lens ──────────────────────
 

@@ -58,6 +58,30 @@ Local handoff asks for confirmation.
 Worktree storage location is configurable — see
 [Settings → Worktrees](../settings/#worktrees).
 
+### Codex environments
+
+When you start a thread on a worktree, PwrAgent can run a **Codex
+environment** before the thread takes its first turn. Environments
+are configured at the Codex level (alongside `AGENTS.md` and
+`.codex/` metadata) and PwrAgent surfaces them in the launchpad
+alongside the model and access-mode pickers:
+
+- Pick which environment to attach to the thread when you create
+  the worktree.
+- Optionally run the environment's **setup hook** (install
+  dependencies, warm caches, run codegen) before the thread starts.
+  Setup output streams live into the thread's transcript so you can
+  watch it complete.
+- Pick which **commands** the environment exposes for the agent to
+  run during the turn. The agent can only invoke commands you've
+  enabled.
+
+<!-- screenshot: desktop-environments.png — Launchpad / composer with the Codex environment picker visible. See DOCS_SITE_SHOT_LIST.md. -->
+
+Environments are usable today but **not yet editable inside the
+PwrAgent UI** — you author them at the Codex level and PwrAgent
+picks them up. In-app editing is on the roadmap.
+
 ### Per-thread settings
 
 Unlike Codex Desktop, where model / reasoning effort / Fast mode /
@@ -189,99 +213,86 @@ You can compose them however you want. Examples:
   work and personal Codex identities via Settings → Models.
 - **N PwrAgent × M Codex.** Whatever combination makes sense.
 
-### Setting up an alternate Codex profile
+### Managing profiles in the app
 
-Today this is a CLI bootstrap (we're working on making it in-app —
-see [Coming soon](#coming-soon)). The flow:
+Both kinds of profiles are managed from **Settings → Profiles**:
 
-```bash
-# Pick a name. Avoid spaces; use lowercase / underscore / dash.
-export CODEX_PROFILE_NAME=work
+- **PwrAgent profiles** — list, create new, switch between. Creating
+  a profile here gives you a fresh `~/.pwragent/profiles/<name>/`
+  with default settings; switching restarts the app under the
+  selected profile.
+- **Codex auth profiles** — under **Settings → Models → Codex**,
+  pick the **Auth profile** dropdown to switch between
+  `CODEX_HOME` directories. The dropdown lists the Codex profiles
+  PwrAgent finds under `~/.codex/profiles/`. Adding a new Codex
+  profile from the same panel triggers the appropriate `codex login`
+  flow against the isolated `CODEX_HOME`.
 
-# Create the Codex home for that auth profile.
-mkdir -p "$HOME/.codex/profiles/$CODEX_PROFILE_NAME"
+![Settings → Profiles panel listing PwrAgent profiles](assets/screenshots/settings-profiles.png)
 
-# Optional: copy your existing Codex config as a starting point.
-cp "$HOME/.codex/config.toml" "$HOME/.codex/profiles/$CODEX_PROFILE_NAME/config.toml"
+### Launching a profile from the command line
 
-# Log Codex into that isolated CODEX_HOME.
-CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" codex login
+For automation or when you want to pin a specific PwrAgent profile
+at launch:
 
-# Verify it's logged in.
-CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" codex login status
-```
-
-If you use API-key auth instead of browser-flow login:
-
-```bash
-printenv OPENAI_API_KEY | \
-  CODEX_HOME="$HOME/.codex/profiles/$CODEX_PROFILE_NAME" \
-  codex login --with-api-key
-```
-
-### Wiring it into PwrAgent
-
-After the alternate `CODEX_HOME` is logged in, point a PwrAgent
-profile at it:
-
-1. Launch PwrAgent with the PwrAgent profile you want this Codex
-   profile attached to. **From source:**
-
-   ```bash
-   PWRAGENT_PROFILE=dev pnpm --filter @pwragent/desktop dev:no-messaging
-   ```
-
-   **From the installed `.app`:**
-
-   ```bash
-   PWRAGENT_PROFILE=work /Applications/PwrAgent.app/Contents/MacOS/PwrAgent &
-   ```
-
-   This invokes the bundled binary directly with the env var set.
-   The `&` backgrounds the app so your terminal stays usable.
-
-2. Open **Settings → Models → Codex**.
-3. In the **Auth profile** picker, choose the directory you
-   created (`work` in the example above).
-4. Save and restart PwrAgent so the App Server re-launches with
-   the new `CODEX_HOME`.
-
-The selection writes to that PwrAgent profile's config only — for
-the example above, `~/.pwragent/profiles/dev/config.toml`:
-
-```toml
-[models.codex]
-profile = "work"
-```
-
-### Verifying without guessing
-
-After the wire-up:
+**Installed `.app` — recommended:**
 
 ```bash
-# Confirm PwrAgent dev selected the Codex auth profile.
+open -na PwrAgent --args --profile work
+```
+
+The `--profile <name>` argument is the supported launch flag — it
+flows through Launch Services into the app's argv, so the app
+shows up correctly in the Dock and Cmd-Tab list.
+
+**From source:**
+
+```bash
+PWRAGENT_PROFILE=dev pnpm --filter @pwragent/desktop dev:no-messaging
+```
+
+The `PWRAGENT_PROFILE` env var still works as a fallback for any
+context where passing argv isn't convenient (the dev server and
+shell-script launchers being the typical cases).
+
+### Under the hood
+
+The in-app profile management writes to your config file the same
+shape an experienced operator would write by hand:
+
+- PwrAgent profile dir: `~/.pwragent/profiles/<name>/` containing
+  `config.toml` (settings) and `state/state.db` (sqlite session
+  state).
+- Codex profile dir: `~/.codex/profiles/<name>/` containing the
+  isolated `CODEX_HOME` (auth tokens, thread history, config).
+- Selected Codex profile is recorded in the active PwrAgent
+  profile's `config.toml`:
+
+  ```toml
+  [models.codex]
+  profile = "work"
+  ```
+
+Verifying without going through the UI:
+
+```bash
+# Confirm the active PwrAgent profile selected the right Codex auth
+# profile.
 rg -n 'profile = "work"|\[models.codex\]' \
-  ~/.pwragent/profiles/dev/config.toml
+  ~/.pwragent/profiles/<your-pwragent-profile>/config.toml
 
-# After starting a Codex thread from PwrAgent, confirm Codex state
-# lands in the isolated CODEX_HOME.
+# Once a Codex thread runs under the selected profile, confirm
+# Codex state lands in the isolated CODEX_HOME.
 find ~/.codex/profiles/work -maxdepth 4 -type f | sort | head -80
 ```
 
-You should see something like:
-
-```
-~/.codex/profiles/work/auth.json
-~/.codex/profiles/work/config.toml  # if copied or created
-~/.codex/profiles/work/session_index.jsonl
-~/.codex/profiles/work/sessions/...
-~/.codex/profiles/work/worktrees/...  # if Codex user-home worktrees are used
-```
+You should see entries like `auth.json`, `config.toml`,
+`session_index.jsonl`, `sessions/`, and (if used) `worktrees/`.
 
 ### Mental model
 
-- `PWRAGENT_PROFILE=<name>` selects PwrAgent's **own** DB, config,
-  and secrets directory.
+- `--profile <name>` (or `PWRAGENT_PROFILE=<name>`) selects
+  PwrAgent's **own** DB, config, and secrets directory.
 - The **Codex auth profile** picked inside that PwrAgent profile
   selects which `CODEX_HOME` PwrAgent hands to the Codex App Server.
 
@@ -312,24 +323,18 @@ asked about — captured here so you can plan around them:
 Active development areas that have shipped designs but aren't in
 release builds yet:
 
-- **Environment setup on new worktree.** When PwrAgent creates a
-  worktree, it'll optionally run a configurable setup hook (install
-  deps, run codegen, warm caches) before handing the worktree to
-  the agent. Today you have to do this manually.
-- **Environment cleanup on archive or handoff.** Inverse of the
-  above — tear down the worktree's working environment when a
-  thread is archived or handed back to Local. Today nothing
-  cleans up.
-- **In-app profile management.** Creating, switching, and
-  configuring PwrAgent profiles (and the Codex profiles bound to
-  them) currently requires the CLI bootstrap described in
-  [Multiple profiles](#multiple-profiles). The flow lands inside
-  the app shortly — pick / create / switch profiles from the
-  PwrAgent UI without dropping to a terminal.
+- **Environment cleanup on archive or handoff.** The setup side
+  shipped with [Codex environments](#codex-environments) — the
+  cleanup side (tear down the worktree's working environment when
+  a thread is archived or handed back to Local) is still on the
+  roadmap. Today nothing cleans up.
+- **In-app environment editing.** Environments are usable from
+  PwrAgent today, but you author them at the Codex level (not in
+  PwrAgent's UI). In-app editing of the environment definition is
+  on the roadmap.
 
-If either of these would be load-bearing for your workflow, watch
-the [GitHub repo](https://github.com/pwrdrvr/PwrAgent) for the
-relevant PRs.
+Watch the [GitHub repo](https://github.com/pwrdrvr/PwrAgent) for
+the relevant PRs.
 
 ## See also
 

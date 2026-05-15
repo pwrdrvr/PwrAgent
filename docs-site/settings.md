@@ -11,6 +11,38 @@ configuration lives under each provider page — see
 [Messaging → Providers](../messaging/#setting-up-providers).
 
 Everything below is reachable from **Settings** in the desktop app.
+The left-nav layout is roughly:
+
+- **General** — desktop-wide defaults (image-paste budget, etc.).
+- **Applications** — terminal, editor, git, `gh` CLI.
+- **Profiles** — PwrAgent profile management; see
+  [Desktop → Multiple profiles](../desktop/#multiple-profiles).
+- **Worktrees** — where worktrees get stored.
+- **Messaging** — per-provider config; see
+  [Messaging → Setting up providers](../messaging/#setting-up-providers).
+- **Models** — Codex App Server discovery, version, Codex auth
+  profile selection.
+- **Experimental** — opt-in features that are still in flux.
+
+## General
+
+Desktop-wide defaults that don't fit anywhere more specific. The
+load-bearing setting today is the **pasted image patch budget**,
+which caps how aggressively PwrAgent resizes large images you paste
+into the composer before they're forwarded to the model.
+
+| Option | What it means |
+|---|---|
+| `1024 patches` | Caps square images at about 1024 32px patches before model-specific multipliers. |
+| `1536 patches` *(default)* | Limits large pasted images to roughly 1536 image patches. Sensible balance for typical screenshots. |
+| `4096 patches` | Allows roughly a 2048×2048 square image before model-specific multipliers. |
+| `Actual size` | Preserves pasted image dimensions before upload. |
+
+![Settings → General panel showing the pasted image patch budget options](assets/screenshots/settings-general.png)
+
+The same patch budget affects messaging-side image attachments
+similarly. See [Using Codex via Messaging → Image upload profile](../using-codex/#image-upload-profile)
+for the messaging-side knob.
 
 ## Application discovery
 
@@ -32,6 +64,27 @@ per-tool; an explicit value beats the auto-discovered one.
 
 Codex App Server discovery is its own beast — see
 [Models / Codex App Server](#models--codex-app-server) below.
+
+## Profiles
+
+PwrAgent has two profile mechanisms — **PwrAgent profiles** (this
+panel) for desktop-app state and **Codex auth profiles** (under
+[Models / Codex App Server](#models--codex-app-server)) for
+isolating Codex `CODEX_HOME` directories. Both compose; see
+[Desktop → Multiple profiles](../desktop/#multiple-profiles) for
+the full conceptual model.
+
+The Profiles panel lets you list, create, switch between, and
+delete PwrAgent profiles. Each row shows the on-disk profile dir,
+the Codex auth profile bound to it, and which one's active /
+configured to launch by default.
+
+![Settings → Profiles panel listing PwrAgent profiles with the active one highlighted](assets/screenshots/settings-profiles.png)
+
+Launches via `--profile <name>` (or `PWRAGENT_PROFILE=<name>`)
+still override the startup default — see
+[Desktop → Launching a profile from the command line](../desktop/#launching-a-profile-from-the-command-line)
+for the CLI launch flag.
 
 ## Worktrees
 
@@ -120,10 +173,24 @@ itself. If Test fails:
   (rare, but Gatekeeper / `xattr -d com.apple.quarantine` can come
   into play on freshly-downloaded binaries).
 
+## Experimental
+
+Opt-in features that are still in flux. Today the panel hosts:
+
+- **Diff condensation** — when on, focused-diff requests fire an
+  xAI judgment call to decide which hunks to elide. Useful when
+  diff payloads bloat past comfortable model-context sizes; off by
+  default.
+
+![Settings → Experimental panel showing the diff condensation toggle](assets/screenshots/settings-experimental.png)
+
+Expect this section to grow as features cycle through the
+experimental phase before promotion.
+
 ## See also
 
 - **[Desktop](../desktop/)** — the app's overall feature set,
   workspaces (Local vs. Worktree), per-thread model / fast /
-  reasoning / permissions.
+  reasoning / permissions, multi-profile model.
 - **[Messaging](../messaging/)** — messenger-specific Settings panels
   live under each [provider setup page](../providers/).
