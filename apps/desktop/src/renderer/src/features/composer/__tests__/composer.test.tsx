@@ -4648,6 +4648,76 @@ describe("Composer", () => {
     });
   });
 
+  it("recovers a meaningful unsent draft after the user deletes it", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [];
+    draftStore.recordHistory = vi.fn((scopeKey, snapshot, status) => {
+      recoveryCandidates.unshift({
+        scopeKey,
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: snapshot.draft,
+        editorDocument: snapshot.editorDocument,
+        skillTokens: snapshot.skillTokens,
+        imageAttachments: snapshot.imageAttachments,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: `h${recoveryCandidates.length + 1}`,
+        charCount: snapshot.draft.length,
+      });
+    });
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+    const deletedDraft =
+      "This is a long unsent draft that the user accidentally deleted. " +
+      "It has enough detail to be worth recovering from ArrowUp history " +
+      "instead of disappearing when the composer becomes empty.";
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: deletedDraft } });
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+
+    expect(draftStore.recordHistory).toHaveBeenCalledWith(
+      "thread:codex:thread-1",
+      expect.objectContaining({ draft: deletedDraft }),
+      "abandoned",
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+  });
+
   it("hydrates a mounted blank composer when durable drafts load after mount", async () => {
     const draftStore = createComposerDraftStore();
     draftStore.hydrationVersion = 0;

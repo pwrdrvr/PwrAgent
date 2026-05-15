@@ -1096,6 +1096,15 @@ export function Composer(props: ComposerProps) {
       state.skillTokens.length === 0 &&
       state.imageAttachments.length === 0
     ) {
+      const previous = latestDraftSnapshotRef.current;
+      if (
+        previous.scopeKey === scopeKey &&
+        (previous.snapshot.draft.trim() ||
+          previous.snapshot.skillTokens.length > 0 ||
+          previous.snapshot.imageAttachments.length > 0)
+      ) {
+        recordComposerDraftHistory(scopeKey, previous.snapshot, "abandoned");
+      }
       draftStore.delete(scopeKey);
       return;
     }
