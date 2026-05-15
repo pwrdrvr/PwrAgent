@@ -396,6 +396,33 @@ function hasCachedWorktreeDirectory(
   );
 }
 
+function hasEquivalentLinkedDirectory(
+  overlay: ThreadOverlayState | undefined,
+  directory: LinkedDirectorySummary,
+): boolean {
+  return Boolean(
+    overlay?.extraLinkedDirectories.some((candidate) => {
+      if (candidate.id !== directory.id || candidate.kind !== directory.kind) {
+        return false;
+      }
+
+      const candidatePath = path.resolve(candidate.path);
+      const directoryPath = path.resolve(directory.path);
+      const candidateWorktreePath = candidate.worktreePath?.trim()
+        ? path.resolve(candidate.worktreePath)
+        : undefined;
+      const directoryWorktreePath = directory.worktreePath?.trim()
+        ? path.resolve(directory.worktreePath)
+        : undefined;
+
+      return (
+        candidatePath === directoryPath &&
+        candidateWorktreePath === directoryWorktreePath
+      );
+    }),
+  );
+}
+
 function pathContainsOrEquals(parentPath: string, childPath: string): boolean {
   const relativePath = path.relative(parentPath, childPath);
   return (
@@ -438,6 +465,59 @@ function buildCachedWorktreeDirectory(
     path: repositoryPath,
     worktreePath,
   };
+}
+
+function buildCachedDirectoryRelationship(
+  thread: AppServerThreadSummary,
+): LinkedDirectorySummary | undefined {
+  const worktreeDirectory = buildCachedWorktreeDirectory(thread);
+  if (worktreeDirectory) {
+    return worktreeDirectory;
+  }
+
+  const projectKey = thread.projectKey?.trim();
+  if (!projectKey) {
+    return undefined;
+  }
+
+  const projectPath = path.resolve(projectKey);
+  const localDirectory = thread.linkedDirectories.find((candidate) => {
+    if (candidate.worktreePath?.trim()) {
+      return false;
+    }
+    return path.resolve(candidate.path) === projectPath;
+  });
+  if (!localDirectory) {
+    return undefined;
+  }
+
+  return {
+    ...localDirectory,
+    id: projectPath,
+    kind: "local",
+    label: localDirectory.label || path.basename(projectPath) || projectPath,
+    path: projectPath,
+    worktreePath: undefined,
+  };
+}
+
+function shouldRepairCachedDirectoryRelationship(params: {
+  directory: LinkedDirectorySummary;
+  overlay: ThreadOverlayState | undefined;
+}): boolean {
+  if (hasEquivalentLinkedDirectory(params.overlay, params.directory)) {
+    return false;
+  }
+
+  if (params.directory.kind === "worktree") {
+    return true;
+  }
+
+  return Boolean(
+    params.overlay?.extraLinkedDirectories.some(
+      (candidate) => candidate.id === params.directory.id,
+    ),
+  );
 }
 
 function normalizeLinkedDirectoryKind(
@@ -973,6 +1053,20 @@ function shouldEnrichThreadDirectories(
   }
 }
 
+function shouldBackfillCodexDirectoryRelationships(
+  callerReason?: ThreadListCallerReason,
+): boolean {
+  switch (callerReason) {
+    case "directory-relationship-reconcile":
+    case "messaging-navigation-snapshot":
+    case "navigation-snapshot":
+    case "startup-prewarm":
+      return true;
+    default:
+      return false;
+  }
+}
+
 type MessagingArchiveCleanupStore = Pick<
   MessagingStoreLike,
   | "deletePendingIntentsForThread"
@@ -1378,6 +1472,8 @@ export class DesktopBackendRegistry {
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly attemptedTitleGenerations = new Set<string>();
+  private readonly repairedDirectoryThreadKeys = new Set<string>();
+  private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
 
   constructor(options?: {
@@ -1940,6 +2036,13 @@ export class DesktopBackendRegistry {
             before: request.before,
             limit: request.limit,
           });
+
+    if (backend === "codex" && !request.before) {
+      await this.repairCodexThreadDirectoryRelationship({
+        reason: "selected-thread",
+        threadId: request.threadId,
+      });
+    }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend,
@@ -3836,12 +3939,21 @@ export class DesktopBackendRegistry {
   private buildThreadListCacheKey(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
     enrichDirectories?: boolean;
     filter?: string;
   }): string {
+    const codexDirectoryBackfill =
+      params.backend === "grok" ||
+      params.archived ||
+      params.enrichDirectories !== false
+        ? undefined
+        : shouldBackfillCodexDirectoryRelationships(params.callerReason);
+
     return JSON.stringify({
       archived: params.archived === true,
       backend: params.backend ?? "all",
+      codexDirectoryBackfill,
       enrichDirectories:
         params.backend === "grok" ? undefined : params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
@@ -3859,6 +3971,159 @@ export class DesktopBackendRegistry {
         this.threadListCache.delete(key);
       }
     }
+  }
+
+  private findCachedCodexThread(threadId: string): AppServerThreadSummary | undefined {
+    for (const state of this.threadListCache.values()) {
+      const thread = state.threads?.find(
+        (candidate) => candidate.source === "codex" && candidate.id === threadId,
+      );
+      if (thread) {
+        return thread;
+      }
+    }
+    return undefined;
+  }
+
+  private async readCheapCodexThreadForRepair(
+    threadId: string,
+  ): Promise<AppServerThreadSummary | undefined> {
+    const cached = this.findCachedCodexThread(threadId);
+    if (cached) {
+      return cached;
+    }
+
+    const threads = await this.codexClient.listThreads(
+      {
+        archived: false,
+        enrichDirectories: false,
+        filter: threadId,
+      },
+      {
+        callerReason: "selected-thread-directory-repair",
+        ownerId: this.threadListCacheOwnerId,
+      },
+    );
+    return threads.find((thread) => thread.id === threadId);
+  }
+
+  private async repairCodexThreadDirectoryRelationship(params: {
+    reason: "selected-thread";
+    threadId: string;
+  }): Promise<void> {
+    if (!this.codexClient.enrichThreadDirectories) {
+      return;
+    }
+
+    try {
+      const cheapThread = await this.readCheapCodexThreadForRepair(params.threadId);
+      if (!cheapThread) {
+        return;
+      }
+
+      const [enrichedThread] = await this.codexClient.enrichThreadDirectories([
+        cheapThread,
+      ]);
+      if (!enrichedThread) {
+        return;
+      }
+
+      const directory = buildCachedDirectoryRelationship(enrichedThread);
+      if (!directory) {
+        return;
+      }
+
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: params.threadId,
+      });
+      if (!shouldRepairCachedDirectoryRelationship({ directory, overlay })) {
+        return;
+      }
+
+      await this.overlayStore.addLinkedDirectory({
+        backend: "codex",
+        threadId: params.threadId,
+        directory,
+      });
+      this.invalidateThreadListCache("codex");
+      await this.emitCodexDirectoryRelationshipsUpdated({
+        reason: params.reason,
+        threadIds: [params.threadId],
+      });
+      this.recordCodexDirectoryRelationshipRepair(params.threadId);
+    } catch (error) {
+      backendRegistryLog.warn("Codex selected thread directory repair failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+    }
+  }
+
+  private recordCodexDirectoryRelationshipRepair(threadId: string): void {
+    this.repairedDirectoryThreadKeys.add(`codex:${threadId}`);
+    if (
+      this.repairedDirectoryThreadKeys.size < 3 ||
+      this.fullDirectoryReconcileDispatched
+    ) {
+      return;
+    }
+
+    this.fullDirectoryReconcileDispatched = true;
+    void this.reconcileAllCodexDirectoryRelationships().catch((error) => {
+      backendRegistryLog.warn("Codex full directory relationship reconcile failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async reconcileAllCodexDirectoryRelationships(): Promise<void> {
+    const threads = await this.codexClient.listThreads(
+      {
+        archived: false,
+        enrichDirectories: false,
+      },
+      {
+        callerReason: "directory-relationship-reconcile",
+        ownerId: this.threadListCacheOwnerId,
+      },
+    );
+    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+      backend: "codex",
+      threadIds: threads.map((thread) => thread.id),
+    });
+    const updatedOverlaysByThreadId =
+      await this.backfillMissingCodexDirectoryRelationships({
+        diagnostics: {
+          callerReason: "directory-relationship-reconcile",
+          ownerId: this.threadListCacheOwnerId,
+        },
+        overlaysByThreadId,
+        threads,
+      });
+    const threadIds = Object.keys(updatedOverlaysByThreadId);
+    if (threadIds.length === 0) {
+      return;
+    }
+
+    this.invalidateThreadListCache("codex");
+    await this.emitCodexDirectoryRelationshipsUpdated({
+      reason: "full-reconcile",
+      threadIds,
+    });
+  }
+
+  private async emitCodexDirectoryRelationshipsUpdated(params: {
+    reason: "selected-thread" | "full-reconcile";
+    threadIds: string[];
+  }): Promise<void> {
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params,
+      },
+    });
   }
 
   private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
@@ -4227,7 +4492,11 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
-    if (!params.archived && params.enrichDirectories === false) {
+    if (
+      !params.archived &&
+      params.enrichDirectories === false &&
+      shouldBackfillCodexDirectoryRelationships(diagnostics?.callerReason)
+    ) {
       const updatedOverlaysByThreadId =
         await this.backfillMissingCodexDirectoryRelationships({
           diagnostics,

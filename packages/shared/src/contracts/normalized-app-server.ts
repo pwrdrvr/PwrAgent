@@ -854,6 +854,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/threadDirectories/updated";
+      params: {
+        reason: "selected-thread" | "full-reconcile";
+        threadIds: string[];
+      };
+    }
+  | {
       method: "thread/pin/added";
       params: {
         threadId: string;

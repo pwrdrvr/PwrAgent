@@ -1485,6 +1485,259 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not let non-backfilling cheap list cache suppress navigation backfill", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const worktreePath = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
+    const cheapThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: worktreePath,
+          label: "ProjectA",
+          path: worktreePath,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [cheapThread],
+    });
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) =>
+        threads.map((thread) => ({
+          ...thread,
+          linkedDirectories: [
+            {
+              id: projectA,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath,
+              kind: "worktree" as const,
+            },
+          ],
+        })),
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "branch-drift",
+    });
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    expect(codexClient.listThreadsCallCount).toBe(2);
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: worktreePath,
+          path: projectA,
+          worktreePath,
+          kind: "worktree",
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("repairs a selected Codex worktree thread with a single-thread directory enrichment", async () => {
+    const projectA = "/Users/example/ProjectA";
+    const worktreePath = "/Users/example/.codex/worktrees/worktree-1/ProjectA";
+    const nestedWorktreeCwd = `${worktreePath}/apps/desktop`;
+    const cheapThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: nestedWorktreeCwd,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [
+        {
+          id: nestedWorktreeCwd,
+          label: "desktop",
+          path: nestedWorktreeCwd,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      threads: [cheapThread],
+    });
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) =>
+        threads.map((thread) => ({
+          ...thread,
+          linkedDirectories: [
+            {
+              id: projectA,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath,
+              kind: "worktree" as const,
+            },
+          ],
+        })),
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    expect(enrichThreadDirectories).toHaveBeenCalledWith([cheapThread]);
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: nestedWorktreeCwd,
+          path: projectA,
+          worktreePath,
+          kind: "worktree",
+        }),
+      ],
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: {
+          reason: "selected-thread",
+          threadIds: ["thread-1"],
+        },
+      },
+    });
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("runs the full Codex directory reconcile once after three distinct selected-thread repairs", async () => {
+    const projectA = "/Users/example/ProjectA";
+    const makeCheapThread = (index: number): AppServerThreadSummary => {
+      const projectKey = `/Users/example/.codex/worktrees/worktree-${index}/ProjectA`;
+      return {
+        id: `thread-${index}`,
+        title: `ProjectA worktree ${index}`,
+        titleSource: "explicit",
+        source: "codex",
+        projectKey,
+        createdAt: 1_000 + index,
+        updatedAt: 2_000 + index,
+        linkedDirectories: [
+          {
+            id: projectKey,
+            label: `worktree-${index}`,
+            path: projectKey,
+            kind: "local",
+          },
+        ],
+      };
+    };
+    const cheapThreads = [1, 2, 3, 4, 5].map(makeCheapThread);
+    const codexClient = new MockBackendClient({
+      threads: cheapThreads,
+    });
+    const enrichThreadDirectories = vi.fn(
+      async (threads: AppServerThreadSummary[]) =>
+        threads.map((thread) => ({
+          ...thread,
+          linkedDirectories: [
+            {
+              id: projectA,
+              label: "ProjectA",
+              path: projectA,
+              worktreePath: thread.projectKey,
+              kind: "worktree" as const,
+            },
+          ],
+        })),
+    );
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.readThread({ backend: "codex", threadId: "thread-1" });
+    await registry.readThread({ backend: "codex", threadId: "thread-2" });
+    const fullReconcileCalls = () =>
+      enrichThreadDirectories.mock.calls.filter(([threads]) => threads.length > 1);
+    expect(fullReconcileCalls()).toHaveLength(0);
+    await registry.readThread({ backend: "codex", threadId: "thread-3" });
+
+    await waitForCondition(() =>
+      enrichThreadDirectories.mock.calls.some(
+        ([threads]) =>
+          threads.length === 2 &&
+          threads.map((thread) => thread.id).join(",") === "thread-4,thread-5",
+      ),
+    );
+    expect(fullReconcileCalls()).toHaveLength(1);
+    const hasFullReconcileEvent = () =>
+      events.some(
+        (event) =>
+          event.backend === "codex" &&
+          event.notification.method === "navigation/threadDirectories/updated" &&
+          (event.notification.params as { reason?: string; threadIds?: string[] })
+            .reason === "full-reconcile" &&
+          (event.notification.params as { threadIds?: string[] }).threadIds?.join(
+            ",",
+          ) === "thread-4,thread-5",
+      );
+    await waitForCondition(hasFullReconcileEvent);
+    expect(hasFullReconcileEvent()).toBe(true);
+
+    const lateThread = makeCheapThread(6);
+    codexClient.setThreads([...cheapThreads, lateThread]);
+    await registry.readThread({ backend: "codex", threadId: "thread-6" });
+    await flushAsync();
+
+    expect(fullReconcileCalls()).toHaveLength(1);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("uses cheap thread summaries for selected-thread branch drift checks", async () => {
     const codexClient = new MockBackendClient({
       threads: [
