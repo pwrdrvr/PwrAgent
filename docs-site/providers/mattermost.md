@@ -130,6 +130,14 @@ in the environment, or store it in the Settings UI. The HMAC pin is
 
 ![Settings → Messaging → Mattermost panel](../assets/screenshots/settings-messaging-mattermost.png)
 
+## Pairing
+
+For the captured walkthrough of the pairing flow (generate → send
+code → approve), and the troubleshooting Activity screen that shows
+blocked inbound messages, see
+[Messaging → Pairing](../../messaging/pairing/). Same flow on every
+supported platform; the screenshots there happen to be Telegram.
+
 ## Settings reference
 
 ### Required (above the Test button)

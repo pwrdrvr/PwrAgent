@@ -50,6 +50,15 @@ fronted by Cloudflare Tunnel or Tailscale Funnel. Read
 [Webhooks — a security note](../webhook-dangers/) before standing
 one up.
 
+## Pairing
+
+The **Pairing** flow is how you populate every platform's
+authorized-user list (and shared-space allowlists) without having
+to find a numeric platform ID anywhere. Same mechanic across all
+six providers; the captured walkthrough plus the Messaging Activity
+troubleshooting screen for blocked inbound messages live at
+[Messaging → Pairing](pairing/).
+
 ## Read before you toggle
 
 A handful of cross-cutting reference pages worth reading once before

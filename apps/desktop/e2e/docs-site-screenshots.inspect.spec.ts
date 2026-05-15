@@ -8,8 +8,10 @@ import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-sta
 import {
   findLatestPairingEntryId,
   markPairingObserved,
+  seedActivityEntries,
   seedTelegramEnabledConfig,
   stateDbPathForHomeRoot,
+  type SeedActivityEntry,
 } from "./fixtures/readme-state-seeding";
 
 // docs-site screenshot capture spec.
@@ -507,6 +509,152 @@ test("messaging-pairing — frame 3: approved, user in authorized list", async (
 
     await bringToFront(app.electronApp);
     captureNative("messaging-pairing-frame-3.png");
+  } finally {
+    await app.close();
+  }
+});
+
+// ────────────────────── Messaging — Activity surface (troubleshooting) ──────────────────────
+
+test("messaging-activity-blocked — Messaging Activity showing rejected inbound", async () => {
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    windowSize: WINDOW_SIZE,
+    preLaunchHook: seedTelegramEnabledConfig,
+  });
+
+  try {
+    // Wait for the main shell so the schema has migrated and the
+    // IPC bridge is wired before we mutate sqlite.
+    await expect(
+      app.window.getByRole("button", { name: "Open settings" }),
+    ).toBeVisible();
+
+    // Seed a handful of rejected inbound entries on a few platforms
+    // so the capture demonstrates what an operator sees when a
+    // messenger user tries to talk to the bot before pairing has
+    // authorized them. All actor IDs are sanitized fictional values.
+    const stateDbPath = stateDbPathForHomeRoot(app.homeRoot);
+    const now = Date.now();
+    const minute = 60_000;
+    const hour = 60 * minute;
+    const entries: SeedActivityEntry[] = [
+      {
+        platform: "telegram",
+        kind: "inbound-rejected",
+        conversationId: "5550199999",
+        conversationTitle: "Riley Chen",
+        actorId: "5550199999",
+        actorDisplayName: "Riley Chen",
+        summary: "Rejected inbound from Riley Chen",
+        createdAt: now - 3 * minute,
+        payload: { conversationKind: "dm" },
+      },
+      {
+        platform: "telegram",
+        kind: "inbound-rejected",
+        conversationId: "5550288888",
+        conversationTitle: "Casey Wong",
+        actorId: "5550288888",
+        actorDisplayName: "Casey Wong",
+        summary: "Rejected inbound from Casey Wong",
+        createdAt: now - 9 * minute,
+        payload: {
+          conversationKind: "topic",
+          conversationParentId: "-1009990000001",
+          conversationBucketId: "-1009990000001",
+        },
+      },
+      {
+        platform: "discord",
+        kind: "inbound-rejected",
+        conversationId: "1100000000000000001",
+        conversationTitle: "design-chat",
+        actorId: "9000000000000000001",
+        actorDisplayName: "Jordan Lee",
+        summary: "Rejected inbound from Jordan Lee",
+        createdAt: now - 17 * minute,
+        payload: { conversationKind: "channel" },
+      },
+      {
+        platform: "slack",
+        kind: "inbound-rejected",
+        conversationId: "C0FAKE002",
+        conversationTitle: "design-chat",
+        actorId: "U0FAKE001",
+        actorDisplayName: "Morgan Patel",
+        summary: "Rejected inbound from Morgan Patel",
+        createdAt: now - 22 * minute,
+        payload: { conversationKind: "channel" },
+      },
+    ];
+    seedActivityEntries(stateDbPath, entries);
+
+    // Open the Messaging Activity window via the preload bridge.
+    await app.window.evaluate(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (window as any).pwragent.openMessagingActivityWindow();
+    });
+
+    // Wait until the window with `messaging-activity` in the URL
+    // exists. The window is created with show: false and shown on
+    // ready-to-show, so poll until it's a real Page object.
+    let activityWindow: import("@playwright/test").Page | undefined;
+    for (let i = 0; i < 30; i++) {
+      for (const candidate of app.electronApp.windows()) {
+        if (candidate.url().includes("messaging-activity")) {
+          activityWindow = candidate;
+          break;
+        }
+      }
+      if (activityWindow) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!activityWindow) {
+      throw new Error(
+        `messaging activity window did not open; current windows: ${app.electronApp
+          .windows()
+          .map((w) => w.url())
+          .join(", ")}`,
+      );
+    }
+    await activityWindow.waitForLoadState("load");
+
+    await app.electronApp.evaluate(({ BrowserWindow }, titleSubstring) => {
+      const win = BrowserWindow.getAllWindows().find((w) =>
+        w.getTitle().includes(titleSubstring),
+      );
+      if (!win) return;
+      win.show();
+      win.focus();
+      win.moveTop();
+    }, "Messaging Activity");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Two nested regions share `aria-label="Messaging activity"`
+    // (the outer window shell and the inner screen); .first() pins
+    // to the outermost.
+    await expect(
+      activityWindow
+        .getByRole("region", { name: "Messaging activity" })
+        .first(),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      activityWindow.getByText(/Rejected inbound from Riley Chen/).first(),
+    ).toBeVisible();
+
+    mkdirSync(screenshotDir, { recursive: true });
+    execFileSync(
+      captureScript,
+      [
+        "Electron",
+        path.join(screenshotDir, "messaging-activity-blocked.png"),
+        "--title=Messaging Activity",
+      ],
+      { stdio: "inherit" },
+    );
   } finally {
     await app.close();
   }

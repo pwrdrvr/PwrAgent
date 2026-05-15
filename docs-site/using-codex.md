@@ -112,8 +112,9 @@ multi-person rooms. The pairing flow applies to whichever level
 your platform exposes.
 
 For a captured walkthrough of what each phase looks like in the
-desktop UI, see
-[Telegram setup → Pairing flow walkthrough](../providers/telegram/#pairing-flow-walkthrough).
+desktop UI — including the troubleshooting Activity screen that
+shows blocked inbound messages — see
+[Messaging → Pairing](../messaging/pairing/).
 
 ### Discovery-mode fallback
 

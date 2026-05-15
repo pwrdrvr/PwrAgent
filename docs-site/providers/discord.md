@@ -54,6 +54,14 @@ flow or discovery-mode logging will surface it after the bot is online.
 
 ![Settings → Messaging → Discord panel](../assets/screenshots/settings-messaging-discord.png)
 
+## Pairing
+
+For the captured walkthrough of the pairing flow (generate → send
+code → approve), and the troubleshooting Activity screen that shows
+blocked inbound messages, see
+[Messaging → Pairing](../../messaging/pairing/). Same flow on every
+supported platform; the screenshots there happen to be Telegram.
+
 ## Settings reference
 
 ### Required (above the Test button)
