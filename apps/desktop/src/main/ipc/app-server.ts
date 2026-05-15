@@ -998,6 +998,13 @@ class DesktopAppServerService {
   async pickDirectoryFromDisk(
     parentWindow?: BrowserWindow,
   ): Promise<PickDirectoryFromDiskResponse> {
+    const e2ePickPath = process.env.PWRAGENT_REPLAY_FIXTURE_PATH
+      ? process.env.PWRAGENT_E2E_PICK_DIRECTORY_PATH?.trim()
+      : undefined;
+    if (e2ePickPath) {
+      return { canceled: false, path: e2ePickPath };
+    }
+
     // Anchor the dialog to whichever window dispatched the IPC so it
     // appears as a sheet on macOS (the renderer's expectation) instead
     // of floating free. `dialog.showOpenDialog` accepts an optional
@@ -1025,10 +1032,20 @@ class DesktopAppServerService {
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
-    const registry = getDesktopBackendRegistry();
-    return await registerDirectoryFromDisk(request, {
-      ensureDirectoryLaunchpad: (req) => registry.ensureDirectoryLaunchpad(req),
+    const response = await registerDirectoryFromDisk(request, {
+      ensureDirectoryLaunchpad: (req) => this.ensureDirectoryLaunchpad(req),
     });
+    if (response.ok) {
+      this.lastDirectoriesByKey.set(response.directoryKey, {
+        key: response.directoryKey,
+        kind: "directory",
+        label: response.directoryLabel,
+        path: response.directoryPath,
+        threadKeys: [],
+        needsAttentionCount: 0,
+      });
+    }
+    return response;
   }
 
   async analyzeFocusedDiff(
