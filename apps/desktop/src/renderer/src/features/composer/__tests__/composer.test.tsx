@@ -4865,6 +4865,76 @@ describe("Composer", () => {
     });
   });
 
+  it("shows pasted image sizes without noisy decimal precision", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const normalizedImage = (file: File, size: number) => ({
+      conversionPath: "renderer" as const,
+      dataUrl: `data:${file.type || "image/png"};base64,AQID`,
+      height: 24,
+      mimeType: "image/png" as const,
+      original: {
+        height: 24,
+        mimeType: file.type || "image/png",
+        name: file.name,
+        size: file.size,
+        width: 32,
+      },
+      size,
+      width: 32,
+    });
+    const files = [
+      new File([new Uint8Array([1])], "small.png", { type: "image/png" }),
+      new File([new Uint8Array([1])], "one-megabyte.png", { type: "image/png" }),
+      new File([new Uint8Array([1])], "mid-megabyte.png", { type: "image/png" }),
+      new File([new Uint8Array([1])], "large.png", { type: "image/png" }),
+    ];
+
+    vi.mocked(normalizeImageFile)
+      .mockImplementationOnce(async (file) => normalizedImage(file, 23.7 * 1024))
+      .mockImplementationOnce(async (file) => normalizedImage(file, 1 * 1024 * 1024))
+      .mockImplementationOnce(async (file) => normalizedImage(file, 1.2 * 1024 * 1024))
+      .mockImplementationOnce(async (file) => normalizedImage(file, 10.4 * 1024 * 1024));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: files.map((file) => ({
+          kind: "file",
+          type: file.type,
+          getAsFile: () => file,
+        })),
+      },
+    });
+
+    expect(await screen.findByText("PNG · 24 KB")).toBeInTheDocument();
+    expect(screen.getByText("PNG · 1 MB")).toBeInTheDocument();
+    expect(screen.getByText("PNG · 1.2 MB")).toBeInTheDocument();
+    expect(screen.getByText("PNG · 10 MB")).toBeInTheDocument();
+  });
+
   it("keeps dropped GIF images animated by preserving the original data URL", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
