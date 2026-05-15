@@ -2147,6 +2147,10 @@ textarea,
 }
 
 .directory-row__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
   min-height: 44px;
   padding: 10px 12px;
 }
@@ -2169,7 +2173,9 @@ textarea,
 }
 
 .directory-row__summary-meta {
+  flex: 0 0 auto;
   gap: 10px;
+  justify-content: flex-end;
 }
 
 .directory-row__icon {
@@ -2180,6 +2186,7 @@ textarea,
 }
 
 .directory-row__title-wrap {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -2192,6 +2199,7 @@ textarea,
 
 .directory-row__chevron {
   display: inline-flex;
+  flex: 0 0 auto;
   width: 9px;
   height: 9px;
   border-right: 1.75px solid var(--text-muted);
