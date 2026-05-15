@@ -4554,10 +4554,15 @@ function formatBytes(size: number): string {
   }
 
   if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
+    return `${Math.round(size / 1024)} KB`;
   }
 
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  const mib = size / (1024 * 1024);
+  if (mib < 10) {
+    return `${Number(mib.toFixed(1))} MB`;
+  }
+
+  return `${Math.round(mib)} MB`;
 }
 
 function formatLaunchpadWorkspaceLabel(
