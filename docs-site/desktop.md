@@ -20,21 +20,43 @@ it yet, and what's coming soon.
 
 ### Sidebar lenses
 
-![Sidebar populated with threads](assets/screenshots/desktop-recents.png)
+![Sidebar with the Updated lens active, showing pinned threads at the top and recent activity below](assets/screenshots/desktop-recents.png)
 
-The left sidebar carries three thread lenses you can switch between:
+The left sidebar carries three thread lenses you can switch between
+with the segmented toggle at the top of the list. All three start
+from the same pool of active (non-archived) threads — they differ
+only in how they sort and group:
 
-- **Inbox** — the default browsing lens. Shows threads with unread
-  activity at the top, with the rest of your active work below.
-- **Recents** — every active thread in most-recently-touched order.
-- **Directories** — threads grouped by the project / repository
-  they're rooted in.
+| Lens | Sort | Grouping |
+|---|---|---|
+| **Updated** *(default)* | Most-recently-updated first. Active threads bubble up as the agent posts. | Flat list with user-curated **Pins** pinned to the top in their own statically-ordered section. |
+| **Created** | Most-recently-created first. **Stable sort** — threads don't jump around mid-work the way they do in Updated. | Same Pins section at the top. |
+| **Directories** | Within each directory, most-recently-created first (stable). | Grouped by the project / repository the thread is rooted in. Per-directory **Pins** sit at the top of their group. |
 
-User-curated **Pins** live as a scrollable section at the top of
-both the Inbox and Recents lenses.
+Use **Updated** when you want "what's the agent doing right now"
+front and center. Use **Created** when you'd rather the order stay
+put while you work through a list. Use **Directories** when you're
+deliberately switching between several repos and want them visually
+separated.
 
-Unread state on a thread shows as an orange cookie marker on the
-row, not a punctuation badge.
+#### Pins
+
+A **pin** keeps a thread visible at the top of the list regardless
+of activity. The pinned section is statically ordered (you set the
+order yourself) and scrolls independently of the rest of the list,
+so a long pin section never buries the rest of your threads.
+
+In **Directories**, pins belong to their parent directory rather
+than to the global list, so each directory gets its own statically-
+ordered pin shelf.
+
+#### Unread marker
+
+When a thread you haven't actively viewed gets new agent output,
+its row picks up an **orange cookie** — a small filled circle next
+to the thread title. The cookie clears the next time you open the
+thread (or select it in the sidebar). Same indicator across all
+three lenses.
 
 ### Thread workspaces: Local and Worktree
 
@@ -137,12 +159,13 @@ The composer parses Markdown as you type:
 
 Codex Desktop doesn't have this yet.
 
-### Search, pins, branch / PR / emoji markers
+### Search, branch / PR / emoji markers
 
 The sidebar's filter accepts branch names, PR numbers, emoji
-markers, and free text. Pin threads you want to keep at the top of
-Recents; the pinned section is scrollable independently of the rest
-of the list.
+markers, and free text. Filtering applies to whichever lens is
+active and respects its sort order.
+
+Pin behavior is covered above under [Sidebar lenses → Pins](#sidebar-lenses).
 
 ## Multiple profiles
 
@@ -311,9 +334,9 @@ asked about — captured here so you can plan around them:
 - **Restoring archived threads.** Once archived, a thread is gone
   from the active list. The transcript and overlay state are still
   on disk, but there's no UI to surface them. (Roadmap.)
-- **Tight auto-archiving.** Threads stay in Recents indefinitely
-  unless you archive them. There's no policy that says "archive
-  threads I haven't touched in N days."
+- **Time-based auto-archiving.** Threads stay in the active list
+  indefinitely unless you archive them. There's no policy that says
+  "archive threads I haven't touched in N days."
 - **Branch auto-naming via button click.** Branch names default
   to the worktree hash. There's no button that says "rename this
   branch to something derived from the thread title" yet.
