@@ -78,10 +78,10 @@ Authorization is **two-keyed** for shared spaces:
   authorize a user.
 
 Both lists live in your local PwrAgent config at
-`~/.pwragent/profiles/<name>/config.toml` — they are **not** stored
-in sqlite, are never synced to a server, and never leave your
-machine. Adding a new authorized user or space is a deliberate edit
-made from **Settings → Messaging → `<platform>`** in the desktop.
+`~/.pwragent/profiles/<name>/config.toml` — plain text on your
+machine, never synced to a server, never sent to anyone. Adding a
+new authorized user or space is a deliberate edit made from
+**Settings → Messaging → `<platform>`** in the desktop.
 
 ### Pairing — how you populate the allowlists
 
@@ -234,7 +234,7 @@ independently using its platform's native components, so a Discord
 user sees Discord-native buttons and a Telegram user sees Telegram
 inline keyboards on the same conversation.
 
-State lives in the desktop's sqlite store (`bindings` table). Bot
+Binding state lives in the desktop's local session store. Bot
 tokens, callback secrets, and other credentials live encrypted at
 rest via macOS Keychain and never travel over the messenger.
 

@@ -69,7 +69,7 @@ supported platform; the screenshots there happen to be Telegram.
 | Setting | What it does |
 |---|---|
 | **Enabled** | Top-of-panel toggle. When off, the adapter doesn't start. |
-| **Bot Token** | The BotFather token. Stored in macOS Keychain via Electron `safeStorage`. The Test button calls `getMe` to verify. |
+| **Bot Token** | The BotFather token. Stored encrypted at rest in your macOS Keychain. The Test button calls `getMe` to verify. |
 | **Authorized User IDs** | Comma-separated list of stable Telegram numeric user IDs. The pairing flow populates this; you can also paste IDs in directly. Empty = discovery mode (every inbound is rejected and logged). |
 
 ### Optional (below the Test button)
