@@ -56,6 +56,23 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
   );
 }
 
+async function clickButton(name: string | RegExp): Promise<void> {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function flushReactUpdates(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 function createDeferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -71,7 +88,8 @@ function createDeferred<T>(): {
 }
 
 describe("App", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await flushReactUpdates();
     cleanup();
   });
 
@@ -656,7 +674,7 @@ describe("App", () => {
     pasteComposerText(reply, "$frontend-design what can this skill do");
     fireEvent.click(reply);
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);
@@ -684,7 +702,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByText("3 messages")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await clickButton("Stop");
 
     await waitFor(() => {
       expect(interruptTurn).toHaveBeenCalledWith({
@@ -1252,7 +1270,7 @@ describe("App", () => {
       await screen.findByLabelText("Reply"),
       "Can you check the plugin sdk boundary?",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(startTurn).toHaveBeenCalledWith({
       backend: "grok",
@@ -1443,7 +1461,7 @@ describe("App", () => {
       await screen.findByRole("textbox", { name: "Reply" }),
       "Start the active turn",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
@@ -1860,7 +1878,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    await clickButton("Start thread");
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
@@ -1876,7 +1894,7 @@ describe("App", () => {
       screen.getByLabelText("Reply"),
       "follow up on the new codex thread",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(startTurn).toHaveBeenCalledWith({
       backend: "codex",
@@ -2150,7 +2168,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    await clickButton("Start thread");
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({

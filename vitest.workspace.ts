@@ -43,7 +43,8 @@ export default defineConfig({
           name: "desktop-renderer",
           globals: true,
           environment: "jsdom",
-          include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"]
+          include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"],
+          setupFiles: ["apps/desktop/src/renderer/src/test/setup.ts"]
         }
       }
     ]

@@ -1,5 +1,12 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,14 +70,14 @@ describe("application discovery", () => {
   });
 
   it("opens VS Code source links with --goto line metadata", async () => {
+    const binDir = path.join(tempDir, "bin");
+    const codePath = path.join(binDir, "code");
     const targetPath = path.join(tempDir, "source.ts");
     const capturePath = path.join(tempDir, "application-open.json");
-    const fakeBinDir = path.join(tempDir, "bin");
-    const fakeCodePath = path.join(fakeBinDir, "code");
-    mkdirSync(fakeBinDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(codePath, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(codePath, 0o755);
     writeFileSync(targetPath, "line 1\nline 2\n", "utf8");
-    writeFileSync(fakeCodePath, "#!/bin/sh\nexit 0\n", "utf8");
-    chmodSync(fakeCodePath, 0o755);
 
     await openDesktopApplication(
       {
@@ -81,7 +88,7 @@ describe("application discovery", () => {
       },
       {
         env: {
-          PATH: fakeBinDir,
+          PATH: binDir,
           PWRAGENT_E2E_APPLICATION_OPEN_CAPTURE_PATH: capturePath,
         },
       }

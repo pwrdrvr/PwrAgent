@@ -478,8 +478,8 @@ function BindingChip(props: {
           className="thread-row__chip-menu"
           aria-label={`Actions for ${ariaTooltip}`}
         >
-          <button
-            type="button"
+          <span
+            tabIndex={0}
             role="menuitem"
             className="thread-row__chip-menu-item"
             onClick={(event) => {
@@ -487,9 +487,17 @@ function BindingChip(props: {
               setMenuOpen(false);
               onUnbind(binding);
             }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                setMenuOpen(false);
+                onUnbind(binding);
+              }
+            }}
           >
             Unbind from {platformLabel}
-          </button>
+          </span>
           <p className="thread-row__chip-menu-hint">
             Removes the binding from this app. To stop the conversation
             entirely, also unbind from {platformLabel}.

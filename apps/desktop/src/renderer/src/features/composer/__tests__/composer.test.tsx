@@ -60,7 +60,16 @@ beforeAll(() => {
   Range.prototype.getBoundingClientRect ??= () => emptyRect;
 });
 
-afterEach(() => {
+async function flushReactUpdates(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+afterEach(async () => {
+  await flushReactUpdates();
   vi.mocked(normalizeImageFile).mockClear();
   cleanup();
 });
@@ -74,6 +83,15 @@ function openDropdown(label: string): HTMLElement {
 function chooseDropdownOption(label: string, optionName: string): void {
   openDropdown(label);
   fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
+async function clickButton(name: string | RegExp): Promise<void> {
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 function createComposerDraftStore(): ComposerDraftStore {
@@ -783,7 +801,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Use defaults" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);
@@ -828,7 +846,7 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Start a slow turn" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
     expect(textarea).toBeEnabled();
@@ -879,7 +897,7 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "did CI pass" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "follow up next" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -955,7 +973,7 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "did CI pass" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "/review main" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -1029,7 +1047,7 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "did CI pass" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
     fireEvent.change(textarea, { target: { value: "/review" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -1365,7 +1383,7 @@ describe("Composer", () => {
     });
 
     expect(await screen.findByAltText("queued.png")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await clickButton("Queue");
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
@@ -2370,7 +2388,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review main" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
@@ -2432,7 +2450,7 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/review" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId="turn-1" />);
@@ -2483,7 +2501,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -2523,7 +2541,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review main" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await clickButton("Queue");
     fireEvent.paste(screen.getByLabelText("Reply"), {
       clipboardData: {
         files: [],
@@ -2603,7 +2621,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review main" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
@@ -2698,7 +2716,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "/review" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
     fireEvent.click(screen.getByRole("button", { name: /Current changes/i }));
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
@@ -4129,7 +4147,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("New thread"), {
       target: { value: "Submitted launchpad should not come back" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    await clickButton("Start thread");
 
     await waitFor(() => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
@@ -4203,7 +4221,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("New thread"), {
       target: { value: "/review main" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    await clickButton("Start thread");
 
     await waitFor(() => {
       expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
@@ -4353,7 +4371,7 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("Use ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -4483,7 +4501,7 @@ describe("Composer", () => {
     expect(richInput).toHaveTextContent("Let's use");
     expect(richInput).not.toHaveTextContent("Let's use $ce:plan plan");
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
@@ -4650,7 +4668,7 @@ describe("Composer", () => {
     expect(within(screen.getByTestId("composer-tiptap-input")).getByText("$ce:plan")).toBeInTheDocument();
     expect(textarea).toHaveValue("Use ");
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -4760,7 +4778,7 @@ describe("Composer", () => {
       expect.objectContaining({ maxPatchCount: 1024 }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -4849,7 +4867,7 @@ describe("Composer", () => {
     expect(await screen.findByAltText("diagram.png")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -4982,7 +5000,7 @@ describe("Composer", () => {
     expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -5049,7 +5067,7 @@ describe("Composer", () => {
       expect(screen.getAllByRole("img")).toHaveLength(1);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
@@ -5303,11 +5321,11 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "stop this turn if needed" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await clickButton("Stop");
 
     await waitFor(() => {
       expect(interruptTurn).toHaveBeenCalledWith({
@@ -5412,7 +5430,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "send then stop" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
 
@@ -5432,7 +5450,7 @@ describe("Composer", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await clickButton("Stop");
 
     await waitFor(() => {
       expect(interruptTurn).toHaveBeenCalledWith({
@@ -5524,7 +5542,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "send then keep thinking" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
 
@@ -5626,7 +5644,7 @@ describe("Composer", () => {
       target: { value: "Plan this change" },
     });
     fireEvent.click(screen.getByLabelText("Plan mode"));
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await clickButton("Send");
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);

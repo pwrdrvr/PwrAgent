@@ -1830,10 +1830,17 @@ describe("useThreadNavigation", () => {
       "directory:/Users/huntharo/github/PwrAgent"
     );
 
-    act(() => {
+    await act(async () => {
       result.current.selectThread(result.current.threads[0]!);
     });
 
+    await waitFor(() => {
+      expect(desktopApi.markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        seenUpdatedAt: 1_000,
+        threadId: "thread-1",
+      });
+    });
     expect(result.current.selectedThread?.id).toBe("thread-1");
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
