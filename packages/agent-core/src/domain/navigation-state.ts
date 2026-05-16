@@ -196,6 +196,7 @@ export function buildNavigationSnapshot(params: {
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummaryWithEnvironmentOptions[];
   unchanged: boolean;
+  workspaceRoots?: string[];
 }): NavigationSnapshot {
   const threads = materializeNavigationThreads({
     firstSnapshot: params.firstSnapshot,
@@ -216,6 +217,7 @@ export function buildNavigationSnapshot(params: {
       threads,
       launchpadsByKey: params.launchpadsByKey,
       gitStatusByKey: params.gitStatusByDirectoryKey,
+      workspaceRoots: params.workspaceRoots,
     }),
     launchpadDefaults: params.launchpadDefaults ?? {
       backend: "codex",

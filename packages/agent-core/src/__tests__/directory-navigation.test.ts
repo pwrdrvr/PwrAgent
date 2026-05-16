@@ -376,6 +376,91 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("filters profile-scoped workspace roots outside the active profile", () => {
+    const defaultProjectsRoot = "/Users/huntharo/.pwragent/profiles/default/projects";
+    const devProjectsRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const legacyProjectsRoot = "/Users/huntharo/.pwragnt/projects";
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "default-thread",
+          linkedDirectories: [
+            {
+              id: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
+              label: "2026-05-08-9bc2d3",
+              path: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "dev-thread",
+          linkedDirectories: [
+            {
+              id: `${devProjectsRoot}/2026-05-12-605c84`,
+              label: "2026-05-12-605c84",
+              path: `${devProjectsRoot}/2026-05-12-605c84`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "legacy-thread",
+          linkedDirectories: [
+            {
+              id: `${legacyProjectsRoot}/2026-05-02-bc16ae`,
+              label: "2026-05-02-bc16ae",
+              path: `${legacyProjectsRoot}/2026-05-02-bc16ae`,
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+      launchpadsByKey: {
+        [`workspace:${defaultProjectsRoot}`]: {
+          directoryKey: `workspace:${defaultProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: defaultProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Default draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 3_000,
+        },
+        [`workspace:${devProjectsRoot}`]: {
+          directoryKey: `workspace:${devProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: devProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Dev draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+        },
+      },
+      workspaceRoots: [defaultProjectsRoot, legacyProjectsRoot],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: `workspace:${defaultProjectsRoot}`,
+        label: "Workspaces",
+        path: defaultProjectsRoot,
+        threadKeys: expect.arrayContaining([
+          "codex:default-thread",
+          "codex:legacy-thread",
+        ]),
+        launchpad: expect.objectContaining({
+          prompt: "Default draft",
+        }),
+      }),
+    ]);
+  });
+
   it("collapses current, legacy, and launchpad-only scratch roots into one Workspaces row", () => {
     const directories = buildDirectorySummaries({
       threads: [

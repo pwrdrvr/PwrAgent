@@ -40,6 +40,7 @@ import type {
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
@@ -65,6 +66,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadId,
       threads,
+      workspaceRoots: resolveScratchProjectsRoots(),
     });
     const directoryStatuses = await this.registry.readDirectoryStatuses(
       snapshot.directories,
