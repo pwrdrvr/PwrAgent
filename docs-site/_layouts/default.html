@@ -21,8 +21,11 @@
       </a>
       <nav class="site-nav" aria-label="Top navigation">
         <div class="site-nav__group">
-          <a class="site-nav__top" href="{{ '/desktop/' | relative_url }}" aria-haspopup="true">Desktop</a>
-          <ul class="site-nav__dropdown" aria-label="Desktop sections">
+          <div class="site-nav__head">
+            <a class="site-nav__top" href="{{ '/desktop/' | relative_url }}">Desktop</a>
+            <button class="site-nav__toggle" type="button" aria-expanded="false" aria-controls="nav-desktop" aria-label="Toggle Desktop submenu"></button>
+          </div>
+          <ul id="nav-desktop" class="site-nav__dropdown" aria-label="Desktop sections">
             <li><a href="{{ '/desktop/#sidebar-lenses' | relative_url }}">Sidebar lenses</a></li>
             <li><a href="{{ '/desktop/#thread-workspaces-local-and-worktree' | relative_url }}">Workspaces &amp; worktrees</a></li>
             <li><a href="{{ '/desktop/#codex-environments' | relative_url }}">Codex environments</a></li>
@@ -32,19 +35,38 @@
           </ul>
         </div>
         <div class="site-nav__group">
-          <a class="site-nav__top" href="{{ '/messaging/' | relative_url }}" aria-haspopup="true">Messaging</a>
-          <ul class="site-nav__dropdown" aria-label="Messaging sections">
+          <div class="site-nav__head">
+            <a class="site-nav__top" href="{{ '/messaging/' | relative_url }}">Messaging</a>
+            <button class="site-nav__toggle" type="button" aria-expanded="false" aria-controls="nav-messaging" aria-label="Toggle Messaging submenu"></button>
+          </div>
+          <ul id="nav-messaging" class="site-nav__dropdown" aria-label="Messaging sections">
             <li><a href="{{ '/using-codex/' | relative_url }}">Using Codex via Messaging</a></li>
             <li><a href="{{ '/messaging/pairing/' | relative_url }}">Pairing</a></li>
-            <li><a href="{{ '/providers/' | relative_url }}">Providers (Telegram, Discord, …)</a></li>
+            <li class="site-nav__group--sub">
+              <div class="site-nav__head site-nav__head--sub">
+                <a class="site-nav__top site-nav__top--sub" href="{{ '/providers/' | relative_url }}">Providers</a>
+                <button class="site-nav__toggle site-nav__toggle--sub" type="button" aria-expanded="false" aria-controls="nav-providers" aria-label="Toggle Providers submenu"></button>
+              </div>
+              <ul id="nav-providers" class="site-nav__subdropdown" aria-label="Providers">
+                <li><a href="{{ '/providers/telegram/' | relative_url }}">Telegram</a></li>
+                <li><a href="{{ '/providers/discord/' | relative_url }}">Discord</a></li>
+                <li><a href="{{ '/providers/feishu/' | relative_url }}">Feishu / Lark</a></li>
+                <li><a href="{{ '/providers/slack/' | relative_url }}">Slack</a></li>
+                <li><a href="{{ '/providers/mattermost/' | relative_url }}">Mattermost</a></li>
+                <li><a href="{{ '/providers/line/' | relative_url }}">LINE</a></li>
+              </ul>
+            </li>
             <li><a href="{{ '/streaming/' | relative_url }}">Streaming responses</a></li>
             <li><a href="{{ '/webhook-dangers/' | relative_url }}">Webhooks — a security note</a></li>
             <li><a href="{{ '/rate-limits/' | relative_url }}">Rate limits and budgets</a></li>
           </ul>
         </div>
         <div class="site-nav__group">
-          <a class="site-nav__top" href="{{ '/settings/' | relative_url }}" aria-haspopup="true">Settings</a>
-          <ul class="site-nav__dropdown" aria-label="Settings sections">
+          <div class="site-nav__head">
+            <a class="site-nav__top" href="{{ '/settings/' | relative_url }}">Settings</a>
+            <button class="site-nav__toggle" type="button" aria-expanded="false" aria-controls="nav-settings" aria-label="Toggle Settings submenu"></button>
+          </div>
+          <ul id="nav-settings" class="site-nav__dropdown" aria-label="Settings sections">
             <li><a href="{{ '/settings/#general' | relative_url }}">General</a></li>
             <li><a href="{{ '/settings/#application-discovery' | relative_url }}">Applications</a></li>
             <li><a href="{{ '/settings/#profiles' | relative_url }}">Profiles</a></li>
@@ -70,5 +92,18 @@
       <span class="site-footer__meta">MIT licensed · operator docs · <a href="https://github.com/pwrdrvr/PwrAgent">github.com/pwrdrvr/PwrAgent</a></span>
     </div>
   </footer>
+
+  <script>
+    // Tap-to-toggle for nav dropdowns on touch / mobile. CSS hides the
+    // dropdown by default on touch + small viewports; flipping aria-expanded
+    // on the closest .site-nav__group(--sub) reveals it. Desktop with a
+    // hover-capable pointer ignores this — CSS shows on :hover/:focus-within.
+    document.addEventListener("click", function (event) {
+      var toggle = event.target.closest(".site-nav__toggle");
+      if (!toggle) return;
+      var expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+    });
+  </script>
 </body>
 </html>

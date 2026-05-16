@@ -200,24 +200,84 @@ body {
   align-items: center;
 }
 
+.site-nav__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .site-nav__top {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   padding: 6px 0;
 }
 
-.site-nav__top::after {
-  content: "▾";
-  font-size: 9px;
-  color: var(--text-muted);
-  transform: translateY(-1px);
-  transition: color 120ms ease;
+/* Cosmetic caret on hover-capable pointers. Touch + mobile
+   replace this with an explicit .site-nav__toggle button. */
+@media (hover: hover) and (pointer: fine) {
+  .site-nav__top::after {
+    content: "▾";
+    margin-left: 4px;
+    font-size: 9px;
+    color: var(--text-muted);
+    transform: translateY(-1px);
+    transition: color 120ms ease;
+  }
+
+  .site-nav__top--sub::after {
+    content: "▸";
+  }
+
+  .site-nav__group:hover .site-nav__top::after,
+  .site-nav__group:focus-within .site-nav__top::after,
+  .site-nav__group--sub:hover .site-nav__top--sub::after,
+  .site-nav__group--sub:focus-within .site-nav__top--sub::after {
+    color: var(--accent);
+  }
 }
 
-.site-nav__group:hover .site-nav__top::after,
-.site-nav__group:focus-within .site-nav__top::after {
+/* Explicit tap-target shown only when CSS can't rely on hover.
+   Hidden by default on hover-capable desktop pointers. */
+.site-nav__toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  margin: -8px 0 -8px 2px;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.site-nav__toggle::before {
+  content: "▾";
+  font-size: 11px;
+  display: inline-block;
+  transition: transform 160ms ease;
+}
+
+.site-nav__toggle--sub::before {
+  content: "▸";
+}
+
+.site-nav__toggle[aria-expanded="true"]::before {
+  transform: rotate(180deg);
+}
+
+.site-nav__toggle--sub[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+.site-nav__toggle:hover,
+.site-nav__toggle:focus-visible {
   color: var(--accent);
+  background: var(--bg-panel-hover);
+  outline: none;
 }
 
 .site-nav__dropdown {
@@ -239,11 +299,14 @@ body {
   z-index: 20;
 }
 
-.site-nav__group:hover .site-nav__dropdown,
-.site-nav__group:focus-within .site-nav__dropdown {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
+/* Hover/focus reveal — only when the pointer can hover. */
+@media (hover: hover) and (pointer: fine) {
+  .site-nav__group:hover > .site-nav__dropdown,
+  .site-nav__group:focus-within > .site-nav__dropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
 }
 
 .site-nav__dropdown li {
@@ -262,6 +325,98 @@ body {
 .site-nav__dropdown a:focus-visible {
   background: var(--bg-panel-hover);
   color: var(--accent);
+}
+
+/* Nested Providers submenu — sits inside .site-nav__dropdown as a <li>. */
+.site-nav__group--sub {
+  position: relative;
+}
+
+.site-nav__head--sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.site-nav__head--sub .site-nav__top {
+  flex: 1;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.site-nav__head--sub .site-nav__top:hover,
+.site-nav__head--sub .site-nav__top:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--accent);
+}
+
+.site-nav__subdropdown {
+  position: absolute;
+  top: -7px;
+  left: 100%;
+  min-width: 200px;
+  margin: 0 0 0 4px;
+  padding: 6px 0;
+  list-style: none;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  z-index: 21;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .site-nav__group--sub:hover > .site-nav__subdropdown,
+  .site-nav__group--sub:focus-within > .site-nav__subdropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+  }
+}
+
+.site-nav__subdropdown li {
+  margin: 0;
+}
+
+.site-nav__subdropdown a {
+  display: block;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.site-nav__subdropdown a:hover,
+.site-nav__subdropdown a:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--accent);
+}
+
+/* Touch pointers (iPad, phones large enough to fall outside the
+   <=720px mobile media query): hide hover-cosmetic carets, show
+   the real toggle buttons, drive visibility from aria-expanded. */
+@media (hover: none), (pointer: coarse) {
+  .site-nav__top::after { content: none; }
+  .site-nav__toggle { display: inline-flex; }
+
+  .site-nav__dropdown,
+  .site-nav__subdropdown {
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .site-nav__group:has(> .site-nav__head > .site-nav__toggle[aria-expanded="true"]) > .site-nav__dropdown,
+  .site-nav__group--sub:has(> .site-nav__head > .site-nav__toggle[aria-expanded="true"]) > .site-nav__subdropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
 }
 
 .site-nav__github {
@@ -556,52 +711,118 @@ img {
 /* ----- Responsive ----- */
 
 @media (max-width: 720px) {
-  .site-header__inner {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  /* Header scrolls away normally on mobile — sticky + always-expanded
+     dropdowns covered most of the viewport. */
+  .site-header {
+    position: static;
+    padding: 10px 18px;
   }
 
+  .site-header__inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .site-brand {
+    align-self: flex-start;
+  }
+
+  /* Stack groups + GitHub link as full-width rows so nothing wraps
+     into someone else's whitespace. */
   .site-nav {
-    flex-wrap: wrap;
-    gap: 12px 16px;
-    font-size: 13px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    font-size: 14px;
   }
 
   .site-nav__group {
-    flex-direction: column;
-    align-items: flex-start;
+    display: block;
   }
 
-  .site-nav__top::after {
-    display: none;
+  .site-nav__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
   }
 
-  .site-nav__dropdown {
+  .site-nav__top {
+    flex: 1;
+    padding: 10px 0;
+  }
+
+  .site-nav__top::after { content: none; }
+
+  .site-nav__toggle {
+    display: inline-flex;
+    padding: 10px 14px;
+    margin: 0 -4px 0 0;
+    color: var(--text-secondary);
+  }
+
+  .site-nav__toggle::before {
+    font-size: 14px;
+  }
+
+  .site-nav__dropdown,
+  .site-nav__subdropdown {
     position: static;
     min-width: 0;
-    margin: 4px 0 0 12px;
+    margin: 0 0 6px 12px;
     padding: 0;
     background: transparent;
     border: 0;
     box-shadow: none;
-    opacity: 1;
-    visibility: visible;
+    opacity: 0;
+    visibility: hidden;
+    height: 0;
+    overflow: hidden;
     transform: none;
   }
 
-  .site-nav__dropdown a {
-    padding: 4px 0;
-    font-size: 12.5px;
+  .site-nav__group:has(> .site-nav__head > .site-nav__toggle[aria-expanded="true"]) > .site-nav__dropdown,
+  .site-nav__group--sub:has(> .site-nav__head > .site-nav__toggle[aria-expanded="true"]) > .site-nav__subdropdown {
+    opacity: 1;
+    visibility: visible;
+    height: auto;
+  }
+
+  .site-nav__dropdown a,
+  .site-nav__subdropdown a {
+    padding: 8px 0;
+    font-size: 13.5px;
+    white-space: normal;
   }
 
   .site-nav__dropdown a:hover,
-  .site-nav__dropdown a:focus-visible {
+  .site-nav__subdropdown a:hover,
+  .site-nav__dropdown a:focus-visible,
+  .site-nav__subdropdown a:focus-visible {
     background: transparent;
   }
 
+  .site-nav__head--sub .site-nav__top {
+    padding: 8px 0;
+    font-size: 13.5px;
+  }
+
+  .site-nav__github {
+    padding: 10px 0;
+  }
+
   .site-main {
-    padding: 36px 18px 72px;
+    padding: 24px 18px 60px;
+  }
+
+  /* Wide tables (4-col Settings references on provider pages, etc.)
+     get their own horizontal scroll so they don't push body width. */
+  .page table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   h1 {
