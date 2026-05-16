@@ -9,6 +9,8 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
+  PrSummary,
+  RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
@@ -211,6 +213,29 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenAt: request.seenAt ?? 2000,
   seenUpdatedAt: request.seenUpdatedAt,
 }));
+const getThreadOverlayState = vi.fn();
+const setThreadPullRequests = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  prs: PrSummary[];
+  refreshKey?: string;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [],
+  prs: request.prs,
+  prsFetchedAt: Date.now(),
+  prsRefreshKey: request.refreshKey,
+}));
+const isGhAvailable = vi.fn(async () => true);
+const getAuthStatus = vi.fn(async () => ({
+  installed: true,
+  loggedIn: true,
+  scopes: ["repo"],
+  hasRepoScope: true,
+}));
+const detectPullRequestsForThread = vi.fn(async (): Promise<PrSummary[]> => []);
 
 vi.mock("electron", () => ({
   app: {
@@ -230,6 +255,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
     markThreadSeen,
+    getThreadOverlayState,
+    setThreadPullRequests,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
   }),
@@ -254,6 +281,19 @@ vi.mock("../app-server/backend-registry", () => ({
   }),
 }));
 
+vi.mock("../pr-status/github-pr-fetcher", () => ({
+  GithubPrFetcher: vi.fn(function GithubPrFetcher() {
+    return {
+      isGhAvailable,
+      getAuthStatus,
+    };
+  }),
+}));
+
+vi.mock("../pr-status/pr-detection", () => ({
+  detectPullRequestsForThread,
+}));
+
 describe("app server ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -274,6 +314,14 @@ describe("app server ipc", () => {
     publishLocalEvent.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
+    getThreadOverlayState.mockReset();
+    getThreadOverlayState.mockResolvedValue(undefined);
+    setThreadPullRequests.mockClear();
+    isGhAvailable.mockClear();
+    isGhAvailable.mockResolvedValue(true);
+    getAuthStatus.mockClear();
+    detectPullRequestsForThread.mockReset();
+    detectPullRequestsForThread.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -547,6 +595,137 @@ describe("app server ipc", () => {
       threadId: "thread-1",
       seenAt: 2000,
       seenUpdatedAt: 3000,
+    });
+  });
+
+  it("refreshes mixed terminal and non-terminal PR chips instead of short-circuiting", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/desktop-source-link-goto",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/desktop-source-link-goto",
+      directoryPaths: ["/repo"],
+    });
+    const stalePassingPr: PrSummary = {
+      number: 433,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
+    };
+    const mergedPr: PrSummary = {
+      number: 430,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/430",
+    };
+    const refreshedPrs: PrSummary[] = [
+      { ...stalePassingPr, state: "merged" },
+      mergedPr,
+    ];
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [stalePassingPr, mergedPr],
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+    detectPullRequestsForThread.mockResolvedValueOnce(refreshedPrs);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+      fetcher: expect.any(Object),
+      branch: "fix/desktop-source-link-goto",
+      directoryPaths: ["/repo"],
+    });
+    expect(setThreadPullRequests).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: refreshedPrs,
+      refreshKey: requestKey,
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      ghAvailable: true,
+      prs: refreshedPrs,
+    });
+  });
+
+  it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/done",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = JSON.stringify({
+      lookupVersion: 2,
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/done",
+      directoryPaths: ["/repo"],
+    });
+    const terminalPrs: PrSummary[] = [
+      {
+        number: 433,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "merged",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/433",
+      },
+      {
+        number: 430,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "closed",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/430",
+      },
+    ];
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: terminalPrs,
+      prsFetchedAt: Date.now() - 120_000,
+      prsRefreshKey: requestKey,
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      request,
+    );
+
+    expect(detectPullRequestsForThread).not.toHaveBeenCalled();
+    expect(setThreadPullRequests).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      ghAvailable: true,
+      prs: terminalPrs,
+      shortCircuited: true,
     });
   });
 
