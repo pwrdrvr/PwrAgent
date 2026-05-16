@@ -488,6 +488,17 @@ h1, h2, h3, h4, h5, h6 {
   margin: 2em 0 0.6em;
 }
 
+/* Sticky-header offset for anchor-jumps. The header is
+   position: sticky on desktop (~50px tall + border), so anchor
+   targets need a top margin or they land underneath the header.
+   Mobile drops sticky (`.site-header { position: static }` in the
+   mobile media query below), so this only fires on desktop. */
+@media (min-width: 721px) {
+  .page :is(h1, h2, h3, h4, h5, h6) {
+    scroll-margin-top: 72px;
+  }
+}
+
 h1 {
   font-size: 30px;
   font-weight: 700;
