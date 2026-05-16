@@ -15,6 +15,7 @@ import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
@@ -35,6 +36,7 @@ export type SettingsSection =
   | "profiles"
   | "applications"
   | "worktrees"
+  | "archived"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
@@ -42,6 +44,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
   { id: "worktrees", label: "Worktrees" },
+  { id: "archived", label: "Archived" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
@@ -402,6 +405,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "archived") {
+    return <ArchivedThreadsSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "applications") {

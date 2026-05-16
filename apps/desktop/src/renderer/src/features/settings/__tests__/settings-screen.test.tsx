@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AppServerThreadSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
 } from "@pwragent/shared";
@@ -517,11 +518,72 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(within(sections).getByRole("button", { name: "Archived" }));
+    expect(screen.getByRole("heading", { name: "Archived threads" })).toBeInTheDocument();
+
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
       "aria-current",
       "page",
     );
+  });
+
+  it("lists archived threads and restores one", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Archived code review",
+      titleSource: "explicit",
+      summary: "Needs to come back to the active thread list.",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          label: "PwrAgnt",
+          path: "/repo/PwrAgnt",
+          kind: "local",
+        },
+      ],
+      gitBranch: "feature/archive-settings",
+      source: "codex",
+    };
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [archivedThread],
+    }));
+    const restoreThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      restoredAt: 4_000,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Archived code review")).toBeInTheDocument();
+    expect(screen.getByText("Needs to come back to the active thread list.")).toBeInTheDocument();
+    expect(screen.getByText("PwrAgnt")).toBeInTheDocument();
+    expect(listThreads).toHaveBeenCalledWith({ archived: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() => {
+      expect(restoreThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-archived",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
   });
 
   it("can restart login for an existing Codex auth profile", async () => {
