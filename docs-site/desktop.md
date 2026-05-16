@@ -193,6 +193,70 @@ The composer parses Markdown as you type:
 
 Codex Desktop doesn't have this yet.
 
+### Multi-message queueing
+
+![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread; "Review changes against main" (a queued /review against the base branch) and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
+
+You don't have to wait for the agent to finish a turn before
+queueing the next thing. While a turn is running, the composer's
+**Send** stages your message as a **queued turn** instead of
+discarding the click — the queued message appears as a chip above
+the composer with a small **×** for cancel.
+
+You can queue as many follow-ups as you want, and they dispatch
+**FIFO, one turn at a time**. The pattern that earns its keep:
+
+1. Send `make a branch and PR for the OAuth refactor` (turn 1).
+2. While that's running, queue `/review` (turn 2).
+3. While *that's* queued, queue `now squash and push --force-with-lease`
+   (turn 3).
+
+You walk away. By the time you come back, turn 1 has produced a
+branch and a PR, turn 2 has run a review pass and addressed
+findings, turn 3 has squashed and force-pushed. Slash commands
+queue exactly like free-form messages — `/review`, `/status`, and
+the rest are first-class queueable.
+
+Queued turns are visible in the composer (chips with cancel `×`)
+and in the transcript (a "queued: …" pill on the in-flight turn
+showing what's next). Cancel any queued turn by clicking its `×`
+in the composer chip — earlier and later queue items keep their
+order.
+
+This is the desktop counterpart to the
+[messaging queue / steer flow](../using-codex/#debounce-queue-steer);
+the two read and write the same per-thread queue, so a turn you
+queued from your phone shows up in the desktop's composer chip
+list immediately, and vice versa.
+
+### Skills browser ($ autocomplete and chips)
+
+![Composer mid-message ("Let's use $ce") with the Skills autocomplete listbox open below it, showing matching skill rows like $ce:plan, $ce:brainstorm, $ce:compound](assets/screenshots/desktop-skills-autocomplete.png)
+
+PwrAgent surfaces **Codex skills** (including plugin-exposed
+skills) directly in the composer. Type **`$`** and an autocomplete
+dropdown opens with every skill the bound Codex profile exposes —
+the same `$skill-name` mention syntax Codex itself uses, but with
+inline picking and rich tooltips so you don't have to remember
+the exact name.
+
+Pick a skill → it lands as an **inline chip** at the cursor (the
+chip carries the skill name, a tooltip with the skill's description,
+and a small **×** to remove it). The chip expands into the
+skill's full mention markdown when the turn is submitted, so the
+agent sees `$skill-name` exactly as if you'd typed it.
+
+You can mix skill chips with free-form text in any order: prose,
+chip, more prose, another chip. Multiple chips in one message are
+each prepended once.
+
+The skill list is shared with the
+[messaging Skills browser](../using-codex/#skills-browser) — both
+surfaces draw from the same Codex App Server skill registry. Adding
+a new plugin-exposed skill makes it appear in `$` autocomplete on
+the desktop and in the paged Skills browser on every bound
+messenger automatically.
+
 ### Search, branch / PR / emoji markers
 
 The sidebar's filter accepts branch names, PR numbers, emoji

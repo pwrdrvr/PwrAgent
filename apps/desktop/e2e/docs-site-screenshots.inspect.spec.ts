@@ -702,3 +702,194 @@ test("desktop-recents — Recents lens populated", async () => {
     await app.close();
   }
 });
+
+// ────────────────────── Composer feature captures ──────────────────────
+
+test("desktop-skills-autocomplete — composer $ autocomplete showing skill list", async () => {
+  test.setTimeout(120_000);
+
+  // Reuse the dedicated skill-autocomplete fixture — it ships with a
+  // realistic skill set (ce:plan, ce:brainstorm, ce:compound, ce:work,
+  // adversarial-document-reviewer, …) so the dropdown reads as a
+  // believable Codex setup rather than a synthetic stub.
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/skill-autocomplete-interactions/replay.fixture.json",
+    ),
+    windowSize: WINDOW_SIZE,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Skill autocomplete replay/i })
+      .first()
+      .click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Skill autocomplete replay",
+      }),
+    ).toBeVisible();
+
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    // Type a realistic prefix before `$ce` so the screenshot looks
+    // like a real composer mid-thought, not an isolated dropdown.
+    await app.window.keyboard.type("Let's use ");
+    await app.window.keyboard.type("$ce");
+
+    // Wait for the Skills listbox; this is what we actually want to
+    // capture.
+    await expect(
+      app.window.getByRole("listbox", { name: "Skills" }),
+    ).toBeVisible();
+
+    await bringToFront(app.electronApp);
+    captureNative("desktop-skills-autocomplete.png");
+  } finally {
+    await app.close();
+  }
+});
+
+test("desktop-queued-turns — composer with /review queued behind an in-flight turn", async () => {
+  test.setTimeout(120_000);
+
+  // Inline fixture: one thread, in-flight turn, no git repo (the
+  // queued-review-release spec needs a real repo because it tests
+  // branch adoption; we just need the visual queue state).
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const tmpRoot = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-docs-site-queue-"),
+  );
+  const fixturePath = path.join(tmpRoot, "docs-site-queue.fixture.json");
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "docs-site-queued-turns",
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: { name: "Replay Codex", version: "1.0.0" },
+              methods: ["thread/list", "thread/read", "turn/start"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [
+              {
+                id: "thread-active",
+                title: "Convert OAuth flow to PKCE",
+                titleSource: "explicit",
+                summary:
+                  "make a branch and PR, then queue /review behind it",
+                source: "codex",
+                executionMode: "default",
+                gitBranch: "main",
+                linkedDirectories: [],
+                updatedAt: 2_000,
+              },
+            ],
+          },
+          {
+            id: "thread-read-1",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [],
+              messages: [],
+              pagination: { supportsPagination: false, hasPreviousPage: false },
+            },
+          },
+          {
+            id: "turn-start-1",
+            kind: "response",
+            method: "turn/start",
+            result: {
+              threadId: "thread-active",
+              turnId: "turn-active",
+            },
+          },
+          {
+            id: "turn-started-1",
+            kind: "notification",
+            notification: {
+              method: "turn/started",
+              params: {
+                threadId: "thread-active",
+                turnId: "turn-active",
+                turn: { id: "turn-active", status: "inProgress" },
+              },
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  const app = await launchElectronApp({ fixturePath, windowSize: WINDOW_SIZE });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Convert OAuth flow to PKCE/i })
+      .first()
+      .click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Convert OAuth flow to PKCE",
+      }),
+    ).toBeVisible();
+
+    // Send the first message; this fires turn/start and stays in
+    // "starting" state until we advance the notification.
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.fill("make a branch and PR for the OAuth refactor");
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    // Advance to in-flight; this swaps the composer's Send button to
+    // Queue and enables follow-up queueing.
+    await app.advance({ stepId: "turn-started-1" });
+
+    // Queue /review main — the headline of the docs section. Bare
+    // `/review` opens the composer's inline review-target picker
+    // (the ReviewConfig fieldset) and doesn't queue until a target
+    // is chosen; `/review main` parses as a complete
+    // review-against-base command and queues with the friendly
+    // "Review changes against main" label.
+    await textbox.fill("/review main");
+    await app.window.getByRole("button", { name: "Queue" }).click();
+    await expect(app.window.getByLabel("Queued message")).toContainText(
+      "Review changes against main",
+    );
+
+    // Stack a second queued follow-up so the screenshot shows the
+    // FIFO-deep-queue capability, not just a single chip.
+    await textbox.fill("now squash and push --force-with-lease");
+    await app.window.getByRole("button", { name: "Queue" }).click();
+    await expect(
+      app.window
+        .getByLabel("Queued message")
+        .filter({ hasText: "squash and push" }),
+    ).toBeVisible();
+
+    await bringToFront(app.electronApp);
+    captureNative("desktop-queued-turns.png");
+  } finally {
+    await app.close();
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
