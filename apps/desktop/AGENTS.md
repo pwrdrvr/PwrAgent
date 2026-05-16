@@ -99,10 +99,16 @@ as its gate. See
 for the shot list and what state each capture needs.
 
 The script builds the desktop app, launches it headed against curated
-replay fixtures + state-seeded sqlite rows, takes the screenshots, and
-exits. macOS Screen Recording permission is required for whichever
-terminal/IDE runs the spec — the first invocation triggers the system
-prompt; subsequent runs are silent.
+replay fixtures + state-seeded sqlite rows, takes the screenshots,
+then runs the **noise filter** (`filter-noise-screenshots.mjs`) to
+revert any PNG whose pixels are identical to the committed version
+— the `screencapture` encoder produces nondeterministic byte streams
+for deterministic input pixels, and PNGs don't delta-compress in
+git's pack format, so committing re-encode noise adds ~900 KB per
+file per regen for zero visual benefit. macOS Screen Recording
+permission is required for whichever terminal/IDE runs the spec —
+the first invocation triggers the system prompt; subsequent runs
+are silent.
 
 Pieces, all under `apps/desktop/`:
 
@@ -114,6 +120,7 @@ Pieces, all under `apps/desktop/`:
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
 | `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. |
 | `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Optional `--title=<substring>` for multi-window apps. |
+| `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs under `docs/assets/screenshots/` and `docs-site/assets/screenshots/`, decodes both HEAD and working-tree versions to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |
 | `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
 | `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |
 
