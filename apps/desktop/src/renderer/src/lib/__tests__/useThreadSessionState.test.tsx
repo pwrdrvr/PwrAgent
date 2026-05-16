@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
+  AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
 } from "@pwragent/shared";
@@ -67,8 +68,26 @@ function diffActivity(params: {
   };
 }
 
+async function waitForThreadHydration(
+  result: { current: { response?: AppServerReadThreadResponse } },
+  threadId = "thread-1"
+): Promise<void> {
+  await waitFor(() => {
+    expect(result.current.response?.threadId).toBe(threadId);
+  });
+}
+
+async function flushReactUpdates(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe("useThreadSessionState", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await flushReactUpdates();
     vi.restoreAllMocks();
   });
 
@@ -2670,9 +2689,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       result.current.setActiveTurnId("turn-1");
@@ -2749,9 +2766,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       result.current.setPendingStatusText("Thinking");
@@ -2797,9 +2812,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       result.current.setActiveTurnId("turn-1");
@@ -2883,9 +2896,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -2961,9 +2972,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3066,9 +3075,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3152,9 +3159,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3221,9 +3226,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3283,9 +3286,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3399,9 +3400,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3507,9 +3506,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3603,9 +3600,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -3693,9 +3688,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -4304,9 +4297,7 @@ describe("useThreadSessionState", () => {
       })
     );
 
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-    });
+    await waitForThreadHydration(result);
 
     act(() => {
       for (const listener of agentEventListeners) {

@@ -1,8 +1,22 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationDirectorySummary } from "@pwragent/shared";
 import { Sidebar } from "../Sidebar";
+
+async function clickElement(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    fireEvent.click(element);
+  });
+}
 
 const backends: BackendSummary[] = [
   {
@@ -1603,16 +1617,24 @@ describe("Sidebar", () => {
     );
     fireEvent.mouseLeave(directoryChip);
 
-    fireEvent.click(directoryChip);
+    await clickElement(directoryChip);
     const branchChip = screen.getByRole("button", {
       name: "Copy branch codex/thread-centric-ui",
     });
     fireEvent.mouseEnter(branchChip);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "codex/thread-centric-ui\nClick to copy to clipboard"
-    );
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole("tooltip")
+          .some(
+            (tooltip) =>
+              tooltip.textContent ===
+              "codex/thread-centric-ui\nClick to copy to clipboard"
+          )
+      ).toBe(true);
+    });
     fireEvent.mouseLeave(branchChip);
-    fireEvent.click(branchChip);
+    await clickElement(branchChip);
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
@@ -1677,8 +1699,8 @@ describe("Sidebar", () => {
     );
     fireEvent.mouseLeave(branchButton);
 
-    fireEvent.click(cwdButton);
-    fireEvent.click(branchButton);
+    await clickElement(cwdButton);
+    await clickElement(branchButton);
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
@@ -1688,7 +1710,7 @@ describe("Sidebar", () => {
     expect(await screen.findAllByText("PwrAgent")).not.toHaveLength(0);
   });
 
-  it("labels detached HEAD and copies the full commit SHA", () => {
+  it("labels detached HEAD and copies the full commit SHA", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -1722,7 +1744,7 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByText("HEAD")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA" }));
+    await clickElement(screen.getByRole("button", { name: "Copy commit SHA" }));
     expect(copyText).toHaveBeenCalledWith("ab12cd3344556677889900aabbccddeeff001122");
   });
 

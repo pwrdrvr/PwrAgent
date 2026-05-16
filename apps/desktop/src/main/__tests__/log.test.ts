@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import electronLog from "electron-log/main.js";
 import { compactStructuredLogData } from "../log";
 
 describe("main logger compact formatting", () => {
+  it("suppresses the electron-log console transport during unit tests", () => {
+    expect(electronLog.transports.console.level).toBe(false);
+  });
+
   it("omits undefined object fields from compact log output", () => {
     expect(
       compactStructuredLogData([
