@@ -192,6 +192,12 @@ type DeletedSkillTokenHistoryEntry = {
   skillTokens: ComposerSkillToken[];
 };
 
+type RecoveryLookupRequest = {
+  lookupId: number;
+  scopeKey: string;
+  version: number;
+};
+
 type PendingProgrammaticComposerChange = {
   expectedDraft: string;
   expectedSkillTokensSignature: string;
@@ -929,6 +935,8 @@ export function Composer(props: ComposerProps) {
     candidates: ComposerDraftSnapshot[];
     scopeKey: string;
   } | undefined>(undefined);
+  const recoveryEligibilityVersionRef = useRef(0);
+  const recoveryLookupSequenceRef = useRef(0);
   const recoveringDraftRef = useRef(false);
   const composerSelectionRequestSequenceRef = useRef(0);
   const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
@@ -1067,6 +1075,15 @@ export function Composer(props: ComposerProps) {
     setEditorDocument(undefined);
     setDraft("");
     setSkillTokens([]);
+  };
+  const hasLiveComposerContent = (): boolean => {
+    const latest = latestDraftSnapshotRef.current;
+    return Boolean(
+      (inputRef.current?.value ?? latest.snapshot.draft).trim() ||
+        (inputRef.current?.skillTokenCount ??
+          latest.snapshot.skillTokens.length) > 0 ||
+        latest.snapshot.imageAttachments.length > 0,
+    );
   };
   const updateVisibleDraft = (
     nextDraft: string,
@@ -1217,7 +1234,17 @@ export function Composer(props: ComposerProps) {
       });
     });
   };
-  const getOrCreateRecoveryCycle = async (): Promise<
+  const isRecoveryLookupCurrent = (
+    request: RecoveryLookupRequest,
+  ): boolean =>
+    recoveryLookupSequenceRef.current === request.lookupId &&
+    recoveryEligibilityVersionRef.current === request.version &&
+    activeComposerScopeKeyRef.current === request.scopeKey &&
+    latestDraftSnapshotRef.current.scopeKey === request.scopeKey &&
+    !hasLiveComposerContent();
+  const getOrCreateRecoveryCycle = async (
+    request?: RecoveryLookupRequest,
+  ): Promise<
     NonNullable<typeof recoveryCycleRef.current> | undefined
   > => {
     if (!draftStore.listRecoveryCandidates) {
@@ -1253,6 +1280,9 @@ export function Composer(props: ComposerProps) {
             return [];
           });
       }
+      if (request && !isRecoveryLookupCurrent(request)) {
+        return undefined;
+      }
       const candidates = response
         .map((candidate) => ({
           draft: candidate.text,
@@ -1280,8 +1310,20 @@ export function Composer(props: ComposerProps) {
     return cycle;
   };
   const recoverPreviousComposerDraft = async (): Promise<void> => {
-    const cycle = await getOrCreateRecoveryCycle();
+    const existingCycle = recoveryCycleRef.current;
+    const lookupRequest =
+      !existingCycle || existingCycle.scopeKey !== composerScopeKey
+        ? {
+            lookupId: ++recoveryLookupSequenceRef.current,
+            scopeKey: composerScopeKey,
+            version: recoveryEligibilityVersionRef.current,
+          }
+        : undefined;
+    const cycle = await getOrCreateRecoveryCycle(lookupRequest);
     if (!cycle) {
+      return;
+    }
+    if (lookupRequest && !isRecoveryLookupCurrent(lookupRequest)) {
       return;
     }
 
@@ -1573,6 +1615,8 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    recoveryEligibilityVersionRef.current += 1;
+    recoveryLookupSequenceRef.current += 1;
     const previousSnapshot = {
       draft,
       editorDocument,
@@ -3237,6 +3281,7 @@ export function Composer(props: ComposerProps) {
   ): void => {
     if (!recoveringDraftRef.current) {
       recoveryCycleRef.current = undefined;
+      recoveryEligibilityVersionRef.current += 1;
     }
     unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
@@ -3319,6 +3364,8 @@ export function Composer(props: ComposerProps) {
         (inputRef.current?.value ?? draft).trim() ||
           (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
       );
+      const liveHasAnyComposerContent =
+        liveHasComposerContent || imageAttachments.length > 0;
       const recoveryCycle = recoveryCycleRef.current;
       const liveSelectionAtStart =
         (inputRef.current?.selectionStart ?? 0) === 0 &&
@@ -3327,20 +3374,22 @@ export function Composer(props: ComposerProps) {
         recoveryCycle?.scopeKey === composerScopeKey && liveSelectionAtStart;
       if (recoveryCycle && !canCycleActiveRecovery) {
         recoveryCycleRef.current = undefined;
+        recoveryEligibilityVersionRef.current += 1;
       }
       if (
         recoveryCycle &&
         canCycleActiveRecovery &&
-        liveHasComposerContent &&
+        liveHasAnyComposerContent &&
         event.key !== "ArrowUp" &&
         event.key !== "ArrowDown"
       ) {
         recoveryCycleRef.current = undefined;
+        recoveryEligibilityVersionRef.current += 1;
       }
       if (
         event.key === "ArrowUp" &&
         (!liveHasComposerContent || canCycleActiveRecovery) &&
-        imageAttachments.length === 0
+        (imageAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         void recoverPreviousComposerDraft();
@@ -3348,9 +3397,9 @@ export function Composer(props: ComposerProps) {
       }
       if (
         event.key === "ArrowDown" &&
-        liveHasComposerContent &&
+        liveHasAnyComposerContent &&
         canCycleActiveRecovery &&
-        imageAttachments.length === 0
+        (imageAttachments.length === 0 || canCycleActiveRecovery)
       ) {
         event.preventDefault();
         recoverNextComposerDraft();

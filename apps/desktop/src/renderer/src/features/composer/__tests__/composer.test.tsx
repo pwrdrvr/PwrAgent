@@ -4576,6 +4576,13 @@ describe("Composer", () => {
 
   it("cycles durable draft recovery candidates like shell history", async () => {
     const draftStore = createComposerDraftStore();
+    const recoveredImageAttachment = {
+      id: "image-1",
+      name: "diagram.png",
+      size: 3,
+      type: "image/png",
+      url: "data:image/png;base64,AQID",
+    };
     const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
       {
         scopeKey: "thread:codex:thread-1",
@@ -4584,7 +4591,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         text: "Recovered unsent draft",
         skillTokens: [],
-        imageAttachments: [],
+        imageAttachments: [recoveredImageAttachment],
         status: "unsent",
         createdAt: 1,
         updatedAt: 3,
@@ -4661,6 +4668,70 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(input).toHaveValue("");
     });
+  });
+
+  it("does not apply stale async draft recovery after the user types", async () => {
+    const draftStore = createComposerDraftStore();
+    let resolveRecoveryCandidates:
+      | ((candidates: ComposerDraftRecoveryCandidate[]) => void)
+      | undefined;
+    draftStore.listRecoveryCandidates = vi.fn(
+      () =>
+        new Promise<ComposerDraftRecoveryCandidate[]>((resolve) => {
+          resolveRecoveryCandidates = resolve;
+        }),
+    );
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.change(input, { target: { value: "New user draft" } });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("New user draft");
+    });
+
+    await act(async () => {
+      resolveRecoveryCandidates?.([
+        {
+          scopeKey: "thread:codex:thread-1",
+          scopeKind: "thread",
+          backend: "codex",
+          threadId: "thread-1",
+          text: "Stale recovered draft",
+          skillTokens: [],
+          imageAttachments: [],
+          status: "unsent",
+          createdAt: 1,
+          updatedAt: 2,
+          contentHash: "stale",
+          charCount: "Stale recovered draft".length,
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    await flushReactUpdates();
+    expect(input).toHaveValue("New user draft");
   });
 
   it("falls back to global recovery candidates from a blank composer", async () => {
