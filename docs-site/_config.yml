@@ -1,0 +1,21 @@
+title: PwrAgent
+description: Run a coding agent. Drive it from your messenger.
+url: https://docs.pwragent.ai
+baseurl: ""
+# Custom layout under _layouts/ — no Jekyll theme inheritance. The
+# Tangerine Terminal palette is in assets/css/site.css.
+exclude:
+  - README.md
+  - vendor/
+  - Gemfile
+  - Gemfile.lock
+  - Dockerfile
+  - "*.swp"
+  - .DS_Store
+permalink: pretty
+plugins:
+  - jekyll-redirect-from
+kramdown:
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    css_class: highlight

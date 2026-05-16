@@ -75,9 +75,13 @@ Screenshots."
 
 3. Launch PwrAgent from Applications. Config and state live under
    `~/.pwragent/`.
-4. (Optional) Pair a messenger from **Settings → Messaging**. You'll need
-   a bot token from Telegram, Discord, or Mattermost and your own
-   platform user ID for the allowlist.
+4. (Optional) Pair a messenger from **Settings → Messaging**. PwrAgent
+   supports Telegram, Discord, Slack, Mattermost, Feishu/Lark, and LINE.
+   Per-platform setup walkthroughs live at
+   **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**,
+   and the usage guide (bound threads, commands, queue/steer, monitor
+   cards, detach) lives at
+   **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
 
 ### From source
 
@@ -171,6 +175,10 @@ stable across 5 messaging providers and is now a candidate submit to OpenClaw.
 
 ## Going deeper
 
+For operator setup — per-platform Settings walkthroughs, the
+streaming-responses tradeoff, the webhook security note — see
+**[docs.pwragent.ai](https://docs.pwragent.ai)**.
+
 - [ARCHITECTURE.md](ARCHITECTURE.md) — process model, storage layers,
   messaging layer summary, dependency boundaries, workspace map.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow, testing,
@@ -180,8 +188,9 @@ stable across 5 messaging providers and is now a candidate submit to OpenClaw.
   layered messaging architecture, capability profiles, callback delivery
   models.
 - [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md)
-  — operator setup, command surface, Cloudflare-Tunnel / Tailscale-Funnel
-  guidance for HTTP-callback providers.
+  — contributor cross-references for the messaging layer; operator
+  content lives at [docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)
+  and [docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/).
 - [docs/state-layout.md](docs/state-layout.md) — on-disk state layout,
   environment variables, profiles.
 
