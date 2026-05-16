@@ -276,6 +276,23 @@ Selecting a thread completes the binding and pins a **status card**
 to the conversation showing the bound thread's current model,
 reasoning, fast mode, and permissions.
 
+### Resume replays the last reply
+
+Once the bind completes, PwrAgent best-effort reposts the bound
+thread's **most recent assistant reply** back into the conversation,
+labeled with how long ago it was originally sent ("from 14 min ago",
+"from 2 days ago"). The replay shows up *before* the status card so
+you immediately see where the agent left off — no scrolling back
+through your own messenger history or jumping to the desktop to
+find the thread.
+
+The replay is best-effort: if the prior reply can't be loaded
+(deleted from the thread, replay store unavailable, very old thread
+without a captured last message), the bind still succeeds — you just
+don't get the recap. The replay runs through all three resume paths:
+picking a row in the Resume browser, a direct `/resume <thread-id>`
+text bind, and the Full Access resume escalation path.
+
 <details markdown="1">
 <summary>Per-provider exceptions</summary>
 
