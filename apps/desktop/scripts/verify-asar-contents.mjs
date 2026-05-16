@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const appPath = args[0]
-  ?? resolve("release-stage/dist/mac-arm64/PwrAgent.app");
+  ?? resolve("release-stage/dist/mac-universal/PwrAgent.app");
 
 const asarPath = resolve(appPath, "Contents/Resources/app.asar");
 if (!existsSync(asarPath)) {

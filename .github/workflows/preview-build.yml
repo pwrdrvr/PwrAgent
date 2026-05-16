@@ -1,4 +1,4 @@
-name: Preview Build (macOS arm64)
+name: Preview Build (macOS universal)
 
 on:
   pull_request:
