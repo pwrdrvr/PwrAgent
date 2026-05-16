@@ -3,10 +3,10 @@ layout: home
 title: PwrAgent docs
 ---
 
-<div class="wordmark-hero">
-  <div class="wordmark-hero__mark">Pwr<span class="wordmark-hero__accent">Agent</span></div>
-  <div class="wordmark-hero__tagline">threads / transcripts</div>
-</div>
+<figure class="screenshot-hero">
+  <img src="{{ '/assets/screenshots/desktop-hero.png' | relative_url }}" alt="PwrAgent desktop: Directories lens grouping threads under PwrAgnt and PwrSnap repos, a mid-conversation thread about OCR image tags with the agent's reply showing edited files and passing pnpm lint, four messenger status icons (Telegram, Discord, Slack, Mattermost) in the title bar, profile selector reading 'profile:default, codex:default', and per-thread model / Full Access / Fast mode / Worktree controls above the composer.">
+  <figcaption>The PwrAgent desktop with four messengers paired, threads grouped by repo, and the per-thread model / access / worktree controls live.</figcaption>
+</figure>
 
 # What PwrAgent is
 

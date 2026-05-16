@@ -6,15 +6,49 @@ permalink: /desktop/
 
 # The PwrAgent desktop
 
-PwrAgent is an Electron desktop app. It runs locally, stores its
-state under `~/.pwragent/`, and pairs a Codex thread list with a
-thread-detail view, a composer, and a sidebar of recents. There's no
-cloud relay and no PwrAgent-owned account — see
-[Settings](../settings/) for how the desktop discovers your local
-Codex install and how authentication works.
+The desktop app is where you live day-to-day. It's an Electron
+app that reads and writes the same on-disk session DB Codex Desktop
+uses, so your threads, transcripts, and authentication are shared
+between the two by default — open either one and your work is
+there.
 
-The rest of this page covers what the desktop **does**, what's not in
-it yet, and what's coming soon.
+What makes the PwrAgent side worth running:
+
+- **Per-thread settings** for model, reasoning effort, Fast mode,
+  and access mode. Codex Desktop scopes these globally; PwrAgent
+  lets a high-stakes refactor run on a stronger model under **Full
+  Access** in one thread while a throwaway script runs on a cheaper
+  model under **Default Access** in another, without the settings
+  bleeding into each other.
+- **Worktree workspaces** so the agent can rip apart a branch in a
+  `git worktree` PwrAgent manages while your main checkout sits
+  undisturbed. Hand a thread off between Local and Worktree when
+  it's ready to land.
+- **Codex environment hooks** — when you spawn a thread on a
+  worktree, PwrAgent can run the environment's setup hook (install
+  deps, warm caches, run codegen) and stream the output into the
+  transcript before the agent takes its first turn.
+- **In-place Markdown composer** — triple-backticks open a code
+  block, `>` opens a blockquote, bullet and numbered lists
+  auto-continue. Codex Desktop doesn't have this yet.
+- **Profile isolation** — two layered profile mechanisms (PwrAgent
+  + Codex) compose into anything from "one install, one identity"
+  to "N installs running side-by-side with isolated auth and
+  isolated messaging credentials." Work / personal / side-projects
+  separation without juggling SSH keys.
+- **Messaging as a first-class concept** — pair a bot on any of six
+  platforms (Telegram, Discord, Slack, Mattermost, Feishu / Lark,
+  LINE) and you can resume or start threads from your phone. See
+  [Messaging](../messaging/) for the operator-facing setup; this
+  page covers the *desktop* side.
+
+State lives under `~/.pwragent/` (overridable with `PWRAGENT_HOME`
+or `--profile <name>`). No cloud relay and no PwrAgent-owned
+account — see [Settings](../settings/) for how the desktop
+discovers your local Codex install and how authentication works.
+
+The rest of this page is the operator-facing tour of what the
+desktop **does**, what's not in it yet, and what's on the roadmap.
 
 ## What's in the desktop today
 
