@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AppServerListThreadsResponse,
   AppServerThreadSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
@@ -580,6 +581,73 @@ describe("SettingsScreen", () => {
         threadId: "thread-archived",
       });
     });
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+  });
+
+  it("does not re-add a restored thread when a stale archive refresh resolves", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Archived code review",
+      titleSource: "explicit",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [],
+      source: "codex",
+    };
+    let resolveStaleRefresh:
+      | ((response: AppServerListThreadsResponse) => void)
+      | undefined;
+    const listThreads = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "all" as const,
+        fetchedAt: 3_000,
+        threads: [archivedThread],
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise<AppServerListThreadsResponse>((resolve) => {
+            resolveStaleRefresh = resolve;
+          }),
+      );
+    const restoreThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      restoredAt: 4_000,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Archived code review")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(listThreads).toHaveBeenCalledTimes(2);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveStaleRefresh?.({
+        backend: "all",
+        fetchedAt: 5_000,
+        threads: [archivedThread],
+      });
+    });
+
     await waitFor(() => {
       expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
     });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -30,6 +30,7 @@ export function ArchivedThreadsSettings(props: {
   });
   const [restoringThreadKey, setRestoringThreadKey] = useState<string>();
   const [restoreMessage, setRestoreMessage] = useState<string>();
+  const restoredThreadKeysRef = useRef(new Set<string>());
 
   const loadArchivedThreads = useCallback(async () => {
     const listThreads = props.desktopApi?.listThreads;
@@ -48,7 +49,12 @@ export function ArchivedThreadsSettings(props: {
       setState({
         fetchedAt: response.fetchedAt,
         loading: false,
-        threads: sortArchivedThreads(response.threads),
+        threads: sortArchivedThreads(
+          response.threads.filter(
+            (thread) =>
+              !restoredThreadKeysRef.current.has(buildArchivedThreadKey(thread)),
+          ),
+        ),
       });
     } catch (error) {
       setState((current) => ({
@@ -86,6 +92,7 @@ export function ArchivedThreadsSettings(props: {
         backend: thread.source,
         threadId: thread.id,
       });
+      restoredThreadKeysRef.current.add(threadKey);
       setState((current) => ({
         ...current,
         threads: current.threads.filter(
