@@ -519,7 +519,9 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(within(sections).getByRole("button", { name: "Archived" }));
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Archived Threads" }),
+    );
     expect(screen.getByRole("heading", { name: "Archived threads" })).toBeInTheDocument();
 
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
@@ -570,7 +572,8 @@ describe("SettingsScreen", () => {
 
     expect(await screen.findByText("Archived code review")).toBeInTheDocument();
     expect(screen.getByText("Needs to come back to the active thread list.")).toBeInTheDocument();
-    expect(screen.getByText("PwrAgnt")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "PwrAgnt" })).toBeInTheDocument();
+    expect(screen.getByText("/repo/PwrAgnt")).toBeInTheDocument();
     expect(listThreads).toHaveBeenCalledWith({ archived: true });
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
@@ -585,6 +588,89 @@ describe("SettingsScreen", () => {
       expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
     });
     expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+  });
+
+  it("groups archived threads by project before restoration", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-pwragent-2",
+          title: "Second PwrAgent thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-other",
+          title: "Other project thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 3_000,
+          linkedDirectories: [
+            {
+              id: "directory-2",
+              label: "OtherProject",
+              path: "/repo/OtherProject",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-pwragent-1",
+          title: "First PwrAgent thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrAgentGroup = (await screen.findByRole("heading", {
+      name: "PwrAgnt",
+    })).closest("section")!;
+    expect(within(pwrAgentGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText("Second PwrAgent thread"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText("First PwrAgent thread"),
+    ).toBeInTheDocument();
+
+    const otherGroup = screen.getByRole("heading", {
+      name: "OtherProject",
+    }).closest("section")!;
+    expect(within(otherGroup).getByText("1 thread")).toBeInTheDocument();
+    expect(within(otherGroup).getByText("Other project thread")).toBeInTheDocument();
   });
 
   it("does not re-add a restored thread when a stale archive refresh resolves", async () => {

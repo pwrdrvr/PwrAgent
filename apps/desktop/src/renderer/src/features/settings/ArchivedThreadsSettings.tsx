@@ -14,6 +14,15 @@ type ArchivedThreadsState = {
   threads: AppServerThreadSummary[];
 };
 
+type ArchivedProjectGroup = {
+  key: string;
+  label: string;
+  path?: string;
+  threads: AppServerThreadSummary[];
+};
+
+type ArchivedProjectIdentity = Omit<ArchivedProjectGroup, "threads">;
+
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -69,8 +78,14 @@ export function ArchivedThreadsSettings(props: {
     void loadArchivedThreads();
   }, [loadArchivedThreads]);
 
+  const projectGroups = useMemo(() => {
+    return groupArchivedThreadsByProject(state.threads);
+  }, [state.threads]);
+
   const fetchedAtLabel = useMemo(() => {
-    return state.fetchedAt ? `Updated ${formatTimestamp(state.fetchedAt)}` : "Archive";
+    return state.fetchedAt
+      ? `Updated ${formatTimestamp(state.fetchedAt)}`
+      : "Archived Threads";
   }, [state.fetchedAt]);
 
   const restoreThread = async (thread: AppServerThreadSummary) => {
@@ -111,11 +126,11 @@ export function ArchivedThreadsSettings(props: {
   };
 
   return (
-    <SettingsSectionStack paneId="archived" aria-label="Archived thread settings">
+    <SettingsSectionStack paneId="archived" aria-label="Archived Threads settings">
       <SettingsPanelHead
-        eyebrow="Archive"
+        eyebrow="Archived Threads"
         title="Archived threads"
-        help="Archived threads stay out of Inbox, Recents, and Directories. Restore one here to make it visible again."
+        help="Archived threads stay out of Inbox, Recents, and Directories. Restore one from its project group to make it visible again."
         action={
           <button
             className="button button--secondary"
@@ -131,9 +146,9 @@ export function ArchivedThreadsSettings(props: {
       />
 
       <SettingsSection
-        eyebrow="Threads"
-        title="Archive"
-        description="Review archived work and restore threads that should return to the main thread lists."
+        eyebrow="Archived Threads"
+        title="By project"
+        description="Review archived work by project and restore threads that should return to the main thread lists."
         chip={state.loading ? "loading" : fetchedAtLabel}
         chipKind="muted"
       >
@@ -141,21 +156,44 @@ export function ArchivedThreadsSettings(props: {
           <p className="settings-empty settings-archive-empty">
             Loading archived threads...
           </p>
-        ) : state.threads.length ? (
+        ) : projectGroups.length ? (
           <div className="settings-archive-list">
-            {state.threads.map((thread) => {
-              const threadKey = buildArchivedThreadKey(thread);
-              return (
-                <ArchivedThreadRow
-                  key={threadKey}
-                  restoring={restoringThreadKey === threadKey}
-                  thread={thread}
-                  onRestore={() => {
-                    void restoreThread(thread);
-                  }}
-                />
-              );
-            })}
+            {projectGroups.map((group) => (
+              <section className="settings-archive-project" key={group.key}>
+                <header className="settings-archive-project__header">
+                  <div className="settings-archive-project__body">
+                    <h3 className="settings-archive-project__title">
+                      {group.label}
+                    </h3>
+                    {group.path ? (
+                      <p className="settings-archive-project__path">
+                        {group.path}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span className="settings-pathrow__chip">
+                    {group.threads.length === 1
+                      ? "1 thread"
+                      : `${group.threads.length} threads`}
+                  </span>
+                </header>
+                <div className="settings-archive-project__threads">
+                  {group.threads.map((thread) => {
+                    const threadKey = buildArchivedThreadKey(thread);
+                    return (
+                      <ArchivedThreadRow
+                        key={threadKey}
+                        restoring={restoringThreadKey === threadKey}
+                        thread={thread}
+                        onRestore={() => {
+                          void restoreThread(thread);
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
         ) : (
           <p className="settings-empty settings-archive-empty">
@@ -237,10 +275,67 @@ function sortArchivedThreads(
   });
 }
 
+function groupArchivedThreadsByProject(
+  threads: AppServerThreadSummary[],
+): ArchivedProjectGroup[] {
+  const groups = new Map<string, ArchivedProjectGroup>();
+  for (const thread of threads) {
+    const project = resolveArchivedProject(thread);
+    const existing = groups.get(project.key);
+    if (existing) {
+      existing.threads.push(thread);
+      continue;
+    }
+    groups.set(project.key, {
+      ...project,
+      threads: [thread],
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => {
+    if (left.key === "__no-project__") return 1;
+    if (right.key === "__no-project__") return -1;
+    return left.label.localeCompare(right.label);
+  });
+}
+
+function resolveArchivedProject(
+  thread: AppServerThreadSummary,
+): ArchivedProjectIdentity {
+  const directory =
+    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
+    thread.linkedDirectories[0];
+  if (directory) {
+    return {
+      key: directory.path || directory.id || directory.label,
+      label: directory.label || pathBaseName(directory.path) || "Project",
+      path: directory.path,
+    };
+  }
+
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey) {
+    return {
+      key: projectKey,
+      label: pathBaseName(projectKey) || projectKey,
+      path: projectKey,
+    };
+  }
+
+  return {
+    key: "__no-project__",
+    label: "No project",
+  };
+}
+
 function buildArchivedThreadKey(thread: AppServerThreadSummary): string {
   return `${thread.source}:${thread.id}`;
 }
 
 function formatTimestamp(timestamp: number): string {
   return dateFormatter.format(timestamp);
+}
+
+function pathBaseName(pathname: string): string {
+  return pathname.split(/[\\/]/).filter(Boolean).at(-1) ?? pathname;
 }
