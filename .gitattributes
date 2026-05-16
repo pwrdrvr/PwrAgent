@@ -1,6 +1,21 @@
-# Captured README demo artifacts. Tag as binary so git doesn't try to
-# diff them on every recapture (each `pnpm --filter @pwragent/desktop
-# screenshot:readme` run regenerates these PNGs and the GIF, and the
-# diffs are noise).
-docs/assets/screenshots/*.png binary
-docs/assets/screenshots/*.gif binary
+# Binary asset handling.
+#
+# Tag image / icon / packaging artifacts as binary so git doesn't
+# try to text-diff them on every regeneration (README and docs-site
+# captures, vendor brand-kit refreshes, packaging builds) and
+# doesn't apply EOL conversion on Windows checkouts.
+
+**/*.png binary
+**/*.gif binary
+**/*.jpg binary
+**/*.jpeg binary
+**/*.ico binary
+**/*.icns binary
+**/*.webp binary
+
+# Vendor brand-kit SVGs — verbatim files from each vendor's brand
+# kit, refreshed via the procedure documented in each vendor's
+# `README.md` and never hand-edited (see
+# `apps/desktop/CLAUDE.md` → "Third-Party Brand Assets" for the rule).
+# Treat as binary so vendor refreshes don't show noisy XML diffs.
+apps/desktop/src/renderer/src/assets/**/*.svg binary
