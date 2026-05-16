@@ -26,10 +26,23 @@ The left-nav layout is roughly:
 
 ## General
 
-Desktop-wide defaults that don't fit anywhere more specific. The
-load-bearing setting today is the **pasted image patch budget**,
-which caps how aggressively PwrAgent resizes large images you paste
-into the composer before they're forwarded to the model.
+Desktop-wide defaults that don't fit anywhere more specific. Only
+one section lives here today (image patch budget); more land here
+as the desktop grows surfaces that don't belong in any other panel.
+
+### Pasted images — patch budget
+
+When you paste a large image into the composer (a screenshot, a
+diagram, a photo from your clipboard), PwrAgent resizes it before
+forwarding to the model so it costs a predictable amount of context.
+Images are converted into model-token-friendly **32×32 pixel patches**;
+this setting caps the patch count before per-model multipliers apply.
+
+Pick the budget based on the typical fidelity you need. Most
+screenshots read fine at the default; bump it up when the model
+needs to read small text (UI labels, code snippets in screenshots,
+tiny CLI output). Drop it down if you regularly paste enormous
+images and want to keep the per-turn token cost low.
 
 | Option | What it means |
 |---|---|
