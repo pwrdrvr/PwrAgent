@@ -378,6 +378,7 @@ describe("buildDirectorySummaries", () => {
 
   it("filters profile-scoped workspace roots outside the active profile", () => {
     const defaultProjectsRoot = "/Users/huntharo/.pwragent/profiles/default/projects";
+    const preProfileProjectsRoot = "/Users/huntharo/.pwragent/projects";
     const devProjectsRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
     const legacyProjectsRoot = "/Users/huntharo/.pwragnt/projects";
     const directories = buildDirectorySummaries({
@@ -389,6 +390,17 @@ describe("buildDirectorySummaries", () => {
               id: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
               label: "2026-05-08-9bc2d3",
               path: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "pre-profile-thread",
+          linkedDirectories: [
+            {
+              id: `${preProfileProjectsRoot}/2026-05-10-c7d8e9`,
+              label: "2026-05-10-c7d8e9",
+              path: `${preProfileProjectsRoot}/2026-05-10-c7d8e9`,
               kind: "local",
             },
           ],
@@ -429,6 +441,18 @@ describe("buildDirectorySummaries", () => {
           createdAt: 1_000,
           updatedAt: 3_000,
         },
+        [`workspace:${preProfileProjectsRoot}`]: {
+          directoryKey: `workspace:${preProfileProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: preProfileProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Pre-profile draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 5_000,
+        },
         [`workspace:${devProjectsRoot}`]: {
           directoryKey: `workspace:${devProjectsRoot}`,
           directoryKind: "workspace",
@@ -442,7 +466,11 @@ describe("buildDirectorySummaries", () => {
           updatedAt: 4_000,
         },
       },
-      workspaceRoots: [defaultProjectsRoot, legacyProjectsRoot],
+      workspaceRoots: [
+        defaultProjectsRoot,
+        preProfileProjectsRoot,
+        legacyProjectsRoot,
+      ],
     });
 
     expect(directories).toEqual([
@@ -452,6 +480,7 @@ describe("buildDirectorySummaries", () => {
         path: defaultProjectsRoot,
         threadKeys: expect.arrayContaining([
           "codex:default-thread",
+          "codex:pre-profile-thread",
           "codex:legacy-thread",
         ]),
         launchpad: expect.objectContaining({

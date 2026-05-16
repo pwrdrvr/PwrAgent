@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   resolveActiveProfileName,
   resolveActiveProfilePath,
+  resolvePwragentRoot,
 } from "../profile";
 
 function formatLocalDatePrefix(date: Date): string {
@@ -27,6 +28,7 @@ export function resolveScratchProjectsRoots(options?: {
 }): string[] {
   const roots = [resolveScratchProjectsRoot(options)];
   if (resolveActiveProfileName(options) === "default") {
+    roots.push(path.join(resolvePwragentRoot(options), "projects"));
     roots.push(path.join(options?.homeDir ?? os.homedir(), ".pwragnt", "projects"));
   }
   return roots;

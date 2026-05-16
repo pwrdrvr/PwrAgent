@@ -34,6 +34,7 @@ describe("resolveScratchProjectsRoot", () => {
       }),
     ).toEqual([
       "/Users/tester/.pwragent/profiles/default/projects",
+      "/Users/tester/.pwragent/projects",
       "/Users/tester/.pwragnt/projects",
     ]);
 
