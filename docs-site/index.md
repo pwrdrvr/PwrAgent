@@ -125,7 +125,7 @@ the architecture notes, and the contributor's path.
 
 # License
 
-PwrAgent is MIT-licensed, owned by PwrDrvr LLC. See the
+PwrAgent is MIT-licensed, created by PwrDrvr LLC. See the
 [LICENSE](https://github.com/pwrdrvr/PwrAgent/blob/main/LICENSE) and
 [THIRD\_PARTY\_LICENSES](https://github.com/pwrdrvr/PwrAgent/blob/main/THIRD_PARTY_LICENSES)
 files in the repo.
