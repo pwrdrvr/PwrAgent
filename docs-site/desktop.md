@@ -28,9 +28,9 @@ What makes the PwrAgent side worth running:
   worktree, PwrAgent can run the environment's setup hook (install
   deps, warm caches, run codegen) and stream the output into the
   transcript before the agent takes its first turn.
-- **In-place Markdown composer** — triple-backticks open a code
-  block, `>` opens a blockquote, bullet and numbered lists
-  auto-continue. Codex Desktop doesn't have this yet.
+- **In-place Markdown composer** — ```` ``` ```` opens a code block,
+  `>` opens a blockquote, bullet and numbered lists auto-continue.
+  Codex Desktop doesn't have this yet.
 - **Profile isolation** — two layered profile mechanisms (PwrAgent
   + Codex) compose into anything from "one install, one identity"
   to "N installs running side-by-side with isolated auth and
@@ -182,7 +182,7 @@ conversation.
 
 The composer parses Markdown as you type:
 
-- Triple backticks + space opens a code block.
+- ```` ``` ```` + space opens a code block.
 - `>` + space opens a blockquote.
 - `-` or `*` + space starts a bulleted list; press Enter on an empty
   bullet to exit.
