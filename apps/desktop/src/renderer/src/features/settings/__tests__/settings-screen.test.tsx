@@ -708,6 +708,79 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
+  it("groups corrupted managed-worktree paths by project folder name", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-pwrsnap-1",
+          title: "Testing env setup",
+          titleSource: "explicit" as const,
+          archivedAt: 5_000,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              label: "PwrSnap",
+              path: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              kind: "worktree" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-pwrsnap-2",
+          title: "Popover window too tall",
+          titleSource: "explicit" as const,
+          archivedAt: 4_000,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              label: "PwrSnap",
+              path: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              kind: "worktree" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrSnapGroup = (await screen.findByRole("heading", {
+      name: "PwrSnap",
+    })).closest("section")!;
+    expect(within(pwrSnapGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(
+      within(pwrSnapGroup).getByText("Testing env setup"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrSnapGroup).getByText("Popover window too tall"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /mp7efuda/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /mp32wplq/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("limits each archived project to the 20 most recent archive timestamps", async () => {
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,

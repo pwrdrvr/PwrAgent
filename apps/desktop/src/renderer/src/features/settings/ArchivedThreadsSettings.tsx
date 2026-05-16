@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import {
+  isToolManagedWorktreePath,
+  type AppServerThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsPanelHead,
@@ -330,15 +333,37 @@ function groupArchivedThreadsByProject(
 function resolveArchivedProject(
   thread: AppServerThreadSummary,
 ): ArchivedProjectIdentity {
-  const directory =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
-  if (directory) {
+  const repositoryDirectory = resolveRepositoryLinkedDirectory(thread);
+  if (repositoryDirectory) {
     return {
-      key: directory.path || directory.id || directory.label,
-      label: directory.label || pathBaseName(directory.path) || "Project",
+      key:
+        repositoryDirectory.path ||
+        repositoryDirectory.id ||
+        repositoryDirectory.label,
+      label:
+        repositoryDirectory.label ||
+        pathBaseName(repositoryDirectory.path) ||
+        "Project",
       latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
-      path: directory.path,
+      path: repositoryDirectory.path,
+    };
+  }
+
+  const snapshotRepositoryPath = resolveSnapshotRepositoryPath(thread);
+  if (snapshotRepositoryPath) {
+    return {
+      key: snapshotRepositoryPath,
+      label: pathBaseName(snapshotRepositoryPath) || snapshotRepositoryPath,
+      latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
+      path: snapshotRepositoryPath,
+    };
+  }
+
+  const managedWorktreeProject = resolveManagedWorktreeProject(thread);
+  if (managedWorktreeProject) {
+    return {
+      ...managedWorktreeProject,
+      latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
     };
   }
 
@@ -355,6 +380,84 @@ function resolveArchivedProject(
   return {
     key: "__no-project__",
     label: "No project",
+    latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
+  };
+}
+
+function resolveRepositoryLinkedDirectory(
+  thread: AppServerThreadSummary,
+): AppServerThreadSummary["linkedDirectories"][number] | undefined {
+  const localDirectory = thread.linkedDirectories.find(
+    (candidate) =>
+      candidate.kind === "local" &&
+      candidate.path.trim() &&
+      !isManagedWorktreePath(candidate.path),
+  );
+  if (localDirectory) {
+    return localDirectory;
+  }
+
+  return thread.linkedDirectories.find((candidate) => {
+    if (candidate.kind !== "worktree") {
+      return false;
+    }
+
+    const directoryPath = candidate.path.trim();
+    if (!directoryPath || isManagedWorktreePath(directoryPath)) {
+      return false;
+    }
+
+    const worktreePath = candidate.worktreePath?.trim();
+    return (
+      !worktreePath ||
+      normalizePath(directoryPath) !== normalizePath(worktreePath)
+    );
+  });
+}
+
+function resolveSnapshotRepositoryPath(
+  thread: AppServerThreadSummary,
+): string | undefined {
+  return [...(thread.worktreeSnapshots ?? [])]
+    .sort(
+      (left, right) =>
+        (right.archivedAt ?? right.createdAt) -
+        (left.archivedAt ?? left.createdAt),
+    )
+    .map((snapshot) => snapshot.repositoryPath.trim())
+    .find((repositoryPath) => {
+      if (!repositoryPath || isManagedWorktreePath(repositoryPath)) {
+        return false;
+      }
+      return !(thread.worktreeSnapshots ?? []).some(
+        (snapshot) =>
+          normalizePath(snapshot.worktreePath) === normalizePath(repositoryPath),
+      );
+    });
+}
+
+function resolveManagedWorktreeProject(
+  thread: AppServerThreadSummary,
+): ArchivedProjectIdentity | undefined {
+  const managedPath =
+    thread.linkedDirectories
+      .flatMap((directory) => [directory.worktreePath, directory.path])
+      .find((candidate) => candidate && isManagedWorktreePath(candidate)) ??
+    (isManagedWorktreePath(thread.projectKey) ? thread.projectKey : undefined);
+  if (!managedPath) {
+    return undefined;
+  }
+
+  const label =
+    thread.linkedDirectories
+      .find((directory) => directory.label.trim())
+      ?.label.trim() ||
+    pathBaseName(managedPath) ||
+    "Project";
+  return {
+    key: `managed-worktree:${label}`,
+    label,
+    path: `Recovered from managed worktrees named ${label}`,
     latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
   };
 }
@@ -399,4 +502,12 @@ function formatTimestamp(timestamp: number): string {
 
 function pathBaseName(pathname: string): string {
   return pathname.split(/[\\/]/).filter(Boolean).at(-1) ?? pathname;
+}
+
+function isManagedWorktreePath(pathname: string | undefined): boolean {
+  return isToolManagedWorktreePath(normalizePath(pathname));
+}
+
+function normalizePath(pathname: string | undefined): string {
+  return pathname?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
 }
