@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.4 - 2026-05-16
+
+- Added PwrAgent and Codex profile management, including profile-scoped settings, Codex account email display, and faster default-profile startup.
+- Added Codex environment setup controls so launchpads can surface, configure, and run repository setup commands before starting work.
+- Hardened Codex binary discovery by rejecting stale or blocked Codex executables before launch and improving PATH hydration for desktop sessions started outside a shell.
+- Added Feishu / Lark messaging support with inbound event handling, outbound formatting, credential validation, settings UI, status icons, and setup docs.
+- Expanded messaging controls with Full Access shortcuts, a monitor command, mention-help new-thread shortcuts, a skills browser in status cards, resume reply reposting, and safer lease cleanup during shutdown.
+- Improved workspace and navigation reliability around managed worktree labels, worktree directory consolidation, selected-thread read state, PR terminal refreshes, branch-drift handling, context rail hover behavior, and stale PR chips.
+- Improved desktop ergonomics with a logs help window, source links that open at target lines, copyable thread metadata chips, safer pasted text and image labels, visible directory header controls, and refined launchpad setup output.
+- Published the first docs.pwragent.ai docs site with desktop, settings, messaging, provider setup, rate-limit, streaming, and Codex usage guides.
+- Strengthened release and CI reliability with Node 24 action updates, docs-site-only CI skipping, pinned ripgrep installation, pnpm supply-chain hardening, binary asset attributes, and screenshot post-processing.
+
 ## v1.0.0-beta.3 - 2026-05-12
 
 - Rebuilt the beta.2 release contents after fixing the ASAR verification rule that incorrectly rejected LINE's runtime PNG brand icon.
