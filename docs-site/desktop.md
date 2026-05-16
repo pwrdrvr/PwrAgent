@@ -195,7 +195,7 @@ Codex Desktop doesn't have this yet.
 
 ### Multi-message queueing
 
-![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread, plus /review and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
+![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread; "Review changes against main" (a queued /review against the base branch) and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
 
 You don't have to wait for the agent to finish a turn before
 queueing the next thing. While a turn is running, the composer's

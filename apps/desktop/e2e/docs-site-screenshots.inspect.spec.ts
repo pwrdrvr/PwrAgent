@@ -864,11 +864,16 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     // Queue and enables follow-up queueing.
     await app.advance({ stepId: "turn-started-1" });
 
-    // Queue /review first — the headline of the docs section.
-    await textbox.fill("/review");
+    // Queue /review main — the headline of the docs section. Bare
+    // `/review` opens the composer's inline review-target picker
+    // (the ReviewConfig fieldset) and doesn't queue until a target
+    // is chosen; `/review main` parses as a complete
+    // review-against-base command and queues with the friendly
+    // "Review changes against main" label.
+    await textbox.fill("/review main");
     await app.window.getByRole("button", { name: "Queue" }).click();
     await expect(app.window.getByLabel("Queued message")).toContainText(
-      "/review",
+      "Review changes against main",
     );
 
     // Stack a second queued follow-up so the screenshot shows the
