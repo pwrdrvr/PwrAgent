@@ -31,7 +31,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -48,7 +48,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -91,7 +91,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -111,7 +111,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -136,7 +136,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -233,7 +233,7 @@ jobs:
 
       - name: Install Node.js and dependencies
         if: steps.changes.outputs.relevant == 'true'
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
         timeout-minutes: 10
         with:
           node-version: 24.x
