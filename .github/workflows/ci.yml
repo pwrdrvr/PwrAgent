@@ -21,6 +21,7 @@ permissions:
   contents: read
 
 jobs:
+  # Validation-only PR: rerun CI against pwrdrvr/configure-nodejs@v1 after v1 moved to v1.1.0.
   install-deps:
     name: Install Dependencies
     if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:live-agent-core' }}
@@ -31,7 +32,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -48,7 +49,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -91,7 +92,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -111,7 +112,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -136,7 +137,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -233,7 +234,7 @@ jobs:
 
       - name: Install Node.js and dependencies
         if: steps.changes.outputs.relevant == 'true'
-        uses: pwrdrvr/configure-nodejs@fix/pnpm-store-cache
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
