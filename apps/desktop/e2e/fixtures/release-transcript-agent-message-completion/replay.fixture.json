@@ -1,0 +1,143 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "release-transcript-agent-message-completion",
+    "sourceCaptureId": "codex-session-019dffad-dd29-7652-a59a-2a8cc8c450c7",
+    "threadId": "thread-release-transcript-completion"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-release-transcript-completion",
+          "title": "PwrAgent - Release transcript repro",
+          "titleSource": "explicit",
+          "summary": "Replay a partial live assistant delta followed by a full completed agent message",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776828785662
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Ship the beta release after validating the gates."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Ship the beta release after validating the gates."
+          }
+        ],
+        "lastUserMessage": "Ship the beta release after validating the gates.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-release-transcript-completion",
+          "turnId": "turn-release-1",
+          "turn": {
+            "id": "turn-release-1",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "activity-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-release-transcript-completion",
+          "turnId": "turn-release-1",
+          "item": {
+            "id": "tool-run-1",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "completed",
+            "command": "pnpm test",
+            "data": {
+              "elapsedMs": 30000,
+              "output": "Vitest suite still running; two environment runtime failures reported so far."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-message-partial-delta",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-release-transcript-completion",
+          "turnId": "turn-release-1",
+          "itemId": "agent-message-release-1",
+          "phase": "commentary",
+          "delta": "is still running too. I’ll wait for full output before deciding whether it’s a real release blocker or the known temp/worktree interaction pattern."
+        }
+      }
+    },
+    {
+      "id": "assistant-message-completed",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-release-transcript-completion",
+          "turnId": "turn-release-1",
+          "item": {
+            "id": "agent-message-release-1",
+            "type": "agentMessage",
+            "phase": "commentary",
+            "text": "The test run has two failures in the Codex environment runtime area while the suite is still finishing; typecheck is still running too. I’ll wait for full output before deciding whether it’s a real release blocker or the known temp/worktree interaction pattern."
+          }
+        }
+      }
+    }
+  ]
+}

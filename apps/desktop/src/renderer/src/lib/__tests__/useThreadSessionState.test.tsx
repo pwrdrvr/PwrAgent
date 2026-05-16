@@ -343,6 +343,99 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("replaces partial live assistant text when the completed agent message has the full commentary", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            hasPreviousPage: false,
+            supportsPagination: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const fullText =
+      "The test run has two failures in the Codex environment runtime area while the suite is still finishing; typecheck is still running too. I’ll wait for full output before deciding whether it’s a real release blocker or the known temp/worktree interaction pattern.";
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "agent-message-1",
+            delta:
+              "is still running too. I’ll wait for full output before deciding whether it’s a real release blocker or the known temp/worktree interaction pattern.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingAssistantMessage?.text).toMatch(/^is still running too/);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "agent-message-1",
+              type: "agentMessage",
+              phase: "commentary",
+              text: fullText,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingAssistantMessage).toBeUndefined();
+    expect(transcriptLabels(result.current.entries)).toEqual([`message:${fullText}`]);
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
