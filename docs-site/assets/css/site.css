@@ -782,15 +782,32 @@ img {
 
   .site-nav__top::after { content: none; }
 
+  /* Mobile toggle reads as an obvious tap target — outlined chevron
+     pill in the accent color rather than a dim text character. */
   .site-nav__toggle {
     display: inline-flex;
-    padding: 10px 14px;
-    margin: 0 -4px 0 0;
-    color: var(--text-secondary);
+    min-width: 44px;
+    height: 32px;
+    padding: 0 12px;
+    margin: 0;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: 6px;
   }
 
   .site-nav__toggle::before {
-    font-size: 14px;
+    font-size: 16px;
+    line-height: 1;
+    font-weight: 700;
+  }
+
+  .site-nav__toggle:hover,
+  .site-nav__toggle:focus-visible,
+  .site-nav__toggle[aria-expanded="true"] {
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border-color: var(--accent);
   }
 
   .site-nav__dropdown,
