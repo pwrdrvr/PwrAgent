@@ -208,6 +208,7 @@ async function pathExists(candidatePath: string): Promise<boolean> {
 async function resolveBinary(
   application: KnownApplication,
   env: NodeJS.ProcessEnv,
+  appPath?: string,
 ): Promise<string | undefined> {
   const explicitPath = application.binaryPaths
     ? await firstExistingPath(application.binaryPaths)
@@ -231,7 +232,29 @@ async function resolveBinary(
     }
   }
 
+  const bundledPath = appPath
+    ? await resolveBundledApplicationCliPath(appPath, application.binaryNames ?? [])
+    : undefined;
+  if (bundledPath) {
+    return bundledPath;
+  }
+
   return undefined;
+}
+
+export async function resolveBundledApplicationCliPath(
+  appPath: string,
+  binaryNames: readonly string[],
+): Promise<string | undefined> {
+  if (binaryNames.length === 0) {
+    return undefined;
+  }
+
+  return await firstExistingPath(
+    binaryNames.map((binaryName) =>
+      path.join(appPath, "Contents", "Resources", "app", "bin", binaryName)
+    )
+  );
 }
 
 async function firstExistingPath(candidates: string[]): Promise<string | undefined> {
@@ -250,7 +273,7 @@ async function discoverApplication(
   const appPath = application.appPaths
     ? await firstExistingPath(application.appPaths)
     : undefined;
-  const executablePath = await resolveBinary(application, env);
+  const executablePath = await resolveBinary(application, env, appPath);
 
   if (!appPath && !executablePath) {
     return undefined;

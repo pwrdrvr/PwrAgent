@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGhosttyAppleScriptArgs,
   openDesktopApplication,
+  resolveBundledApplicationCliPath,
 } from "../settings/application-discovery";
 
 const { spawnMock } = vi.hoisted(() => ({
@@ -64,7 +65,12 @@ describe("application discovery", () => {
   it("opens VS Code source links with --goto line metadata", async () => {
     const targetPath = path.join(tempDir, "source.ts");
     const capturePath = path.join(tempDir, "application-open.json");
+    const fakeBinDir = path.join(tempDir, "bin");
+    const fakeCodePath = path.join(fakeBinDir, "code");
+    mkdirSync(fakeBinDir, { recursive: true });
     writeFileSync(targetPath, "line 1\nline 2\n", "utf8");
+    writeFileSync(fakeCodePath, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(fakeCodePath, 0o755);
 
     await openDesktopApplication(
       {
@@ -75,7 +81,7 @@ describe("application discovery", () => {
       },
       {
         env: {
-          PATH: process.env.PATH,
+          PATH: fakeBinDir,
           PWRAGENT_E2E_APPLICATION_OPEN_CAPTURE_PATH: capturePath,
         },
       }
@@ -89,5 +95,24 @@ describe("application discovery", () => {
     expect(capture.invocation.command).toMatch(/code$/);
     expect(capture.invocation.args).toEqual(["--goto", `${targetPath}:12`]);
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves the bundled VS Code CLI from an app-only install", async () => {
+    const appPath = path.join(tempDir, "Visual Studio Code.app");
+    const bundledCodePath = path.join(
+      appPath,
+      "Contents",
+      "Resources",
+      "app",
+      "bin",
+      "code"
+    );
+    mkdirSync(path.dirname(bundledCodePath), { recursive: true });
+    writeFileSync(bundledCodePath, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(bundledCodePath, 0o755);
+
+    await expect(resolveBundledApplicationCliPath(appPath, ["code"])).resolves.toBe(
+      bundledCodePath
+    );
   });
 });

@@ -47,6 +47,25 @@ test("opens transcript source links with VS Code line metadata", async () => {
         name: "Source link editor open",
       })
     ).toBeVisible();
+    await expect
+      .poll(async () =>
+        await app.window.evaluate(async () => {
+          const api = (
+            window as Window & {
+              pwragent?: {
+                readSettings?: (
+                  request: Record<string, never>
+                ) => Promise<{
+                  snapshot: { applications: { editors: Array<{ id: string }> } };
+                }>;
+              };
+            }
+          ).pwragent;
+          const settings = await api?.readSettings?.({});
+          return settings?.snapshot.applications.editors.map((editor) => editor.id) ?? [];
+        })
+      )
+      .toContain("vscode");
 
     const reviewCard = app.window.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toContainText("Open this source link");
