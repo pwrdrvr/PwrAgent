@@ -45,7 +45,7 @@ jobs:
         run: pnpm --filter @pwragent/desktop package:dryrun
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: PwrAgent-${{ steps.version.outputs.version }}-preview
           path: apps/desktop/release-stage/dist/*.dmg
