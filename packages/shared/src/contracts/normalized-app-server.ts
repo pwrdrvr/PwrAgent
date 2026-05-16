@@ -77,7 +77,16 @@ export type AppServerReviewOutput = {
 export type LinkedDirectorySummary = {
   id: string;
   label: string;
+  /**
+   * Canonical repository/local checkout path used for grouping and Local mode.
+   * For Worktree entries this is the repository checkout, not the current
+   * thread command CWD.
+   */
   path: string;
+  /**
+   * Active worktree checkout path when kind is "worktree". Thread-scoped
+   * commands, VS Code, and terminal launches should prefer this over path.
+   */
   worktreePath?: string;
   kind: "local" | "worktree";
 };
@@ -119,6 +128,13 @@ export type CodexThreadEnvironmentRuntime = {
   environmentId: string;
   environmentName: string;
   executionTarget: CodexEnvironmentExecutionTarget;
+  /**
+   * CWD used when this environment runtime was selected or last launched.
+   * This is persisted runtime state and can become stale after workspace
+   * handoff. New commands should use the current thread workspace path
+   * (LinkedDirectorySummary.worktreePath/path, or an explicit Run request cwd)
+   * and then update this value.
+   */
   cwd?: string;
   setupEnabled?: boolean;
   setupStatus?: "skipped" | "completed" | "failed";
@@ -397,7 +413,12 @@ export type HandoffThreadWorkspaceRequest = {
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
   strategy?: ThreadWorkspaceHandoffStrategy;
+  /** Repository/local checkout path that owns the worktree relationship. */
   repositoryPath?: string;
+  /**
+   * Current workspace path before handoff: local path for Local, worktreePath
+   * for Worktree.
+   */
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;

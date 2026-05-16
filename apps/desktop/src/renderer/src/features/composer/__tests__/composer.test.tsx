@@ -427,7 +427,15 @@ describe("Composer", () => {
       titleSource: "explicit",
       source: "codex",
       executionMode: "default",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "fixture-repo",
+          label: "FixtureRepo",
+          path: "/repo/FixtureRepo",
+          worktreePath: "/repo/.worktrees/thread-1/FixtureRepo",
+          kind: "worktree",
+        },
+      ],
       inbox: { inInbox: false },
       codexEnvironmentRuntime: {
         environmentId: "environment",
@@ -471,6 +479,7 @@ describe("Composer", () => {
         backend: "codex",
         threadId: "thread-1",
         actionId: "dev-messaging",
+        cwd: "/repo/.worktrees/thread-1/FixtureRepo",
       });
     });
 
