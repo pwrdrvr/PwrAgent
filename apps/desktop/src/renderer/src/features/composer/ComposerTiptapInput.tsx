@@ -628,6 +628,53 @@ function insertWysiwygSoftBreak(editor: TiptapEditor): boolean {
   return editor.commands.setHardBreak();
 }
 
+function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
+  return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
+}
+
+function selectionIsInsideNode(editor: TiptapEditor, nodeTypeName: string): boolean {
+  const { $from, $to } = editor.state.selection;
+  const isInside = ($pos: typeof $from): boolean => {
+    for (let depth = $pos.depth; depth >= 0; depth -= 1) {
+      if ($pos.node(depth).type.name === nodeTypeName) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return isInside($from) && isInside($to);
+}
+
+function pastePlainTextIntoActiveBlock(
+  editor: TiptapEditor,
+  event: ClipboardEvent<HTMLDivElement>,
+): boolean {
+  const text = getPlainTextFromPaste(event);
+  if (!text) {
+    return false;
+  }
+
+  if (
+    editor.state.selection.$from.parent.type.name === "codeBlock" &&
+    editor.state.selection.$to.parent.type.name === "codeBlock"
+  ) {
+    event.preventDefault();
+    const { from, to } = editor.state.selection;
+    editor.view.dispatch(editor.state.tr.insertText(text, from, to).scrollIntoView());
+    return true;
+  }
+
+  if (selectionIsInsideNode(editor, "blockquote")) {
+    event.preventDefault();
+    return editor.commands.insertContent(splitTextContent(text), {
+      updateSelection: true,
+    });
+  }
+
+  return false;
+}
+
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
   contentLength: number;
   prefixLength: number;
@@ -1114,7 +1161,17 @@ export const ComposerTiptapInput = forwardRef<
         },
         paste: (_view, event) => {
           propsRef.current.onPaste?.(event as unknown as ClipboardEvent<HTMLDivElement>);
-          return event.defaultPrevented;
+          if (event.defaultPrevented) {
+            return true;
+          }
+          const currentEditor = editorRef.current;
+          if (!currentEditor || !propsRef.current.markdownConversion) {
+            return false;
+          }
+          return pastePlainTextIntoActiveBlock(
+            currentEditor,
+            event as unknown as ClipboardEvent<HTMLDivElement>,
+          );
         },
       },
     },

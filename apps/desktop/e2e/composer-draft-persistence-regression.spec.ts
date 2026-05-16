@@ -245,6 +245,34 @@ async function pasteDelayedImage(page: Page, params: {
   }, params);
 }
 
+async function pastePlainText(page: Page, params: {
+  accessibleName: "New thread" | "Reply";
+  html?: string;
+  text: string;
+}): Promise<void> {
+  await page.evaluate(({ accessibleName, html, text }) => {
+    const textbox = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="textbox"]'),
+    ).find((element) => element.getAttribute("aria-label") === accessibleName);
+    if (!textbox) {
+      throw new Error(`${accessibleName} Tiptap textbox not found`);
+    }
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", text);
+    if (html) {
+      dataTransfer.setData("text/html", html);
+    }
+    textbox.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer,
+      }),
+    );
+  }, params);
+}
+
 test("keeps Tiptap launchpad and reply drafts with pasted images across switching and refresh", async () => {
   const fixture = await createComposerDraftPersistenceFixture();
   const app = await launchElectronApp({
@@ -289,6 +317,110 @@ test("keeps Tiptap launchpad and reply drafts with pasted images across switchin
     await expect(tiptapInput).toHaveAttribute("data-value", replyDraft);
     await expect(app.window.getByLabel("Pasted images")).toHaveCount(1);
     await expect(app.window.getByAltText("reply-draft.png")).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("keeps every pasted line inside the active Tiptap code block", async () => {
+  const fixture = await createComposerDraftPersistenceFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openExistingThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("```");
+    await app.window.keyboard.press("Space");
+
+    const pastedText = [
+      " 1) e2e/library-source-filter.spec.ts:74:1 › source-app filters load captures outside the initial virtualized page ",
+      "",
+      "",
+      "Test timeout of 180000ms exceeded.",
+      "",
+      "",
+      "    Error Context: test-results/library-source-filter-sour-7c26e-he-initial-virtualized-page/error-context.md",
+    ].join("\n");
+
+    await pastePlainText(app.window, {
+      accessibleName: "Reply",
+      html: [
+        "<div> 1) e2e/library-source-filter.spec.ts:74:1 › source-app filters load captures outside the initial virtualized page </div>",
+        "<div><br></div>",
+        "<div><br></div>",
+        "<div>Test timeout of 180000ms exceeded.</div>",
+        "<div><br></div>",
+        "<div><br></div>",
+        "<div>&nbsp;&nbsp;&nbsp;&nbsp;Error Context: test-results/library-source-filter-sour-7c26e-he-initial-virtualized-page/error-context.md</div>",
+      ].join(""),
+      text: pastedText,
+    });
+
+    await expect(tiptapInput.locator("pre")).toHaveCount(1);
+    await expect(tiptapInput.locator("pre")).toContainText(
+      "Test timeout of 180000ms exceeded.",
+    );
+    await expect(
+      tiptapInput.locator("p", {
+        hasText: /Test timeout|Error Context|source-app/,
+      }),
+    ).toHaveCount(0);
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      `\`\`\`\n${pastedText}\n\`\`\``,
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("keeps every pasted line inside the active Tiptap block quote", async () => {
+  const fixture = await createComposerDraftPersistenceFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openExistingThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("> ");
+
+    const pastedText = [
+      "first quoted line",
+      "",
+      "second quoted line after a blank",
+      "third quoted line",
+    ].join("\n");
+
+    await pastePlainText(app.window, {
+      accessibleName: "Reply",
+      text: pastedText,
+    });
+
+    await expect(tiptapInput.locator("blockquote")).toHaveCount(1);
+    await expect(tiptapInput.locator("blockquote")).toContainText(
+      "second quoted line after a blank",
+    );
+    await expect(tiptapInput.locator("> p")).toHaveCount(0);
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      [
+        "> first quoted line",
+        "> ",
+        "> second quoted line after a blank",
+        "> third quoted line",
+      ].join("\n"),
+    );
   } finally {
     await app.close();
     await fixture.cleanup();
