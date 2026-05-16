@@ -195,6 +195,8 @@ Codex Desktop doesn't have this yet.
 
 ### Multi-message queueing
 
+![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread, plus /review and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
+
 You don't have to wait for the agent to finish a turn before
 queueing the next thing. While a turn is running, the composer's
 **Send** stages your message as a **queued turn** instead of
@@ -228,6 +230,8 @@ queued from your phone shows up in the desktop's composer chip
 list immediately, and vice versa.
 
 ### Skills browser ($ autocomplete and chips)
+
+![Composer mid-message ("Let's use $ce") with the Skills autocomplete listbox open below it, showing matching skill rows like $ce:plan, $ce:brainstorm, $ce:compound](assets/screenshots/desktop-skills-autocomplete.png)
 
 PwrAgent surfaces **Codex skills** (including plugin-exposed
 skills) directly in the composer. Type **`$`** and an autocomplete
