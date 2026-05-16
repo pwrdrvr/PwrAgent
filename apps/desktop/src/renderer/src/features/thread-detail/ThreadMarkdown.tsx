@@ -43,8 +43,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
   const openLocalFileLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, href: string): void => {
-      const targetPath = localFilePathFromHref(href);
-      if (!targetPath || !editorApplication || !props.desktopApi?.openApplication) {
+      const target = localFileTargetFromHref(href);
+      if (!target || !editorApplication || !props.desktopApi?.openApplication) {
         return;
       }
 
@@ -53,7 +53,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .openApplication({
           applicationId: editorApplication.id,
           kind: "editor",
-          targetPath,
+          targetPath: target.path,
+          targetLine: target.line,
+          targetColumn: target.column,
         })
         .catch((error: unknown) => {
           console.error("Failed to open transcript file link", error);
@@ -332,13 +334,15 @@ function normalizeSkillPath(href: string): string | undefined {
   return undefined;
 }
 
-function localFilePathFromHref(href: string): string | undefined {
+function localFileTargetFromHref(
+  href: string
+): { path: string; line?: number; column?: number } | undefined {
   if (href.startsWith("file://")) {
-    return stripFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+    return splitFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
   }
 
   if (href.startsWith("/")) {
-    return stripFileLineSuffix(href);
+    return splitFileLineSuffix(href);
   }
 
   return undefined;
@@ -353,7 +357,26 @@ function denormalizeMarkdownUrl(url: string): string {
 }
 
 function stripFileLineSuffix(filePath: string): string {
-  return filePath.replace(/:(\d+)(?::\d+)?$/, "");
+  return splitFileLineSuffix(filePath).path;
+}
+
+function splitFileLineSuffix(filePath: string): {
+  path: string;
+  line?: number;
+  column?: number;
+} {
+  const match = /:(\d+)(?::(\d+))?$/.exec(filePath);
+  if (!match) {
+    return { path: filePath };
+  }
+
+  const line = Number.parseInt(match[1] ?? "", 10);
+  const column = match[2] ? Number.parseInt(match[2], 10) : undefined;
+  return {
+    path: filePath.slice(0, match.index),
+    ...(Number.isInteger(line) ? { line } : {}),
+    ...(Number.isInteger(column) ? { column } : {}),
+  };
 }
 
 function extractTextContent(node: ReactNode): string {

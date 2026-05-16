@@ -130,7 +130,11 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [props.applications]
   );
   const openLocalFile = useCallback(
-    (event: MouseEvent<HTMLAnchorElement>, targetPath: string): void => {
+    (
+      event: MouseEvent<HTMLAnchorElement>,
+      targetPath: string,
+      targetLine: number
+    ): void => {
       if (!editorApplication || !props.desktopApi?.openApplication) {
         return;
       }
@@ -141,6 +145,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           applicationId: editorApplication.id,
           kind: "editor",
           targetPath,
+          targetLine,
         })
         .catch((error: unknown) => {
           console.error("Failed to open review file link", error);
@@ -247,7 +252,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                     className="transcript-review__location-path"
                     href={fileHref(absoluteFilePath, range.start)}
                     onClick={(event) => {
-                      openLocalFile(event, absoluteFilePath);
+                      openLocalFile(event, absoluteFilePath, range.start);
                     }}
                     rel="noopener noreferrer"
                     target="_blank"

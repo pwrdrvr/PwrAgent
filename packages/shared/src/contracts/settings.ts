@@ -643,6 +643,8 @@ export type OpenDesktopApplicationRequest = {
   applicationId: string;
   kind: DesktopApplicationKind;
   targetPath: string;
+  targetLine?: number;
+  targetColumn?: number;
 };
 
 export type OpenDesktopApplicationResponse = {

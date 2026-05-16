@@ -73,6 +73,53 @@ describe("ThreadMarkdown", () => {
         applicationId: "zed",
         kind: "editor",
         targetPath: "/repo/PwrAgent/AGENTS.md",
+        targetLine: 17,
+        targetColumn: undefined,
+      });
+    });
+  });
+
+  it("passes local file link line and column metadata to the configured editor", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "vscode", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication }}
+        text={"Open [source](/repo/PwrAgent/src/main.ts:12:4)."}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "source" }));
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/PwrAgent/src/main.ts",
+        targetLine: 12,
+        targetColumn: 4,
       });
     });
   });
