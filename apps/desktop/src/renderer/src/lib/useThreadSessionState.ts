@@ -989,6 +989,43 @@ function isContextCompactionItemNotification(
   return itemType?.replace(/[-_\s]/g, "").toLowerCase() === "contextcompaction";
 }
 
+function normalizeCompletedAgentMessagePhase(
+  value: unknown
+): AppServerThreadMessageEntry["phase"] | undefined {
+  if (value === "commentary") {
+    return "commentary";
+  }
+  if (value === "final_answer" || value === "final") {
+    return "final";
+  }
+  return undefined;
+}
+
+function agentMessageEntryFromCompletedItem(
+  params: Record<string, unknown>,
+  fallbackPhase?: AppServerThreadMessageEntry["phase"]
+): AppServerThreadMessageEntry | undefined {
+  const item = getNotificationItem(params);
+  if (item?.type !== "agentMessage") {
+    return undefined;
+  }
+
+  const id = typeof item.id === "string" && item.id.trim() ? item.id : undefined;
+  const text = typeof item.text === "string" && item.text.trim() ? item.text : undefined;
+  if (!id || !text) {
+    return undefined;
+  }
+
+  const phase = normalizeCompletedAgentMessagePhase(item.phase) ?? fallbackPhase;
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    ...(phase ? { phase } : {}),
+    text,
+  };
+}
+
 function buildTurnMetadata(params: {
   fallbackId?: string;
   fallbackStartedAt?: number;
@@ -2440,7 +2477,71 @@ export function useThreadSessionState(params: {
             };
           }
 
-          const item = getNotificationItem(event.notification.params);
+          const completedItem = getNotificationItem(event.notification.params);
+          const pendingAssistantMessage = current.pendingAssistantMessage;
+          const fallbackAgentMessagePhase =
+            pendingAssistantMessage && pendingAssistantMessage.id === completedItem?.id
+              ? pendingAssistantMessage.phase
+              : undefined;
+          const completedAgentMessage = agentMessageEntryFromCompletedItem(
+            event.notification.params,
+            fallbackAgentMessagePhase
+          );
+          if (completedAgentMessage?.phase === "commentary") {
+            const turn = buildTurnMetadata({
+              fallbackId:
+                typeof event.notification.params.turnId === "string"
+                  ? event.notification.params.turnId
+                  : current.activeTurnId,
+              fallbackStartedAt: current.activeTurnStartedAt,
+              fallbackStatus: "in_progress",
+            });
+            const isSamePendingMessage =
+              current.pendingAssistantMessage?.id === completedAgentMessage.id;
+            const carriedSequence = isSamePendingMessage
+              ? readRendererSequence(current.pendingAssistantMessage)
+              : undefined;
+            const sequence = carriedSequence ?? current.nextLiveEntrySequence;
+            const nextMessage = withRendererSequence(
+              {
+                ...completedAgentMessage,
+                createdAt: isSamePendingMessage
+                  ? current.pendingAssistantMessage?.createdAt
+                  : Date.now(),
+                ...(turn ? { turn } : {}),
+              },
+              sequence
+            );
+            const nextResponse = appendMessageEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [nextMessage]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              nextLiveEntrySequence:
+                carriedSequence === undefined
+                  ? current.nextLiveEntrySequence + 1
+                  : current.nextLiveEntrySequence,
+              optimisticEntries: current.optimisticEntries.filter(
+                (entry) =>
+                  entry.type !== "message" ||
+                  entry.id !== completedAgentMessage.id
+              ),
+              pendingAssistantMessage:
+                isSamePendingMessage ? undefined : current.pendingAssistantMessage,
+              response: nextResponse,
+            };
+          }
+
+          const item = completedItem ?? getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
           if (details.length > 0) {
             const turn = buildTurnMetadata({
