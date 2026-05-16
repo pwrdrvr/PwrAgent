@@ -4194,6 +4194,11 @@ textarea,
   padding: 0 24px 16px 24px;
 }
 
+.thread-view--launchpad > .thread-header,
+.thread-view--launchpad > .launchpad-panel {
+  flex: 0 0 auto;
+}
+
 .thread-view__launchpad-composer {
   display: flex;
   flex: 0 0 auto;
@@ -4203,7 +4208,7 @@ textarea,
 }
 
 .thread-view__launchpad-composer:has(.transcript-panel--setup) {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   margin-top: 0;
 }

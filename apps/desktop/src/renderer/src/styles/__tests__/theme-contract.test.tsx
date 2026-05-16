@@ -219,6 +219,19 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps launchpad setup output from shrinking the header summary", () => {
+    const setupComposerRule = extractRuleBody(
+      css,
+      ".thread-view__launchpad-composer:has(.transcript-panel--setup)"
+    );
+
+    expect(css).toMatch(
+      /\.thread-view--launchpad > \.thread-header,\s*\.thread-view--launchpad > \.launchpad-panel\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
+    );
+    expect(setupComposerRule).toContain("flex: 1 1 0;");
+    expect(setupComposerRule).toContain("min-height: 0;");
+  });
+
   it("reserves opened context rail width for the thread header status area", () => {
     expect(css).toMatch(
       /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 12px\);[\s\S]*?\}/
