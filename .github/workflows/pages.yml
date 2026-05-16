@@ -14,6 +14,10 @@ on:
     paths:
       - "docs-site/**"
       - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -21,12 +25,13 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one in-flight Pages deploy at a time, but let queued runs
-# finish rather than canceling (we don't want a hot-fix to be
-# clobbered mid-deploy).
+# Serialize the production deploy (one in-flight at a time, no
+# canceling so a hot-fix can't be clobbered mid-deploy). PR builds
+# don't deploy, so they get their own per-ref group and can run in
+# parallel with main's deploy without queueing behind it.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -35,7 +40,7 @@ jobs:
       run:
         working-directory: docs-site
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -51,11 +56,13 @@ jobs:
           JEKYLL_ENV: production
         run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs-site/_site
 
   deploy:
+    # PR runs only validate the build; deploys are gated to main.
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -63,4 +70,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
