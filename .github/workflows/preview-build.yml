@@ -10,7 +10,7 @@ permissions:
 jobs:
   preview:
     name: Build preview DMG
-    if: github.event.label.name == 'build-preview'
+    if: github.event.label.name == 'ci:build-preview'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
