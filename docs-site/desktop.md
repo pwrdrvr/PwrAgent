@@ -31,6 +31,11 @@ What makes the PwrAgent side worth running:
 - **In-place Markdown composer** — ```` ``` ```` opens a code block,
   `>` opens a blockquote, bullet and numbered lists auto-continue.
   Codex Desktop doesn't have this yet.
+- **Persistent draft history** — every keystroke autosaves to a
+  per-profile SQLite store. Press **↑** in an empty composer to
+  recover and cycle through the last 20 drafts (unsent *and* sent).
+  Drafts survive thread switches, sidebar refreshes, settings
+  overlays, and full app restarts.
 - **Profile isolation** — two layered profile mechanisms (PwrAgent
   + Codex) compose into anything from "one install, one identity"
   to "N installs running side-by-side with isolated auth and
@@ -192,6 +197,48 @@ The composer parses Markdown as you type:
   `` `code` ``, links) renders as you type.
 
 Codex Desktop doesn't have this yet.
+
+### Composer draft history (↑ recovers your last message)
+
+Every keystroke in the composer is autosaved to a per-profile
+SQLite store, including the text, any `$skill` chips, pasted
+images, and the Tiptap editor state. Drafts survive **everything**
+that historically lost them in other agent UIs:
+
+- Navigating between threads
+- Opening Settings and coming back
+- A sidebar refresh
+- Quitting and relaunching the app
+- Tiptap undo grouping going sideways
+- Closing a thread without sending
+
+To recover a previous draft, focus an **empty** composer and press
+**↑ (ArrowUp)**. The composer fills with the most recent
+candidate. Keep pressing **↑** to cycle further back through up to
+**20 recent candidates** (per-profile); **↓ (ArrowDown)** cycles
+forward through the same list.
+
+Candidates include:
+
+- **Unsent drafts you abandoned** — anything you typed and walked
+  away from.
+- **Messages you've already sent** — recover what you said and
+  re-send it (with edits) without retyping.
+- **Drafts from other scopes** — if the current scope has no
+  history, the recovery falls back to recent drafts from
+  anywhere in the same PwrAgent profile.
+
+The recovery cycle is anchored on the *blank composer* state.
+Start typing once you've found the draft you want and the cycle
+ends — the next **↑** will move the cursor in the usual way.
+
+Persisted state lives in your active PwrAgent profile's
+`state.db` under `composer_drafts_latest` (the current snapshot
+per scope) and `composer_draft_recovery` (the bounded recovery
+journal). Switching PwrAgent profiles via `--profile <name>`
+gives that profile its own independent draft history.
+
+Codex Desktop doesn't have this yet either.
 
 ### Multi-message queueing
 
