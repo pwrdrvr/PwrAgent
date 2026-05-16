@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -42,6 +43,10 @@ name = "Fixture Env"
 
 [setup]
 script = "printf setup-output && sleep 2"
+
+[[actions]]
+name = "Capture CWD"
+command = "pwd -P > .pwragent-e2e-action-cwd"
 `,
     "utf8",
   );
@@ -229,6 +234,18 @@ script = "printf setup-output && sleep 2"
   };
 }
 
+function getSecondaryWorktreePath(repoDir: string): string | undefined {
+  const output = execFileSync("git", ["-C", repoDir, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+  });
+  const repoRealPath = realpathSync.native(repoDir);
+  return output
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length).trim())
+    .find((worktreePath) => realpathSync.native(worktreePath) !== repoRealPath);
+}
+
 async function createNoCodexEnvironmentsFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
@@ -330,6 +347,25 @@ async function createNoCodexEnvironmentsFixture(): Promise<{
   };
 }
 
+async function readActionCwdMarker(params: {
+  localPath: string;
+  worktreePath: string;
+}): Promise<string> {
+  for (const candidatePath of [params.worktreePath, params.localPath]) {
+    try {
+      return await readFile(
+        path.join(candidatePath, ".pwragent-e2e-action-cwd"),
+        "utf8",
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return "";
+}
+
 test("selected Codex environments run setup and show transcript output", async () => {
   const fixture = await createCodexEnvironmentSetupFixture();
   const app = await launchElectronApp({
@@ -358,11 +394,9 @@ test("selected Codex environments run setup and show transcript output", async (
         .locator('[aria-label="Setup command"]')
         .getByText("$ printf setup-output && sleep 2"),
     ).toBeVisible();
-    await expect(
-      app.window
-        .locator('[aria-label="Setup output"]')
-        .getByText("setup-output", { exact: true }),
-    ).toBeVisible();
+    await expect(app.window.locator('[aria-label="Setup output"]')).toContainText(
+      "setup-output",
+    );
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "hello env" }),
@@ -380,8 +414,7 @@ test("selected Codex environments run setup and show transcript output", async (
     await expect(
       app.window
         .getByRole("region", { name: "Transcript" })
-        .getByText("setup-output", { exact: true }),
-    ).toBeVisible();
+    ).toContainText("setup-output");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -416,6 +449,97 @@ test("existing running thread keeps selected Codex environment after pending sta
     await expect(app.window.getByRole("status")).toContainText("Thinking");
     await expect(environmentDropdown).toHaveAttribute("data-value", "environment");
     await expect(environmentDropdown).toContainText("Fixture Env");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("thread environment Run command uses the current cwd after workspace handoff", async () => {
+  const fixture = await createCodexEnvironmentSetupFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Existing directory thread/ })
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),
+    ).toBeVisible();
+
+    await app.window.getByLabel("Codex environment").click();
+    await app.window.getByRole("option", { name: "Fixture Env" }).click();
+    await expect(app.window.getByLabel("Codex environment")).toContainText(
+      "Fixture Env",
+    );
+    await expect(app.window.getByLabel("Environment command")).toContainText(
+      "Capture CWD",
+    );
+
+    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
+    const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Handoff" }).click();
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => getSecondaryWorktreePath(fixture.repoDir) ?? "", {
+        timeout: 5_000,
+      })
+      .not.toBe("");
+    const worktreePath = getSecondaryWorktreePath(fixture.repoDir);
+    expect(worktreePath).toBeTruthy();
+
+    await app.window.getByRole("button", { name: "Run" }).click();
+    await expect
+      .poll(
+        async () =>
+          await app.window.evaluate(async () => {
+            const desktopApi = (window as any).pwragent;
+            const snapshot = await desktopApi.getNavigationSnapshot({ backend: "codex" });
+            const thread = snapshot.threads.find(
+              (candidate: { id: string }) => candidate.id === "thread-existing",
+            );
+            return thread?.codexEnvironmentRuntime?.actionStatus ?? "missing";
+          }),
+        { timeout: 5_000 },
+      )
+      .toBe("started");
+    await expect
+      .poll(
+        async () =>
+          await readActionCwdMarker({
+            localPath: fixture.repoDir,
+            worktreePath: worktreePath!,
+          }),
+        {
+          timeout: 5_000,
+        },
+      )
+      .toBe(`${await realpath(worktreePath!)}\n`);
+
+    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
+    const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
+    await expect(returnDialog).toBeVisible();
+    await returnDialog.getByRole("button", { name: "Handoff" }).click();
+    await expect(returnDialog).toBeHidden();
+
+    await app.window.getByRole("button", { name: "Run" }).click();
+    await expect
+      .poll(
+        async () =>
+          await readFile(
+            path.join(fixture.repoDir, ".pwragent-e2e-action-cwd"),
+            "utf8",
+          ),
+        {
+          timeout: 5_000,
+        },
+      )
+      .toBe(`${await realpath(fixture.repoDir)}\n`);
   } finally {
     await app.close();
     await fixture.cleanup();

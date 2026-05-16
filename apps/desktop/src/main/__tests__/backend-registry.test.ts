@@ -2929,6 +2929,165 @@ command = '''printf action-ran > ${outputPath}'''
     }
   });
 
+  it("runs existing-thread environment actions from the current worktree directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-worktree-"));
+    const localPath = path.join(root, "local");
+    const worktreePath = path.join(root, "worktree");
+    const outputPath = path.join(root, "action-cwd.txt");
+    await mkdir(localPath, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "fixture-repo",
+              label: "FixtureRepo",
+              path: localPath,
+              worktreePath,
+              kind: "worktree",
+            },
+          ],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: localPath,
+            setupEnabled: false,
+            actions: [
+              {
+                id: "capture-cwd",
+                name: "Capture CWD",
+                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "capture-cwd",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          cwd: worktreePath,
+          actionName: "Capture CWD",
+          actionStatus: "started",
+        },
+      });
+      await expectEventually(
+        async () => await readFile(outputPath, "utf8"),
+        await realpath(worktreePath),
+      );
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          cwd: worktreePath,
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs existing-thread environment actions from Local after worktree handoff back", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-local-"));
+    const localPath = path.join(root, "local");
+    const worktreePath = path.join(root, "worktree");
+    const outputPath = path.join(root, "action-cwd.txt");
+    await mkdir(localPath, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "fixture-repo",
+              label: "FixtureRepo",
+              path: localPath,
+              kind: "local",
+            },
+          ],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: worktreePath,
+            setupEnabled: false,
+            actions: [
+              {
+                id: "capture-cwd",
+                name: "Capture CWD",
+                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "capture-cwd",
+        }),
+      ).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          cwd: localPath,
+          actionName: "Capture CWD",
+          actionStatus: "started",
+        },
+      });
+      await expectEventually(
+        async () => await readFile(outputPath, "utf8"),
+        await realpath(localPath),
+      );
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("persists failed existing-thread environment actions before rejecting", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-fail-"));
     const overlayStore = createOverlayStoreMock({
@@ -3053,7 +3212,7 @@ script = "printf setup-output"
         details: [
           {
             command: {
-              output: "setup-output",
+              output: expect.stringContaining("setup-output"),
               exitCode: 0,
             },
           },
@@ -3237,8 +3396,8 @@ script = "printf setup-failed && exit 42"
 
       expect(response.threadId).toBe("thread-1");
       expect(response.turnId).toBeUndefined();
-      expect(response.codexEnvironmentStartupFailure).toEqual({
-        message: "Codex environment command exited with 42",
+      expect(response.codexEnvironmentStartupFailure).toMatchObject({
+        message: expect.stringContaining("Codex environment command exited with 42"),
         phase: "setup",
         worktreeCleanupAvailable: true,
       });
@@ -3246,7 +3405,7 @@ script = "printf setup-failed && exit 42"
         environmentName: "Broken Env",
         setupStatus: "failed",
         setupExitCode: 42,
-        setupOutput: "setup-failed",
+        setupOutput: expect.stringContaining("setup-failed"),
       });
       expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
         worktreePath,

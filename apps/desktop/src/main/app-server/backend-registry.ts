@@ -294,7 +294,15 @@ type BackendClient = {
   }): Promise<{ threadId: string }>;
 };
 
-function resolveThreadGitSourcePath(
+/**
+ * Resolve the live workspace CWD for thread-scoped commands.
+ *
+ * Worktree threads must run from LinkedDirectorySummary.worktreePath; Local
+ * threads run from LinkedDirectorySummary.path. Persisted environment runtime
+ * cwd is intentionally not consulted here because it can lag behind a
+ * Local/Worktree handoff.
+ */
+function resolveThreadWorkspaceCwd(
   thread: AppServerThreadSummary | undefined,
   overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
@@ -302,15 +310,13 @@ function resolveThreadGitSourcePath(
     return undefined;
   }
 
-  const linkedDirectories = [
+  return resolveLinkedDirectoryWorkspaceCwd([
     ...overlayDirectories,
     ...thread.linkedDirectories,
-  ];
-
-  return resolveLinkedDirectoryCwd(linkedDirectories) ?? thread.projectKey;
+  ]) ?? thread.projectKey;
 }
 
-function resolveLinkedDirectoryCwd(
+function resolveLinkedDirectoryWorkspaceCwd(
   linkedDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
   const directory =
@@ -3148,12 +3154,12 @@ export class DesktopBackendRegistry {
         overlay,
         thread,
       });
-    const sourcePath = resolveThreadGitSourcePath(
+    const workspaceCwd = resolveThreadWorkspaceCwd(
       thread,
       overlay?.extraLinkedDirectories ?? [],
     );
-    const observedBranch = sourcePath
-      ? await readCurrentGitBranch(sourcePath).catch(() => thread?.observedGitBranch)
+    const observedBranch = workspaceCwd
+      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
@@ -3171,7 +3177,7 @@ export class DesktopBackendRegistry {
       drifted,
       expectedBranch,
       observedBranch: normalizedObservedBranch,
-      sourcePath,
+      workspaceCwd,
       threadId: params.threadId,
     });
 
@@ -3198,12 +3204,12 @@ export class DesktopBackendRegistry {
       callerReason: "active-turn-branch-adoption",
       threadId: params.threadId,
     });
-    const sourcePath = resolveThreadGitSourcePath(
+    const workspaceCwd = resolveThreadWorkspaceCwd(
       thread,
       overlay?.extraLinkedDirectories ?? [],
     );
-    const observedBranch = sourcePath
-      ? await readCurrentGitBranch(sourcePath).catch(() => thread?.observedGitBranch)
+    const observedBranch = workspaceCwd
+      ? await readCurrentGitBranch(workspaceCwd).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
 
@@ -3240,7 +3246,7 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         observedBranch: normalizedObservedBranch,
         previousExpectedBranch,
-        sourcePath,
+        workspaceCwd,
         threadId: params.threadId,
       });
     }
@@ -3542,8 +3548,11 @@ export class DesktopBackendRegistry {
       throw new Error("This thread does not have a selected Codex environment.");
     }
 
+    const currentCwd =
+      request.cwd?.trim() ||
+      (await this.resolveCodexThreadTurnCwd(request.threadId, overlay));
     const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
-      runtime,
+      currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
       request.actionId,
     );
     let nextRuntime: CodexThreadEnvironmentRuntime;
@@ -4582,7 +4591,7 @@ export class DesktopBackendRegistry {
     const enrichedThreads = await Promise.all(
       threadsWithPending.map(async (thread) => {
         const overlay = overlaysByThreadId[thread.id];
-        const cwd = resolveThreadGitSourcePath(
+        const cwd = resolveThreadWorkspaceCwd(
           thread,
           overlay?.extraLinkedDirectories ?? [],
         );
@@ -5019,13 +5028,15 @@ export class DesktopBackendRegistry {
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
-    const overlayCwd = resolveLinkedDirectoryCwd(overlay?.extraLinkedDirectories);
+    const overlayCwd = resolveLinkedDirectoryWorkspaceCwd(
+      overlay?.extraLinkedDirectories,
+    );
     if (overlayCwd?.trim()) {
       return overlayCwd.trim();
     }
 
     const pendingThread = this.pendingStartedThreads.get(`codex:${threadId}`);
-    const pendingCwd = resolveThreadGitSourcePath(pendingThread);
+    const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
     if (pendingCwd?.trim()) {
       return pendingCwd.trim();
     }
@@ -5035,7 +5046,7 @@ export class DesktopBackendRegistry {
       callerReason: "turn-cwd",
       threadId,
     });
-    return resolveThreadGitSourcePath(thread)?.trim() || undefined;
+    return resolveThreadWorkspaceCwd(thread)?.trim() || undefined;
   }
 
   private async recordCodexWorktreeOwnerThread(params: {

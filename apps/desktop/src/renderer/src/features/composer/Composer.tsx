@@ -2844,6 +2844,7 @@ export function Composer(props: ComposerProps) {
         backend: props.thread.source,
         threadId: props.thread.id,
         actionId: selectedThreadCodexAction.id,
+        ...(workspaceOpenPath ? { cwd: workspaceOpenPath } : {}),
       });
       await props.onRefreshNavigation?.();
     } catch (error) {
@@ -5006,10 +5007,18 @@ function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | 
 
 type ThreadWorkspace = {
   mode: "local" | "worktree";
+  /** Repository/local checkout path. In Worktree mode this is not the command CWD. */
   repositoryPath: string;
+  /** Current workspace path for opening apps and running thread-scoped commands. */
   sourcePath: string;
 };
 
+/**
+ * Single renderer source of truth for workspace-opening commands in the
+ * thread composer. VS Code, terminal, and environment Run must all use this
+ * value so Worktree threads launch from worktreePath and Local threads launch
+ * from path.
+ */
 function getComposerWorkspaceOpenPath(params: {
   directory?: NavigationDirectorySummary;
   launchpad?: NavigationLaunchpadDraft;

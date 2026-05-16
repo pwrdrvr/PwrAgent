@@ -318,6 +318,12 @@ export type RunCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   actionId: string;
+  /**
+   * Current thread workspace CWD. Renderer callers should pass the same path
+   * they use to open VS Code/terminal: worktreePath for Worktree threads, path
+   * for Local threads. Main process re-resolves this when omitted.
+   */
+  cwd?: string;
 };
 
 export type RunCodexEnvironmentActionResponse = {
