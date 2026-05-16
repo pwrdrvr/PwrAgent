@@ -13,6 +13,10 @@ const ChangelogWindow = lazy(async () => ({
 const LogsWindow = lazy(async () => ({
   default: (await import("./features/logs/LogsWindow")).LogsWindow,
 }));
+const LicenseDocumentWindow = lazy(async () => ({
+  default: (await import("./features/license/LicenseDocumentWindow"))
+    .LicenseDocumentWindow,
+}));
 const MessagingActivityWindow = lazy(async () => ({
   default: (await import("./features/messaging-activity/MessagingActivityWindow"))
     .MessagingActivityWindow,
@@ -41,6 +45,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "changelog",
     render: () => <ChangelogWindow />,
+  },
+  {
+    match: (hash) => hash === "third-party-notices",
+    render: () => <LicenseDocumentWindow />,
   },
   {
     match: (hash) => hash === "logs",

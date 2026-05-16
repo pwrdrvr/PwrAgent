@@ -1,8 +1,12 @@
+export const PWRAGENT_HOMEPAGE_URL = "https://pwragent.ai";
+export const PWRAGENT_DOCUMENTATION_URL = "https://docs.pwragent.ai";
+
 export type AppMetadata = {
   applicationName: string;
   applicationVersion: string;
   copyright: string;
   homepage: string;
+  documentationUrl: string;
   electronVersion: string;
   chromeVersion: string;
   nodeVersion: string;

@@ -73,6 +73,8 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
 
   const readLicenseDocument = props.desktopApi?.readLicenseDocument;
   const openChangelogWindow = props.desktopApi?.openChangelogWindow;
+  const openThirdPartyNoticesWindow =
+    props.desktopApi?.openThirdPartyNoticesWindow;
   const handleReadLicenseDocument = async (kind: AppLicenseDocumentKind) => {
     if (!readLicenseDocument) {
       return;
@@ -159,6 +161,18 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
             </dd>
           </div>
           <div>
+            <dt>Documentation</dt>
+            <dd>
+              <a
+                href={metadata.documentationUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {metadata.documentationUrl}
+              </a>
+            </dd>
+          </div>
+          <div>
             <dt>Electron</dt>
             <dd>{metadata.electronVersion}</dd>
           </div>
@@ -207,22 +221,17 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
                 void handleReadLicenseDocument("license");
               }}
             >
-              {licenseLoading === "license" ? "Loading…" : "View license"}
+              {licenseLoading === "license" ? "Loading…" : "View MIT license"}
             </button>
             <button
               className="button button--secondary"
               type="button"
-              disabled={
-                !readLicenseDocument ||
-                licenseLoading === "third-party-licenses"
-              }
+              disabled={!openThirdPartyNoticesWindow}
               onClick={() => {
-                void handleReadLicenseDocument("third-party-licenses");
+                void openThirdPartyNoticesWindow?.();
               }}
             >
-              {licenseLoading === "third-party-licenses"
-                ? "Loading…"
-                : "Third-party licenses"}
+              Third-party notices
             </button>
           </div>
           {licenseError ? (
