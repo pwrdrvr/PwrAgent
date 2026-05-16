@@ -3,7 +3,7 @@ import {
   spawn as spawnProcess,
 } from "node:child_process";
 import fs from "node:fs";
-import { access } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,13 @@ type KnownApplication = {
   canOpenWorkspace?: boolean;
   macOpenStrategy?: "ghostty-applescript";
   terminalWorkingDirectoryArg?: (targetPath: string) => string[];
+};
+
+type ApplicationLaunchInvocation = {
+  command: string;
+  args: string[];
+  cwd?: string;
+  mode: "execFile" | "spawn";
 };
 
 const EDITORS: KnownApplication[] = [
@@ -201,6 +208,7 @@ async function pathExists(candidatePath: string): Promise<boolean> {
 async function resolveBinary(
   application: KnownApplication,
   env: NodeJS.ProcessEnv,
+  appPath?: string,
 ): Promise<string | undefined> {
   const explicitPath = application.binaryPaths
     ? await firstExistingPath(application.binaryPaths)
@@ -224,7 +232,29 @@ async function resolveBinary(
     }
   }
 
+  const bundledPath = appPath
+    ? await resolveBundledApplicationCliPath(appPath, application.binaryNames ?? [])
+    : undefined;
+  if (bundledPath) {
+    return bundledPath;
+  }
+
   return undefined;
+}
+
+export async function resolveBundledApplicationCliPath(
+  appPath: string,
+  binaryNames: readonly string[],
+): Promise<string | undefined> {
+  if (binaryNames.length === 0) {
+    return undefined;
+  }
+
+  return await firstExistingPath(
+    binaryNames.map((binaryName) =>
+      path.join(appPath, "Contents", "Resources", "app", "bin", binaryName)
+    )
+  );
 }
 
 async function firstExistingPath(candidates: string[]): Promise<string | undefined> {
@@ -243,7 +273,7 @@ async function discoverApplication(
   const appPath = application.appPaths
     ? await firstExistingPath(application.appPaths)
     : undefined;
-  const executablePath = await resolveBinary(application, env);
+  const executablePath = await resolveBinary(application, env, appPath);
 
   if (!appPath && !executablePath) {
     return undefined;
@@ -323,33 +353,99 @@ export async function openDesktopApplication(
     return { opened: true };
   }
 
-  await openEditor(application, targetPath, env);
+  const invocation = buildEditorLaunchInvocation(application, targetPath, request);
+  if (await captureApplicationOpenIfRequested(request, invocation, env)) {
+    return { opened: true };
+  }
+  await runLaunchInvocation(invocation, env);
   return { opened: true };
 }
 
-async function openEditor(
+function buildEditorLaunchInvocation(
   application: DesktopApplicationDiscoveryCandidate,
   targetPath: string,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+  request: OpenDesktopApplicationRequest,
+): ApplicationLaunchInvocation {
   if (application.executablePath) {
-    await spawnDetached(application.executablePath, [targetPath], { env });
-    return;
+    return {
+      command: application.executablePath,
+      args: editorCliArgs(application.id, targetPath, request),
+      mode: "spawn",
+    };
   }
 
   if (application.appPath && process.platform === "darwin") {
-    await execFile(
-      "/usr/bin/open",
-      ["-a", macApplicationName(application.appPath), targetPath],
-      {
-        env,
-        timeout: 10_000,
-      },
-    );
-    return;
+    return {
+      command: "/usr/bin/open",
+      args: ["-a", macApplicationName(application.appPath), targetPath],
+      mode: "execFile",
+    };
   }
 
   throw new Error(`${application.name} does not have an executable launcher.`);
+}
+
+function editorCliArgs(
+  applicationId: string,
+  targetPath: string,
+  request: OpenDesktopApplicationRequest,
+): string[] {
+  if (!supportsVsCodeGoto(applicationId) || !isPositiveInteger(request.targetLine)) {
+    return [targetPath];
+  }
+
+  const location = isPositiveInteger(request.targetColumn)
+    ? `${targetPath}:${request.targetLine}:${request.targetColumn}`
+    : `${targetPath}:${request.targetLine}`;
+  return ["--goto", location];
+}
+
+function supportsVsCodeGoto(applicationId: string): boolean {
+  return (
+    applicationId === "vscode" ||
+    applicationId === "cursor" ||
+    applicationId === "windsurf"
+  );
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+async function runLaunchInvocation(
+  invocation: ApplicationLaunchInvocation,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (invocation.mode === "spawn") {
+    await spawnDetached(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env,
+    });
+    return;
+  }
+
+  await execFile(invocation.command, invocation.args, {
+    env,
+    timeout: 10_000,
+  });
+}
+
+async function captureApplicationOpenIfRequested(
+  request: OpenDesktopApplicationRequest,
+  invocation: ApplicationLaunchInvocation,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const capturePath = env.PWRAGENT_E2E_APPLICATION_OPEN_CAPTURE_PATH;
+  if (!capturePath) {
+    return false;
+  }
+
+  await writeFile(
+    capturePath,
+    `${JSON.stringify({ request, invocation }, null, 2)}\n`,
+    "utf8",
+  );
+  return true;
 }
 
 async function openTerminal(

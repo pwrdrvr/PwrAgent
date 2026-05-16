@@ -501,6 +501,8 @@ describe("TranscriptList", () => {
         applicationId: "zed",
         kind: "editor",
         targetPath: "/repo/PwrAgent/AGENTS.md",
+        targetLine: 17,
+        targetColumn: undefined,
       });
     });
   });

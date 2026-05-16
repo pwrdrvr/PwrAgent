@@ -1,0 +1,93 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "source-link-editor-open",
+    "threadId": "thread-source-link-editor-open"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-source-link-editor-open",
+          "title": "Source link editor open",
+          "titleSource": "explicit",
+          "summary": "Verify transcript source links open editor line targets.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "review",
+            "id": "review-1",
+            "displayText": "Code review",
+            "review": "Source link line target regression.",
+            "output": {
+              "findings": [
+                {
+                  "title": "Open this source link",
+                  "body": "Clicking the source link should preserve the target line.",
+                  "confidence_score": 0.95,
+                  "priority": 2,
+                  "code_location": {
+                    "absolute_file_path": "/tmp/pwragent-source-link-e2e/source.ts",
+                    "line_range": {
+                      "start": 12,
+                      "end": 12
+                    }
+                  }
+                }
+              ],
+              "overall_correctness": "patch is incorrect",
+              "overall_explanation": "Source link line target regression.",
+              "overall_confidence_score": 0.95
+            }
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Source link line target regression."
+          }
+        ],
+        "lastAssistantMessage": "Source link line target regression.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
