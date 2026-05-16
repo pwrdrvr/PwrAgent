@@ -92,6 +92,7 @@ type RawThreadSummary = {
   fastMode?: boolean;
   createdAt?: number;
   updatedAt?: number;
+  archivedAt?: number;
 };
 
 type SkillCatalogEntry = {
@@ -831,6 +832,7 @@ export class GrokAppServerClient {
           ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
+          archivedAt: thread.archivedAt,
           model: thread.model,
           serviceTier: thread.serviceTier,
           reasoningEffort: thread.reasoningEffort,

@@ -15,6 +15,7 @@ import type {
   AppServerThreadSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
+  WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
@@ -298,6 +299,25 @@ function createSettingsState(
   };
 }
 
+function createArchivedSnapshot(
+  threadId: string,
+  archivedAt: number,
+): WorktreeSnapshotSummary {
+  return {
+    id: `snapshot-${threadId}-${archivedAt}`,
+    backend: "codex",
+    threadId,
+    worktreePath: `/worktrees/${threadId}`,
+    repositoryPath: "/repo/PwrAgnt",
+    snapshotRef: `refs/archive/${threadId}`,
+    snapshotCommit: "abc123",
+    createdAt: archivedAt,
+    archivedAt,
+    state: "archived",
+    ignoredFilesExcluded: true,
+  };
+}
+
 describe("SettingsScreen", () => {
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
@@ -571,7 +591,9 @@ describe("SettingsScreen", () => {
     );
 
     expect(await screen.findByText("Archived code review")).toBeInTheDocument();
-    expect(screen.getByText("Needs to come back to the active thread list.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Needs to come back to the active thread list."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "PwrAgnt" })).toBeInTheDocument();
     expect(screen.getByText("/repo/PwrAgnt")).toBeInTheDocument();
     expect(listThreads).toHaveBeenCalledWith({ archived: true });
@@ -601,6 +623,9 @@ describe("SettingsScreen", () => {
           titleSource: "explicit" as const,
           createdAt: 1_000,
           updatedAt: 4_000,
+          worktreeSnapshots: [
+            createArchivedSnapshot("thread-pwragent-2", 2_000),
+          ],
           linkedDirectories: [
             {
               id: "directory-1",
@@ -617,6 +642,7 @@ describe("SettingsScreen", () => {
           titleSource: "explicit" as const,
           createdAt: 1_000,
           updatedAt: 3_000,
+          worktreeSnapshots: [createArchivedSnapshot("thread-other", 3_000)],
           linkedDirectories: [
             {
               id: "directory-2",
@@ -633,6 +659,9 @@ describe("SettingsScreen", () => {
           titleSource: "explicit" as const,
           createdAt: 1_000,
           updatedAt: 2_000,
+          worktreeSnapshots: [
+            createArchivedSnapshot("thread-pwragent-1", 5_000),
+          ],
           linkedDirectories: [
             {
               id: "directory-1",
@@ -659,18 +688,79 @@ describe("SettingsScreen", () => {
       name: "PwrAgnt",
     })).closest("section")!;
     expect(within(pwrAgentGroup).getByText("2 threads")).toBeInTheDocument();
+    const firstPwrAgentThread = within(pwrAgentGroup).getByText(
+      "First PwrAgent thread",
+    );
+    const secondPwrAgentThread = within(pwrAgentGroup).getByText(
+      "Second PwrAgent thread",
+    );
     expect(
-      within(pwrAgentGroup).getByText("Second PwrAgent thread"),
-    ).toBeInTheDocument();
-    expect(
-      within(pwrAgentGroup).getByText("First PwrAgent thread"),
-    ).toBeInTheDocument();
+      firstPwrAgentThread.compareDocumentPosition(secondPwrAgentThread) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     const otherGroup = screen.getByRole("heading", {
       name: "OtherProject",
     }).closest("section")!;
     expect(within(otherGroup).getByText("1 thread")).toBeInTheDocument();
-    expect(within(otherGroup).getByText("Other project thread")).toBeInTheDocument();
+    expect(
+      within(otherGroup).getByText("Other project thread"),
+    ).toBeInTheDocument();
+  });
+
+  it("limits each archived project to the 20 most recent archive timestamps", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: Array.from({ length: 25 }, (_, index): AppServerThreadSummary => {
+        const threadNumber = index + 1;
+        const threadId = `thread-${threadNumber}`;
+        return {
+          id: threadId,
+          title: `Archived thread ${String(threadNumber).padStart(2, "0")}`,
+          titleSource: "explicit",
+          createdAt: 1_000,
+          updatedAt: 1_000 + threadNumber,
+          worktreeSnapshots: [createArchivedSnapshot(threadId, threadNumber)],
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local",
+            },
+          ],
+          source: "codex",
+        };
+      }),
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrAgentGroup = (await screen.findByRole("heading", {
+      name: "PwrAgnt",
+    })).closest("section")!;
+    expect(
+      within(pwrAgentGroup).getByText("Archived thread 25"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText("Archived thread 06"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).queryByText("Archived thread 05"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText(
+        "Showing 20 of 25 most recent archived threads.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("does not re-add a restored thread when a stale archive refresh resolves", async () => {

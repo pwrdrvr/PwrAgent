@@ -17,11 +17,14 @@ type ArchivedThreadsState = {
 type ArchivedProjectGroup = {
   key: string;
   label: string;
+  latestArchiveTimestamp: number;
   path?: string;
   threads: AppServerThreadSummary[];
 };
 
 type ArchivedProjectIdentity = Omit<ArchivedProjectGroup, "threads">;
+
+const ARCHIVED_THREADS_PER_PROJECT_LIMIT = 20;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -145,72 +148,86 @@ export function ArchivedThreadsSettings(props: {
         }
       />
 
-      <SettingsSection
-        eyebrow="Archived Threads"
-        title="By project"
-        description="Review archived work by project and restore threads that should return to the main thread lists."
-        chip={state.loading ? "loading" : fetchedAtLabel}
-        chipKind="muted"
-      >
-        {state.loading && state.threads.length === 0 ? (
-          <p className="settings-empty settings-archive-empty">
-            Loading archived threads...
-          </p>
-        ) : projectGroups.length ? (
-          <div className="settings-archive-list">
-            {projectGroups.map((group) => (
-              <section className="settings-archive-project" key={group.key}>
-                <header className="settings-archive-project__header">
-                  <div className="settings-archive-project__body">
-                    <h3 className="settings-archive-project__title">
-                      {group.label}
-                    </h3>
-                    {group.path ? (
-                      <p className="settings-archive-project__path">
-                        {group.path}
-                      </p>
-                    ) : null}
-                  </div>
-                  <span className="settings-pathrow__chip">
-                    {group.threads.length === 1
-                      ? "1 thread"
-                      : `${group.threads.length} threads`}
-                  </span>
-                </header>
-                <div className="settings-archive-project__threads">
-                  {group.threads.map((thread) => {
-                    const threadKey = buildArchivedThreadKey(thread);
-                    return (
-                      <ArchivedThreadRow
-                        key={threadKey}
-                        restoring={restoringThreadKey === threadKey}
-                        thread={thread}
-                        onRestore={() => {
-                          void restoreThread(thread);
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <p className="settings-empty settings-archive-empty">
-            No archived threads.
-          </p>
-        )}
-        {restoreMessage ? (
-          <p className="settings-archive-status" role="status">
-            {restoreMessage}
-          </p>
-        ) : null}
-        {state.error ? (
-          <p className="settings-row__error settings-archive-status" role="alert">
-            {state.error}
-          </p>
-        ) : null}
-      </SettingsSection>
+      {(state.loading && state.threads.length === 0) ||
+      (!state.loading && projectGroups.length === 0) ||
+      restoreMessage ||
+      state.error ? (
+        <SettingsSection
+          eyebrow="Archived Threads"
+          title="Project folders"
+          description="Review archived work by project and restore threads that should return to the main thread lists."
+          chip={state.loading ? "loading" : fetchedAtLabel}
+          chipKind="muted"
+        >
+          {state.loading && state.threads.length === 0 ? (
+            <p className="settings-empty settings-archive-empty">
+              Loading archived threads...
+            </p>
+          ) : null}
+          {!state.loading && projectGroups.length === 0 ? (
+            <p className="settings-empty settings-archive-empty">
+              No archived threads.
+            </p>
+          ) : null}
+          {restoreMessage ? (
+            <p className="settings-archive-status" role="status">
+              {restoreMessage}
+            </p>
+          ) : null}
+          {state.error ? (
+            <p
+              className="settings-row__error settings-archive-status"
+              role="alert"
+            >
+              {state.error}
+            </p>
+          ) : null}
+        </SettingsSection>
+      ) : null}
+
+      {projectGroups.map((group) => {
+        const visibleThreads = group.threads.slice(
+          0,
+          ARCHIVED_THREADS_PER_PROJECT_LIMIT,
+        );
+        const hiddenThreadCount = group.threads.length - visibleThreads.length;
+        return (
+          <SettingsSection
+            key={group.key}
+            eyebrow="Project folder"
+            title={group.label}
+            description={group.path}
+            chip={
+              group.threads.length === 1
+                ? "1 thread"
+                : `${group.threads.length} threads`
+            }
+            chipKind="muted"
+          >
+            <div className="settings-archive-project__threads">
+              {visibleThreads.map((thread) => {
+                const threadKey = buildArchivedThreadKey(thread);
+                return (
+                  <ArchivedThreadRow
+                    key={threadKey}
+                    restoring={restoringThreadKey === threadKey}
+                    thread={thread}
+                    onRestore={() => {
+                      void restoreThread(thread);
+                    }}
+                  />
+                );
+              })}
+              {hiddenThreadCount > 0 ? (
+                <p className="settings-archive-status">
+                  Showing {ARCHIVED_THREADS_PER_PROJECT_LIMIT} of{" "}
+                  {group.threads.length} most recent archived threads.
+                </p>
+              ) : null}
+            </div>
+          </SettingsSection>
+        );
+      })}
     </SettingsSectionStack>
   );
 }
@@ -224,7 +241,10 @@ function ArchivedThreadRow(props: {
   const directories = thread.linkedDirectories
     .map((directory) => directory.label || directory.path)
     .filter(Boolean);
-  const activityLabel = thread.updatedAt
+  const archivedAt = resolveArchiveTimestamp(thread);
+  const activityLabel = archivedAt
+    ? `Archived ${formatTimestamp(archivedAt)}`
+    : thread.updatedAt
     ? `Updated ${formatTimestamp(thread.updatedAt)}`
     : thread.createdAt
       ? `Created ${formatTimestamp(thread.createdAt)}`
@@ -266,8 +286,8 @@ function sortArchivedThreads(
   threads: AppServerThreadSummary[],
 ): AppServerThreadSummary[] {
   return [...threads].sort((left, right) => {
-    const rightTimestamp = right.updatedAt ?? right.createdAt ?? 0;
-    const leftTimestamp = left.updatedAt ?? left.createdAt ?? 0;
+    const rightTimestamp = resolveArchiveSortTimestamp(right);
+    const leftTimestamp = resolveArchiveSortTimestamp(left);
     const timestampDelta = rightTimestamp - leftTimestamp;
     return timestampDelta !== 0
       ? timestampDelta
@@ -284,6 +304,10 @@ function groupArchivedThreadsByProject(
     const existing = groups.get(project.key);
     if (existing) {
       existing.threads.push(thread);
+      existing.latestArchiveTimestamp = Math.max(
+        existing.latestArchiveTimestamp,
+        project.latestArchiveTimestamp,
+      );
       continue;
     }
     groups.set(project.key, {
@@ -295,7 +319,11 @@ function groupArchivedThreadsByProject(
   return [...groups.values()].sort((left, right) => {
     if (left.key === "__no-project__") return 1;
     if (right.key === "__no-project__") return -1;
-    return left.label.localeCompare(right.label);
+    const timestampDelta =
+      right.latestArchiveTimestamp - left.latestArchiveTimestamp;
+    return timestampDelta !== 0
+      ? timestampDelta
+      : left.label.localeCompare(right.label);
   });
 }
 
@@ -309,6 +337,7 @@ function resolveArchivedProject(
     return {
       key: directory.path || directory.id || directory.label,
       label: directory.label || pathBaseName(directory.path) || "Project",
+      latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
       path: directory.path,
     };
   }
@@ -318,6 +347,7 @@ function resolveArchivedProject(
     return {
       key: projectKey,
       label: pathBaseName(projectKey) || projectKey,
+      latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
       path: projectKey,
     };
   }
@@ -325,7 +355,38 @@ function resolveArchivedProject(
   return {
     key: "__no-project__",
     label: "No project",
+    latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
   };
+}
+
+function resolveArchiveSortTimestamp(thread: AppServerThreadSummary): number {
+  return (
+    resolveArchiveTimestamp(thread) ??
+    thread.updatedAt ??
+    thread.createdAt ??
+    0
+  );
+}
+
+function resolveArchiveTimestamp(
+  thread: AppServerThreadSummary,
+): number | undefined {
+  const explicitArchivedAt = thread.archivedAt;
+  if (explicitArchivedAt) {
+    return explicitArchivedAt;
+  }
+
+  return (thread.worktreeSnapshots ?? []).reduce<number | undefined>(
+    (latest, snapshot) => {
+      if (!snapshot.archivedAt) {
+        return latest;
+      }
+      return latest === undefined
+        ? snapshot.archivedAt
+        : Math.max(latest, snapshot.archivedAt);
+    },
+    undefined,
+  );
 }
 
 function buildArchivedThreadKey(thread: AppServerThreadSummary): string {

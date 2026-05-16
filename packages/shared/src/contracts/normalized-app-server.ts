@@ -162,6 +162,7 @@ export type AppServerThreadSummary = {
   projectKey?: string;
   createdAt?: number;
   updatedAt?: number;
+  archivedAt?: number;
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
   observedGitBranch?: string;
