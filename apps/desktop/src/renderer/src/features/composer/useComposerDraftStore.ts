@@ -3,6 +3,9 @@ import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  ComposerDraftLifecycle,
+  ComposerDraftRecoveryCandidate,
+  ListComposerDraftRecoveryCandidatesRequest,
   NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
@@ -34,6 +37,7 @@ export type ComposerPendingSteerSnapshot = {
 export type ComposerDraftStore = {
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
+  hydrationVersion?: number;
   deletePendingSteer(scopeKey: string): void;
   deleteQueuedTurn(scopeKey: string): void;
   getPendingSteer(scopeKey: string): ComposerPendingSteerSnapshot | undefined;
@@ -42,6 +46,14 @@ export type ComposerDraftStore = {
   removeQueuedTurnAt(scopeKey: string, index: number): ComposerQueuedTurnSnapshot | undefined;
   removeQueuedTurnById(scopeKey: string, id: string): ComposerQueuedTurnSnapshot | undefined;
   shiftQueuedTurn(scopeKey: string): ComposerQueuedTurnSnapshot | undefined;
+  listRecoveryCandidates?(
+    request: ListComposerDraftRecoveryCandidatesRequest,
+  ): Promise<ComposerDraftRecoveryCandidate[]>;
+  recordHistory?(
+    scopeKey: string,
+    snapshot: ComposerDraftSnapshot,
+    status: ComposerDraftLifecycle,
+  ): void;
   setPendingSteer(scopeKey: string, snapshot: ComposerPendingSteerSnapshot): void;
   setQueuedTurn(scopeKey: string, snapshot: ComposerQueuedTurnSnapshot): void;
   setQueuedTurns(scopeKey: string, snapshots: ComposerQueuedTurnSnapshot[]): void;

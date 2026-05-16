@@ -18,6 +18,8 @@ const showAppLogWindowMock = vi.fn();
 const showChangelogWindowMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
+const registerComposerDraftIpcHandlersMock = vi.fn();
+const disposeComposerDraftIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerProfilesIpcHandlersMock = vi.fn();
@@ -143,6 +145,11 @@ vi.mock("../ipc/image-normalization", () => ({
   disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
 }));
 
+vi.mock("../ipc/composer-drafts", () => ({
+  registerComposerDraftIpcHandlers: registerComposerDraftIpcHandlersMock,
+  disposeComposerDraftIpcHandlers: disposeComposerDraftIpcHandlersMock,
+}));
+
 vi.mock("../ipc/preload-log", () => ({
   registerPreloadLogIpcHandlers: registerPreloadLogIpcHandlersMock,
   disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
@@ -251,6 +258,8 @@ describe("bootstrapApp", () => {
     showChangelogWindowMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
+    registerComposerDraftIpcHandlersMock.mockReset();
+    disposeComposerDraftIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
     disposePreloadLogIpcHandlersMock.mockReset();
     registerProfilesIpcHandlersMock.mockReset();
@@ -342,6 +351,7 @@ describe("bootstrapApp", () => {
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -464,6 +474,7 @@ describe("bootstrapApp", () => {
 
     appEventHandlers.get("before-quit")?.();
     expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();

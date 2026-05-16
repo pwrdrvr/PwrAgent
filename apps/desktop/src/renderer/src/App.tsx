@@ -17,6 +17,7 @@ import {
 } from "./features/settings/useDesktopSettings";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
+import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -91,7 +92,11 @@ function DesktopAppShell(props: {
     onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
-  const composerDraftStore = useComposerDraftStore();
+  const baseComposerDraftStore = useComposerDraftStore();
+  const composerDraftStore = useDurableComposerDraftStore(
+    baseComposerDraftStore,
+    desktopApi,
+  );
   useQueuedTurnRelease({
     backends: backendSummaries.backends,
     composerDraftStore,

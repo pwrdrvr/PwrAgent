@@ -192,6 +192,12 @@ type DeletedSkillTokenHistoryEntry = {
   skillTokens: ComposerSkillToken[];
 };
 
+type RecoveryLookupRequest = {
+  lookupId: number;
+  scopeKey: string;
+  version: number;
+};
+
 type PendingProgrammaticComposerChange = {
   expectedDraft: string;
   expectedSkillTokensSignature: string;
@@ -909,6 +915,7 @@ export function Composer(props: ComposerProps) {
       : "empty";
   const localDraftStore = useComposerDraftStore();
   const draftStore = props.draftStore ?? localDraftStore;
+  const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
   const savedInitialDraft = draftStore.get(composerScopeKey);
   const savedInitialQueuedTurns = props.thread
     ? draftStore.getQueuedTurns(composerScopeKey)
@@ -923,6 +930,15 @@ export function Composer(props: ComposerProps) {
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
+  const recoveryCycleRef = useRef<{
+    activeIndex?: number;
+    candidates: ComposerDraftSnapshot[];
+    scopeKey: string;
+  } | undefined>(undefined);
+  const recoveryEligibilityVersionRef = useRef(0);
+  const recoveryLookupSequenceRef = useRef(0);
+  const recoveringDraftRef = useRef(false);
+  const composerSelectionRequestSequenceRef = useRef(0);
   const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
   const latestDraftSnapshotRef = useRef<{
     scopeKey: string;
@@ -993,6 +1009,10 @@ export function Composer(props: ComposerProps) {
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
   );
+  const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
+    id: string;
+    index: number;
+  }>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
@@ -1023,7 +1043,9 @@ export function Composer(props: ComposerProps) {
     draft.length,
   );
   const isDraftStoreScope = (scopeKey: string): boolean =>
-    scopeKey.startsWith("thread:") || scopeKey.startsWith("launchpad:");
+    scopeKey === "empty" ||
+    scopeKey.startsWith("thread:") ||
+    scopeKey.startsWith("launchpad:");
   const canonicalDraft = useMemo(
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
@@ -1054,10 +1076,23 @@ export function Composer(props: ComposerProps) {
     setDraft("");
     setSkillTokens([]);
   };
+  const hasLiveComposerContent = (): boolean => {
+    const latest = latestDraftSnapshotRef.current;
+    return Boolean(
+      (inputRef.current?.value ?? latest.snapshot.draft).trim() ||
+        (inputRef.current?.skillTokenCount ??
+          latest.snapshot.skillTokens.length) > 0 ||
+        latest.snapshot.imageAttachments.length > 0,
+    );
+  };
   const updateVisibleDraft = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
+    options?: { preserveRecoveryCycle?: boolean },
   ): void => {
+    if (!recoveringDraftRef.current && !options?.preserveRecoveryCycle) {
+      recoveryCycleRef.current = undefined;
+    }
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
     if (nextSkillTokens) {
@@ -1086,6 +1121,15 @@ export function Composer(props: ComposerProps) {
       state.skillTokens.length === 0 &&
       state.imageAttachments.length === 0
     ) {
+      const previous = latestDraftSnapshotRef.current;
+      if (
+        previous.scopeKey === scopeKey &&
+        (previous.snapshot.draft.trim() ||
+          previous.snapshot.skillTokens.length > 0 ||
+          previous.snapshot.imageAttachments.length > 0)
+      ) {
+        recordComposerDraftHistory(scopeKey, previous.snapshot, "abandoned");
+      }
       draftStore.delete(scopeKey);
       return;
     }
@@ -1096,6 +1140,220 @@ export function Composer(props: ComposerProps) {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
     }
+  };
+  const recordComposerDraftHistory = (
+    scopeKey: string,
+    state: ComposerDraftSnapshot,
+    status: "unsent" | "sent" | "abandoned",
+  ): void => {
+    if (!isDraftStoreScope(scopeKey)) {
+      return;
+    }
+    draftStore.recordHistory?.(scopeKey, state, status);
+  };
+  const getComposerDraftSnapshotSignature = (
+    snapshot: ComposerDraftSnapshot,
+  ): string =>
+    JSON.stringify({
+      draft: snapshot.draft,
+      editorDocument: snapshot.editorDocument,
+      imageAttachments: snapshot.imageAttachments.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        size: attachment.size,
+        type: attachment.type,
+        url: attachment.url,
+      })),
+      skillTokens: snapshot.skillTokens.map((token) => ({
+        index: token.index,
+        name: token.name,
+        path: token.path,
+      })),
+    });
+  const dedupeComposerDraftSnapshots = (
+    snapshots: ComposerDraftSnapshot[],
+  ): ComposerDraftSnapshot[] => {
+    const seen = new Set<string>();
+    return snapshots.filter((snapshot) => {
+      const signature = getComposerDraftSnapshotSignature(snapshot);
+      if (seen.has(signature)) {
+        return false;
+      }
+      seen.add(signature);
+      return true;
+    });
+  };
+  const applyRecoveredComposerDraft = (
+    snapshot: ComposerDraftSnapshot,
+  ): void => {
+    recoveringDraftRef.current = true;
+    deletedSkillTokenHistoryRef.current = [];
+    flushSync(() => {
+      setDraft(snapshot.draft);
+      setEditorDocument(snapshot.editorDocument);
+      setImageAttachments(snapshot.imageAttachments);
+      setSkillTokens(snapshot.skillTokens);
+      setComposerSelectionRequest({
+        id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
+        index: 0,
+      });
+    });
+    saveComposerDraftSnapshot(composerScopeKey, snapshot);
+    setSendError(undefined);
+    requestAnimationFrame(() => {
+      recoveringDraftRef.current = false;
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(0, 0);
+      requestAnimationFrame(() => {
+        inputRef.current?.setSelectionRange(0, 0);
+      });
+    });
+  };
+  const clearRecoveredComposerDraft = (): void => {
+    recoveryCycleRef.current = undefined;
+    recoveringDraftRef.current = true;
+    deletedSkillTokenHistoryRef.current = [];
+    clearComposerDraftSnapshot(composerScopeKey);
+    flushSync(() => {
+      setDraft("");
+      setEditorDocument(undefined);
+      setImageAttachments([]);
+      setSkillTokens([]);
+      setComposerSelectionRequest({
+        id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
+        index: 0,
+      });
+    });
+    setSendError(undefined);
+    requestAnimationFrame(() => {
+      recoveringDraftRef.current = false;
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(0, 0);
+      requestAnimationFrame(() => {
+        inputRef.current?.setSelectionRange(0, 0);
+      });
+    });
+  };
+  const isRecoveryLookupCurrent = (
+    request: RecoveryLookupRequest,
+  ): boolean =>
+    recoveryLookupSequenceRef.current === request.lookupId &&
+    recoveryEligibilityVersionRef.current === request.version &&
+    activeComposerScopeKeyRef.current === request.scopeKey &&
+    latestDraftSnapshotRef.current.scopeKey === request.scopeKey &&
+    !hasLiveComposerContent();
+  const getOrCreateRecoveryCycle = async (
+    request?: RecoveryLookupRequest,
+  ): Promise<
+    NonNullable<typeof recoveryCycleRef.current> | undefined
+  > => {
+    if (!draftStore.listRecoveryCandidates) {
+      return undefined;
+    }
+
+    let cycle = recoveryCycleRef.current;
+    if (!cycle || cycle.scopeKey !== composerScopeKey) {
+      let response = await draftStore
+        .listRecoveryCandidates({
+          backend: props.thread?.source,
+          directoryKey: props.launchpad?.directoryKey ?? props.directory?.key,
+          includeSent: true,
+          limit: 20,
+          scopeKey: composerScopeKey,
+          threadId: props.thread?.id,
+        })
+        .catch((error) => {
+          console.warn("Failed to list composer draft recovery candidates", error);
+          return [];
+        });
+      if (response.length === 0) {
+        response = await draftStore
+          .listRecoveryCandidates({
+            includeSent: true,
+            limit: 20,
+          })
+          .catch((error) => {
+            console.warn(
+              "Failed to list global composer draft recovery candidates",
+              error,
+            );
+            return [];
+          });
+      }
+      if (request && !isRecoveryLookupCurrent(request)) {
+        return undefined;
+      }
+      const candidates = response
+        .map((candidate) => ({
+          draft: candidate.text,
+          editorDocument: candidate.editorDocument as JSONContent | undefined,
+          imageAttachments: candidate.imageAttachments,
+          skillTokens: candidate.skillTokens as ComposerSkillToken[],
+        }))
+        .filter(
+          (candidate) =>
+            candidate.draft.trim() ||
+            candidate.skillTokens.length > 0 ||
+            candidate.imageAttachments.length > 0,
+        );
+      const uniqueCandidates = dedupeComposerDraftSnapshots(candidates);
+      if (uniqueCandidates.length === 0) {
+        return;
+      }
+      cycle = {
+        activeIndex: undefined,
+        candidates: uniqueCandidates,
+        scopeKey: composerScopeKey,
+      };
+    }
+
+    return cycle;
+  };
+  const recoverPreviousComposerDraft = async (): Promise<void> => {
+    const existingCycle = recoveryCycleRef.current;
+    const lookupRequest =
+      !existingCycle || existingCycle.scopeKey !== composerScopeKey
+        ? {
+            lookupId: ++recoveryLookupSequenceRef.current,
+            scopeKey: composerScopeKey,
+            version: recoveryEligibilityVersionRef.current,
+          }
+        : undefined;
+    const cycle = await getOrCreateRecoveryCycle(lookupRequest);
+    if (!cycle) {
+      return;
+    }
+    if (lookupRequest && !isRecoveryLookupCurrent(lookupRequest)) {
+      return;
+    }
+
+    const activeIndex = cycle.activeIndex ?? -1;
+    const nextIndex = Math.min(activeIndex + 1, cycle.candidates.length - 1);
+    const candidate = cycle.candidates[nextIndex];
+    recoveryCycleRef.current = {
+      ...cycle,
+      activeIndex: nextIndex,
+    };
+    applyRecoveredComposerDraft(candidate);
+  };
+  const recoverNextComposerDraft = (): void => {
+    const cycle = recoveryCycleRef.current;
+    if (!cycle || cycle.scopeKey !== composerScopeKey) {
+      return;
+    }
+
+    const activeIndex = cycle.activeIndex ?? 0;
+    const nextIndex = activeIndex - 1;
+    if (nextIndex < 0) {
+      clearRecoveredComposerDraft();
+      return;
+    }
+
+    recoveryCycleRef.current = {
+      ...cycle,
+      activeIndex: nextIndex,
+    };
+    applyRecoveredComposerDraft(cycle.candidates[nextIndex]);
   };
   const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
@@ -1212,6 +1470,10 @@ export function Composer(props: ComposerProps) {
       skillTokens: [],
     };
 
+    const latest = latestDraftSnapshotRef.current;
+    if (latest.scopeKey === scopeKey) {
+      recordComposerDraftHistory(scopeKey, latest.snapshot, "sent");
+    }
     clearComposerDraftSnapshot(scopeKey);
     latestDraftSnapshotRef.current = {
       scopeKey,
@@ -1353,6 +1615,8 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    recoveryEligibilityVersionRef.current += 1;
+    recoveryLookupSequenceRef.current += 1;
     const previousSnapshot = {
       draft,
       editorDocument,
@@ -1391,6 +1655,29 @@ export function Composer(props: ComposerProps) {
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
   }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
+
+  useEffect(() => {
+    const saved = draftStore.get(composerScopeKey);
+    if (!saved) {
+      return;
+    }
+    const latest = latestDraftSnapshotRef.current;
+    if (latest.scopeKey !== composerScopeKey) {
+      return;
+    }
+    if (
+      latest.snapshot.draft.trim() ||
+      latest.snapshot.skillTokens.length > 0 ||
+      latest.snapshot.imageAttachments.length > 0
+    ) {
+      return;
+    }
+
+    setDraft(saved.draft);
+    setEditorDocument(saved.editorDocument);
+    setImageAttachments(saved.imageAttachments);
+    setSkillTokens(saved.skillTokens);
+  }, [composerScopeKey, draftStore, draftStoreHydrationVersion]);
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -1748,6 +2035,11 @@ export function Composer(props: ComposerProps) {
       if (options?.queued) {
         removeQueuedTurn(options.queued);
       } else {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "sent",
+        );
         clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
         setReviewConfig(undefined);
@@ -1863,6 +2155,11 @@ export function Composer(props: ComposerProps) {
       if (queued) {
         removeQueuedTurn(queued);
       } else {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "sent",
+        );
         clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
         setImageAttachments([]);
@@ -1944,6 +2241,11 @@ export function Composer(props: ComposerProps) {
       text: canonicalDraft,
       imageAttachments,
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -1961,6 +2263,11 @@ export function Composer(props: ComposerProps) {
       imageAttachments: [],
       reviewCommand,
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -2056,6 +2363,11 @@ export function Composer(props: ComposerProps) {
       imageAttachments: pending.imageAttachments,
       status: "pending",
     });
+    recordComposerDraftHistory(
+      composerScopeKey,
+      latestDraftSnapshotRef.current.snapshot,
+      "unsent",
+    );
     clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
@@ -2967,6 +3279,10 @@ export function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
     metadata?: ComposerInputChangeMetadata,
   ): void => {
+    if (!recoveringDraftRef.current) {
+      recoveryCycleRef.current = undefined;
+      recoveryEligibilityVersionRef.current += 1;
+    }
     unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
       pendingProgrammaticComposerChangeRef.current;
@@ -3003,8 +3319,20 @@ export function Composer(props: ComposerProps) {
           })()
         : undefined;
     const storedSkillTokens = nextSkillTokens ?? skillTokens;
+    const preserveRecoveryCycle =
+      !recoveringDraftRef.current &&
+      recoveryCycleRef.current?.candidates.some(
+        (candidate) =>
+          getComposerDraftSnapshotSignature(candidate) ===
+          getComposerDraftSnapshotSignature({
+            draft: nextDraft,
+            editorDocument: metadata?.editorDocument,
+            imageAttachments,
+            skillTokens: storedSkillTokens,
+          }),
+      ) === true;
 
-    updateVisibleDraft(nextDraft, nextSkillTokens);
+    updateVisibleDraft(nextDraft, nextSkillTokens, { preserveRecoveryCycle });
     setEditorDocument(metadata?.editorDocument);
     saveComposerDraftSnapshot(composerScopeKey, {
       draft: nextDraft,
@@ -3032,6 +3360,52 @@ export function Composer(props: ComposerProps) {
     }
 
     if (!hasAutocomplete) {
+      const liveHasComposerContent = Boolean(
+        (inputRef.current?.value ?? draft).trim() ||
+          (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
+      );
+      const liveHasAnyComposerContent =
+        liveHasComposerContent || imageAttachments.length > 0;
+      const recoveryCycle = recoveryCycleRef.current;
+      const liveSelectionAtStart =
+        (inputRef.current?.selectionStart ?? 0) === 0 &&
+        (inputRef.current?.selectionEnd ?? 0) === 0;
+      const canCycleActiveRecovery =
+        recoveryCycle?.scopeKey === composerScopeKey && liveSelectionAtStart;
+      if (recoveryCycle && !canCycleActiveRecovery) {
+        recoveryCycleRef.current = undefined;
+        recoveryEligibilityVersionRef.current += 1;
+      }
+      if (
+        recoveryCycle &&
+        canCycleActiveRecovery &&
+        liveHasAnyComposerContent &&
+        event.key !== "ArrowUp" &&
+        event.key !== "ArrowDown"
+      ) {
+        recoveryCycleRef.current = undefined;
+        recoveryEligibilityVersionRef.current += 1;
+      }
+      if (
+        event.key === "ArrowUp" &&
+        (!liveHasComposerContent || canCycleActiveRecovery) &&
+        (imageAttachments.length === 0 || canCycleActiveRecovery)
+      ) {
+        event.preventDefault();
+        void recoverPreviousComposerDraft();
+        return;
+      }
+      if (
+        event.key === "ArrowDown" &&
+        liveHasAnyComposerContent &&
+        canCycleActiveRecovery &&
+        (imageAttachments.length === 0 || canCycleActiveRecovery)
+      ) {
+        event.preventDefault();
+        recoverNextComposerDraft();
+        return;
+      }
+
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         void submitTurn(event.metaKey ? "steer" : "default");
@@ -3603,6 +3977,7 @@ export function Composer(props: ComposerProps) {
             label={isLaunchpad ? "New thread" : "Reply"}
             markdownConversion
             placeholder={composerPlaceholder}
+            selectionRequest={composerSelectionRequest}
             editorDocument={editorDocument}
             skillTokens={skillTokens}
             value={draft}

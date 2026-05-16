@@ -13,6 +13,7 @@ import {
 import { flushSync } from "react-dom";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
+import { closeHistory } from "prosemirror-history";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import type { AppServerSkillSummary } from "@pwragent/shared";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
@@ -42,6 +43,10 @@ type ComposerTiptapInputProps = {
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
+  selectionRequest?: {
+    id: string;
+    index: number;
+  };
   skillTokens: ComposerSkillToken[];
   value: string;
 };
@@ -54,6 +59,11 @@ type TiptapReadState = {
 };
 
 type DeletedSingleSkillState = TiptapReadState & {
+  editorDocument: JSONContent;
+  selectionIndex: number;
+};
+
+type ControlledHistoryEntry = TiptapReadState & {
   editorDocument: JSONContent;
   selectionIndex: number;
 };
@@ -133,6 +143,10 @@ const SkillMention = Mention.extend({
 
 const MarkdownStarterKit = StarterKit.configure({
   link: false,
+  undoRedo: {
+    depth: 500,
+    newGroupDelay: 750,
+  },
 });
 
 const PlainTextStarterKit = StarterKit.configure({
@@ -144,6 +158,10 @@ const PlainTextStarterKit = StarterKit.configure({
   link: false,
   listItem: false,
   orderedList: false,
+  undoRedo: {
+    depth: 500,
+    newGroupDelay: 750,
+  },
 });
 
 function splitTextContent(text: string): JSONContent[] {
@@ -942,6 +960,10 @@ function getContentSignature(params: {
   });
 }
 
+function closeEditorHistory(editor: TiptapEditor): void {
+  editor.view.dispatch(closeHistory(editor.state.tr));
+}
+
 function applyExternalSkillInsertion(params: {
   current: TiptapReadState;
   editor: TiptapEditor;
@@ -995,11 +1017,16 @@ function applyExternalSkillInsertion(params: {
     insertedContent.push({ type: "text", text: " " });
   }
 
-  return params.editor.commands.insertContentAt(
+  closeEditorHistory(params.editor);
+  const inserted = params.editor.commands.insertContentAt(
     { from, to },
     insertedContent,
     { updateSelection: true },
   );
+  if (inserted) {
+    closeEditorHistory(params.editor);
+  }
+  return inserted;
 }
 
 export const ComposerTiptapInput = forwardRef<
@@ -1011,9 +1038,14 @@ export const ComposerTiptapInput = forwardRef<
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const appliedSelectionRequestIdRef = useRef<string | undefined>(undefined);
   const deletedSingleSkillRef = useRef<DeletedSingleSkillState | undefined>(
     undefined,
   );
+  const controlledUndoStackRef = useRef<ControlledHistoryEntry[]>([]);
+  const controlledRedoStackRef = useRef<ControlledHistoryEntry[]>([]);
+  const applyingControlledHistoryRef = useRef(false);
+  const controlledChangeInProgressRef = useRef(false);
   const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
   const propsSignature = getContentSignature({
     value: props.value,
@@ -1028,6 +1060,106 @@ export const ComposerTiptapInput = forwardRef<
   );
 
   propsRef.current = props;
+  const getControlledHistoryEntry = (
+    currentEditor: TiptapEditor,
+  ): ControlledHistoryEntry => ({
+    ...readTiptapContent(currentEditor, readMode),
+    editorDocument: currentEditor.getJSON(),
+    selectionIndex: selectionIndexRef.current,
+  });
+  const pushControlledUndoEntry = (currentEditor: TiptapEditor): void => {
+    if (applyingControlledHistoryRef.current) {
+      return;
+    }
+    const entry = getControlledHistoryEntry(currentEditor);
+    const stack = controlledUndoStackRef.current;
+    const previous = stack.at(-1);
+    if (
+      previous &&
+      getContentSignature(previous) === getContentSignature(entry)
+    ) {
+      return;
+    }
+    stack.push(entry);
+    if (stack.length > 100) {
+      stack.shift();
+    }
+  };
+  const restoreControlledHistoryEntry = (
+    currentEditor: TiptapEditor,
+    entry: ControlledHistoryEntry,
+  ): void => {
+    applyingControlledHistoryRef.current = true;
+    closeEditorHistory(currentEditor);
+    currentEditor.commands.setContent(entry.editorDocument, { emitUpdate: false });
+    closeEditorHistory(currentEditor);
+    selectionIndexRef.current = entry.selectionIndex;
+    flushSync(() => {
+      propsRef.current.onChange(entry.value, entry.skillTokens, {
+        editorDocument: entry.editorDocument,
+      });
+    });
+    applyingControlledHistoryRef.current = false;
+    requestAnimationFrame(() => {
+      currentEditor.commands.focus();
+      try {
+        currentEditor.commands.setTextSelection(
+          getPositionAtDraftIndex(currentEditor, entry.selectionIndex, readMode),
+        );
+      } catch {
+        // jsdom and detached editor states can fail selection mapping.
+      }
+    });
+  };
+  const applySelectionRequest = (
+    currentEditor: TiptapEditor,
+    request: ComposerTiptapInputProps["selectionRequest"] | undefined,
+  ): void => {
+    if (!request || appliedSelectionRequestIdRef.current === request.id) {
+      return;
+    }
+    appliedSelectionRequestIdRef.current = request.id;
+    selectionIndexRef.current = request.index;
+    currentEditor.commands.focus();
+    currentEditor.commands.setTextSelection(
+      getPositionAtDraftIndex(currentEditor, request.index, readMode),
+    );
+  };
+  const runUndoOrRedo = (
+    currentEditor: TiptapEditor,
+    direction: "undo" | "redo",
+  ): boolean => {
+    const sourceStack =
+      direction === "undo"
+        ? controlledUndoStackRef.current
+        : controlledRedoStackRef.current;
+    const targetStack =
+      direction === "undo"
+        ? controlledRedoStackRef.current
+        : controlledUndoStackRef.current;
+    const entry = sourceStack.pop();
+    if (entry) {
+      targetStack.push(getControlledHistoryEntry(currentEditor));
+      restoreControlledHistoryEntry(currentEditor, entry);
+      return true;
+    }
+
+    const beforeSignature = getContentSignature(
+      readTiptapContent(currentEditor, readMode),
+    );
+    const handled =
+      direction === "undo"
+        ? currentEditor.commands.undo()
+        : currentEditor.commands.redo();
+    const afterSignature = getContentSignature(
+      readTiptapContent(currentEditor, readMode),
+    );
+    if (handled && beforeSignature !== afterSignature) {
+      return true;
+    }
+
+    return handled;
+  };
   const initialContent = useMemo(
     () =>
       props.editorDocument ??
@@ -1065,8 +1197,37 @@ export const ComposerTiptapInput = forwardRef<
         keydown: (_view, event) => {
           const macPlatform = isMacPlatform();
           if (
+            event.key.toLowerCase() === "y" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            const currentEditor = editorRef.current;
+            if (!currentEditor) {
+              return false;
+            }
+            event.preventDefault();
+            return runUndoOrRedo(currentEditor, "redo");
+          }
+
+          if (
             event.key.toLowerCase() === "z" &&
             (event.metaKey || event.ctrlKey) &&
+            !event.altKey &&
+            event.shiftKey
+          ) {
+            const currentEditor = editorRef.current;
+            if (!currentEditor) {
+              return false;
+            }
+            event.preventDefault();
+            return runUndoOrRedo(currentEditor, "redo");
+          }
+
+          if (
+            event.key.toLowerCase() === "z" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.altKey &&
             !event.shiftKey &&
             deletedSingleSkillRef.current
           ) {
@@ -1077,9 +1238,11 @@ export const ComposerTiptapInput = forwardRef<
             if (!currentEditor) {
               return true;
             }
+            closeEditorHistory(currentEditor);
             currentEditor.commands.setContent(deleted.editorDocument, {
               emitUpdate: false,
             });
+            closeEditorHistory(currentEditor);
             selectionIndexRef.current = deleted.selectionIndex;
             flushSync(() => {
               propsRef.current.onChange(deleted.value, deleted.skillTokens, {
@@ -1131,15 +1294,31 @@ export const ComposerTiptapInput = forwardRef<
               skillTokens: propsRef.current.skillTokens,
               value: propsRef.current.value,
             };
+            closeEditorHistory(currentEditor);
             currentEditor.commands.setContent(buildTiptapContent("", []), {
               emitUpdate: false,
             });
+            closeEditorHistory(currentEditor);
             flushSync(() => {
               propsRef.current.onChange("", [], {
                 editorDocument: currentEditor.getJSON(),
               });
             });
             return true;
+          }
+
+          if (
+            event.key.toLowerCase() === "z" &&
+            (event.metaKey || event.ctrlKey) &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            const currentEditor = editorRef.current;
+            if (!currentEditor) {
+              return false;
+            }
+            event.preventDefault();
+            return runUndoOrRedo(currentEditor, "undo");
           }
 
           if (
@@ -1191,6 +1370,14 @@ export const ComposerTiptapInput = forwardRef<
         return;
       }
       pendingExternalSignatureRef.current = undefined;
+      if (
+        !pendingSignature &&
+        !controlledChangeInProgressRef.current &&
+        !applyingControlledHistoryRef.current
+      ) {
+        controlledUndoStackRef.current = [];
+        controlledRedoStackRef.current = [];
+      }
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
@@ -1255,6 +1442,9 @@ export const ComposerTiptapInput = forwardRef<
       get: () => propsRef.current.value,
       set: (nextValue) => {
         const value = String(nextValue ?? "");
+        pushControlledUndoEntry(editor);
+        controlledRedoStackRef.current = [];
+        controlledChangeInProgressRef.current = true;
         selectionIndexRef.current = value.length;
         editor.commands.setContent(
           buildTiptapContent(value, [], {
@@ -1267,6 +1457,7 @@ export const ComposerTiptapInput = forwardRef<
             editorDocument: editor.getJSON(),
           });
         });
+        controlledChangeInProgressRef.current = false;
       },
     });
     Object.defineProperty(editorDom, "selectionStart", {
@@ -1326,12 +1517,19 @@ export const ComposerTiptapInput = forwardRef<
       currentEditorDocumentSignature !== nextEditorDocumentSignature
     ) {
       pendingExternalSignatureRef.current = propsSignature;
+      pushControlledUndoEntry(editor);
+      controlledRedoStackRef.current = [];
+      closeEditorHistory(editor);
       editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
+      closeEditorHistory(editor);
+      applySelectionRequest(editor, props.selectionRequest);
       pendingExternalSignatureRef.current = undefined;
       return;
     }
 
     pendingExternalSignatureRef.current = propsSignature;
+    pushControlledUndoEntry(editor);
+    controlledRedoStackRef.current = [];
     if (
       applyExternalSkillInsertion({
         current,
@@ -1347,12 +1545,14 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     pendingExternalSignatureRef.current = propsSignature;
+    closeEditorHistory(editor);
     editor.commands.setContent(
       buildTiptapContent(props.value, props.skillTokens, {
         markdownConversion: props.markdownConversion,
       }),
       { emitUpdate: false },
     );
+    closeEditorHistory(editor);
     pendingExternalSignatureRef.current = undefined;
 
     if (pendingSelectionIndexRef.current !== undefined) {
@@ -1362,15 +1562,35 @@ export const ComposerTiptapInput = forwardRef<
       editor.commands.setTextSelection(
         getPositionAtDraftIndex(editor, nextSelectionIndex, readMode),
       );
+    } else {
+      applySelectionRequest(editor, props.selectionRequest);
     }
   }, [
     editor,
     props.editorDocument,
+    props.selectionRequest,
     props.skillTokens,
     props.value,
     propsSignature,
     readMode,
   ]);
+
+  useLayoutEffect(() => {
+    if (
+      !editor ||
+      !props.selectionRequest ||
+      appliedSelectionRequestIdRef.current === props.selectionRequest.id
+    ) {
+      return;
+    }
+
+    appliedSelectionRequestIdRef.current = props.selectionRequest.id;
+    selectionIndexRef.current = props.selectionRequest.index;
+    editor.commands.focus();
+    editor.commands.setTextSelection(
+      getPositionAtDraftIndex(editor, props.selectionRequest.index, readMode),
+    );
+  }, [editor, props.selectionRequest, readMode]);
 
   useEffect(() => {
     if (!editor) {
@@ -1417,6 +1637,14 @@ export const ComposerTiptapInput = forwardRef<
     get selectionStart() {
       return selectionIndexRef.current;
     },
+    get skillTokenCount() {
+      return editor
+        ? readTiptapContent(editor, readMode).skillTokens.length
+        : props.skillTokens.length;
+    },
+    get value() {
+      return editor ? readTiptapContent(editor, readMode).value : props.value;
+    },
     setSelectionRange: (start: number) => {
       if (!editor) {
         return;
@@ -1439,6 +1667,47 @@ export const ComposerTiptapInput = forwardRef<
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
+      onKeyDownCapture={(event) => {
+        if (!editor || event.defaultPrevented) {
+          return;
+        }
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
+          if (event.defaultPrevented) {
+            event.stopPropagation();
+          }
+          return;
+        }
+        if (
+          event.key.toLowerCase() === "z" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          deletedSingleSkillRef.current
+        ) {
+          return;
+        }
+        if (
+          event.key.toLowerCase() === "y" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          !event.shiftKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          runUndoOrRedo(editor, "redo");
+          return;
+        }
+        if (
+          event.key.toLowerCase() === "z" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          runUndoOrRedo(editor, event.shiftKey ? "redo" : "undo");
+        }
+      }}
     >
       <EditorContent editor={editor} />
     </div>

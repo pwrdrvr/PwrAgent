@@ -197,9 +197,41 @@ CREATE INDEX IF NOT EXISTS idx_directory_git_status_fetched
   ON directory_git_status(fetched_at DESC);
 `;
 
+const COMPOSER_DRAFT_RECOVERY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS composer_draft_latest (
+  scope_key    TEXT PRIMARY KEY,
+  scope_kind   TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_latest_updated
+  ON composer_draft_latest(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS composer_draft_journal (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_key    TEXT NOT NULL,
+  scope_kind   TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  char_count   INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  payload      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_updated
+  ON composer_draft_journal(scope_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_composer_draft_journal_updated
+  ON composer_draft_journal(updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_hash_status
+  ON composer_draft_journal(scope_key, content_hash, status);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
+const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const COMPOSER_DRAFT_JOURNAL_CAP = 300;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
@@ -266,6 +298,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 5) {
       db.transaction(() => {
         db.pragma("user_version = 5");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 6) {
+      db.transaction(() => {
+        db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
+        db.pragma("user_version = 6");
       })();
     }
 
@@ -351,6 +389,19 @@ export class StateDb {
            )`,
         )
         .run(MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
+      this.db
+        .prepare("DELETE FROM composer_draft_journal WHERE updated_at < ?")
+        .run(now - COMPOSER_DRAFT_JOURNAL_RETENTION_MS);
+      this.db
+        .prepare(
+          `DELETE FROM composer_draft_journal
+           WHERE id IN (
+             SELECT id FROM composer_draft_journal
+             ORDER BY updated_at DESC, id DESC
+             LIMIT -1 OFFSET ?
+           )`,
+        )
+        .run(COMPOSER_DRAFT_JOURNAL_CAP);
     });
     cleanup();
     this.db.pragma("incremental_vacuum");
@@ -393,6 +444,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
   db.transaction(() => {
     db.exec(SCHEMA_V4);
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
+    db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

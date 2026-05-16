@@ -15,5 +15,7 @@ export type ComposerInputHandle = {
   focus: () => void;
   readonly selectionEnd: number;
   readonly selectionStart: number;
+  readonly skillTokenCount: number;
+  readonly value: string;
   setSelectionRange: (start: number, end: number) => void;
 };

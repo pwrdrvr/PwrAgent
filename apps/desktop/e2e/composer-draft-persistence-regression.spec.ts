@@ -471,3 +471,42 @@ test("restores an already-open Tiptap WYSIWYG reply as rendered markdown after s
     await fixture.cleanup();
   }
 });
+
+test("recovers an accidentally deleted Tiptap reply draft from another blank composer", async () => {
+  const fixture = await createComposerDraftPersistenceFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openExistingThread(app);
+
+    const deletedDraft =
+      "This is a long unsent reply draft typed into the real Tiptap editor. " +
+      "It should be recoverable with ArrowUp after an accidental select-all delete " +
+      "instead of disappearing when the composer becomes empty.";
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+
+    await textbox.focus();
+    await app.window.keyboard.type(deletedDraft);
+    await expect(tiptapInput).toHaveAttribute("data-value", deletedDraft);
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Backspace");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+
+    await openDirectoryLaunchpad(app);
+    const launchpadInput = app.window.getByTestId("composer-tiptap-input");
+    await app.window.getByRole("textbox", { name: "New thread" }).focus();
+    await expect(launchpadInput).toHaveAttribute("data-value", "");
+
+    await app.window.keyboard.press("ArrowUp");
+    await expect(launchpadInput).toHaveAttribute("data-value", deletedDraft);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});

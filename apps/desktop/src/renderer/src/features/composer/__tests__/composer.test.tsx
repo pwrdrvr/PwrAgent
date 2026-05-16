@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
+  ComposerDraftRecoveryCandidate,
   NavigationThreadSummary,
   NavigationLaunchpadDraft,
   StartReviewRequest,
@@ -4518,6 +4519,454 @@ describe("Composer", () => {
           ],
         }),
       );
+    });
+  });
+
+  it("keeps post-skill long-form text recoverable across undo and redo", async () => {
+    renderComposerWithRegressionSkills();
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce:plan` },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const longBody = [
+      "This is the first long paragraph after the inserted skill.",
+      "",
+      "This is the second paragraph with enough text to look like a real note.",
+      "",
+      "This is the final sentence before a small accidental deletion.",
+    ].join("\n");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}${longBody}` },
+    });
+    fireEvent.change(input, {
+      target: {
+        value: `${reportedSkillAutocompleteDraftPrefix}${longBody.replace(
+          "small accidental deletion",
+          "small accidental"
+        )}`,
+      },
+    });
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "z", metaKey: true });
+
+    await waitFor(() => {
+      expect(richInput.getAttribute("data-value")).toContain(
+        "This is the second paragraph with enough text",
+      );
+    });
+    expect(richInput).toHaveTextContent(
+      "This is the second paragraph with enough text"
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "y", metaKey: true });
+
+    await waitFor(() => {
+      expect(richInput.getAttribute("data-value")).toContain(
+        "This is the second paragraph with enough text",
+      );
+    });
+    expect(richInput).toHaveTextContent(
+      "This is the second paragraph with enough text"
+    );
+  });
+
+  it("cycles durable draft recovery candidates like shell history", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveredImageAttachment = {
+      id: "image-1",
+      name: "diagram.png",
+      size: 3,
+      type: "image/png",
+      url: "data:image/png;base64,AQID",
+    };
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
+      {
+        scopeKey: "thread:codex:thread-1",
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: "Recovered unsent draft",
+        skillTokens: [],
+        imageAttachments: [recoveredImageAttachment],
+        status: "unsent",
+        createdAt: 1,
+        updatedAt: 3,
+        contentHash: "h1",
+        charCount: "Recovered unsent draft".length,
+      },
+      {
+        scopeKey: "thread:codex:thread-1",
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: "Recovered recently sent draft",
+        skillTokens: [],
+        imageAttachments: [],
+        status: "sent",
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: "h2",
+        charCount: "Recovered recently sent draft".length,
+      },
+    ];
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered unsent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
+    });
+    expect(draftStore.listRecoveryCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeSent: true,
+        scopeKey: "thread:codex:thread-1",
+      }),
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered recently sent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
+    });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered unsent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
+    });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+  });
+
+  it("does not apply stale async draft recovery after the user types", async () => {
+    const draftStore = createComposerDraftStore();
+    let resolveRecoveryCandidates:
+      | ((candidates: ComposerDraftRecoveryCandidate[]) => void)
+      | undefined;
+    draftStore.listRecoveryCandidates = vi.fn(
+      () =>
+        new Promise<ComposerDraftRecoveryCandidate[]>((resolve) => {
+          resolveRecoveryCandidates = resolve;
+        }),
+    );
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.change(input, { target: { value: "New user draft" } });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("New user draft");
+    });
+
+    await act(async () => {
+      resolveRecoveryCandidates?.([
+        {
+          scopeKey: "thread:codex:thread-1",
+          scopeKind: "thread",
+          backend: "codex",
+          threadId: "thread-1",
+          text: "Stale recovered draft",
+          skillTokens: [],
+          imageAttachments: [],
+          status: "unsent",
+          createdAt: 1,
+          updatedAt: 2,
+          contentHash: "stale",
+          charCount: "Stale recovered draft".length,
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    await flushReactUpdates();
+    expect(input).toHaveValue("New user draft");
+  });
+
+  it("falls back to global recovery candidates from a blank composer", async () => {
+    const draftStore = createComposerDraftStore();
+    const globalCandidate: ComposerDraftRecoveryCandidate = {
+      scopeKey: "thread:codex:other-thread",
+      scopeKind: "thread",
+      backend: "codex",
+      threadId: "other-thread",
+      text: "Recovered draft from another composer",
+      skillTokens: [],
+      imageAttachments: [],
+      status: "abandoned",
+      createdAt: 1,
+      updatedAt: 2,
+      contentHash: "h-global",
+      charCount: "Recovered draft from another composer".length,
+    };
+    draftStore.listRecoveryCandidates = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([globalCandidate]);
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered draft from another composer");
+    });
+    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        includeSent: true,
+        scopeKey: "thread:codex:thread-1",
+      }),
+    );
+    expect(draftStore.listRecoveryCandidates).toHaveBeenNthCalledWith(
+      2,
+      {
+        includeSent: true,
+        limit: 20,
+      },
+    );
+  });
+
+  it("recovers a meaningful unsent draft after the user deletes it", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [];
+    draftStore.recordHistory = vi.fn((scopeKey, snapshot, status) => {
+      recoveryCandidates.unshift({
+        scopeKey,
+        scopeKind: "thread",
+        backend: "codex",
+        threadId: "thread-1",
+        text: snapshot.draft,
+        editorDocument: snapshot.editorDocument,
+        skillTokens: snapshot.skillTokens,
+        imageAttachments: snapshot.imageAttachments,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: `h${recoveryCandidates.length + 1}`,
+        charCount: snapshot.draft.length,
+      });
+    });
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+    const deletedDraft =
+      "This is a long unsent draft that the user accidentally deleted. " +
+      "It has enough detail to be worth recovering from ArrowUp history " +
+      "instead of disappearing when the composer becomes empty.";
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: deletedDraft } });
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+
+    expect(draftStore.recordHistory).toHaveBeenCalledWith(
+      "thread:codex:thread-1",
+      expect.objectContaining({ draft: deletedDraft }),
+      "abandoned",
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+  });
+
+  it("recovers an accidentally deleted no-project draft from the empty composer scope", async () => {
+    const draftStore = createComposerDraftStore();
+    const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [];
+    draftStore.recordHistory = vi.fn((scopeKey, snapshot, status) => {
+      recoveryCandidates.unshift({
+        scopeKey,
+        scopeKind: "empty",
+        text: snapshot.draft,
+        editorDocument: snapshot.editorDocument,
+        skillTokens: snapshot.skillTokens,
+        imageAttachments: snapshot.imageAttachments,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+        contentHash: `h-empty-${recoveryCandidates.length + 1}`,
+        charCount: snapshot.draft.length,
+      });
+    });
+    draftStore.listRecoveryCandidates = vi.fn(async () => recoveryCandidates);
+    const deletedDraft =
+      "Somebody once told me\n\n\n\n" +
+      "The world is gonna roll me\n\n\n\n" +
+      "I ain't the sharpest tool in the shed\n\n\n\n" +
+      "```\n// This is a tool\n```\n\n\n\n" +
+      "- This is\n- Not exactly a tool";
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: deletedDraft } });
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() => {
+      expect(input).toHaveValue("");
+    });
+
+    expect(draftStore.recordHistory).toHaveBeenCalledWith(
+      "empty",
+      expect.objectContaining({ draft: deletedDraft }),
+      "abandoned",
+    );
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue(deletedDraft);
+    });
+  });
+
+  it("hydrates a mounted blank composer when durable drafts load after mount", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.hydrationVersion = 0;
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Build Codex client",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const renderComposer = () => (
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={thread}
+      />
+    );
+    const { rerender } = render(renderComposer());
+    const input = screen.getByLabelText("Reply");
+    expect(input).toHaveValue("");
+
+    draftStore.set("thread:codex:thread-1", {
+      draft: "Hydrated durable draft after startup",
+      editorDocument: undefined,
+      imageAttachments: [],
+      skillTokens: [],
+    });
+    draftStore.hydrationVersion = 1;
+    rerender(renderComposer());
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Hydrated durable draft after startup");
     });
   });
 
