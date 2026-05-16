@@ -800,8 +800,9 @@ class DesktopAppServerService {
     });
     const existingPrs = existing?.prs ?? [];
     const branch = request.branch.trim();
-    // Terminal-state short-circuit: once a PR is merged or closed, we
-    // do not need to re-query gh for the same branch/directory lookup.
+    // Terminal-state short-circuit: once every cached PR for a lookup is
+    // merged or closed, we do not need to re-query gh for the same
+    // branch/directory lookup.
     // A different lookup can mean the thread moved to a new branch after
     // merging an older PR, so stale terminal chips must not block it.
     //
@@ -812,10 +813,14 @@ class DesktopAppServerService {
     // fetch below, and callers that need to observe the no-op
     // programmatically can read `shortCircuited: true` off the
     // response.
-    const hasTerminalPr = existingPrs.some(
-      (pr) => pr.state === "merged" || pr.state === "closed",
-    );
-    if (hasTerminalPr && branch !== "HEAD" && existing?.prsRefreshKey === requestKey) {
+    const allExistingPrsTerminal =
+      existingPrs.length > 0
+      && existingPrs.every((pr) => pr.state === "merged" || pr.state === "closed");
+    if (
+      allExistingPrsTerminal
+      && branch !== "HEAD"
+      && existing?.prsRefreshKey === requestKey
+    ) {
       return {
         backend,
         threadId: request.threadId,
