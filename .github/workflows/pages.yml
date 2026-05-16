@@ -1,0 +1,66 @@
+# Build the docs-site/ Jekyll site and publish it to GitHub Pages,
+# which serves docs.pwragent.ai via the CNAME in docs-site/CNAME.
+#
+# Source mode in GitHub Settings → Pages must be set to "GitHub Actions"
+# (one-time setup). Pages' built-in "Deploy from a branch" mode only
+# supports `/` or `/docs`, neither of which fits — `docs/` is already
+# used for plans/brainstorms/architecture in this repo.
+
+name: Deploy docs.pwragent.ai
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one in-flight Pages deploy at a time, but let queued runs
+# finish rather than canceling (we don't want a hot-fix to be
+# clobbered mid-deploy).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: docs-site
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build Jekyll site
+        env:
+          JEKYLL_ENV: production
+        run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
