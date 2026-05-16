@@ -9,6 +9,12 @@ const MAX_COMPACT_DEPTH = 2;
 type ElectronLogHook = (typeof electronLog.hooks)[number];
 type ElectronLogMessage = Parameters<ElectronLogHook>[0];
 
+const electronLogConsoleTransport = electronLog.transports?.console;
+
+if (process.env.VITEST === "true" && electronLogConsoleTransport) {
+  electronLogConsoleTransport.level = false;
+}
+
 export function initializeMainLogger(): void {
   if (initialized) {
     return;
