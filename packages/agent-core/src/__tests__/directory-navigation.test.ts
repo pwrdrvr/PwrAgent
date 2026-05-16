@@ -467,7 +467,7 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
-  it("keeps multiple pending workspace drafts selectable instead of collapsing one away", () => {
+  it("collapses multiple pending workspace drafts into one Workspaces row", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
@@ -498,25 +498,21 @@ describe("buildDirectorySummaries", () => {
       },
     });
 
-    expect(directories).toHaveLength(2);
-    expect(directories).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "workspace:/Users/huntharo/.pwragnt/projects",
-          launchpad: expect.objectContaining({
-            directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
-            prompt: "Legacy draft",
-          }),
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/huntharo/.pwragent/profiles/dev/projects",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 4_000,
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          prompt: "Profile draft",
         }),
-        expect.objectContaining({
-          key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
-          launchpad: expect.objectContaining({
-            directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
-            prompt: "Profile draft",
-          }),
-        }),
-      ]),
-    );
+      }),
+    ]);
   });
 
   it("keeps same-named Codex worktrees as separate directory rows", () => {
