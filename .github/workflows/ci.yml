@@ -21,6 +21,7 @@ permissions:
   contents: read
 
 jobs:
+  # Validation-only PR: rerun CI against pwrdrvr/configure-nodejs@v1 after v1 moved to v1.1.1.
   install-deps:
     name: Install Dependencies
     if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'ci:live-agent-core' }}
@@ -55,12 +56,7 @@ jobs:
 
       - name: License metadata
         timeout-minutes: 10
-        run: |
-          if ! pnpm licenses:check; then
-            echo "License check failed; forcing pnpm to relink dependencies before retrying."
-            pnpm install --frozen-lockfile --force
-            pnpm licenses:check
-          fi
+        run: pnpm licenses:check
 
       - name: Type check
         timeout-minutes: 10
