@@ -167,6 +167,73 @@ describe("ComposerDraftRecoveryStore", () => {
       }),
     ]);
   });
+
+  it("replaces the last unsubmitted prefix draft with the longer version", () => {
+    store.recordHistory(
+      buildDraft({
+        contentHash: "short",
+        status: "abandoned",
+        text: "the quick fox",
+        updatedAt: 10,
+      }),
+    );
+    store.recordHistory(
+      buildDraft({
+        contentHash: "long",
+        status: "abandoned",
+        text: "the quick fox jumped over the lazy dog",
+        updatedAt: 20,
+      }),
+    );
+
+    expect(
+      store.listCandidates({
+        scopeKey: "thread:codex:thread-1",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        contentHash: "long",
+        text: "the quick fox jumped over the lazy dog",
+      }),
+    ]);
+  });
+
+  it("keeps sent history even when a longer unsent prompt starts with it", () => {
+    store.recordHistory(
+      buildDraft({
+        contentHash: "sent-short",
+        status: "sent",
+        text: "the quick fox",
+        updatedAt: 10,
+      }),
+    );
+    store.recordHistory(
+      buildDraft({
+        contentHash: "unsent-long",
+        status: "abandoned",
+        text: "the quick fox jumped over the lazy dog",
+        updatedAt: 20,
+      }),
+    );
+
+    expect(
+      store.listCandidates({
+        includeSent: true,
+        scopeKey: "thread:codex:thread-1",
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        contentHash: "unsent-long",
+        status: "abandoned",
+        text: "the quick fox jumped over the lazy dog",
+      }),
+      expect.objectContaining({
+        contentHash: "sent-short",
+        status: "sent",
+        text: "the quick fox",
+      }),
+    ]);
+  });
 });
 
 function buildDraft(

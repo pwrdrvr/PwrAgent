@@ -54,6 +54,14 @@ export function useDurableComposerDraftStore(
         localSequence: localRecoverySequenceRef.current,
       };
       localRecoverySequenceRef.current += 1;
+      const [previousCandidate] = localRecoveryCandidatesRef.current;
+      if (shouldReplacePreviousUnsentCandidate(previousCandidate, nextCandidate)) {
+        localRecoveryCandidatesRef.current = [
+          nextCandidate,
+          ...localRecoveryCandidatesRef.current.slice(1),
+        ].slice(0, 80);
+        return;
+      }
       const dedupeKey = getRecoveryCandidateKey(nextCandidate);
       localRecoveryCandidatesRef.current = [
         nextCandidate,
@@ -387,6 +395,25 @@ function scoreRecoveryCandidate(
     score -= 10;
   }
   return score;
+}
+
+function shouldReplacePreviousUnsentCandidate(
+  previous: ComposerDraftRecoveryCandidate | undefined,
+  next: ComposerDraftRecoveryCandidate,
+): boolean {
+  if (!previous || previous.status === "sent" || next.status === "sent") {
+    return false;
+  }
+  if (previous.scopeKey !== next.scopeKey) {
+    return false;
+  }
+  const previousText = previous.text.trimEnd();
+  const nextText = next.text.trimEnd();
+  return (
+    previousText.length > 0 &&
+    nextText.length > previousText.length &&
+    nextText.startsWith(previousText)
+  );
 }
 
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {

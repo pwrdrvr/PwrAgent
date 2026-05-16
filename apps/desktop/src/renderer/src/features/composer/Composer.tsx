@@ -925,8 +925,8 @@ export function Composer(props: ComposerProps) {
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
   const recoveryCycleRef = useRef<{
+    activeIndex?: number;
     candidates: ComposerDraftSnapshot[];
-    index: number;
     scopeKey: string;
   } | undefined>(undefined);
   const recoveringDraftRef = useRef(false);
@@ -1171,13 +1171,15 @@ export function Composer(props: ComposerProps) {
   ): void => {
     recoveringDraftRef.current = true;
     deletedSkillTokenHistoryRef.current = [];
-    setDraft(snapshot.draft);
-    setEditorDocument(snapshot.editorDocument);
-    setImageAttachments(snapshot.imageAttachments);
-    setSkillTokens(snapshot.skillTokens);
-    setComposerSelectionRequest({
-      id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
-      index: 0,
+    flushSync(() => {
+      setDraft(snapshot.draft);
+      setEditorDocument(snapshot.editorDocument);
+      setImageAttachments(snapshot.imageAttachments);
+      setSkillTokens(snapshot.skillTokens);
+      setComposerSelectionRequest({
+        id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
+        index: 0,
+      });
     });
     saveComposerDraftSnapshot(composerScopeKey, snapshot);
     setSendError(undefined);
@@ -1185,11 +1187,41 @@ export function Composer(props: ComposerProps) {
       recoveringDraftRef.current = false;
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(0, 0);
+      requestAnimationFrame(() => {
+        inputRef.current?.setSelectionRange(0, 0);
+      });
     });
   };
-  const recoverPreviousComposerDraft = async (): Promise<void> => {
+  const clearRecoveredComposerDraft = (): void => {
+    recoveryCycleRef.current = undefined;
+    recoveringDraftRef.current = true;
+    deletedSkillTokenHistoryRef.current = [];
+    clearComposerDraftSnapshot(composerScopeKey);
+    flushSync(() => {
+      setDraft("");
+      setEditorDocument(undefined);
+      setImageAttachments([]);
+      setSkillTokens([]);
+      setComposerSelectionRequest({
+        id: `recovery:${++composerSelectionRequestSequenceRef.current}`,
+        index: 0,
+      });
+    });
+    setSendError(undefined);
+    requestAnimationFrame(() => {
+      recoveringDraftRef.current = false;
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(0, 0);
+      requestAnimationFrame(() => {
+        inputRef.current?.setSelectionRange(0, 0);
+      });
+    });
+  };
+  const getOrCreateRecoveryCycle = async (): Promise<
+    NonNullable<typeof recoveryCycleRef.current> | undefined
+  > => {
     if (!draftStore.listRecoveryCandidates) {
-      return;
+      return undefined;
     }
 
     let cycle = recoveryCycleRef.current;
@@ -1239,18 +1271,47 @@ export function Composer(props: ComposerProps) {
         return;
       }
       cycle = {
+        activeIndex: undefined,
         candidates: uniqueCandidates,
-        index: 0,
         scopeKey: composerScopeKey,
       };
     }
 
-    const candidate = cycle.candidates[cycle.index % cycle.candidates.length];
+    return cycle;
+  };
+  const recoverPreviousComposerDraft = async (): Promise<void> => {
+    const cycle = await getOrCreateRecoveryCycle();
+    if (!cycle) {
+      return;
+    }
+
+    const activeIndex = cycle.activeIndex ?? -1;
+    const nextIndex = Math.min(activeIndex + 1, cycle.candidates.length - 1);
+    const candidate = cycle.candidates[nextIndex];
     recoveryCycleRef.current = {
       ...cycle,
-      index: cycle.index + 1,
+      activeIndex: nextIndex,
     };
     applyRecoveredComposerDraft(candidate);
+  };
+  const recoverNextComposerDraft = (): void => {
+    const cycle = recoveryCycleRef.current;
+    if (!cycle || cycle.scopeKey !== composerScopeKey) {
+      return;
+    }
+
+    const activeIndex = cycle.activeIndex ?? 0;
+    const nextIndex = activeIndex - 1;
+    if (nextIndex < 0) {
+      clearRecoveredComposerDraft();
+      return;
+    }
+
+    recoveryCycleRef.current = {
+      ...cycle,
+      activeIndex: nextIndex,
+    };
+    applyRecoveredComposerDraft(cycle.candidates[nextIndex]);
   };
   const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
@@ -3268,12 +3329,31 @@ export function Composer(props: ComposerProps) {
         recoveryCycleRef.current = undefined;
       }
       if (
+        recoveryCycle &&
+        canCycleActiveRecovery &&
+        liveHasComposerContent &&
+        event.key !== "ArrowUp" &&
+        event.key !== "ArrowDown"
+      ) {
+        recoveryCycleRef.current = undefined;
+      }
+      if (
         event.key === "ArrowUp" &&
         (!liveHasComposerContent || canCycleActiveRecovery) &&
         imageAttachments.length === 0
       ) {
         event.preventDefault();
         void recoverPreviousComposerDraft();
+        return;
+      }
+      if (
+        event.key === "ArrowDown" &&
+        liveHasComposerContent &&
+        canCycleActiveRecovery &&
+        imageAttachments.length === 0
+      ) {
+        event.preventDefault();
+        recoverNextComposerDraft();
         return;
       }
 

@@ -4574,7 +4574,7 @@ describe("Composer", () => {
     );
   });
 
-  it("cycles durable draft recovery candidates with ArrowUp from a blank composer", async () => {
+  it("cycles durable draft recovery candidates like shell history", async () => {
     const draftStore = createComposerDraftStore();
     const recoveryCandidates: ComposerDraftRecoveryCandidate[] = [
       {
@@ -4633,6 +4633,7 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(input).toHaveValue("Recovered unsent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
     });
     expect(draftStore.listRecoveryCandidates).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4645,6 +4646,20 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(input).toHaveValue("Recovered recently sent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
+    });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("Recovered unsent draft");
+      expect((input as HTMLTextAreaElement).selectionStart).toBe(0);
+    });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      expect(input).toHaveValue("");
     });
   });
 

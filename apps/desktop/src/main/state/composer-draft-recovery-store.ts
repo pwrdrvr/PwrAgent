@@ -194,6 +194,45 @@ export class ComposerDraftRecoveryStore {
     draft: ComposerDraftSnapshotRecord,
   ): ComposerDraftRecoveryCandidate {
     const db = this.stateDb.raw;
+    const previousRow = db
+      .prepare(
+        `SELECT id, scope_key, scope_kind, status, content_hash, char_count,
+                created_at, updated_at, payload
+         FROM composer_draft_journal
+         WHERE scope_key = ? AND status IN ('unsent', 'abandoned')
+         ORDER BY updated_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(draft.scopeKey) as DraftJournalRow | undefined;
+    const previousDraft = previousRow
+      ? parseDraftPayload(previousRow.payload)
+      : undefined;
+    if (shouldReplacePreviousUnsentDraft(previousDraft, draft)) {
+      db.prepare(
+        `DELETE FROM composer_draft_journal
+         WHERE scope_key = ? AND content_hash = ? AND status = ? AND id <> ?`,
+      ).run(draft.scopeKey, draft.contentHash, draft.status, previousRow!.id);
+      db.prepare(
+        `UPDATE composer_draft_journal
+         SET scope_kind = ?,
+             status = ?,
+             content_hash = ?,
+             char_count = ?,
+             updated_at = ?,
+             payload = ?
+         WHERE id = ?`,
+      ).run(
+        draft.scopeKind,
+        draft.status,
+        draft.contentHash,
+        draft.charCount,
+        draft.updatedAt,
+        JSON.stringify(draft),
+        previousRow!.id,
+      );
+      return { ...draft, journalId: previousRow!.id };
+    }
+
     db.prepare(
       `INSERT INTO composer_draft_journal(
          scope_key, scope_kind, status, content_hash, char_count,
@@ -352,4 +391,23 @@ function scoreCandidate(
     score -= 10;
   }
   return score;
+}
+
+function shouldReplacePreviousUnsentDraft(
+  previous: ComposerDraftSnapshotRecord | undefined,
+  next: ComposerDraftSnapshotRecord,
+): boolean {
+  if (!previous || previous.status === "sent" || next.status === "sent") {
+    return false;
+  }
+  if (previous.scopeKey !== next.scopeKey) {
+    return false;
+  }
+  const previousText = previous.text.trimEnd();
+  const nextText = next.text.trimEnd();
+  return (
+    previousText.length > 0 &&
+    nextText.length > previousText.length &&
+    nextText.startsWith(previousText)
+  );
 }

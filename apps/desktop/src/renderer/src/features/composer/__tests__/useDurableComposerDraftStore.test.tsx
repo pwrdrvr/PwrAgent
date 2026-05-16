@@ -129,6 +129,51 @@ describe("useDurableComposerDraftStore", () => {
     expect(draft).toBeDefined();
     resolveRecordHistory?.({ candidate: draft! });
   });
+
+  it("replaces the optimistic unsubmitted prefix candidate with the longer draft", async () => {
+    const recordComposerDraftHistory = vi.fn<
+      NonNullable<DesktopApi["recordComposerDraftHistory"]>
+    >(async (request) => ({ candidate: request.draft }));
+    const listComposerDraftRecoveryCandidates = vi.fn<
+      NonNullable<DesktopApi["listComposerDraftRecoveryCandidates"]>
+    >(async () => ({ candidates: [] }));
+    const desktopApi = {
+      listComposerDraftRecoveryCandidates,
+      recordComposerDraftHistory,
+    } as Partial<DesktopApi> as DesktopApi;
+    const { result } = renderHook(() =>
+      useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+    );
+
+    act(() => {
+      result.current.recordHistory?.(
+        "thread:codex:thread-1",
+        buildSnapshot(
+          "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold",
+        ),
+        "abandoned",
+      );
+      result.current.recordHistory?.(
+        "thread:codex:thread-1",
+        buildSnapshot(
+          "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold into a longer coherent prompt",
+        ),
+        "abandoned",
+      );
+    });
+
+    const candidates = await result.current.listRecoveryCandidates?.({
+      backend: "codex",
+      scopeKey: "thread:codex:thread-1",
+      threadId: "thread-1",
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        text: "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold into a longer coherent prompt",
+      }),
+    ]);
+  });
 });
 
 function buildSnapshot(draft: string): ComposerDraftSnapshot {

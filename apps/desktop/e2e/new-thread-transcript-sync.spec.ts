@@ -547,11 +547,8 @@ test("top-level new thread cycles deleted no-project drafts only from the recove
       )
       .toBe(0);
 
-    await textbox.evaluate((node, selectionIndex) => {
-      (node as HTMLElement & {
-        setSelectionRange: (start: number, end: number) => void;
-      }).setSelectionRange(selectionIndex, selectionIndex);
-    }, storedEarlierDraft?.length ?? earlierDraft.length);
+    await app.window.keyboard.press("ArrowDown");
+    await expect(tiptapInput).toHaveAttribute("data-value", storedDraft ?? "");
     await expect
       .poll(async () =>
         await textbox.evaluate(
@@ -559,8 +556,13 @@ test("top-level new thread cycles deleted no-project drafts only from the recove
             (node as HTMLElement & { selectionStart: number }).selectionStart,
         )
       )
-      .toBe(storedEarlierDraft?.length ?? earlierDraft.length);
+      .toBe(0);
+
     await app.window.keyboard.press("ArrowUp");
+    await expect(tiptapInput).toHaveAttribute("data-value", storedEarlierDraft ?? "");
+
+    await app.window.keyboard.press("ArrowRight");
+    await app.window.keyboard.press("ArrowDown");
     await expect(tiptapInput).toHaveAttribute("data-value", storedEarlierDraft ?? "");
   } finally {
     await app.close();

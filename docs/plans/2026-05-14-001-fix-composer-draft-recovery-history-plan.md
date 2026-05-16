@@ -302,8 +302,11 @@ flowchart TB
 - Candidate order should be current-scope unsent drafts first, then current-directory/thread related unsent drafts, then recent sent prompts for the same thread/directory/backend, then broader recent sent prompts if still useful.
 - Restoring a candidate should restore the full snapshot: text, editor document, skill tokens, and image metadata.
 - Restoring a candidate must place the caret at draft index `0`, not at the end. While the caret remains exactly at `0..0`, repeated ArrowUp continues cycling through recovery candidates.
+- While recovery mode is active, the caret remains at `0..0`, and the composer is non-empty, ArrowDown moves back toward the newest/first recovery candidate. ArrowDown from the newest candidate returns the composer to blank and ends the active cycle, matching shell history behavior.
 - Once the caret leaves `0..0` in a restored draft, the active recovery cycle is over. ArrowUp must return to normal editor navigation and must not cycle drafts again until the composer is fully blank.
+- Any key other than ArrowUp/ArrowDown while a restored non-empty draft is active breaks recovery mode. That includes typing, ArrowRight, Ctrl/Command-end movement, mouse movement, or any selection-changing command; after that, ArrowUp/ArrowDown behave as normal editor navigation until the composer is blank again.
 - Recovery-history rows should represent coherent drafts, not every edit step. Record them at explicit boundaries: successful send, queue/steer handoff, lifecycle flush of a complete unsent draft, or whole-composer deletion that transitions from non-empty to empty.
+- The recovery store should collapse near-repeat unsubmitted drafts: if the last unsubmitted history item for the same scope is a prefix of the next unsubmitted item, replace the older item with the longer one. Sent prompts are immutable shell-style history entries and must not be replaced by later longer drafts.
 - Provide a small quiet inline status or accessible announcement indicating which candidate was restored and how to cycle, without adding persistent explanatory copy.
 - Do not override ArrowUp when the composer has content, autocomplete is open, or the caret is not at the start.
 - Add a clear path to return to blank after cycling, either by cycling past the last candidate or using normal select/delete behavior.
@@ -317,7 +320,10 @@ flowchart TB
 - Happy path: blank thread reply composer + ArrowUp restores the most recent unsent reply draft for that thread.
 - Happy path: blank composer + repeated ArrowUp cycles from unsent candidates into recent sent candidates.
 - Happy path: after ArrowUp restores a candidate, the caret is at the top-left/start position and a second ArrowUp cycles to the next candidate.
+- Happy path: after repeated ArrowUp reaches an older candidate, ArrowDown returns toward the newest candidate and ArrowDown from the newest candidate returns to a blank composer.
 - Edge case: after a restored candidate's caret moves away from the start position, ArrowUp does not cycle recovery candidates again while that draft remains non-empty.
+- Edge case: after a restored candidate's caret moves away from the start position, ArrowDown does not cycle or clear recovery candidates while that draft remains non-empty.
+- Edge case: unsubmitted prefix drafts are collapsed in recovery history, while sent prompts remain as separate recoverable entries.
 - Edge case: nonblank composer + ArrowUp preserves normal editor navigation and does not replace content.
 - Edge case: autocomplete open + ArrowUp moves autocomplete selection, not recovery.
 - Edge case: restored candidate with skill tokens rehydrates the Tiptap mention nodes and serializes to the same canonical draft on send.

@@ -1111,6 +1111,20 @@ export const ComposerTiptapInput = forwardRef<
       }
     });
   };
+  const applySelectionRequest = (
+    currentEditor: TiptapEditor,
+    request: ComposerTiptapInputProps["selectionRequest"] | undefined,
+  ): void => {
+    if (!request || appliedSelectionRequestIdRef.current === request.id) {
+      return;
+    }
+    appliedSelectionRequestIdRef.current = request.id;
+    selectionIndexRef.current = request.index;
+    currentEditor.commands.focus();
+    currentEditor.commands.setTextSelection(
+      getPositionAtDraftIndex(currentEditor, request.index, readMode),
+    );
+  };
   const runUndoOrRedo = (
     currentEditor: TiptapEditor,
     direction: "undo" | "redo",
@@ -1508,6 +1522,7 @@ export const ComposerTiptapInput = forwardRef<
       closeEditorHistory(editor);
       editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
       closeEditorHistory(editor);
+      applySelectionRequest(editor, props.selectionRequest);
       pendingExternalSignatureRef.current = undefined;
       return;
     }
@@ -1547,17 +1562,20 @@ export const ComposerTiptapInput = forwardRef<
       editor.commands.setTextSelection(
         getPositionAtDraftIndex(editor, nextSelectionIndex, readMode),
       );
+    } else {
+      applySelectionRequest(editor, props.selectionRequest);
     }
   }, [
     editor,
     props.editorDocument,
+    props.selectionRequest,
     props.skillTokens,
     props.value,
     propsSignature,
     readMode,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       !editor ||
       !props.selectionRequest ||
@@ -1653,7 +1671,7 @@ export const ComposerTiptapInput = forwardRef<
         if (!editor || event.defaultPrevented) {
           return;
         }
-        if (event.key === "ArrowUp") {
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           if (event.defaultPrevented) {
             event.stopPropagation();
