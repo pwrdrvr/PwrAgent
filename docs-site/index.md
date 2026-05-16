@@ -3,48 +3,129 @@ layout: home
 title: PwrAgent docs
 ---
 
-<div class="wordmark-hero">
-  <div class="wordmark-hero__mark">Pwr<span class="wordmark-hero__accent">Agent</span></div>
-  <div class="wordmark-hero__tagline">threads / transcripts</div>
-</div>
+<figure class="screenshot-hero">
+  <img src="{{ '/assets/screenshots/desktop-hero.png' | relative_url }}" alt="PwrAgent desktop: Directories lens grouping threads under PwrAgnt and PwrSnap repos, a mid-conversation thread about OCR image tags with the agent's reply showing edited files and passing pnpm lint, four messenger status icons (Telegram, Discord, Slack, Mattermost) in the title bar, profile selector reading 'profile:default, codex:default', and per-thread model / Full Access / Fast mode / Worktree controls above the composer.">
+  <figcaption>The PwrAgent desktop with four messengers paired, threads grouped by repo, and the per-thread model / access / worktree controls live.</figcaption>
+</figure>
 
-# PwrAgent
+# What PwrAgent is
 
-PwrAgent is a beta desktop coding agent that you drive from the chat
-platforms you already use. Start a thread on your laptop, refine the
-requirements with it from Slack, approve a Default-Access command from
-Telegram, and pick the thread back up on the desktop when you sit down
-again.
+PwrAgent is an **agentic coding environment in the same family as
+Codex Desktop** — a desktop app where you spawn a Codex thread, point
+it at a directory, watch the agent work, approve commands, and ship
+the result. If you already know Codex Desktop, you know the shape:
+threads, transcripts, per-thread model and access-mode pickers,
+permission prompts when the agent wants to do something destructive.
 
-This site is the **operator's guide** — setup, settings, and the
-tradeoffs behind each toggle. For the codebase, the architecture, and
-the contributor's path, head to the
-[GitHub repo](https://github.com/pwrdrvr/PwrAgent).
+The two apps **share thread state by default**. Open Codex Desktop
+and your PwrAgent threads are there; open PwrAgent and your Codex
+Desktop threads are there. They read and write the same on-disk
+session DB, so you can start a thread in one and pick it up in the
+other without thinking about it.
 
-## Get started
+When you *don't* want that — work code in one window, side-project
+code in another, a sandbox for trying things in a third — you create
+**isolated profiles**:
+
+- A **PwrAgent profile** (via `--profile work`) carries its own
+  config, sqlite DB, messaging credentials, and Codex pairing.
+- A **Codex profile** (a Codex-side concept) carries its own
+  authentication and per-Codex defaults.
+- You can bind a PwrAgent profile to a specific Codex profile, then
+  launch as many copies of PwrAgent simultaneously as you want — one
+  per profile — each isolated from the others. Work in one Dock
+  icon, personal in another, side projects in a third. Threads,
+  authentication, and messaging credentials never cross the
+  boundary.
+
+See [Desktop → Multiple profiles](desktop/#multiple-profiles) for the
+worked setup.
+
+# Messaging from anywhere
+
+PwrAgent's other half is **messaging integration**. Pair a bot once
+on **Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE**,
+and you can resume an existing thread or start a new one from your
+phone — review the last reply, send the next prompt, approve a
+Default-Access command — without opening the laptop.
+
+It's built for the cases where the laptop isn't an option: a phone
+on cellular, a hotel WiFi connection that drops every two minutes,
+an iPad you're using on the couch. The messaging path runs as a thin
+transport on top of your platform of choice; the agent itself stays
+on your laptop, so resilience to network blips is mostly the chat
+platform's problem (which they're already good at solving).
+
+See [Messaging](messaging/) for the per-platform setup walkthroughs
+and the end-to-end [Using Codex via Messaging](using-codex/) guide.
+
+# How well does it actually work?
+
+The author **uses PwrAgent as their primary coding environment**.
+Hundreds of PRs in this repository and others were created or
+reviewed through it — substantial features, refactors across package
+boundaries, bug investigations that span days. The messaging surface
+gets daily use from a phone for triage, approval, and "what did you
+end up doing while I was away" check-ins on long-running threads.
+
+That doesn't make it the right tool for everybody, but it does mean
+the rough edges that would have stopped a serious user have already
+been filed off. The honest list of what's still missing today and
+what's on the roadmap lives at
+[Desktop → Not yet](desktop/#not-yet-missing-from-the-desktop) and
+[Desktop → Coming soon](desktop/#coming-soon).
+
+# What PwrAgent is going to be
+
+The shape above is **the starting point, not the destination**.
+There are plans on the roadmap (better thread archival, branch
+auto-naming, monitor cards that survive restarts, more messaging
+providers, a tighter loop between Codex environments and worktrees),
+but the more interesting question is **what *you* want to build on
+top of this**.
+
+If you've ever wished a coding agent worked some specific way that
+no existing tool gets right — that's the kind of thing this codebase
+is set up to absorb. The architecture is layered (renderer / IPC /
+agent-core / messaging providers / shared) with hard dependency
+boundaries, the data layer is sqlite WAL with forward-compatible
+migrations, and the messaging providers each implement a small
+capability-profile contract so adding a seventh is a few-day task
+rather than a few-month one.
+
+We'd genuinely like to see what you bring. Patches, issue threads,
+forks that go in a different direction — all of it. Start with the
+[GitHub repo](https://github.com/pwrdrvr/PwrAgent) for the codebase,
+the architecture notes, and the contributor's path.
+
+# Get started
 
 - **Download** the latest signed macOS build from the
   [GitHub Releases page](https://github.com/pwrdrvr/PwrAgent/releases).
-- **Install** by opening the DMG and dragging PwrAgent into Applications.
-- (Optional) **Pair a messenger** from **Settings → Messaging**. See
-  [Messaging](messaging/) for the full per-platform walkthroughs.
+- **Install** by opening the DMG and dragging PwrAgent into
+  Applications. The build is Developer ID-signed and Apple-notarized,
+  so first launch should be a single Gatekeeper prompt — no
+  right-click-open ceremony.
+- **(Optional) Pair a messenger** from **Settings → Messaging**.
+  See the [Messaging](messaging/) section for the per-platform
+  walkthroughs.
 
-## Browse the docs
+# Browse the docs
 
-- **[Desktop](desktop/)** — the PwrAgent desktop app itself: worktrees,
-  Local mode, handoff, auto-naming, per-thread model / fast / reasoning
-  / permissions, what's missing today, what's coming soon.
+- **[Desktop](desktop/)** — sidebar lenses, thread workspaces (Local
+  and Worktree), Codex environments, per-thread settings, multiple
+  profiles, and what's still on the roadmap.
 - **[Messaging](messaging/)** — drive Codex threads from Telegram,
-  Discord, Slack, Mattermost, Feishu / Lark, or LINE. Includes the
-  end-to-end usage guide, per-platform setup, rate limits, the
-  streaming-responses tradeoff, and the webhook security note.
-- **[Settings](settings/)** — application discovery (terminal, editor,
-  git, gh CLI), worktree storage location, Codex App Server / Codex
-  Desktop coordination, authentication.
+  Discord, Slack, Mattermost, Feishu / Lark, or LINE. End-to-end
+  usage guide, per-platform setup, rate limits, the streaming-
+  responses tradeoff, and the webhook security note.
+- **[Settings](settings/)** — application discovery (terminal,
+  editor, git, gh CLI), profiles, worktree storage, Codex App
+  Server / Codex Desktop coordination, the experimental flags.
 
-## License
+# License
 
-PwrAgent is MIT-licensed, owned by PwrDrvr LLC. See the
+PwrAgent is MIT-licensed, created by PwrDrvr LLC. See the
 [LICENSE](https://github.com/pwrdrvr/PwrAgent/blob/main/LICENSE) and
 [THIRD\_PARTY\_LICENSES](https://github.com/pwrdrvr/PwrAgent/blob/main/THIRD_PARTY_LICENSES)
 files in the repo.
