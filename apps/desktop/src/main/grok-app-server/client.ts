@@ -152,6 +152,25 @@ function readString(
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function readTimestamp(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
 function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
   const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
   if (normalized === "active") {
@@ -257,6 +276,7 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
             typeof record.createdAt === "number" ? record.createdAt : undefined,
           updatedAt:
             typeof record.updatedAt === "number" ? record.updatedAt : undefined,
+          archivedAt: readTimestamp(record, "archivedAt", "archived_at"),
         },
       ];
     })
