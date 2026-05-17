@@ -21,6 +21,12 @@ export type DesktopWorktreeStorageLocation =
 export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
+export const DESKTOP_UPDATE_CHANNELS = ["latest", "prerelease"] as const;
+
+export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
+
+export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
+
 export type DesktopSettingsNonSecretSource = "default" | "config" | "env";
 export type DesktopSettingsSecretSource = "unset" | "keychain" | "env";
 export type DesktopSettingsSource =
@@ -134,6 +140,10 @@ export type DesktopMessagingAttachmentSettingsSnapshot = {
 
 export type DesktopImageUploadSettingsSnapshot = {
   pastedImageMaxPatches: DesktopSettingsValue<number>;
+};
+
+export type DesktopUpdateSettingsSnapshot = {
+  channel: DesktopSettingsValue<DesktopUpdateChannel>;
 };
 
 export type DesktopCodexCandidateSource =
@@ -305,6 +315,7 @@ export type DesktopSettingsSnapshot = {
     };
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
+  updates: DesktopUpdateSettingsSnapshot;
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
     allowFullAccessEscalation: DesktopSettingsValue<boolean>;
@@ -413,6 +424,9 @@ export type DesktopSettingsConfigPatch = {
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
+  };
+  updates?: {
+    channel?: DesktopUpdateChannel;
   };
   messaging?: {
     enabled?: boolean;
@@ -665,6 +679,12 @@ export function isDesktopWorktreeStorageLocation(
   return DESKTOP_WORKTREE_STORAGE_LOCATIONS.includes(
     value as DesktopWorktreeStorageLocation,
   );
+}
+
+export function isDesktopUpdateChannel(
+  value: string,
+): value is DesktopUpdateChannel {
+  return DESKTOP_UPDATE_CHANNELS.includes(value as DesktopUpdateChannel);
 }
 
 /**

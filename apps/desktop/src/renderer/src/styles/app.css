@@ -3524,6 +3524,24 @@ textarea,
   line-height: 1;
 }
 
+.settings-segmented__button--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 112px;
+  line-height: 1.15;
+}
+
+.settings-segmented__meta {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-segmented__button:hover,
 .settings-segmented__button:focus-visible {
   color: var(--text-primary);

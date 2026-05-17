@@ -8,11 +8,13 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
+  DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
+  DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
@@ -299,6 +301,9 @@ export class DesktopSettingsService {
         pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
           config.imageUploads?.pastedImageMaxPatches,
         ),
+      },
+      updates: {
+        channel: this.resolveUpdateChannelValue(config.updates?.channel),
       },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
@@ -589,6 +594,11 @@ export class DesktopSettingsService {
       .storage.value;
   }
 
+  resolveUpdateChannel(): DesktopUpdateChannel {
+    return this.resolveUpdateChannelValue(this.readConfig().config.updates?.channel)
+      .value;
+  }
+
   async writeConfigPatch(
     patch: DesktopSettingsConfigPatch,
   ): Promise<DesktopSettingsSnapshot> {
@@ -856,6 +866,15 @@ export class DesktopSettingsService {
     return {
       value: normalized ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
       source: normalized === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveUpdateChannelValue(
+    configValue: DesktopUpdateChannel | undefined,
+  ): DesktopSettingsValue<DesktopUpdateChannel> {
+    return {
+      value: configValue ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
     };
   }
 

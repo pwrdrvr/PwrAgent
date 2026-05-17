@@ -1,4 +1,13 @@
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { useEffect, useState } from "react";
+import type {
+  DesktopSettingsSnapshot,
+  DesktopUpdateChannel,
+} from "@pwragent/shared";
+import type {
+  AppUpdateReleaseInfo,
+  AppUpdateReleaseVersions,
+} from "../../../../shared/app-metadata";
+import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -37,16 +46,55 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   },
 ];
 
+const UPDATE_CHANNEL_OPTIONS: Array<{
+  label: string;
+  value: DesktopUpdateChannel;
+}> = [
+  { label: "Latest", value: "latest" },
+  { label: "Prerelease", value: "prerelease" },
+];
+
+function releaseVersionText(release: AppUpdateReleaseInfo | undefined): string {
+  return release?.version ?? "Unavailable";
+}
+
+function releaseHelpText(
+  releases: AppUpdateReleaseVersions | undefined,
+): string {
+  if (!releases) {
+    return "Release versions are loading.";
+  }
+  return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
+}
+
 export function GeneralSettings(props: {
+  desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
+  onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
 }) {
+  const [releaseVersions, setReleaseVersions] = useState<
+    AppUpdateReleaseVersions | undefined
+  >();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
+  const updateChannel = props.snapshot.updates.channel;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
     (option) => option.value === pastedImageMaxPatches.value,
   );
+
+  useEffect(() => {
+    let canceled = false;
+    void props.desktopApi?.readAppUpdateReleaseVersions?.().then((versions) => {
+      if (!canceled) {
+        setReleaseVersions(versions);
+      }
+    });
+    return () => {
+      canceled = true;
+    };
+  }, [props.desktopApi]);
 
   return (
     <SettingsSectionStack paneId="general" aria-label="General settings">
@@ -55,6 +103,50 @@ export function GeneralSettings(props: {
         title="General settings"
         help="Defaults that apply across PwrAgent surfaces."
       />
+
+      <SettingsSection
+        eyebrow="General"
+        title="Updates"
+        chip={sourceBadge(updateChannel)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Update channel"
+            sub="Choose which GitHub release stream the updater follows."
+            help={releaseHelpText(releaseVersions)}
+            error={updateChannel.error}
+            source={sourceBadge(updateChannel)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Update channel"
+              >
+                {UPDATE_CHANNEL_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={updateChannel.value === option.value}
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      updateChannel.value === option.value ? " is-active" : ""
+                    }`}
+                    disabled={props.saving}
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onUpdateChannelChange(option.value);
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {releaseVersionText(releaseVersions?.[option.value])}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"

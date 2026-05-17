@@ -35,6 +35,9 @@ describe("desktop settings contracts", () => {
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },
       },
+      updates: {
+        channel: { value: "latest", source: "default" },
+      },
       messaging: {
         enabled: {
           value: true,

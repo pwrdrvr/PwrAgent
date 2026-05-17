@@ -1,6 +1,7 @@
 import type {
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
+  DesktopUpdateChannel,
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -221,8 +222,14 @@ function SettingsSectionBody(props: {
   if (props.section === "general") {
     return (
       <GeneralSettings
+        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
+          await props.settings.writeConfig({
+            updates: { channel },
+          });
+        }}
         onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
           await props.settings.writeConfig({
             imageUploads: {

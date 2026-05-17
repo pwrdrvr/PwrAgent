@@ -175,6 +175,7 @@ import {
   APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
   APP_UPDATE_INSTALL_CHANNEL,
+  APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -257,6 +258,7 @@ import type {
   AppMetadata,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
+  AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../shared/app-metadata";
 
@@ -316,6 +318,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
   readAppUpdateStatus: async (): Promise<AppUpdateStatus> =>
     await ipcRenderer.invoke(APP_UPDATE_STATUS_READ_CHANNEL),
+  readAppUpdateReleaseVersions: async (): Promise<AppUpdateReleaseVersions> =>
+    await ipcRenderer.invoke(APP_UPDATE_RELEASES_READ_CHANNEL),
   onAppUpdateStatus: (
     callback: (status: AppUpdateStatus) => void,
   ): (() => void) => {

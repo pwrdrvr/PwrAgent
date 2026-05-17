@@ -7,6 +7,7 @@ import {
   registerAppMetadataIpcHandlers,
 } from "./ipc/app-metadata";
 import {
+  checkForAppUpdatesNow,
   disposeAppUpdateIpcHandlers,
   initAutoUpdater,
   registerAppUpdateIpcHandlers,
@@ -179,6 +180,12 @@ function installApplicationMenu(): void {
           label: `About ${APP_NAME}`,
           click: () => {
             app.showAboutPanel();
+          },
+        },
+        {
+          label: "Check for Updates",
+          click: () => {
+            void checkForAppUpdatesNow("menu");
           },
         },
         {

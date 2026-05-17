@@ -64,3 +64,17 @@ export type AppUpdateStatus =
 export type AppUpdateInstallResult =
   | { status: "restarting" }
   | { status: "error"; message: string };
+
+export type AppUpdateReleaseInfo = {
+  version?: string;
+  name?: string;
+  url?: string;
+  publishedAt?: string;
+  unavailableReason?: string;
+};
+
+export type AppUpdateReleaseVersions = {
+  latest: AppUpdateReleaseInfo;
+  prerelease: AppUpdateReleaseInfo;
+  fetchedAt: number;
+};
