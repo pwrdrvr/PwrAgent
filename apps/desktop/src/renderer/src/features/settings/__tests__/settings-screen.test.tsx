@@ -63,6 +63,9 @@ function createSnapshot(
     imageUploads: {
       pastedImageMaxPatches: { value: 1536, source: "default" },
     },
+    updates: {
+      channel: { value: "latest", source: "default" },
+    },
     messaging: {
       enabled: { value: true, source: "default" },
       allowFullAccessEscalation: { value: true, source: "default" },
@@ -282,13 +285,41 @@ function createSettingsState(
 describe("SettingsScreen", () => {
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
-    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+    const desktopApi = {
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        latest: { version: "v1.0.0" },
+        prerelease: { version: "v1.0.0-beta.7" },
+      })),
+    };
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
     expect(within(sections).getByRole("button", { name: "General" })).toHaveAttribute(
       "aria-current",
       "page",
     );
+
+    expect(screen.getByRole("heading", { name: "Updates" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Latest/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /Prerelease/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        updates: {
+          channel: "prerelease",
+        },
+      });
+    });
 
     expect(screen.getByRole("heading", { name: "Pasted images" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "1536 patches" })).toHaveAttribute(

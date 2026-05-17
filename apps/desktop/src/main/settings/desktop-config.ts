@@ -8,11 +8,14 @@ import type {
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
+  DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
+  DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopWorktreeStorageLocation,
+  isDesktopUpdateChannel,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
@@ -53,6 +56,9 @@ export type DesktopSettingsConfig = {
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
+  };
+  updates?: {
+    channel?: DesktopUpdateChannel;
   };
   messaging?: {
     enabled?: boolean;
@@ -330,6 +336,17 @@ export function desktopSettingsPatchToEdits(
         ["image_uploads", "pasted_image_max_patches"],
         pastedImageMaxPatches,
       );
+    }
+  }
+
+  if (patch.updates?.channel !== undefined) {
+    if (patch.updates.channel === DESKTOP_UPDATE_CHANNEL_DEFAULT) {
+      edits.push({
+        op: "delete",
+        path: ["updates", "channel"],
+      });
+    } else {
+      set(["updates", "channel"], patch.updates.channel);
     }
   }
 
@@ -661,6 +678,7 @@ function normalizeDesktopConfig(
   const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
+  const updates = tables["updates"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -690,6 +708,9 @@ function normalizeDesktopConfig(
       pastedImageMaxPatches: readNumber(
         imageUploads?.pasted_image_max_patches,
       ),
+    },
+    updates: {
+      channel: readUpdateChannel(updates?.channel),
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
@@ -856,6 +877,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.imageUploads = config.imageUploads;
   }
 
+  if (config.updates && hasDefinedValue(config.updates)) {
+    pruned.updates = config.updates;
+  }
+
   const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
@@ -984,6 +1009,14 @@ function readToolUpdateMode(
   value: TomlScalar | undefined,
 ): MessagingToolUpdateMode | undefined {
   return typeof value === "string" && isMessagingToolUpdateMode(value)
+    ? value
+    : undefined;
+}
+
+function readUpdateChannel(
+  value: TomlScalar | undefined,
+): DesktopUpdateChannel | undefined {
+  return typeof value === "string" && isDesktopUpdateChannel(value)
     ? value
     : undefined;
 }

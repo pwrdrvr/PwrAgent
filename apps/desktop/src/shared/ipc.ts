@@ -169,6 +169,7 @@ export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
 export const APP_UPDATE_INSTALL_CHANNEL = "app:install-update";
+export const APP_UPDATE_RELEASES_READ_CHANNEL = "app:read-update-releases";
 export const PROFILES_LIST_CHANNEL = "profiles:list";
 export const PROFILES_OPEN_CHANNEL = "profiles:open";
 export const PROFILES_CREATE_CHANNEL = "profiles:create";

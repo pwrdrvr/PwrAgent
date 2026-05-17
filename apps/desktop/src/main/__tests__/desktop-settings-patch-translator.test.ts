@@ -53,6 +53,39 @@ describe("desktopSettingsPatchToEdits — image uploads", () => {
   });
 });
 
+describe("desktopSettingsPatchToEdits — updates", () => {
+  it("writes the prerelease update channel", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          channel: "prerelease",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["updates", "channel"],
+        value: "prerelease",
+      },
+    ]);
+  });
+
+  it("removes the update channel when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          channel: "latest",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["updates", "channel"],
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — messaging attachments", () => {
   it("writes non-default image upload profiles", () => {
     expect(

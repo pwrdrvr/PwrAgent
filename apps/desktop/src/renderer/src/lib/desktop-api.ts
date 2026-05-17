@@ -157,6 +157,7 @@ import type {
   AppMetadata,
   AppUpdateCheckResult,
   AppUpdateInstallResult,
+  AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../../../shared/app-metadata";
 
@@ -175,6 +176,7 @@ export type DesktopApi = {
   onAppLogEntry?: (callback: (entry: AppLogEntry) => void) => () => void;
   checkForAppUpdates?: () => Promise<AppUpdateCheckResult>;
   readAppUpdateStatus?: () => Promise<AppUpdateStatus>;
+  readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
   installAppUpdate?: () => Promise<AppUpdateInstallResult>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;

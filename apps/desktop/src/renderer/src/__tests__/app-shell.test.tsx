@@ -187,6 +187,9 @@ describe("App", () => {
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },
       },
+      updates: {
+        channel: { value: "latest", source: "default" },
+      },
       messaging: {
         enabled: { value: true, source: "default" },
         allowFullAccessEscalation: { value: true, source: "default" },

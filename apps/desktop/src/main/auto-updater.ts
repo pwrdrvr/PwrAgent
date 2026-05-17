@@ -4,20 +4,36 @@ const { autoUpdater } = electronUpdater;
 import {
   APP_UPDATE_CHECK_CHANNEL,
   APP_UPDATE_INSTALL_CHANNEL,
+  APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
 } from "../shared/ipc";
 import type {
   AppUpdateCheckResult,
   AppUpdateInstallResult,
+  AppUpdateReleaseInfo,
+  AppUpdateReleaseVersions,
   AppUpdateStatus,
 } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
+import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 
 const log = getMainLogger("pwragent:updater");
+const GITHUB_RELEASES_URL =
+  "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30";
+const RELEASE_FETCH_TIMEOUT_MS = 5_000;
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
+
+type GitHubRelease = {
+  draft?: boolean;
+  html_url?: string;
+  name?: string;
+  prerelease?: boolean;
+  published_at?: string;
+  tag_name?: string;
+};
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
   updateStatus = nextStatus;
@@ -31,6 +47,94 @@ function setUpdateStatus(nextStatus: AppUpdateStatus): void {
 
 function downloadedVersion(): string | undefined {
   return updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+}
+
+function currentUpdateChannel(): "latest" | "prerelease" {
+  try {
+    return getDesktopSettingsService().resolveUpdateChannel();
+  } catch (err) {
+    log.warn("failed to read update channel setting", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return "latest";
+  }
+}
+
+function configureAutoUpdaterChannel(): void {
+  const updateChannel = currentUpdateChannel();
+  autoUpdater.allowPrerelease = updateChannel === "prerelease";
+  log.info("configured auto-update channel", {
+    allowPrerelease: autoUpdater.allowPrerelease,
+    updateChannel,
+  });
+}
+
+function releaseInfoFromGitHubRelease(
+  release: GitHubRelease | undefined,
+  unavailableReason: string,
+): AppUpdateReleaseInfo {
+  if (!release?.tag_name) {
+    return { unavailableReason };
+  }
+  return {
+    version: release.tag_name,
+    ...(release.name ? { name: release.name } : {}),
+    ...(release.html_url ? { url: release.html_url } : {}),
+    ...(release.published_at ? { publishedAt: release.published_at } : {}),
+  };
+}
+
+function githubReleaseHeaders(): HeadersInit {
+  const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
+  return {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "PwrAgent",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(GITHUB_RELEASES_URL, {
+      headers: githubReleaseHeaders(),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub releases request failed with ${response.status}`);
+    }
+    const payload = await response.json();
+    const releases = Array.isArray(payload)
+      ? payload.filter((release): release is GitHubRelease =>
+          typeof release === "object" && release !== null,
+        )
+      : [];
+    const publicReleases = releases.filter((release) => release.draft !== true);
+    const latest = publicReleases.find(
+      (release) => release.prerelease !== true,
+    );
+    const prerelease = publicReleases.find(
+      (release) => release.prerelease === true,
+    );
+    return {
+      fetchedAt: Date.now(),
+      latest: releaseInfoFromGitHubRelease(latest, "No stable release found."),
+      prerelease: releaseInfoFromGitHubRelease(
+        prerelease,
+        "No prerelease found.",
+      ),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      fetchedAt: Date.now(),
+      latest: { unavailableReason: message },
+      prerelease: { unavailableReason: message },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function initAutoUpdater(): void {
@@ -59,7 +163,7 @@ export function initAutoUpdater(): void {
   autoUpdater.logger = log as unknown as Console;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.allowPrerelease = true;
+  configureAutoUpdaterChannel();
 
   autoUpdater.on("checking-for-update", () => {
     log.info("checking-for-update");
@@ -115,9 +219,15 @@ export function registerAppUpdateIpcHandlers(): void {
   ipcMain.removeHandler(APP_UPDATE_CHECK_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_STATUS_READ_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_INSTALL_CHANNEL);
+  ipcMain.removeHandler(APP_UPDATE_RELEASES_READ_CHANNEL);
   ipcMain.handle(
     APP_UPDATE_STATUS_READ_CHANNEL,
     async (): Promise<AppUpdateStatus> => updateStatus,
+  );
+  ipcMain.handle(
+    APP_UPDATE_RELEASES_READ_CHANNEL,
+    async (): Promise<AppUpdateReleaseVersions> =>
+      await readAppUpdateReleaseVersions(),
   );
   ipcMain.handle(
     APP_UPDATE_INSTALL_CHANNEL,
@@ -153,6 +263,7 @@ export function registerAppUpdateIpcHandlers(): void {
         return result;
       }
       try {
+        configureAutoUpdaterChannel();
         const result = await autoUpdater.checkForUpdates();
         if (updateStatus.status === "downloaded") {
           return { status: "downloaded", version: updateStatus.version };
@@ -179,4 +290,5 @@ export function disposeAppUpdateIpcHandlers(): void {
   ipcMain.removeHandler(APP_UPDATE_CHECK_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_STATUS_READ_CHANNEL);
   ipcMain.removeHandler(APP_UPDATE_INSTALL_CHANNEL);
+  ipcMain.removeHandler(APP_UPDATE_RELEASES_READ_CHANNEL);
 }

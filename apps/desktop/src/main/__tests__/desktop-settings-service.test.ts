@@ -39,6 +39,9 @@ describe("DesktopSettingsService", () => {
         "[image_uploads]",
         "pasted_image_max_patches = 4096",
         "",
+        "[updates]",
+        'channel = "prerelease"',
+        "",
         "[messaging.attachments]",
         'image_profile = "high"',
         "",
@@ -107,6 +110,10 @@ describe("DesktopSettingsService", () => {
       value: 4096,
       source: "config",
     });
+    expect(snapshot.updates.channel).toEqual({
+      value: "prerelease",
+      source: "config",
+    });
     expect(snapshot.messaging.attachments.imageProfile).toEqual({
       value: "high",
       source: "config",
@@ -164,6 +171,51 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.worktrees.effectivePath).toMatch(
       /\.pwragent\/worktrees$/,
     );
+  });
+
+  it("defaults the update channel and only persists prerelease", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.updates.channel).toEqual({
+      value: "latest",
+      source: "default",
+    });
+    expect(service.resolveUpdateChannel()).toBe("latest");
+
+    await service.writeConfigPatch({
+      updates: {
+        channel: "prerelease",
+      },
+    });
+
+    const afterPrerelease = fs.readFileSync(configPath, "utf8");
+    expect(afterPrerelease).toContain("[updates]");
+    expect(afterPrerelease).toContain('channel = "prerelease"');
+    expect((await service.readSettings()).updates.channel).toEqual({
+      value: "prerelease",
+      source: "config",
+    });
+    expect(service.resolveUpdateChannel()).toBe("prerelease");
+
+    await service.writeConfigPatch({
+      updates: {
+        channel: "latest",
+      },
+    });
+
+    const afterDefault = fs.readFileSync(configPath, "utf8");
+    expect(afterDefault).not.toContain("channel");
+    expect((await service.readSettings()).updates.channel).toEqual({
+      value: "latest",
+      source: "default",
+    });
   });
 
   it("defaults the image upload profile and only persists non-default values", async () => {
