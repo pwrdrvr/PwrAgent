@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -56,6 +56,10 @@ export async function installAcpBinary(params: {
       archiveUrl: params.distribution.archiveUrl,
       destinationPath: archivePath,
     });
+    await verifyArchiveIntegrity({
+      distribution: params.distribution,
+      archivePath,
+    });
     await extractor({ archivePath, destinationDir: stagingDir });
     const command = resolveCommandPath(stagingDir, params.distribution.command);
     await access(command, fsConstants.F_OK);
@@ -105,6 +109,44 @@ function archiveFileName(archiveUrl: string): string {
 
 function sanitizeInstallName(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+async function verifyArchiveIntegrity(params: {
+  distribution: AcpBinaryPlatformDistribution;
+  archivePath: string;
+}): Promise<void> {
+  if (!params.distribution.checksum) {
+    return;
+  }
+
+  const archive = await readFile(params.archivePath);
+  const actualHex = createHash("sha256").update(archive).digest("hex");
+  const expected = normalizeSha256Checksum(params.distribution.checksum);
+  if (expected.kind === "hex") {
+    if (actualHex !== expected.value) {
+      throw new Error("binary archive checksum verification failed");
+    }
+    return;
+  }
+
+  const actualBase64 = Buffer.from(actualHex, "hex").toString("base64");
+  if (actualBase64 !== expected.value) {
+    throw new Error("binary archive checksum verification failed");
+  }
+}
+
+function normalizeSha256Checksum(
+  checksum: string,
+): { kind: "hex" | "base64"; value: string } {
+  const trimmed = checksum.trim();
+  if (trimmed.startsWith("sha256-")) {
+    return { kind: "base64", value: trimmed.slice("sha256-".length) };
+  }
+  const value = trimmed.replace(/^sha256[:=]/i, "").toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error("binary archive checksum must be a SHA-256 digest");
+  }
+  return { kind: "hex", value };
 }
 
 async function defaultDownloader(params: {

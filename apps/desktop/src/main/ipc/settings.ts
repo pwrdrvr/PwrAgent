@@ -76,6 +76,7 @@ import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { AcpInstaller } from "../acp/acp-installer";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
+import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
 import { AcpRegistryService } from "../acp/acp-registry-service";
 import type {
   AcpInstalledAgentRecord,
@@ -170,7 +171,7 @@ async function installAcpAgent(
 
   const distribution = selectAcpDistribution(agent, request.distributionKind);
   if (!distribution) {
-    return { ok: false, error: "No allowed distribution is available." };
+    return { ok: false, error: "No supported distribution is available for this platform." };
   }
 
   const installer = new AcpInstaller({ store });
@@ -215,7 +216,32 @@ function acpAgentSettingsEntry(params: {
 
   const distribution = selectAcpDistribution(params.agent);
   if (!distribution) {
-    return undefined;
+    const displayDistribution = params.agent.distributions[0];
+    if (!displayDistribution) {
+      return undefined;
+    }
+    return {
+      backendId: params.agent.backendId,
+      registryId: params.agent.id,
+      name: params.agent.name,
+      description: params.agent.description,
+      version: params.agent.version,
+      license: params.agent.license,
+      authors: params.agent.authors,
+      repositoryUrl: params.agent.repositoryUrl,
+      websiteUrl: params.agent.websiteUrl,
+      distributionKind: displayDistribution.kind,
+      distributionSource: describeDistributionSource(displayDistribution),
+      installable: false,
+      installed: false,
+      installStatus: "unavailable",
+      authStatus: params.agent.auth.required ? "required" : "not-required",
+      verificationStatus: params.agent.verificationStatus,
+      allowlistRuleId: params.agent.allowlist.allowed
+        ? params.agent.allowlist.ruleId
+        : undefined,
+      unavailableReason: "No supported distribution is available for this platform.",
+    };
   }
   return {
     backendId: params.agent.backendId,
@@ -274,14 +300,7 @@ function selectAcpDistribution(
   agent: Pick<AcpRegistryAgent, "distributions">,
   preferredKind?: AcpRegistryDistribution["kind"],
 ): AcpRegistryDistribution | undefined {
-  const distributions = preferredKind
-    ? agent.distributions.filter((distribution) => distribution.kind === preferredKind)
-    : agent.distributions;
-  return (
-    distributions.find((distribution) => distribution.kind === "npx") ??
-    distributions.find((distribution) => distribution.kind === "uvx") ??
-    distributions[0]
-  );
+  return selectAcpDistributionForCurrentPlatform(agent.distributions, preferredKind);
 }
 
 async function resolveCodexCommandForProfileWorkflow(

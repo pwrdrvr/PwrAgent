@@ -1347,7 +1347,11 @@ describe("DesktopBackendRegistry", () => {
 
   it("starts ACP sessions, prompts them, reads replay, and cancels turns", async () => {
     const sessions: AcpSessionMetadata[] = [];
-    const startedPrompts: Array<{ sessionId: string; prompt: string }> = [];
+    const startedPrompts: Array<{
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }> = [];
     const cancelledSessions: string[] = [];
     const emittedEvents: AgentEvent[] = [];
     const acpBackendId = "acp:codex-acp" as AcpBackendId;
@@ -1372,11 +1376,15 @@ describe("DesktopBackendRegistry", () => {
         sessions.push(metadata);
         return metadata;
       }),
-      startPrompt: vi.fn((params: { sessionId: string; prompt: string }) => {
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        prompt: string;
+        turnId?: string;
+      }) => {
         startedPrompts.push(params);
         return {
           sessionId: params.sessionId,
-          turnId: "pending:session-1:1001",
+          turnId: params.turnId ?? "pending:session-1:1001",
         };
       }),
       cancelSession: vi.fn(async (sessionId: string) => {
@@ -1462,7 +1470,7 @@ describe("DesktopBackendRegistry", () => {
     ).resolves.toEqual({
       backend: acpBackendId,
       threadId: "session-1",
-      turnId: "pending:session-1:1001",
+      turnId: "pending:session-1",
     });
     await expect(
       registry.readThread({
@@ -1480,12 +1488,12 @@ describe("DesktopBackendRegistry", () => {
       registry.interruptTurn({
         backend: acpBackendId,
         threadId: "session-1",
-        turnId: "pending:session-1:1001",
+        turnId: "pending:session-1",
       }),
     ).resolves.toEqual({
       backend: acpBackendId,
       threadId: "session-1",
-      turnId: "pending:session-1:1001",
+      turnId: "pending:session-1",
     });
 
     expect(acpClient.initialize).toHaveBeenCalledTimes(1);
@@ -1495,7 +1503,7 @@ describe("DesktopBackendRegistry", () => {
       title: "ACP session",
     });
     expect(startedPrompts).toEqual([
-      { sessionId: "session-1", prompt: "hello ACP" },
+      { sessionId: "session-1", prompt: "hello ACP", turnId: "pending:session-1" },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([

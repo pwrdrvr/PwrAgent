@@ -1863,6 +1863,26 @@ export class DesktopBackendRegistry {
               },
             });
           },
+          onPromptError: async ({ sessionId, turnId, error }) => {
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "turn/failed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  turn: {
+                    id: turnId,
+                    status: "failed",
+                    completedAt: Date.now(),
+                    error: {
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                  },
+                },
+              },
+            });
+          },
         });
       });
     this.messagingStore = options?.messagingStore;
@@ -2472,6 +2492,7 @@ export class DesktopBackendRegistry {
       const result = client.startPrompt({
         sessionId: params.threadId,
         prompt,
+        turnId: syntheticStartedTurnId,
       });
       this.invalidateThreadListCache(params.backend);
       return {

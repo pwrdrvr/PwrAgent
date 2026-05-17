@@ -133,6 +133,50 @@ describe("AcpRegistryService", () => {
     });
   });
 
+  it("does not treat signature-only binary metadata as verified", async () => {
+    const service = new AcpRegistryService({
+      allowlist: new AcpAgentAllowlist([
+        {
+          id: "codex-rule",
+          registryId: "codex-acp",
+          versions: ["0.14.0"],
+          distributionKinds: ["binary"],
+          allowedArchiveHosts: ["github.com"],
+          allowUnverifiedBinary: true,
+        },
+      ]),
+    });
+    const snapshot = {
+      fetchedAt: 1,
+      agents: normalizeRegistry({
+        agents: [
+          {
+            id: "codex-acp",
+            name: "Codex CLI",
+            version: "0.14.0",
+            distribution: {
+              binary: {
+                "darwin-aarch64": {
+                  archive:
+                    "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz",
+                  signature:
+                    "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz.sig",
+                  cmd: "./codex-acp",
+                },
+              },
+            },
+          },
+        ],
+      }),
+      raw: {},
+    };
+
+    expect(service.applyAllowlist(snapshot)[0]).toMatchObject({
+      installable: true,
+      verificationStatus: "unverified-allowed",
+    });
+  });
+
   it("rejects registry HTTP failures", async () => {
     const service = new AcpRegistryService({
       fetch: async () => ({

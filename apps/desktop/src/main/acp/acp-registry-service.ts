@@ -80,8 +80,7 @@ export class AcpRegistryService {
       );
       const binaryHasIntegrity = agent.distributions.some(
         (distribution) =>
-          distribution.kind === "binary" &&
-          (Boolean(distribution.checksum) || Boolean(distribution.signatureUrl)),
+          distribution.kind === "binary" && Boolean(distribution.checksum),
       );
       const verificationStatus =
         hasBinary && !binaryHasIntegrity

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -100,5 +100,53 @@ describe("AcpAgentClient", () => {
         params: { sessionId: "session-1" },
       },
     ]);
+  });
+
+  it("reports fire-and-forget prompt failures", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:codex-acp",
+      store,
+      transport: {
+        request: async (method, params) => {
+          if (method === "session/prompt") {
+            throw new Error("agent exited");
+          }
+          return transport.request(method, params);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1000,
+      onPromptError: (event) => {
+        errors.push(event);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const prompt = client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "keep going",
+      turnId: "pending:session-1",
+    });
+
+    expect(prompt).toEqual({
+      sessionId: "session-1",
+      turnId: "pending:session-1",
+    });
+    await vi.waitFor(() => {
+      expect(errors).toHaveLength(1);
+    });
+    expect(errors[0]).toMatchObject({
+      sessionId: "session-1",
+      turnId: "pending:session-1",
+    });
+    expect(errors[0]?.error).toBeInstanceOf(Error);
+    expect((errors[0]?.error as Error).message).toBe("agent exited");
   });
 });

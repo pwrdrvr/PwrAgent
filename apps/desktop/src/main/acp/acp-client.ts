@@ -27,6 +27,11 @@ export type AcpAgentClientOptions = {
     replay: AppServerThreadReplay;
     update: Record<string, unknown>;
   }) => Promise<void> | void;
+  onPromptError?: (event: {
+    sessionId: string;
+    turnId: string;
+    error: unknown;
+  }) => Promise<void> | void;
 };
 
 export class AcpAgentClient {
@@ -115,12 +120,23 @@ export class AcpAgentClient {
   startPrompt(params: {
     sessionId: string;
     prompt: string;
+    turnId?: string;
   }): { sessionId: string; turnId: string } {
-    const turnId = `pending:${params.sessionId}:${this.now()}`;
-    void this.options.transport.request("session/prompt", {
-      sessionId: params.sessionId,
-      prompt: params.prompt,
-    }).catch(() => undefined);
+    const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
+    void this.options.transport
+      .request("session/prompt", {
+        sessionId: params.sessionId,
+        prompt: params.prompt,
+      })
+      .catch((error) =>
+        Promise.resolve(
+          this.options.onPromptError?.({
+            sessionId: params.sessionId,
+            turnId,
+            error,
+          }),
+        ).catch(() => undefined),
+      );
     return {
       sessionId: params.sessionId,
       turnId,

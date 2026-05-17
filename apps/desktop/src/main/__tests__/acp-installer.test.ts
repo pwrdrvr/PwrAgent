@@ -138,6 +138,77 @@ describe("AcpInstaller", () => {
     });
   });
 
+  it("verifies binary archive checksums before extraction", async () => {
+    let extracted = false;
+    const installer = new AcpInstaller({
+      store,
+      now: () => 1000,
+      archiveDownloader: async ({ destinationPath }) => {
+        await writeFile(destinationPath, "archive");
+      },
+      archiveExtractor: async ({ destinationDir }) => {
+        extracted = true;
+        await writeFile(path.join(destinationDir, "codex-acp"), "#!/bin/sh\n");
+      },
+    });
+    const installRoot = path.join(tempDir, "agents");
+    const distribution = {
+      ...buildBinaryDistribution("./codex-acp"),
+      checksum: "sha256:0eb3e36bfb24dcd9bb1d1bece1531216b59539a8fde17ee80224af0653c92aa3",
+    };
+
+    const result = await installer.install({
+      agent: buildAgent(),
+      distribution,
+      allowlistRuleId: "codex-rule",
+      installRoot,
+      confirmed: true,
+    });
+
+    expect(extracted).toBe(true);
+    expect(result).toMatchObject({
+      ok: true,
+      record: {
+        installStatus: "installed",
+        verificationStatus: "verified",
+      },
+    });
+  });
+
+  it("does not extract or promote binaries with checksum mismatches", async () => {
+    let extracted = false;
+    const installer = new AcpInstaller({
+      store,
+      now: () => 1000,
+      archiveDownloader: async ({ destinationPath }) => {
+        await writeFile(destinationPath, "archive");
+      },
+      archiveExtractor: async () => {
+        extracted = true;
+      },
+    });
+
+    const result = await installer.install({
+      agent: buildAgent(),
+      distribution: {
+        ...buildBinaryDistribution("./codex-acp"),
+        checksum: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      },
+      allowlistRuleId: "codex-rule",
+      installRoot: path.join(tempDir, "agents"),
+      confirmed: true,
+    });
+
+    expect(extracted).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      record: {
+        installStatus: "install-failed",
+        lastError: "binary archive checksum verification failed",
+      },
+    });
+  });
+
   it("rejects binary command paths that escape the install directory", async () => {
     const installer = new AcpInstaller({
       store,

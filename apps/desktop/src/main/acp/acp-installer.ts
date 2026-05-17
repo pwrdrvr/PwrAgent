@@ -100,8 +100,7 @@ function buildBaseRecord(
     authStatus: authStatusForAgent(request.agent),
     verificationStatus:
       request.distribution.kind === "binary" &&
-      !request.distribution.checksum &&
-      !request.distribution.signatureUrl
+      !request.distribution.checksum
         ? "unverified-allowed"
         : request.distribution.kind === "binary"
           ? "verified"
