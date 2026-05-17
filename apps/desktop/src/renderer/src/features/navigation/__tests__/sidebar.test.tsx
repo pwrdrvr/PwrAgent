@@ -2257,4 +2257,66 @@ describe("Sidebar directory pinning", () => {
     const bSummaryAfter = getDirectorySummary(/ProjectB/i);
     expect(bSummaryAfter.getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("dismisses any open directory context menu when a thread context menu opens", async () => {
+    // Regression: a `contextmenu` event doesn't fire the
+    // document-level `click` listener that normally dismisses
+    // open menus. Before the fix, right-clicking a directory →
+    // right-clicking a thread (without an intervening left-click)
+    // left both menus stacked on top of each other.
+    //
+    // The directory→thread direction was already symmetric
+    // (`openDirectoryContextMenu` clears `contextMenu` itself),
+    // so this test locks the formerly-broken direction only.
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+      threadKeys: ["codex:thread-1"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[pinnedA]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        // selectedItemKey points at the thread inside A so the
+        // auto-expand effect opens A on mount — that's the only
+        // way a thread row inside the Directories lens becomes
+        // visible to right-click.
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={onSetThreadPin}
+        onSetDirectoryPin={async () => undefined}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // Right-click directory A → directory menu opens.
+    const directorySummary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(directorySummary);
+    await screen.findByRole("menuitem", { name: "Unpin Directory" });
+
+    // Right-click the thread row inside A (no intervening left
+    // click) → `openThreadContextMenu` runs. The directory menu
+    // must dismiss as a side-effect.
+    const threadRow = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    fireEvent.contextMenu(threadRow);
+
+    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    expect(
+      screen.queryByRole("menuitem", { name: "Unpin Directory" }),
+    ).not.toBeInTheDocument();
+  });
 });

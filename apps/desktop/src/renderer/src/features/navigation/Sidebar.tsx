@@ -361,6 +361,13 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition
   ): void => {
     setRenameThread(undefined);
+    // Symmetric with `openDirectoryContextMenu`'s
+    // `setContextMenu(undefined)` — a `contextmenu` event doesn't
+    // trigger the document-level `click` listener that normally
+    // dismisses menus, so without this explicit clear a user could
+    // right-click a directory and then right-click a thread and
+    // see both menus stacked on top of each other.
+    setDirectoryContextMenu(undefined);
     setContextMenu({ requestedPosition: position, thread });
   };
 
