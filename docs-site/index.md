@@ -28,7 +28,7 @@ code in another, a sandbox for trying things in a third — you create
 **isolated profiles**:
 
 - A **PwrAgent profile** (via `--profile work`) carries its own
-  config, sqlite DB, messaging credentials, and Codex pairing.
+  config, session state, messaging credentials, and Codex pairing.
 - A **Codex profile** (a Codex-side concept) carries its own
   authentication and per-Codex defaults.
 - You can bind a PwrAgent profile to a specific Codex profile, then
@@ -86,11 +86,10 @@ top of this**.
 
 If you've ever wished a coding agent worked some specific way that
 no existing tool gets right — that's the kind of thing this codebase
-is set up to absorb. The architecture is layered (renderer / IPC /
-agent-core / messaging providers / shared) with hard dependency
-boundaries, the data layer is sqlite WAL with forward-compatible
-migrations, and the messaging providers each implement a small
-capability-profile contract so adding a seventh is a few-day task
+is set up to absorb. Cleanly layered packages with hard dependency
+boundaries, a forward-compatible local data layer that doesn't
+fight you on schema changes, and a per-platform messaging contract
+small enough that adding a seventh provider is a few-day task
 rather than a few-month one.
 
 We'd genuinely like to see what you bring. Patches, issue threads,

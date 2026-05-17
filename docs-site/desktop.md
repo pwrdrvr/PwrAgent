@@ -6,11 +6,10 @@ permalink: /desktop/
 
 # The PwrAgent desktop
 
-The desktop app is where you live day-to-day. It's an Electron
-app that reads and writes the same on-disk session DB Codex Desktop
-uses, so your threads, transcripts, and authentication are shared
-between the two by default — open either one and your work is
-there.
+The desktop app is where you live day-to-day. It reads and writes
+the same on-disk session state Codex Desktop uses, so your threads,
+transcripts, and authentication are shared between the two by
+default — open either one and your work is there.
 
 What makes the PwrAgent side worth running:
 
@@ -31,6 +30,11 @@ What makes the PwrAgent side worth running:
 - **In-place Markdown composer** — ```` ``` ```` opens a code block,
   `>` opens a blockquote, bullet and numbered lists auto-continue.
   Codex Desktop doesn't have this yet.
+- **Persistent draft history** — every keystroke autosaves to a
+  per-profile store. Press **↑** in an empty composer to recover
+  and cycle through the last 20 drafts (unsent *and* sent). Drafts
+  survive thread switches, sidebar refreshes, settings overlays,
+  and full app restarts.
 - **Profile isolation** — two layered profile mechanisms (PwrAgent
   + Codex) compose into anything from "one install, one identity"
   to "N installs running side-by-side with isolated auth and
@@ -193,6 +197,64 @@ The composer parses Markdown as you type:
 
 Codex Desktop doesn't have this yet.
 
+### Undo / redo (per-thread)
+
+While a thread is focused, **Cmd+Z** undoes the most recent change
+to that thread's composer, and **Cmd+Shift+Z** (or **Cmd+Y**)
+redoes. Each thread carries its own independent undo stack —
+switching threads doesn't merge the histories, and undo never
+crosses thread boundaries.
+
+Undo also restores a `$skill` chip you just removed with
+**Backspace**, recovering both the chip and its position in the
+surrounding text — so an accidental delete doesn't cost you the
+chip you spent time picking.
+
+For recovery **across** threads or app restarts, see
+[Composer draft history](#composer-draft-history--recovers-your-last-message)
+below — the **↑** mechanic there reaches further back than the
+per-thread undo stack does.
+
+### Composer draft history (↑ recovers your last message)
+
+Every keystroke in the composer is autosaved to a per-profile
+store, including the text, any `$skill` chips, pasted images, and
+any rich formatting you applied. Drafts survive **everything**
+that historically lost them in other agent UIs:
+
+- Navigating between threads
+- Opening Settings and coming back
+- A sidebar refresh
+- Quitting and relaunching the app
+- An undo / redo sequence that backs over what you typed
+- Closing a thread without sending
+
+To recover a previous draft, focus an **empty** composer and press
+**↑ (ArrowUp)**. The composer fills with the most recent
+candidate. Keep pressing **↑** to cycle further back through up to
+**20 recent candidates** (per-profile); **↓ (ArrowDown)** cycles
+forward through the same list.
+
+Candidates include:
+
+- **Unsent drafts you abandoned** — anything you typed and walked
+  away from.
+- **Messages you've already sent** — recover what you said and
+  re-send it (with edits) without retyping.
+- **Drafts from other scopes** — if the current scope has no
+  history, the recovery falls back to recent drafts from
+  anywhere in the same PwrAgent profile.
+
+The recovery cycle is anchored on the *blank composer* state.
+Start typing once you've found the draft you want and the cycle
+ends — the next **↑** will move the cursor in the usual way.
+
+Draft history is **per PwrAgent profile** — switching profiles via
+`--profile <name>` gives that profile its own independent history.
+Drafts never leave your machine.
+
+Codex Desktop doesn't have this yet either.
+
 ### Multi-message queueing
 
 ![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread; "Review changes against main" (a queued /review against the base branch) and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
@@ -275,7 +337,7 @@ Read once; the rest of the section is a worked setup.
 A **PwrAgent profile** is selected by the `PWRAGENT_PROFILE` env
 var at launch. Each profile carries its own:
 
-- `config.toml` (settings) and `state.db` (sqlite session DB).
+- `config.toml` (settings) and `state.db` (session state).
 - New-thread sticky settings (the per-thread defaults you've
   carried forward).
 - **Messaging profile**, entirely isolated from other PwrAgent
@@ -382,8 +444,7 @@ The in-app profile management writes to your config file the same
 shape an experienced operator would write by hand:
 
 - PwrAgent profile dir: `~/.pwragent/profiles/<name>/` containing
-  `config.toml` (settings) and `state/state.db` (sqlite session
-  state).
+  `config.toml` (settings) and `state/state.db` (session state).
 - Codex profile dir: `~/.codex/profiles/<name>/` containing the
   isolated `CODEX_HOME` (auth tokens, thread history, config).
 - Selected Codex profile is recorded in the active PwrAgent
