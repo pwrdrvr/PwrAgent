@@ -5,8 +5,8 @@ description: Prepare, validate, tag, publish, and monitor guarded PwrAgent deskt
 
 # Release
 
-Use this skill for PwrAgent desktop releases published by
-`.github/workflows/release.yml`.
+Use this skill for PwrAgent desktop releases published by the
+`.github/workflows/release.yml` Universal macOS workflow.
 
 ## Read First
 
@@ -43,7 +43,8 @@ Read these files before changing release metadata:
 - Do not use GitHub generated release notes as the final notes.
 - Do not force-push the default branch or rewrite an existing release tag
   without explicit user approval.
-- Keep v1.0 proprietary licensing intact: do not add OSS license language.
+- Keep MIT licensing intact: do not change first-party license metadata or
+  remove license disclosures without an explicit policy change.
 
 ## Prepare Release Metadata
 
@@ -161,8 +162,8 @@ Push the tag after the release metadata is already on `main`:
 git push origin v<version>
 ```
 
-The tag push triggers `Release Desktop (macOS arm64)`. The workflow must pass
-`Check release metadata` before build/sign/notarize/publish starts.
+The tag push triggers `Release Desktop (macOS universal)`. The workflow must
+pass `Check release metadata` before build/sign/notarize/publish starts.
 
 For a manual dispatch, verify the tag already exists on GitHub:
 
@@ -195,8 +196,17 @@ gh release download v<version> --dir .local/release/v<version>
 ls .local/release/v<version>
 ```
 
-Expect signed/notarized macOS arm64 assets, including DMG/ZIP files and
-`latest-mac.yml`.
+Expect signed/notarized Universal macOS assets:
+
+- A versioned Universal DMG, such as `PwrAgent-<version>-universal.dmg`.
+- A stable `PwrAgent.dmg` alias uploaded by the workflow for
+  `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`.
+- A Universal updater ZIP and `.blockmap`.
+- `latest-mac.yml`.
+
+The stable `PwrAgent.dmg` alias is intentionally unversioned so the website can
+link to the latest release without knowing the current version. Do not remove
+or replace it with an arch-suffixed DMG.
 
 Then replace electron-builder's empty/default release notes and mark prerelease
 tags as prereleases:
