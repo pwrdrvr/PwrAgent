@@ -95,8 +95,15 @@ import {
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
+  isAcpBackendId,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
+import type { AcpAgentStore } from "../acp/acp-agent-store";
+import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
+import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import { AcpAgentStore as SqliteAcpAgentStore } from "../acp/acp-agent-store";
+import { AcpSessionStore as SqliteAcpSessionStore } from "../acp/acp-session-store";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import { createScratchProjectDirectory } from "./scratch-projects";
@@ -801,6 +808,102 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
   };
 }
 
+function buildAcpCapabilities(): BackendCapabilities {
+  return {
+    listThreads: true,
+    createThread: true,
+    resumeThread: true,
+    archiveThread: false,
+    restoreThread: false,
+    archiveWorktree: false,
+    restoreWorktree: false,
+    renameThread: false,
+    readThread: true,
+    startTurn: true,
+    startReview: false,
+    interruptTurn: true,
+    steerTurn: false,
+    transcriptPagination: false,
+    toolUse: true,
+    approvalRequests: true,
+    multiDirectoryThreads: true,
+  };
+}
+
+function describeInstalledAcpBackend(agent: AcpInstalledAgentRecord): BackendSummary {
+  const available =
+    agent.installStatus === "installed" &&
+    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
+  const unavailableReason =
+    available
+      ? undefined
+      : agent.lastError ??
+        (agent.authStatus === "required"
+          ? "ACP agent authentication required"
+          : "ACP agent unavailable");
+
+  return {
+    kind: agent.backendId,
+    source: "acp",
+    label: agent.name,
+    available,
+    acp: {
+      registryId: agent.registryId,
+      version: agent.version,
+      distributionKinds: [agent.distributionKind],
+      installStatus: agent.installStatus,
+      authStatus: agent.authStatus,
+      verificationStatus: agent.verificationStatus,
+      installedAt: agent.installedAt,
+      updatedAt: agent.updatedAt,
+      repositoryUrl: agent.registryAgent?.repositoryUrl,
+      websiteUrl: agent.registryAgent?.websiteUrl,
+      allowlistRuleId: agent.allowlistRuleId,
+      license: agent.registryAgent?.license,
+    },
+    methods: ["session/new", "session/load", "session/prompt", "session/cancel"],
+    capabilities: buildAcpCapabilities(),
+    executionModes: [
+      {
+        mode: "default",
+        label: EXECUTION_MODE_SUMMARIES.default.label,
+        available,
+        isDefault: true,
+        unavailableReason,
+      },
+      {
+        mode: "full-access",
+        label: EXECUTION_MODE_SUMMARIES["full-access"].label,
+        available,
+        unavailableReason,
+      },
+    ],
+    unavailableReason,
+  };
+}
+
+function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
+  return {
+    id: session.sessionId,
+    title: session.title,
+    titleSource: "explicit",
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    linkedDirectories: session.cwd
+      ? [
+          {
+            id: session.cwd,
+            label: path.basename(session.cwd) || session.cwd,
+            path: session.cwd,
+            kind: "local",
+          },
+        ]
+      : [],
+    source: session.backendId,
+    executionMode: session.executionMode,
+  };
+}
+
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   const args = [
     "-c",
@@ -1480,6 +1583,8 @@ export class DesktopBackendRegistry {
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
+  private readonly acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents">;
+  private readonly acpSessionStore?: Pick<AcpSessionStore, "listSessions" | "getSession">;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -1574,6 +1679,8 @@ export class DesktopBackendRegistry {
     gitDirectoryService?: GitDirectoryService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
+    acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents"> | null;
+    acpSessionStore?: Pick<AcpSessionStore, "listSessions" | "getSession"> | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     createScratchProjectDirectory?: () => Promise<string>;
@@ -1674,6 +1781,20 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
+    this.acpAgentStore =
+      options?.acpAgentStore === null
+        ? undefined
+        : options?.acpAgentStore ??
+          (isAppStateInitialized()
+            ? new SqliteAcpAgentStore(getAppStateDb())
+            : undefined);
+    this.acpSessionStore =
+      options?.acpSessionStore === null
+        ? undefined
+        : options?.acpSessionStore ??
+          (isAppStateInitialized()
+            ? new SqliteAcpSessionStore(getAppStateDb())
+            : undefined);
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
@@ -1919,12 +2040,13 @@ export class DesktopBackendRegistry {
       this.describeCodexBackend(),
       this.describeSingleBackend("grok", this.grokClient),
     ]);
+    const acpSummaries = this.describeInstalledAcpBackends();
 
     return {
       fetchedAt: Date.now(),
       backends: request.includeUnavailable
-        ? summaries
-        : summaries.filter((backend) => backend.available),
+        ? [...summaries, ...acpSummaries]
+        : [...summaries, ...acpSummaries].filter((backend) => backend.available),
     };
   }
 
@@ -2085,6 +2207,10 @@ export class DesktopBackendRegistry {
       return threads;
     }
 
+    if (params.backend && isAcpBackendId(params.backend)) {
+      return this.listInstalledAcpThreads(params.backend, params.filter);
+    }
+
     const threadLists = await Promise.all([
       this.listThreads({
         backend: "codex",
@@ -2100,6 +2226,7 @@ export class DesktopBackendRegistry {
         enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }).catch(() => []),
+      Promise.resolve(this.listAllInstalledAcpThreads(params.filter)),
     ]);
 
     return threadLists
@@ -2180,6 +2307,30 @@ export class DesktopBackendRegistry {
     });
 
     return { data };
+  }
+
+  private listAllInstalledAcpThreads(filter?: string): AppServerThreadSummary[] {
+    return (this.acpAgentStore?.listInstalledAgents() ?? []).flatMap((agent) =>
+      this.listInstalledAcpThreads(agent.backendId, filter),
+    );
+  }
+
+  private listInstalledAcpThreads(
+    backendId: AppServerBackendKind,
+    filter?: string,
+  ): AppServerThreadSummary[] {
+    if (!isAcpBackendId(backendId)) {
+      return [];
+    }
+    const normalizedFilter = filter?.trim().toLowerCase();
+    return (this.acpSessionStore?.listSessions(backendId) ?? [])
+      .map((session) => acpSessionToThreadSummary(session))
+      .filter(
+        (thread) =>
+          !normalizedFilter ||
+          thread.title.toLowerCase().includes(normalizedFilter) ||
+          thread.id.toLowerCase().includes(normalizedFilter),
+      );
   }
 
   async archiveThread(
@@ -5550,6 +5701,11 @@ export class DesktopBackendRegistry {
       ],
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
+  }
+
+  private describeInstalledAcpBackends(): BackendSummary[] {
+    const installedAgents = this.acpAgentStore?.listInstalledAgents() ?? [];
+    return installedAgents.map((agent) => describeInstalledAcpBackend(agent));
   }
 
   private async describeSingleBackend(

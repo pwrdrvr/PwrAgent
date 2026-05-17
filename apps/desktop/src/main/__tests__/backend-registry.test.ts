@@ -28,6 +28,8 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import type { AcpSessionMetadata } from "../acp/acp-session-store";
 
 const execFileAsync = promisify(execFileCallback);
 
@@ -946,6 +948,24 @@ function createMessagingArchiveCleanerMock(
   };
 }
 
+function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
+  return {
+    listInstalledAgents: () => records,
+  };
+}
+
+function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
+  return {
+    listSessions: (backendId: string) =>
+      records.filter((record) => record.backendId === backendId),
+    getSession: (backendId: string, sessionId: string) =>
+      records.find(
+        (record) =>
+          record.backendId === backendId && record.sessionId === sessionId,
+      ),
+  };
+}
+
 describe("DesktopBackendRegistry", () => {
   it("reports backend availability and capabilities", async () => {
     const codexClient = new MockBackendClient({
@@ -1181,6 +1201,133 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(registry.getLatestCodexConfigWarning()).toEqual({});
+    await registry.close();
+  });
+
+  it("reports installed ACP agents as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          version: "0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "gemini-local",
+          installedAt: 1000,
+          updatedAt: 2000,
+          registryAgent: {
+            id: "gemini",
+            backendId: "acp:gemini",
+            name: "Gemini CLI",
+            version: "0.42.0",
+            authors: ["Google"],
+            license: "Apache-2.0",
+            repositoryUrl: "https://github.com/google-gemini/gemini-cli",
+            distributions: [],
+            distributionKinds: [],
+            auth: { required: false, methods: [] },
+            raw: {},
+          },
+        },
+      ]),
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "acp:gemini",
+          source: "acp",
+          label: "Gemini CLI",
+          available: true,
+          acp: expect.objectContaining({
+            registryId: "gemini",
+            version: "0.42.0",
+            installStatus: "installed",
+            authStatus: "not-required",
+            verificationStatus: "not-applicable",
+            allowlistRuleId: "gemini-local",
+            license: "Apache-2.0",
+          }),
+          capabilities: expect.objectContaining({
+            createThread: true,
+            readThread: true,
+            startTurn: true,
+          }),
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("lists persisted ACP sessions as thread summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "gemini-local",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: "acp:gemini",
+          sessionId: "session-1",
+          title: "ACP Thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 3000,
+          executionMode: "full-access",
+          status: "idle",
+        },
+      ]),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "acp:gemini" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        source: "acp:gemini",
+        title: "ACP Thread",
+        executionMode: "full-access",
+        linkedDirectories: [
+          {
+            id: "/repo/project",
+            label: "project",
+            path: "/repo/project",
+            kind: "local",
+          },
+        ],
+      }),
+    ]);
+    await expect(registry.listThreads()).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        source: "acp:gemini",
+      }),
+    ]);
 
     await registry.close();
   });

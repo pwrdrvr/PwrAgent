@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   buildThreadIdentityKey,
+  isAppServerBackendKind,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
 } from "@pwragent/shared";
@@ -10130,13 +10131,17 @@ function readBindingTarget(
   }
 
   const actionId = event.actionId ?? event.interaction.id;
-  const match = /^bind:(codex|grok):(.+)$/.exec(actionId);
+  const match = /^bind:([^:]+):(.+)$/.exec(actionId);
   if (!match) {
+    return undefined;
+  }
+  const backend = match[1]!;
+  if (!isAppServerBackendKind(backend)) {
     return undefined;
   }
 
   return {
-    backend: match[1] as AppServerBackendKind,
+    backend,
     threadId: match[2]!,
   };
 }
@@ -10150,7 +10155,7 @@ function readBindingTargetFromValue(
 
   const backend = value.backend;
   const threadId = value.threadId;
-  if ((backend === "codex" || backend === "grok") && typeof threadId === "string") {
+  if (typeof backend === "string" && isAppServerBackendKind(backend) && typeof threadId === "string") {
     return {
       backend,
       threadId,
