@@ -271,9 +271,16 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
   if (result.status === "no-update") {
     return <p className="settings-empty">You're up to date (v{result.version}).</p>;
   }
+  if (result.status === "downloaded") {
+    return (
+      <p className="settings-empty">
+        Update ready: v{result.version}. Restart to install.
+      </p>
+    );
+  }
   return (
     <p className="settings-empty">
-      Update available: v{result.version}. Restart to install.
+      Update available: v{result.version}. Downloading in the background.
     </p>
   );
 }

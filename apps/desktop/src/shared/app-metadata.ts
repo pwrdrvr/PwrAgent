@@ -48,4 +48,19 @@ export type AppUpdateCheckResult =
   | { status: "error"; message: string }
   | { status: "checking" }
   | { status: "no-update"; version: string }
+  | { status: "downloaded"; version: string }
   | { status: "available"; version: string };
+
+export type AppUpdateStatus =
+  | { status: "idle" }
+  | { status: "skipped"; reason: string }
+  | { status: "checking" }
+  | { status: "no-update"; version: string }
+  | { status: "available"; version: string }
+  | { status: "downloading"; version: string; percent?: number }
+  | { status: "downloaded"; version: string }
+  | { status: "error"; message: string };
+
+export type AppUpdateInstallResult =
+  | { status: "restarting" }
+  | { status: "error"; message: string };

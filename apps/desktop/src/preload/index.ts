@@ -174,6 +174,9 @@ import {
   APP_METADATA_READ_CHANNEL,
   APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
+  APP_UPDATE_INSTALL_CHANNEL,
+  APP_UPDATE_STATUS_EVENT_CHANNEL,
+  APP_UPDATE_STATUS_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -253,6 +256,8 @@ import type {
   AppLicenseDocumentKind,
   AppMetadata,
   AppUpdateCheckResult,
+  AppUpdateInstallResult,
+  AppUpdateStatus,
 } from "../shared/app-metadata";
 
 function recordPreloadLog(
@@ -309,6 +314,22 @@ const desktopApi = Object.freeze({
   },
   checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
+  readAppUpdateStatus: async (): Promise<AppUpdateStatus> =>
+    await ipcRenderer.invoke(APP_UPDATE_STATUS_READ_CHANNEL),
+  onAppUpdateStatus: (
+    callback: (status: AppUpdateStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: AppUpdateStatus,
+    ) => callback(payload);
+    ipcRenderer.on(APP_UPDATE_STATUS_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(APP_UPDATE_STATUS_EVENT_CHANNEL, listener);
+    };
+  },
+  installAppUpdate: async (): Promise<AppUpdateInstallResult> =>
+    await ipcRenderer.invoke(APP_UPDATE_INSTALL_CHANNEL),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (
