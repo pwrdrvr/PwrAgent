@@ -29,6 +29,9 @@ describe("DesktopSettingsService", () => {
         "[experimental]",
         'chat_reply_composer = "tiptap-chips"',
         "",
+        "[general]",
+        "developer_mode = true",
+        "",
         "[messaging]",
         "allow_full_access_thread_resume = false",
         "allow_full_access_escalation = false",
@@ -85,6 +88,10 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.experimental.chatReplyComposer).toEqual({
       value: "tiptap-wysiwyg-markdown-chips",
       source: "default",
+    });
+    expect(snapshot.general.developerMode).toEqual({
+      value: true,
+      source: "config",
     });
     expect(snapshot.messaging.toolUpdateMode).toEqual({
       value: "show_more",
@@ -216,6 +223,39 @@ describe("DesktopSettingsService", () => {
       value: "latest",
       source: "default",
     });
+  });
+
+  it("defaults developer mode from the app packaging mode and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      defaultDeveloperMode: false,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.general.developerMode).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveDeveloperMode()).toBe(false);
+
+    await service.writeConfigPatch({
+      general: {
+        developerMode: true,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
+    expect(saved).toContain("developer_mode = true");
+    expect((await service.readSettings()).general.developerMode).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(service.resolveDeveloperMode()).toBe(true);
   });
 
   it("defaults the image upload profile and only persists non-default values", async () => {

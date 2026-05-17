@@ -170,6 +170,12 @@ describe("App", () => {
         backend: "memory",
         encrypted: false,
       },
+      general: {
+        developerMode: {
+          value: false,
+          source: "default",
+        },
+      },
       experimental: {
         chatReplyComposer: {
           value: "tiptap-wysiwyg-markdown-chips",

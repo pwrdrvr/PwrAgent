@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import { desktopSettingsPatchToEdits } from "../settings/desktop-config";
 import { parseTomlTables } from "../settings/toml-editor";
 
+describe("desktopSettingsPatchToEdits — general", () => {
+  it("writes developer mode", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        developerMode: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "developer_mode"],
+        value: true,
+      },
+    ]);
+  });
+});
+
 describe("desktopSettingsPatchToEdits — experimental", () => {
   it("writes the Full Access risk warning dismissal flag", () => {
     const edits = desktopSettingsPatchToEdits({

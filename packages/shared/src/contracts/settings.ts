@@ -146,6 +146,10 @@ export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
 };
 
+export type DesktopGeneralSettingsSnapshot = {
+  developerMode: DesktopSettingsValue<boolean>;
+};
+
 export type DesktopCodexCandidateSource =
   | "env"
   | "config"
@@ -295,6 +299,7 @@ export type DesktopSettingsSnapshot = {
     };
   };
   secretStorage: DesktopSettingsSecretStorageState;
+  general: DesktopGeneralSettingsSnapshot;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
     fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
@@ -414,6 +419,9 @@ export type DesktopSettingsSnapshot = {
 };
 
 export type DesktopSettingsConfigPatch = {
+  general?: {
+    developerMode?: boolean;
+  };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     diffCondensation?: {

@@ -47,7 +47,7 @@ const routes: Array<{
     render: () => <ChangelogWindow />,
   },
   {
-    match: (hash) => hash === "third-party-notices",
+    match: (hash) => hash === "license" || hash === "third-party-notices",
     render: () => <LicenseDocumentWindow />,
   },
   {

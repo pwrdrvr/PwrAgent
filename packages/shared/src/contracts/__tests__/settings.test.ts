@@ -18,6 +18,12 @@ describe("desktop settings contracts", () => {
         backend: "safeStorage",
         encrypted: true,
       },
+      general: {
+        developerMode: {
+          value: false,
+          source: "default",
+        },
+      },
       experimental: {
         chatReplyComposer: {
           value: "tiptap-wysiwyg-markdown-chips",

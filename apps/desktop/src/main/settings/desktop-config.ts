@@ -46,6 +46,9 @@ type StoredChatReplyComposer =
   | LegacyChatReplyComposer;
 
 export type DesktopSettingsConfig = {
+  general?: {
+    developerMode?: boolean;
+  };
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
     fullAccessRiskWarningDismissed?: boolean;
@@ -305,6 +308,10 @@ export function desktopSettingsPatchToEdits(
   // `chat_reply_composer` is obsolete and intentionally ignored by current
   // clients. Preserve existing values for downgrade compatibility, but do not
   // write new values.
+  if (patch.general?.developerMode !== undefined) {
+    set(["general", "developer_mode"], patch.general.developerMode);
+  }
+
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
     set(
       ["experimental", "diff_condensation", "enabled"],
@@ -676,6 +683,7 @@ function normalizeDesktopConfig(
   tables: Record<string, Record<string, TomlScalar>>,
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
+  const general = tables["general"];
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
@@ -694,6 +702,9 @@ function normalizeDesktopConfig(
   const worktrees = tables["worktrees"];
 
   return pruneEmptyConfig({
+    general: {
+      developerMode: readBoolean(general?.developer_mode),
+    },
     experimental: {
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
       fullAccessRiskWarningDismissed: readBoolean(
@@ -871,6 +882,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   if (config.experimental && hasDefinedValue(config.experimental)) {
     pruned.experimental = config.experimental;
+  }
+
+  if (config.general && hasDefinedValue(config.general)) {
+    pruned.general = config.general;
   }
 
   if (config.imageUploads && hasDefinedValue(config.imageUploads)) {

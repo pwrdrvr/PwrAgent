@@ -545,6 +545,12 @@ function disposeCredentialTester(): void {
 
 export function registerSettingsIpcHandlers(
   service?: DesktopSettingsService,
+  options?: {
+    onConfigPatchWritten?: (
+      patch: DesktopSettingsConfigPatch,
+      snapshot: DesktopSettingsSnapshot,
+    ) => void | Promise<void>;
+  },
 ): void {
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
@@ -568,6 +574,7 @@ export function registerSettingsIpcHandlers(
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
       const snapshot = await activeService.writeConfigPatch(request.patch);
+      await options?.onConfigPatchWritten?.(request.patch, snapshot);
       await refreshModelBackendsIfNeeded({ patch: request.patch });
       if (messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);

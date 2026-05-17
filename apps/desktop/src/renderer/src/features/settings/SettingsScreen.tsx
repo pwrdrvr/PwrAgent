@@ -225,6 +225,11 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        onDeveloperModeChange={async (developerMode: boolean) => {
+          await props.settings.writeConfig({
+            general: { developerMode },
+          });
+        }}
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
             updates: { channel },
