@@ -235,6 +235,9 @@
    The default :root values target Mission Control behavior; the explicit
    data-density attribute selector only carries overrides.
    =========================================================================== */
+/* Suppress directory / PR / agent / binding chips in the list. Reaction
+   and pin markers stay visible — reactions because they're user-curated
+   signals, pin because the pin marker on its own is information-dense. */
 :root[data-density="compact"] .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
   display: none;
 }
@@ -242,6 +245,38 @@
 :root[data-density="compact"] .thread-row__chips {
   /* Tighter inter-chip gap when only reactions + pin remain visible. */
   gap: 4px;
+}
+
+/* Shrink the pin marker so it reads as a marker, not a chip. In Mission
+   Control the full "Pinned" pill is informational; in Compact, the
+   section position + a small marker carries the same signal. */
+:root[data-density="compact"] .thread-row__chip--pin {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* Tighten thread-row vertical real estate. The row keeps its column
+   layout (title row → chips row when chips remain), but every vertical
+   measurement shrinks. The hidden-chips selector zeroes the column gap
+   for rows where every chip is suppressed — :has() lets us detect
+   "container has at least one visible chip" without JS. */
+:root[data-density="compact"] .thread-row {
+  gap: 4px;
+  padding: 6px 10px 6px 12px;
+}
+
+:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--reaction)):not(:has(.thread-row__chip--pin)) {
+  gap: 0;
+}
+
+/* Pull the inter-row gap in tight so the list reads as a scannable
+   index, not a card stack. The section divider (.recents-pinned-divider)
+   keeps its own vertical breathing room. */
+:root[data-density="compact"] .sidebar-list,
+:root[data-density="compact"] .directory-groups {
+  gap: 2px;
 }
 
 * {
