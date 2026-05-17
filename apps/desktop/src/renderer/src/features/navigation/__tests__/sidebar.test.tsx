@@ -2147,4 +2147,114 @@ describe("Sidebar directory pinning", () => {
       }, 200);
     });
   });
+
+  it("does not re-expand a user-collapsed directory when another directory is unpinned", async () => {
+    // Regression: the auto-expand effect in DirectoriesList runs on
+    // every `props.directories` reference change, not just on
+    // `selectedItemKey` change. Its skip check used
+    // `if (current[directory.key])` — but `false` (user explicitly
+    // collapsed) is falsy, so the effect re-overrode the user's
+    // collapse every time directories changed. Triggered visibly
+    // when right-clicking → "Unpin Directory" on directory A:
+    //   1. unpin mutates `directories` (A loses pinnedRank)
+    //   2. effect re-runs, finds B contains the selected thread,
+    //      sees current[B] === false, overwrites to true
+    //   3. B silently expands behind the user's back
+    const threadInB = {
+      ...sharedThread,
+      id: "thread-in-projectb",
+      title: "Work happening in ProjectB",
+      linkedDirectories: [
+        {
+          id: "dir-projectb",
+          label: "ProjectB",
+          path: projectBDirectory.path!,
+          kind: "local" as const,
+        },
+      ],
+    };
+    const threadKey = "codex:thread-in-projectb";
+
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+      threadKeys: [threadKey],
+    };
+
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[pinnedA, pinnedB]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={threadKey}
+        threads={[threadInB]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // The auto-expand effect runs on mount with `selectedItemKey`
+    // pointing at a thread in B → B opens automatically. That's
+    // the intended behavior (drop the user into the directory
+    // they're working in).
+    const bSummary = getDirectorySummary(/ProjectB/i);
+    await waitFor(() => {
+      expect(bSummary.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    // User explicitly collapses B (they don't want the threads list
+    // taking sidebar space right now). expandedByKey[B] = false.
+    fireEvent.click(bSummary);
+    expect(bSummary.getAttribute("aria-expanded")).toBe("false");
+
+    // Now: user right-clicks A and unpins it. The IPC fan-out
+    // produces a new `directories` array with A's pinnedRank
+    // gone (modeled here as a direct rerender — the optimistic
+    // patcher in useThreadNavigation does the equivalent).
+    const unpinnedA: NavigationDirectorySummary = {
+      ...pinnedA,
+      pinnedRank: undefined,
+    };
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[unpinnedA, pinnedB]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={threadKey}
+        threads={[threadInB]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // The user's explicit collapse of B must survive the unrelated
+    // unpin of A. Before the fix, the auto-expand effect would
+    // re-fire and silently re-open B.
+    const bSummaryAfter = getDirectorySummary(/ProjectB/i);
+    expect(bSummaryAfter.getAttribute("aria-expanded")).toBe("false");
+  });
 });

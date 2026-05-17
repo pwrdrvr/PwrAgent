@@ -359,7 +359,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
           selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
           directory.threadKeys.includes(selectedItemKey)
         ) {
-          if (current[directory.key]) {
+          // Respect explicit user state in either direction. If the
+          // user has touched this directory's expand state at all
+          // (true OR false), leave it alone — they're driving. We
+          // only auto-expand on the first reveal when the key is
+          // `undefined`. Previously this checked `if (current[key])`
+          // which treated `false` as "not yet expanded" and re-
+          // overrode the user's collapse every time `directories`
+          // changed reference (which happens on EVERY snapshot
+          // mutation, e.g. unpinning an unrelated sibling).
+          if (current[directory.key] !== undefined) {
             return current;
           }
 
