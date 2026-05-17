@@ -287,6 +287,7 @@ function runShellCommand(
     let stderr = "";
     let settled = false;
     let closed = false;
+    let timedOut = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
 
@@ -309,10 +310,7 @@ function runShellCommand(
       }
     };
 
-    const settle = (
-      callback: () => void,
-      options?: { keepKillTimer?: boolean },
-    ) => {
+    const settle = (callback: () => void) => {
       if (settled) {
         return;
       }
@@ -321,7 +319,7 @@ function runShellCommand(
         clearTimeout(timeoutHandle);
         timeoutHandle = undefined;
       }
-      if (killHandle && !options?.keepKillTimer) {
+      if (killHandle) {
         clearTimeout(killHandle);
         killHandle = undefined;
       }
@@ -336,28 +334,14 @@ function runShellCommand(
           timeoutMs: params.timeoutMs,
           durationMs,
         });
+        timedOut = true;
+        timeoutHandle = undefined;
         terminateChild("SIGTERM");
         killHandle = setTimeout(() => {
           if (!closed) {
             terminateChild("SIGKILL");
           }
         }, 2_000);
-        settle(
-          () => {
-            reject(
-              new CodexEnvironmentCommandError(
-                `Codex environment command timed out after ${params.timeoutMs}ms`,
-                {
-                  durationMs,
-                  output: [stdout.trimEnd(), stderr.trimEnd()]
-                    .filter(Boolean)
-                    .join("\n"),
-                },
-              ),
-            );
-          },
-          { keepKillTimer: true },
-        );
       }, params.timeoutMs);
     }
 
@@ -411,6 +395,22 @@ function runShellCommand(
         code,
         signal,
       });
+      if (timedOut) {
+        settle(() => {
+          reject(
+            new CodexEnvironmentCommandError(
+              `Codex environment command timed out after ${params.timeoutMs}ms`,
+              {
+                durationMs: Date.now() - startedAt,
+                output: [stdout.trimEnd(), stderr.trimEnd()]
+                  .filter(Boolean)
+                  .join("\n"),
+              },
+            ),
+          );
+        });
+        return;
+      }
       if (code === 0) {
         settle(() => {
           resolve({
