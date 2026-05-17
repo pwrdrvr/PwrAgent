@@ -2498,7 +2498,8 @@ textarea,
   left: 16px;
   bottom: 16px;
   display: grid;
-  width: min(360px, calc(100vw - 32px));
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
