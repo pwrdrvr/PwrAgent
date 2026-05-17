@@ -1,34 +1,36 @@
 /**
- * Appearance — theme + density runtime management.
+ * Appearance — theme + density runtime helpers (renderer side).
  *
- * Theme has three modes:
- *   - "system"  — follows prefers-color-scheme; resolves to "dark" | "light"
- *                 at apply time, and re-resolves when the OS theme flips.
- *   - "dark"    — explicit override, ignores prefers-color-scheme.
- *   - "light"   — explicit override, ignores prefers-color-scheme.
+ * Source of truth: per-profile `config.toml` `[general.appearance]`
+ * block, owned by the main process. The desktop-settings-service
+ * resolves it into `DesktopSettingsSnapshot.general.appearance`, the
+ * renderer reads it through the existing settings IPC, and writes back
+ * via `writeSettingsConfig({ general: { appearance: { theme, density } } })`.
  *
- * Density has two modes:
- *   - "mission-control" — current default; full chip rendering in thread
- *                         list rows.
- *   - "compact"         — chips suppressed in list rows; reactions + pin
- *                         markers stay visible.
+ * The flash-of-wrong-theme path is:
+ *   main `readBootstrapAppearance` (sync file read)
+ *     → BrowserWindow `additionalArguments`
+ *     → preload `contextBridge.exposeInMainWorld("__pwragentAppearance", …)`
+ *     → inline `<script>` in index.html sets `<html data-theme/data-density>`
+ *     → React mounts with attributes already in place.
  *
- * Persistence: source of truth is the per-profile config.toml under
- * [general.appearance], owned by the main process. The renderer mirrors
- * the resolved choice into localStorage.pwragentAppearance so the
- * pre-React bootstrap script in index.html can apply data-theme +
- * data-density attributes synchronously before first paint (avoids
- * flash-of-wrong-theme).
- *
- * IPC wiring (config read/write) lands in Step 3 of issue #472 and
- * connects via desktopApi.readSettings / writeSettingsConfig. The hook
- * below is intentionally IPC-agnostic — it can run on localStorage
- * alone for tests, dev, and the bootstrap path.
+ * This file only owns the *runtime* helpers that the React hook uses to
+ * push appearance changes through to the DOM and to resolve "system" via
+ * `matchMedia`. Persistence is handled by the parent App via writeConfig.
  */
 
-export type ThemePreference = "system" | "dark" | "light";
+import type {
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
+} from "@pwragent/shared";
+import {
+  DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_THEME_DEFAULT,
+} from "@pwragent/shared";
+
+export type ThemePreference = DesktopAppearanceTheme;
+export type DensityPreference = DesktopAppearanceDensity;
 export type ResolvedTheme = "dark" | "light";
-export type DensityPreference = "mission-control" | "compact";
 
 export type AppearancePreference = {
   theme: ThemePreference;
@@ -36,14 +38,9 @@ export type AppearancePreference = {
 };
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
-  theme: "system",
-  density: "mission-control",
+  theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
+  density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
 };
-
-/** localStorage key the bootstrap script in index.html reads. Keep in
- *  sync — changing the key requires editing both this file and the
- *  inline script. */
-export const APPEARANCE_STORAGE_KEY = "pwragentAppearance";
 
 /** Resolve `"system"` to either `"dark"` or `"light"` by querying the
  *  OS preference. Explicit `"dark"` / `"light"` pass through. Returns
@@ -82,38 +79,22 @@ export function applyAppearanceAttributes(
   }
 }
 
-/** Read the cached appearance preference from localStorage. Returns
- *  defaults if the entry is missing or malformed. */
-export function readCachedAppearance(): AppearancePreference {
-  if (typeof localStorage === "undefined") return DEFAULT_APPEARANCE;
-  try {
-    const raw = localStorage.getItem(APPEARANCE_STORAGE_KEY);
-    if (!raw) return DEFAULT_APPEARANCE;
-    const parsed = JSON.parse(raw) as Partial<AppearancePreference>;
-    return {
-      theme: normalizeTheme(parsed.theme),
-      density: normalizeDensity(parsed.density),
-    };
-  } catch {
-    return DEFAULT_APPEARANCE;
-  }
-}
-
-/** Persist the appearance preference to localStorage so the next
- *  bootstrap can apply it synchronously before React mounts. */
-export function writeCachedAppearance(preference: AppearancePreference): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(
-      APPEARANCE_STORAGE_KEY,
-      JSON.stringify({
-        theme: preference.theme,
-        density: preference.density,
-      }),
-    );
-  } catch {
-    /* storage unavailable — fall back to in-memory only. */
-  }
+/**
+ * Read the appearance hint that the preload bridged in from main. This
+ * mirrors the inline bootstrap script in index.html and is used by the
+ * React hook for its initial state before the IPC snapshot arrives. The
+ * snapshot — read on settings load — is authoritative; this is just a
+ * synchronous bootstrap value.
+ */
+export function readBridgedAppearance(): AppearancePreference {
+  if (typeof window === "undefined") return DEFAULT_APPEARANCE;
+  const bridged = (window as unknown as {
+    __pwragentAppearance?: Partial<AppearancePreference>;
+  }).__pwragentAppearance;
+  return {
+    theme: normalizeTheme(bridged?.theme),
+    density: normalizeDensity(bridged?.density),
+  };
 }
 
 function normalizeTheme(value: unknown): ThemePreference {

@@ -11,25 +11,26 @@
       // Appearance bootstrap — runs BEFORE the React bundle loads so the
       // first paint matches the persisted theme + density. Without this,
       // a flash-of-wrong-theme appears on every launch (renders dark for
-      // ~50-150ms, then snaps to light when React hydrates the setting).
+      // ~50-150ms, then snaps to light when React mounts the setting).
       //
-      // Reads localStorage.pwragentAppearance, a JSON blob mirrored from
-      // the main-process per-profile config on every appearance change.
-      // localStorage is synchronous (unlike IPC), so it's the only safe
-      // pre-mount source. The main-process config remains source of truth;
-      // localStorage is a cache that's rebuilt on first load by the
-      // useAppearance hook.
+      // Reads `window.__pwragentAppearance`, exposed synchronously by the
+      // preload script (which decodes it from `process.argv`'s
+      // `--pwragent-appearance=...` flag set by main at window-creation).
+      // Main reads the active profile's config.toml `[general.appearance]`
+      // block — the TOML is the single source of truth. The renderer's
+      // useAppearance hook writes back via writeSettingsConfig IPC when
+      // the user changes the toggle, and the next launch reads the new
+      // value through the same path.
       //
-      // For theme: "system", resolves the active scheme via
-      // matchMedia at this exact instant. If the user's OS theme changes
-      // mid-session, the renderer hook listens for that and updates the
-      // attribute live — no reload needed.
+      // For theme: "system", resolves the active scheme via matchMedia
+      // at this exact instant. If the user's OS theme changes mid-session,
+      // the renderer hook listens for that and updates the attribute live
+      // — no reload needed.
       (function () {
         try {
-          var raw = localStorage.getItem("pwragentAppearance");
-          var saved = raw ? JSON.parse(raw) : {};
-          var theme = saved.theme || "system";
-          var density = saved.density || "mission-control";
+          var bridged = window.__pwragentAppearance || {};
+          var theme = bridged.theme || "system";
+          var density = bridged.density || "mission-control";
           var resolvedTheme;
           if (theme === "light" || theme === "dark") {
             resolvedTheme = theme;
@@ -52,9 +53,9 @@
             document.documentElement.setAttribute("data-density", "compact");
           }
         } catch (_) {
-          // Storage unavailable or parse failed — fall back to dark + mission-
-          // control defaults. The useAppearance hook will sync once it
-          // mounts and the desktopApi is available.
+          // Bridge unavailable or shape wrong — fall back to dark + mission-
+          // control defaults. The useAppearance hook will resync once the
+          // settings snapshot arrives over IPC.
         }
       })();
     </script>

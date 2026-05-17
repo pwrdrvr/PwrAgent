@@ -175,6 +175,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        appearance: {
+          theme: { value: "system", source: "default" },
+          density: { value: "mission-control", source: "default" },
+        },
       },
       experimental: {
         chatReplyComposer: {

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
@@ -13,7 +15,11 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
+  DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
+  isDesktopAppearanceDensity,
+  isDesktopAppearanceTheme,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
   sanitizeMessagingContactLabel,
@@ -48,6 +54,10 @@ type StoredChatReplyComposer =
 export type DesktopSettingsConfig = {
   general?: {
     developerMode?: boolean;
+    appearance?: {
+      theme?: DesktopAppearanceTheme;
+      density?: DesktopAppearanceDensity;
+    };
   };
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
@@ -329,6 +339,26 @@ export function desktopSettingsPatchToEdits(
       ["experimental", "diff_condensation", "model"],
       patch.experimental.diffCondensation.model,
     );
+  }
+
+  if (patch.general?.appearance?.theme !== undefined) {
+    if (patch.general.appearance.theme === DESKTOP_APPEARANCE_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "theme"] });
+    } else {
+      set(["general", "appearance", "theme"], patch.general.appearance.theme);
+    }
+  }
+  if (patch.general?.appearance?.density !== undefined) {
+    if (
+      patch.general.appearance.density === DESKTOP_APPEARANCE_DENSITY_DEFAULT
+    ) {
+      edits.push({ op: "delete", path: ["general", "appearance", "density"] });
+    } else {
+      set(
+        ["general", "appearance", "density"],
+        patch.general.appearance.density,
+      );
+    }
   }
 
   if (patch.imageUploads?.pastedImageMaxPatches !== undefined) {
@@ -682,8 +712,9 @@ export function parseDesktopSettingsToml(
 function normalizeDesktopConfig(
   tables: Record<string, Record<string, TomlScalar>>,
 ): DesktopSettingsConfig {
-  const experimental = tables["experimental"];
   const general = tables["general"];
+  const generalAppearance = tables["general.appearance"];
+  const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
@@ -704,6 +735,10 @@ function normalizeDesktopConfig(
   return pruneEmptyConfig({
     general: {
       developerMode: readBoolean(general?.developer_mode),
+      appearance: {
+        theme: readAppearanceTheme(generalAppearance?.theme),
+        density: readAppearanceDensity(generalAppearance?.density),
+      },
     },
     experimental: {
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
@@ -880,12 +915,21 @@ function normalizeDesktopConfig(
 function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig {
   const pruned: DesktopSettingsConfig = {};
 
-  if (config.experimental && hasDefinedValue(config.experimental)) {
-    pruned.experimental = config.experimental;
+  const developerMode = config.general?.developerMode;
+  const appearance = config.general?.appearance;
+  const appearanceDefined = appearance && hasDefinedValue(appearance);
+  if (developerMode !== undefined || appearanceDefined) {
+    pruned.general = {};
+    if (developerMode !== undefined) {
+      pruned.general.developerMode = developerMode;
+    }
+    if (appearanceDefined) {
+      pruned.general.appearance = appearance;
+    }
   }
 
-  if (config.general && hasDefinedValue(config.general)) {
-    pruned.general = config.general;
+  if (config.experimental && hasDefinedValue(config.experimental)) {
+    pruned.experimental = config.experimental;
   }
 
   if (config.imageUploads && hasDefinedValue(config.imageUploads)) {
@@ -1032,6 +1076,22 @@ function readUpdateChannel(
   value: TomlScalar | undefined,
 ): DesktopUpdateChannel | undefined {
   return typeof value === "string" && isDesktopUpdateChannel(value)
+    ? value
+    : undefined;
+}
+
+function readAppearanceTheme(
+  value: TomlScalar | undefined,
+): DesktopAppearanceTheme | undefined {
+  return typeof value === "string" && isDesktopAppearanceTheme(value)
+    ? value
+    : undefined;
+}
+
+function readAppearanceDensity(
+  value: TomlScalar | undefined,
+): DesktopAppearanceDensity | undefined {
+  return typeof value === "string" && isDesktopAppearanceDensity(value)
     ? value
     : undefined;
 }

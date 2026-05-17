@@ -9,6 +9,10 @@ import {
   WINDOW_KIND_MESSAGING_ACTIVITY,
   registerWindowChannels,
 } from "./window-channels";
+import {
+  readBootstrapAppearance,
+  serializeBootstrapAppearance,
+} from "./settings/appearance-bootstrap";
 
 const log = getMainLogger("pwragent:activity-window");
 
@@ -42,6 +46,9 @@ export function showMessagingActivityWindow(): void {
     return;
   }
 
+  const appearance = readBootstrapAppearance();
+  const backgroundColor =
+    appearance.theme === "light" ? "#fdfcfa" : "#000000";
   const window = new BrowserWindow({
     width: 980,
     height: 720,
@@ -51,12 +58,13 @@ export function showMessagingActivityWindow(): void {
     title: "Messaging Activity — PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    backgroundColor: "#000000",
+    backgroundColor,
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: [serializeBootstrapAppearance(appearance)],
     },
   });
 

@@ -31,18 +31,26 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 
 export function App() {
-  // Owns live theme + density state. The pre-React bootstrap script in
-  // index.html sets the initial data-* attributes synchronously to avoid
-  // flash-of-wrong-theme; this hook then keeps them in sync (system-theme
-  // changes, settings toggles, cross-window storage events). Lifted to
-  // the App root so a single controller instance is shared across the
-  // shell and the Settings → General → Appearance section — calling the
-  // hook twice would create two independent state instances that drift
-  // (the localStorage `storage` event only fires for OTHER documents,
-  // not the same one).
-  const appearanceController = useAppearance();
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
+  // Owns live theme + density state. Source of truth is per-profile
+  // config.toml; the snapshot pulls it in over IPC, the hook adopts it
+  // when available, and setters write back via writeSettingsConfig.
+  // The pre-React bootstrap script in index.html already set the initial
+  // data-* attributes from the preload-bridged value (same TOML, sync
+  // read at window-creation), so first-paint matches and this hook just
+  // keeps the React state aligned + handles system-theme flips. Lifted
+  // to the App root so a single controller instance is shared across the
+  // shell and the Settings → General → Appearance section.
+  const appearanceController = useAppearance({
+    snapshotPreference: settings.snapshot?.general.appearance
+      ? {
+        theme: settings.snapshot.general.appearance.theme.value,
+        density: settings.snapshot.general.appearance.density.value,
+      }
+      : undefined,
+    writeConfig: settings.writeConfig,
+  });
 
   if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
     return (
