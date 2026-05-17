@@ -367,7 +367,7 @@ provenance in profile state.
   cache.
 - Allowlist decisions are auditable and not embedded as scattered conditionals.
 
-- [ ] **Unit 3: Implement ACP Installers and Launch Descriptors**
+- [x] **Unit 3: Implement ACP Installers and Launch Descriptors**
 
 **Goal:** Install or prepare launch descriptors for `npx`, `uvx`, and supported
 binary registry distributions with explicit confirmation and provenance.
