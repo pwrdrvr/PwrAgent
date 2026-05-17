@@ -20,18 +20,26 @@ function extractRootTokens(source: string): Record<string, string> {
 }
 
 /**
- * Pulls the body out of the FIRST CSS rule whose selector matches.
+ * Pulls the body out of the FIRST top-level CSS rule whose selector
+ * matches exactly.
  *
- * Caveat: if `app.css` ever wraps a selector in a `@media` (or `@supports`)
- * block at the top level, this picks the outermost `{ ... \n}` it sees,
- * which may not be the rule the test intended. Today every selector in
- * `app.css` is defined exactly once at the top level, so the first match
- * IS the right one. If that ever changes, scope the regex by the
- * surrounding `@media` boundary first.
+ * "Top-level" means the rule's selector is anchored at the start of a
+ * line — every base rule in `app.css` lives at column 0. Attribute-
+ * scoped overrides like `:root[data-density="compact"] .thread-row { … }`
+ * still mention the selector text but are NOT preceded by a newline +
+ * the bare selector, so they're skipped here. The intent of these tests
+ * is to lock the *base* rule shape, not every override.
+ *
+ * Caveat: if `app.css` ever wraps a selector in a `@media` (or
+ * `@supports`) block at the top level, this picks the outermost
+ * `{ … \n}` it sees, which may not be the rule the test intended. Scope
+ * by the surrounding at-rule boundary if/when that happens.
  */
 function extractRuleBody(source: string, selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const ruleMatch = source.match(new RegExp(`${escapedSelector}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`));
+  const ruleMatch = source.match(
+    new RegExp(`(?:^|\\n)${escapedSelector}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
+  );
   if (!ruleMatch?.groups?.body) {
     throw new Error(`Expected app.css to define ${selector}`);
   }

@@ -267,6 +267,15 @@
   padding: 6px 10px 6px 12px;
 }
 
+/* Pull the overflow + add-reaction buttons up by the same amount the row
+   shrank its top padding, so they keep aligning with the title line
+   instead of sinking toward the row's geometric center on short
+   single-line rows. .thread-row__actions is a SIBLING of .thread-row
+   under .thread-row-shell, so the override targets it directly. */
+:root[data-density="compact"] .thread-row__actions {
+  top: 3px;
+}
+
 :root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--reaction)):not(:has(.thread-row__chip--pin)) {
   gap: 0;
 }
@@ -1781,6 +1790,15 @@ textarea,
 
 .thread-row__actions {
   position: absolute;
+  /* Align the overflow button + add-reaction chip with the title line,
+     not the row's geometric center. The 26-px-tall button sits a few
+     pixels into the row's top padding so its vertical midpoint matches
+     the title's line midpoint. When the row is multi-line (chips
+     present) the title is still the FIRST line, so the same offset
+     keeps the button anchored to it. The Compact density variant
+     overrides this `top` (see the density-compact block at the top of
+     the file) so the button stays on the title line when the row's top
+     padding shrinks from 12 → 6. */
   top: 9px;
   right: 9px;
   z-index: 3;
