@@ -86,6 +86,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          # We install pa11y-ci + http-server globally as a one-shot;
+          # no project package.json in docs-site. Disable the auto-
+          # detected pnpm cache (the repo root has a pnpm-lock.yaml
+          # that setup-node would otherwise try to honor, but pnpm
+          # isn't pre-installed on the runner so the cache step
+          # fails with "Unable to locate executable file: pnpm").
+          package-manager-cache: false
 
       - name: Build Jekyll site for a11y audit
         # Re-build with no base path so the URLs in .pa11yci.json
