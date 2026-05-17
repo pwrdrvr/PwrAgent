@@ -172,6 +172,7 @@ import {
   APP_LOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
+  APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
   APP_UPDATE_CHECK_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -289,6 +290,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(APP_CHANGELOG_DOCUMENT_READ_CHANNEL),
   openChangelogWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  },
+  openThirdPartyNoticesWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL);
   },
   readAppLogSnapshot: async (): Promise<AppLogSnapshot> =>
     await ipcRenderer.invoke(APP_LOG_SNAPSHOT_READ_CHANNEL),

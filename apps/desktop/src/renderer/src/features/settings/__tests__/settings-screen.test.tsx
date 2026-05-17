@@ -1721,25 +1721,28 @@ describe("SettingsScreen", () => {
 
   it("renders About license attribution and opens bundled notices", async () => {
     const openChangelogWindow = vi.fn(async () => undefined);
+    const openThirdPartyNoticesWindow = vi.fn(async () => undefined);
     const readLicenseDocument = vi.fn(async (kind: string) => ({
       kind,
-      title: kind === "license" ? "MIT License" : "Third-Party Licenses",
+      title: kind === "license" ? "MIT License" : "Third-Party Notices",
       content:
         kind === "license"
           ? "MIT License\n\nPermission is hereby granted."
-          : "PwrAgent Third-Party Licenses\n\nreact@19.2.5",
+          : "PwrAgent Third-Party Notices\n\nreact@19.2.5",
     }));
     const desktopApi = {
       readAppMetadata: vi.fn(async () => ({
         applicationName: "PwrAgent",
         applicationVersion: "1.0.0-alpha.8",
         copyright: "Copyright © 2026 PwrDrvr LLC.",
-        homepage: "https://pwrdrvr.com",
+        homepage: "https://pwragent.ai",
+        documentationUrl: "https://docs.pwragent.ai",
         electronVersion: "41.2.1",
         chromeVersion: "142.0.0.0",
         nodeVersion: "24.0.0",
       })),
       openChangelogWindow,
+      openThirdPartyNoticesWindow,
       readLicenseDocument,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
@@ -1753,17 +1756,22 @@ describe("SettingsScreen", () => {
     );
 
     expect(await screen.findByText("PwrAgent is licensed under MIT.")).toBeInTheDocument();
+    expect(screen.getByText("https://pwragent.ai")).toBeInTheDocument();
+    expect(screen.getByText("https://docs.pwragent.ai")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open changelog" }));
     expect(openChangelogWindow).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole("button", { name: "Third-party licenses" }));
+    fireEvent.click(screen.getByRole("button", { name: "Third-party notices" }));
+    expect(openThirdPartyNoticesWindow).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "View MIT license" }));
 
     await waitFor(() => {
-      expect(readLicenseDocument).toHaveBeenCalledWith("third-party-licenses");
+      expect(readLicenseDocument).toHaveBeenCalledWith("license");
     });
-    expect(await screen.findByLabelText("Third-Party Licenses")).toHaveTextContent(
-      "react@19.2.5",
+    expect(await screen.findByLabelText("MIT License")).toHaveTextContent(
+      "Permission is hereby granted.",
     );
   });
 

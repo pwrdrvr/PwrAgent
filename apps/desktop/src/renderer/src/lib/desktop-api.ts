@@ -167,6 +167,7 @@ export type DesktopApi = {
   ) => Promise<AppLicenseDocument>;
   readChangelogDocument?: () => Promise<AppChangelogDocument>;
   openChangelogWindow?: () => Promise<void>;
+  openThirdPartyNoticesWindow?: () => Promise<void>;
   readAppLogSnapshot?: () => Promise<AppLogSnapshot>;
   openAppLogWindow?: () => Promise<void>;
   onAppLogEntry?: (callback: (entry: AppLogEntry) => void) => () => void;

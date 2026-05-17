@@ -160,6 +160,8 @@ export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";
 export const APP_CHANGELOG_DOCUMENT_READ_CHANNEL = "app:read-changelog-document";
 export const APP_CHANGELOG_WINDOW_OPEN_CHANNEL = "app:open-changelog-window";
+export const APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL =
+  "app:open-third-party-notices-window";
 export const APP_LOG_SNAPSHOT_READ_CHANNEL = "app:read-log-snapshot";
 export const APP_LOG_ENTRY_EVENT_CHANNEL = "app:log-entry-event";
 export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";

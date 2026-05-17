@@ -10,21 +10,24 @@ import {
   APP_LOG_WINDOW_OPEN_CHANNEL,
   APP_LICENSE_DOCUMENT_READ_CHANNEL,
   APP_METADATA_READ_CHANNEL,
+  APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
 } from "../../shared/ipc";
-import type {
-  AppChangelogDocument,
-  AppLogSnapshot,
-  AppLicenseDocument,
-  AppLicenseDocumentKind,
-  AppMetadata,
+import {
+  PWRAGENT_DOCUMENTATION_URL,
+  PWRAGENT_HOMEPAGE_URL,
+  type AppChangelogDocument,
+  type AppLogSnapshot,
+  type AppLicenseDocument,
+  type AppLicenseDocumentKind,
+  type AppMetadata,
 } from "../../shared/app-metadata";
 import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
 import { showChangelogWindow } from "../changelog-window";
+import { showThirdPartyNoticesWindow } from "../license-document-window";
 import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
-const APP_HOMEPAGE = "https://pwrdrvr.com";
 
 let unsubscribeAppLogEntries: (() => void) | undefined;
 
@@ -33,7 +36,8 @@ export function resolveAppMetadata(): AppMetadata {
     applicationName: app.getName(),
     applicationVersion: app.getVersion(),
     copyright: APP_COPYRIGHT,
-    homepage: APP_HOMEPAGE,
+    homepage: PWRAGENT_HOMEPAGE_URL,
+    documentationUrl: PWRAGENT_DOCUMENTATION_URL,
     electronVersion: process.versions.electron ?? "",
     chromeVersion: process.versions.chrome ?? "",
     nodeVersion: process.versions.node ?? "",
@@ -69,7 +73,7 @@ export async function readAppLicenseDocument(
   const content = await readFile(resolveLicenseDocumentPath(kind), "utf8");
   return {
     kind,
-    title: kind === "license" ? "MIT License" : "Third-Party Licenses",
+    title: kind === "license" ? "MIT License" : "Third-Party Notices",
     content,
   };
 }
@@ -97,6 +101,7 @@ export function registerAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
   ipcMain.handle(APP_METADATA_READ_CHANNEL, async (): Promise<AppMetadata> =>
@@ -117,6 +122,12 @@ export function registerAppMetadataIpcHandlers(): void {
     showChangelogWindow();
   });
   ipcMain.handle(
+    APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL,
+    async (): Promise<void> => {
+      showThirdPartyNoticesWindow();
+    },
+  );
+  ipcMain.handle(
     APP_LOG_SNAPSHOT_READ_CHANNEL,
     async (): Promise<AppLogSnapshot> => readAppLogSnapshot(),
   );
@@ -132,6 +143,7 @@ export function disposeAppMetadataIpcHandlers(): void {
   ipcMain.removeHandler(APP_LICENSE_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_DOCUMENT_READ_CHANNEL);
   ipcMain.removeHandler(APP_CHANGELOG_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(APP_THIRD_PARTY_NOTICES_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(APP_LOG_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(APP_LOG_WINDOW_OPEN_CHANNEL);
 }

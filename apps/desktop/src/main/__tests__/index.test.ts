@@ -16,6 +16,7 @@ const disposeAppUpdateIpcHandlersMock = vi.fn();
 const initAutoUpdaterMock = vi.fn();
 const showAppLogWindowMock = vi.fn();
 const showChangelogWindowMock = vi.fn();
+const showThirdPartyNoticesWindowMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerComposerDraftIpcHandlersMock = vi.fn();
@@ -50,7 +51,11 @@ const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
-const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
+const buildFromTemplateMock = vi.fn((template: unknown) => ({
+  kind: "menu",
+  template,
+}));
+const shellOpenExternalMock = vi.fn(async () => undefined);
 const setNameMock = vi.fn();
 const setAboutPanelOptionsMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
@@ -95,7 +100,7 @@ vi.mock("electron", () => ({
     buildFromTemplate: buildFromTemplateMock,
   },
   shell: {
-    openExternal: vi.fn(),
+    openExternal: shellOpenExternalMock,
   },
   nativeImage: {
     createFromPath: nativeImageCreateFromPathMock,
@@ -138,6 +143,10 @@ vi.mock("../app-log-window", () => ({
 
 vi.mock("../changelog-window", () => ({
   showChangelogWindow: showChangelogWindowMock,
+}));
+
+vi.mock("../license-document-window", () => ({
+  showThirdPartyNoticesWindow: showThirdPartyNoticesWindowMock,
 }));
 
 vi.mock("../ipc/image-normalization", () => ({
@@ -256,6 +265,7 @@ describe("bootstrapApp", () => {
     disposeApplicationIpcHandlersMock.mockReset();
     showAppLogWindowMock.mockReset();
     showChangelogWindowMock.mockReset();
+    showThirdPartyNoticesWindowMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
     registerComposerDraftIpcHandlersMock.mockReset();
@@ -300,6 +310,7 @@ describe("bootstrapApp", () => {
     registerMessagingStatusIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();
     setApplicationMenuMock.mockReset();
+    shellOpenExternalMock.mockReset();
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
     getAppPathMock.mockClear();
@@ -403,6 +414,39 @@ describe("bootstrapApp", () => {
     expect(listThreadsMock).toHaveBeenCalledWith({
       callerReason: "startup-prewarm",
     });
+  });
+
+  it("wires release help links to PwrAgent destinations and bundled notices", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const template = buildFromTemplateMock.mock.calls[0]?.[0] as
+      | Array<{
+          role?: string;
+          submenu?: Array<{
+            label?: string;
+            click?: () => void | Promise<void>;
+          }>;
+        }>
+      | undefined;
+    const helpMenu = template?.find((item) => item.role === "help");
+    const item = (label: string) =>
+      helpMenu?.submenu?.find((menuItem) => menuItem.label === label);
+
+    item("Third-Party Notices")?.click?.();
+    expect(showThirdPartyNoticesWindowMock).toHaveBeenCalledOnce();
+
+    await item("PwrAgent Website")?.click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith("https://pwragent.ai");
+
+    await item("Documentation")?.click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://docs.pwragent.ai",
+    );
+
+    expect(item(["Visit", "Website"].join(" "))).toBeUndefined();
   });
 
   it("logs startup thread list prewarm failures without blocking startup", async () => {

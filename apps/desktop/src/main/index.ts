@@ -13,6 +13,11 @@ import {
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
+import { showThirdPartyNoticesWindow } from "./license-document-window";
+import {
+  PWRAGENT_DOCUMENTATION_URL,
+  PWRAGENT_HOMEPAGE_URL,
+} from "../shared/app-metadata";
 import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
@@ -73,7 +78,6 @@ import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
-const APP_WEBSITE = "https://pwrdrvr.com";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -184,15 +188,27 @@ function installApplicationMenu(): void {
           },
         },
         {
+          label: "Third-Party Notices",
+          click: () => {
+            showThirdPartyNoticesWindow();
+          },
+        },
+        {
           label: "Logs",
           click: () => {
             showAppLogWindow();
           },
         },
         {
-          label: "Visit Website",
+          label: "PwrAgent Website",
           click: async () => {
-            await shell.openExternal(APP_WEBSITE);
+            await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
+          },
+        },
+        {
+          label: "Documentation",
+          click: async () => {
+            await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
           },
         },
       ],

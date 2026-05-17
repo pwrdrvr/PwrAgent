@@ -607,6 +607,16 @@ textarea,
   margin-top: 8px;
 }
 
+.document-window__pre {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .document-window--logs {
   color: var(--text-primary);
 }
