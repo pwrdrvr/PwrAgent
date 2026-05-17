@@ -22,6 +22,8 @@ The left-nav layout is roughly:
   [Messaging → Setting up providers](../messaging/#setting-up-providers).
 - **Models** — Codex App Server discovery, version, Codex auth
   profile selection.
+- **Agents** — allowlisted ACP coding-agent registry entries and
+  install/provenance status.
 - **Experimental** — opt-in features that are still in flux.
 
 ## General
@@ -205,6 +207,39 @@ itself. If Test fails:
 - Confirm the App Server binary is executable on your account
   (rare, but Gatekeeper / `xattr -d com.apple.quarantine` can come
   into play on freshly-downloaded binaries).
+
+## Agents / ACP registry
+
+PwrAgent can install allowlisted Agent Client Protocol (ACP) coding
+agents as local backends. ACP agents are third-party executables that
+speak a coding-agent protocol; they are **not** raw model providers
+and they do not replace PwrAgent's built-in Codex or Grok backends.
+
+Settings → Agents shows the allowlisted registry entries PwrAgent is
+prepared to expose. Each row includes version, license, distribution
+source, install state, auth/setup state, verification state, and
+repository/website provenance when the registry provides it.
+
+Install is a two-step flow:
+
+1. Click **Review install**.
+2. Read the source/trust disclosure and click **Install**.
+
+PwrAgent supports `npx`, `uvx`, and platform binary distributions.
+Package-manager entries are stored as command/argument descriptors
+and launched without shell interpolation. Binary entries are installed
+from the allowlisted archive source; checksum/signature metadata is
+verified when present. If an allowlisted binary lacks integrity
+metadata, Settings calls that out before install.
+
+The access-mode boundary is intentionally narrow: PwrAgent can mediate
+ACP filesystem and terminal requests that pass through the client
+protocol, but it cannot sandbox what a third-party agent process does
+internally outside those requests. Install only agents whose source and
+behavior you trust.
+
+Contributor-facing implementation details live in the repository at
+`docs/acp-registry-backends.md`.
 
 ## Experimental
 
