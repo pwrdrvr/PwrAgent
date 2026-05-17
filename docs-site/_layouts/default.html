@@ -42,6 +42,7 @@
   <link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <header class="site-header">
     <div class="site-header__inner">
       <a class="site-brand" href="{{ '/' | relative_url }}" aria-label="PwrAgent docs home">
@@ -114,7 +115,7 @@
     </div>
   </header>
 
-  <main class="site-main">
+  <main id="main-content" class="site-main" tabindex="-1">
     <article class="page">
       {{ content }}
     </article>

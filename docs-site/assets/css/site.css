@@ -74,6 +74,45 @@ body {
   color: #000;
 }
 
+/* ----- Skip-to-content link -----
+ * Visually hidden until a keyboard user tabs to it as the first
+ * focusable element on the page, then appears as a prominent
+ * button anchored to the top-left so the user can skip past the
+ * top nav and land directly in the main content area. The <main>
+ * is `tabindex="-1"` so the anchor jump actually moves focus
+ * (browser default puts focus on the URL bar, not the target). */
+
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #000;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  border-radius: 6px;
+  transform: translateY(-200%);
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+/* Don't paint a focus ring around the <main> just because the
+ * skip-link bumped focus there — the visible page content already
+ * tells the user where they are. */
+#main-content:focus {
+  outline: none;
+}
+
 /* ----- Site header ----- */
 
 .site-header {
