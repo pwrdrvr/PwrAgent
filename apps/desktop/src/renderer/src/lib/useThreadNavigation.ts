@@ -516,6 +516,63 @@ function updateThreadPinsInSnapshot(
   return changed ? { ...snapshot, threads } : snapshot;
 }
 
+/**
+ * Directory pin patchers — mirror of `updateThreadPin{,s}InSnapshot`
+ * minus the per-backend dimension (plan 2026-05-09-002 Units I + J).
+ * Both return the same snapshot reference when nothing changes so
+ * React skips the re-render. The IPC + bus paths converge on the
+ * same patcher so the optimistic update and the authoritative
+ * response collapse into a no-op when they agree.
+ */
+function updateDirectoryPinInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    directoryKey: string;
+    pinnedRank?: string;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (directory.pinnedRank === params.pinnedRank) {
+      return directory;
+    }
+    changed = true;
+    return { ...directory, pinnedRank: params.pinnedRank };
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
+}
+
+function updateDirectoryPinsInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    pinnedRanks: Record<string, string>;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    const pinnedRank = params.pinnedRanks[directory.key];
+    if (!pinnedRank || directory.pinnedRank === pinnedRank) {
+      return directory;
+    }
+    changed = true;
+    return { ...directory, pinnedRank };
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
+}
+
 function markThreadSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -1358,6 +1415,12 @@ export function useThreadNavigation(
     backend: AppServerBackendKind,
     threadIds: string[],
   ) => Promise<void>;
+  /** Directory pin: optimistic patch → IPC → reconcile. Plan Unit J. */
+  setDirectoryPin: (
+    directory: NavigationDirectorySummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  reorderDirectoryPins: (directoryKeys: string[]) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
@@ -1947,6 +2010,52 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadPinsInSnapshot(current.response, {
             backend: event.backend,
+            pinnedRanks,
+          }),
+        }));
+        return;
+      }
+
+      // Directory pin bus events (plan 2026-05-09-002, Unit I).
+      // Patcher short-circuits when the rank already matches so the
+      // IPC response → patch → bus event → patch chain collapses
+      // into a single React render.
+      if (method === "directory/pin/added") {
+        const { directoryKey, pinnedRank } = event.notification.params as {
+          directoryKey: string;
+          pinnedRank: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryPinInSnapshot(current.response, {
+            directoryKey,
+            pinnedRank,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "directory/pin/removed") {
+        const { directoryKey } = event.notification.params as {
+          directoryKey: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryPinInSnapshot(current.response, {
+            directoryKey,
+            pinnedRank: undefined,
+          }),
+        }));
+        return;
+      }
+
+      if (method === "directory/pin/reordered") {
+        const { pinnedRanks } = event.notification.params as {
+          pinnedRanks: Record<string, string>;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryPinsInSnapshot(current.response, {
             pinnedRanks,
           }),
         }));
@@ -2837,6 +2946,8 @@ export function useThreadNavigation(
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
   const setThreadPinRequest = desktopApi?.setThreadPin;
   const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
+  const setDirectoryPinRequest = desktopApi?.setDirectoryPin;
+  const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
   const setThreadReaction = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -2966,6 +3077,88 @@ export function useThreadNavigation(
       }
     },
     [refresh, reorderThreadPinsRequest],
+  );
+
+  /**
+   * Directory pin mutators (plan 2026-05-09-002, Unit J). Mirror of
+   * setThreadPin / reorderThreadPins — optimistic snapshot patch,
+   * IPC call, re-patch with authoritative response, refresh() on
+   * throw. The patcher short-circuits when the optimistic rank
+   * matches the response so the second patch is a no-op (no
+   * double-render).
+   */
+  const setDirectoryPin = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      pinned: boolean,
+    ): Promise<void> => {
+      if (!setDirectoryPinRequest) {
+        return;
+      }
+
+      const pinnedRank = pinned
+        ? directory.pinnedRank ??
+          buildAppendPinRank(
+            (state.response?.directories ?? [])
+              .filter((candidate) => candidate.kind === "directory")
+              .map((candidate) => candidate.pinnedRank),
+          )
+        : undefined;
+
+      setState((current) => ({
+        ...current,
+        response: updateDirectoryPinInSnapshot(current.response, {
+          directoryKey: directory.key,
+          pinnedRank,
+        }),
+      }));
+
+      try {
+        const result = await setDirectoryPinRequest({
+          directoryKey: directory.key,
+          pinnedRank,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryPinInSnapshot(current.response, {
+            directoryKey: result.directoryKey,
+            pinnedRank: result.pinnedRank,
+          }),
+        }));
+      } catch {
+        await refresh();
+      }
+    },
+    [refresh, setDirectoryPinRequest, state.response?.directories],
+  );
+
+  const reorderDirectoryPins = useCallback(
+    async (directoryKeys: string[]): Promise<void> => {
+      if (!reorderDirectoryPinsRequest) {
+        return;
+      }
+
+      const pinnedRanks = buildPinnedRanks(directoryKeys);
+      setState((current) => ({
+        ...current,
+        response: updateDirectoryPinsInSnapshot(current.response, {
+          pinnedRanks,
+        }),
+      }));
+
+      try {
+        const result = await reorderDirectoryPinsRequest({ directoryKeys });
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryPinsInSnapshot(current.response, {
+            pinnedRanks: result.pinnedRanks,
+          }),
+        }));
+      } catch {
+        await refresh();
+      }
+    },
+    [refresh, reorderDirectoryPinsRequest],
   );
 
   const updateThreadExecutionMode = useCallback(
@@ -3155,6 +3348,8 @@ export function useThreadNavigation(
     setThreadReaction,
     setThreadPin,
     reorderThreadPins,
+    setDirectoryPin,
+    reorderDirectoryPins,
     snapshot: state.response,
     threads,
   };

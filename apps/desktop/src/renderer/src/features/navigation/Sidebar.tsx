@@ -85,6 +85,18 @@ type SidebarProps = {
     threadIds: string[],
   ) => Promise<void>;
   /**
+   * Directory pinning (plan 2026-05-09-002). Mirror of thread-pin
+   * props minus the per-backend dimension. Both must be provided
+   * for the DirectoriesList to render the pinned section + accept
+   * drag-pin gestures; passing only one (e.g. testing) leaves the
+   * other path as a no-op.
+   */
+  onSetDirectoryPin?: (
+    directory: NavigationDirectorySummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
    * fresh PR status before they click in.
@@ -504,6 +516,8 @@ export function Sidebar(props: SidebarProps) {
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onReorderThreadPins={props.onReorderThreadPins}
+              onSetDirectoryPin={props.onSetDirectoryPin}
+              onReorderDirectoryPins={props.onReorderDirectoryPins}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}

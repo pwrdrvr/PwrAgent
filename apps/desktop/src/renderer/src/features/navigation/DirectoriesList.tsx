@@ -44,6 +44,17 @@ type DirectoriesListProps = {
     backend: AppServerBackendKind,
     threadIds: string[],
   ) => Promise<void>;
+  /**
+   * Directory pinning (plan 2026-05-09-002, Unit K). When both
+   * handlers are provided, directory rows are draggable + the
+   * pinned section + divider render. Mirror of the thread-pin props
+   * minus the per-backend dimension.
+   */
+  onSetDirectoryPin?: (
+    directory: NavigationDirectorySummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,

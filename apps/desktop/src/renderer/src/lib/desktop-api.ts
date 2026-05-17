@@ -35,8 +35,12 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
+  ReorderDirectoryPinsRequest,
+  ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetDirectoryPinRequest,
+  SetDirectoryPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadPinRequest,
@@ -325,6 +329,18 @@ export type DesktopApi = {
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
+  /**
+   * Directory pin IPC (plan 2026-05-09-002, Unit H). Mirror of
+   * setThreadPin / reorderThreadPins minus the per-backend
+   * dimension. The main-process handler validates the directoryKey
+   * starts with "directory:" (rejecting workspace/unlinked).
+   */
+  setDirectoryPin?: (
+    request: SetDirectoryPinRequest
+  ) => Promise<SetDirectoryPinResponse>;
+  reorderDirectoryPins?: (
+    request: ReorderDirectoryPinsRequest
+  ) => Promise<ReorderDirectoryPinsResponse>;
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;
