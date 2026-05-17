@@ -61,6 +61,7 @@ import {
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
+  type RestoreThreadWorktreeResult,
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
@@ -1956,11 +1957,16 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
     });
+    const worktrees = await this.restoreThreadWorktrees({
+      backend,
+      threadId: result.threadId,
+    });
 
     return {
       backend,
       threadId: result.threadId,
       restoredAt: Date.now(),
+      worktrees,
     };
   }
 
@@ -5305,6 +5311,90 @@ export class DesktopBackendRegistry {
           };
         }
       }),
+    );
+  }
+
+  private async restoreThreadWorktrees(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<RestoreThreadWorktreeResult[]> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const snapshots = [...(overlay?.worktreeSnapshots ?? [])]
+      .filter((snapshot) => snapshot.state !== "present")
+      .sort(
+        (left, right) =>
+          (right.archivedAt ?? right.restoredAt ?? right.createdAt) -
+          (left.archivedAt ?? left.restoredAt ?? left.createdAt),
+      );
+    const seenWorktreePaths = new Set<string>();
+    const uniqueSnapshots = snapshots.filter((snapshot) => {
+      const resolvedPath = path.resolve(snapshot.worktreePath);
+      if (seenWorktreePaths.has(resolvedPath)) {
+        return false;
+      }
+      seenWorktreePaths.add(resolvedPath);
+      return true;
+    });
+
+    return await Promise.all(
+      uniqueSnapshots.map(
+        async (snapshot): Promise<RestoreThreadWorktreeResult> => {
+          try {
+            if (await pathExists(snapshot.worktreePath)) {
+              return {
+                worktreePath: snapshot.worktreePath,
+                repositoryPath: snapshot.repositoryPath,
+                snapshotRef: snapshot.snapshotRef,
+                restored: false,
+                skippedReason: "Worktree path already exists.",
+              };
+            }
+
+            const restoredSnapshot = await this.worktreeArchiveService.restore({
+              backend: params.backend,
+              threadId: params.threadId,
+              worktreePath: snapshot.worktreePath,
+              repositoryPath: snapshot.repositoryPath,
+              snapshotRef: snapshot.snapshotRef,
+              snapshotCommit: snapshot.snapshotCommit,
+              snapshot,
+              allowDetachedFallback: true,
+            });
+            await this.overlayStore.upsertWorktreeSnapshot({
+              backend: params.backend,
+              threadId: params.threadId,
+              snapshot: restoredSnapshot,
+            });
+
+            return {
+              worktreePath: restoredSnapshot.worktreePath,
+              repositoryPath: restoredSnapshot.repositoryPath,
+              snapshotRef: restoredSnapshot.snapshotRef,
+              restored: true,
+              snapshot: restoredSnapshot,
+            };
+          } catch (error) {
+            backendRegistryLog.warn("restore thread worktree restore failed", {
+              backend: params.backend,
+              threadId: params.threadId,
+              repositoryPath: snapshot.repositoryPath,
+              worktreePath: snapshot.worktreePath,
+              snapshotRef: snapshot.snapshotRef,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return {
+              worktreePath: snapshot.worktreePath,
+              repositoryPath: snapshot.repositoryPath,
+              snapshotRef: snapshot.snapshotRef,
+              restored: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      ),
     );
   }
 

@@ -372,10 +372,21 @@ export type RestoreThreadRequest = {
   threadId: ThreadIdentifier;
 };
 
+export type RestoreThreadWorktreeResult = {
+  worktreePath: string;
+  repositoryPath?: string;
+  snapshotRef?: string;
+  restored: boolean;
+  snapshot?: WorktreeSnapshotSummary;
+  skippedReason?: string;
+  error?: string;
+};
+
 export type RestoreThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   restoredAt: number;
+  worktrees?: RestoreThreadWorktreeResult[];
 };
 
 export type ArchiveWorktreeRequest = {

@@ -39,6 +39,7 @@ type RestoreWorktreeParams = {
   snapshotRef: string;
   snapshotCommit: string;
   snapshot?: WorktreeSnapshotSummary;
+  allowDetachedFallback?: boolean;
   now?: number;
 };
 
@@ -195,19 +196,8 @@ export class WorktreeArchiveService {
   async restore(params: RestoreWorktreeParams): Promise<WorktreeSnapshotSummary> {
     const worktreePath = path.resolve(params.worktreePath);
     const repositoryPath = path.resolve(params.repositoryPath);
-    const snapshotCommit = trimGitOutput(
-      (await this.runGit(repositoryPath, [
-        "rev-parse",
-        `${params.snapshotRef}^{commit}`,
-      ]))
-        .stdout,
-    );
-
-    if (snapshotCommit !== params.snapshotCommit) {
-      throw new Error(
-        `Snapshot ref ${params.snapshotRef} points at ${snapshotCommit}, expected ${params.snapshotCommit}.`,
-      );
-    }
+    const { commit: restoreCommit, fallbackReason } =
+      await this.resolveRestoreCommit(params);
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
     await this.runGit(repositoryPath, [
@@ -215,7 +205,7 @@ export class WorktreeArchiveService {
       "add",
       "--detach",
       worktreePath,
-      snapshotCommit,
+      restoreCommit,
     ]);
 
     const restoredAt = params.now ?? Date.now();
@@ -227,7 +217,7 @@ export class WorktreeArchiveService {
         worktreePath,
         repositoryPath,
         snapshotRef: params.snapshotRef,
-        snapshotCommit,
+        snapshotCommit: restoreCommit,
         createdAt: restoredAt,
         ignoredFilesExcluded: true,
       }),
@@ -236,11 +226,84 @@ export class WorktreeArchiveService {
       worktreePath,
       repositoryPath,
       snapshotRef: params.snapshotRef,
-      snapshotCommit,
+      snapshotCommit: restoreCommit,
       restoredAt,
       state: "restored",
-      unavailableReason: undefined,
+      unavailableReason: fallbackReason,
     };
+  }
+
+  private async resolveRestoreCommit(
+    params: RestoreWorktreeParams,
+  ): Promise<{ commit: string; fallbackReason?: string }> {
+    try {
+      const snapshotCommit = trimGitOutput(
+        (await this.runGit(params.repositoryPath, [
+          "rev-parse",
+          `${params.snapshotRef}^{commit}`,
+        ]))
+          .stdout,
+      );
+
+      if (snapshotCommit === params.snapshotCommit) {
+        return { commit: snapshotCommit };
+      }
+
+      const mismatch = `Snapshot ref ${params.snapshotRef} points at ${snapshotCommit}, expected ${params.snapshotCommit}.`;
+      if (!params.allowDetachedFallback) {
+        throw new Error(mismatch);
+      }
+      return await this.resolveDetachedFallbackCommit(params, mismatch);
+    } catch (error) {
+      if (!params.allowDetachedFallback) {
+        throw error;
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      return await this.resolveDetachedFallbackCommit(params, reason);
+    }
+  }
+
+  private async resolveDetachedFallbackCommit(
+    params: RestoreWorktreeParams,
+    reason: string,
+  ): Promise<{ commit: string; fallbackReason: string }> {
+    const fallbackCandidates = [
+      {
+        label: "retained snapshot commit",
+        value: params.snapshotCommit,
+      },
+      {
+        label: "source HEAD",
+        value: params.snapshot?.sourceHead,
+      },
+      {
+        label: "repository HEAD",
+        value: "HEAD",
+      },
+    ];
+
+    for (const candidate of fallbackCandidates) {
+      if (!candidate.value) {
+        continue;
+      }
+
+      try {
+        const commit = trimGitOutput(
+          (await this.runGit(params.repositoryPath, [
+            "rev-parse",
+            `${candidate.value}^{commit}`,
+          ])).stdout,
+        );
+        return {
+          commit,
+          fallbackReason: `${reason} Restored detached worktree from ${candidate.label}.`,
+        };
+      } catch {
+        // Try the next retained identity before giving up.
+      }
+    }
+
+    throw new Error(`${reason} No detached fallback commit is available.`);
   }
 
   private async createSnapshotCommit(params: {
