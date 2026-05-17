@@ -4,6 +4,7 @@ import type {
   DesktopUpdateChannel,
   MessagingChannelKind,
 } from "@pwragent/shared";
+import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
@@ -48,6 +49,12 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 ];
 
 export function SettingsScreen(props: {
+  /** Live theme + density controller from the App root. Threaded down to
+   *  Settings → General → Appearance. Optional so the fatal-settings
+   *  early-return fallbacks (which render SettingsScreen alone) can omit
+   *  it without compile errors — the Appearance UI is hidden there
+   *  anyway because the snapshot is unavailable. */
+  appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
   profiles?: PwrAgentProfilesState;
   settings: DesktopSettingsState;
@@ -190,6 +197,7 @@ export function SettingsScreen(props: {
             </div>
           ) : snapshot ? (
             <SettingsSectionBody
+              appearanceController={props.appearanceController}
               desktopApi={props.desktopApi}
               profiles={props.profiles}
               section={section}
@@ -209,6 +217,7 @@ export function SettingsScreen(props: {
 }
 
 function SettingsSectionBody(props: {
+  appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
@@ -222,6 +231,7 @@ function SettingsSectionBody(props: {
   if (props.section === "general") {
     return (
       <GeneralSettings
+        appearanceController={props.appearanceController}
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}

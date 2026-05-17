@@ -8,6 +8,11 @@ import type {
   AppUpdateReleaseVersions,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type {
+  AppearanceController,
+  DensityPreference,
+  ThemePreference,
+} from "../../lib/useAppearance";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -16,6 +21,29 @@ import {
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 import { SettingsSwitch } from "./SettingsSwitch";
+
+const THEME_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: ThemePreference;
+}> = [
+  { label: "System", meta: "Follow OS", value: "system" },
+  { label: "Dark", meta: "Always dark", value: "dark" },
+  { label: "Light", meta: "Always light", value: "light" },
+];
+
+const DENSITY_OPTIONS: Array<{
+  label: string;
+  meta: string;
+  value: DensityPreference;
+}> = [
+  {
+    label: "Mission control",
+    meta: "Full thread chips",
+    value: "mission-control",
+  },
+  { label: "Compact", meta: "Chips hidden", value: "compact" },
+];
 
 const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   description: string;
@@ -69,6 +97,7 @@ function releaseHelpText(
 }
 
 export function GeneralSettings(props: {
+  appearanceController?: AppearanceController;
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -99,6 +128,8 @@ export function GeneralSettings(props: {
     };
   }, [props.desktopApi]);
 
+  const appearance = props.appearanceController?.appearance;
+
   return (
     <SettingsSectionStack paneId="general" aria-label="General settings">
       <SettingsPanelHead
@@ -106,6 +137,80 @@ export function GeneralSettings(props: {
         title="General settings"
         help="Defaults that apply across PwrAgent surfaces."
       />
+
+      {props.appearanceController && appearance ? (
+        <SettingsSection eyebrow="General" title="Appearance">
+          <div className="settings-fields">
+            <SettingsField
+              label="Theme"
+              sub="System follows your OS appearance and flips live when you change it."
+              help={
+                appearance.theme === "system"
+                  ? `Currently following the OS (${appearance.resolvedTheme}).`
+                  : `Locked to ${appearance.theme}.`
+              }
+              control={
+                <div
+                  className="settings-segmented"
+                  role="radiogroup"
+                  aria-label="Theme"
+                >
+                  {THEME_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-checked={appearance.theme === option.value}
+                      className={`settings-segmented__button settings-segmented__button--stacked${
+                        appearance.theme === option.value ? " is-active" : ""
+                      }`}
+                      role="radio"
+                      type="button"
+                      onClick={() => {
+                        props.appearanceController?.setTheme(option.value);
+                      }}
+                    >
+                      <span>{option.label}</span>
+                      <span className="settings-segmented__meta">
+                        {option.meta}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+            <SettingsField
+              label="Density"
+              sub="Compact hides the directory and PR chips in thread rows so more threads fit on screen. Reaction and pin markers stay visible."
+              control={
+                <div
+                  className="settings-segmented"
+                  role="radiogroup"
+                  aria-label="Density"
+                >
+                  {DENSITY_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-checked={appearance.density === option.value}
+                      className={`settings-segmented__button settings-segmented__button--stacked${
+                        appearance.density === option.value ? " is-active" : ""
+                      }`}
+                      role="radio"
+                      type="button"
+                      onClick={() => {
+                        props.appearanceController?.setDensity(option.value);
+                      }}
+                    >
+                      <span>{option.label}</span>
+                      <span className="settings-segmented__meta">
+                        {option.meta}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
         eyebrow="General"

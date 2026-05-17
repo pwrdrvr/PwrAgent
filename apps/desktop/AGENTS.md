@@ -247,6 +247,21 @@ Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 ## Implementation Notes
 
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.
+- **No raw color literals outside `:root` / `:root[data-theme="..."]`.** All
+  hex / rgb / hsl / `color-mix(in srgb, #..., ...)` constants belong in the
+  token blocks at the top of `styles/app.css`. Use `var(--token)` everywhere
+  else. The renderer ships light and dark themes via `data-theme` attribute
+  selectors and a synchronous pre-React bootstrap in `index.html` — any new
+  raw color literal in a component rule (or further down in `app.css`) will
+  not flip with the theme and is a regression. Derived alpha overlays should
+  use `color-mix(in srgb, var(--token) <pct>%, transparent)` so they
+  automatically follow the token in every theme. The theme + density runtime
+  contract is documented in `src/renderer/src/lib/appearance.ts` and the
+  per-window controller is `src/renderer/src/lib/useAppearance.ts` — the App
+  root owns a single controller and threads it down to the Settings →
+  General → Appearance section; do not call `useAppearance()` in multiple
+  places (`storage` events only fire for OTHER documents and the instances
+  would drift).
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
 - For tooltips inside clipped or layered surfaces (sidebar, scroll regions,
