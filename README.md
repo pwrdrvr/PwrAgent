@@ -52,9 +52,9 @@ Config + state live under `~/.pwragent/profiles/<name>/` ([on-disk layout](docs/
 git clone https://github.com/pwrdrvr/PwrAgent.git
 cd PwrAgent
 pnpm install
-pnpm --filter @pwragent/desktop dev:no-messaging   # full UI, no live messaging adapters
+pnpm dev:no-messaging   # full UI, no live messaging adapters
 # or
-pnpm --filter @pwragent/desktop dev                # full UI + live messaging
+pnpm dev                # full UI + live messaging
 ```
 
 Codex App Server credentials live in `~/.config/grok-app-server/config.toml` or the equivalent env vars. Full dev workflow, test strategy, replay fixtures, and diagnostics in **[CONTRIBUTING.md](CONTRIBUTING.md)**.

@@ -431,7 +431,7 @@ shows up correctly in the Dock and Cmd-Tab list.
 **From source:**
 
 ```bash
-PWRAGENT_PROFILE=dev pnpm --filter @pwragent/desktop dev:no-messaging
+PWRAGENT_PROFILE=dev pnpm dev:no-messaging
 ```
 
 The `PWRAGENT_PROFILE` env var still works as a fallback for any
