@@ -115,20 +115,25 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
 const appServerLog = getMainLogger("pwragent:app-server");
 
 /**
- * Reject pin requests that target synthesized pseudo-directories
- * (`workspace:*`, `unlinked`). Directory pinning is a user-curated
- * order for folders the user actually picked — the workspace/
- * unlinked aggregators are derived from thread metadata and don't
- * model a single folder, so pinning them is meaningless. The
- * snapshot builder (`buildDirectorySummaries`) also defends against
- * this on the read side, but rejecting here keeps the overlay
- * store free of stale rows that would otherwise accumulate without
- * any read-side effect. See plan 2026-05-09-002, Unit G.
+ * Reject pin requests that target the synthetic catch-all bucket
+ * (`unlinked`). Directory pinning is a user-curated order for
+ * named entries the user actually browses — both real directories
+ * (`directory:*`) and workspaces (`workspace:*`) qualify, since the
+ * user picks them by name in the sidebar. The `unlinked` bucket is
+ * a roll-up of threads with no linked directory and doesn't model
+ * a single entry, so pinning it is meaningless. The snapshot
+ * builder (`buildDirectorySummaries`) also defends against this on
+ * the read side, but rejecting here keeps the overlay store free
+ * of stale rows that would otherwise accumulate without any
+ * read-side effect. See plan 2026-05-09-002, Unit G.
  */
 function rejectNonDirectoryPinKey(directoryKey: string): void {
-  if (!directoryKey.startsWith("directory:")) {
+  if (
+    !directoryKey.startsWith("directory:") &&
+    !directoryKey.startsWith("workspace:")
+  ) {
     throw new Error(
-      `Cannot pin non-directory entry: ${directoryKey} (only kind: "directory" summaries are pinnable)`,
+      `Cannot pin synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are pinnable)`,
     );
   }
 }

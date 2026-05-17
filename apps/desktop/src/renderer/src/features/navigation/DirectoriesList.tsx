@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
@@ -85,6 +91,20 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
 
+/**
+ * The user can pin both `kind: "directory"` and `kind: "workspace"`
+ * entries — both are named entries they click in the sidebar. Only
+ * `kind: "unlinked"` (the synthetic catch-all for threads with no
+ * linked directory) is excluded. Keep this policy in one place so
+ * the IPC guard, snapshot builder, and renderer guards can't drift
+ * apart. See plan 2026-05-09-002 Unit K.
+ */
+function isPinnableDirectoryKind(
+  directory: Pick<NavigationDirectorySummary, "kind">,
+): boolean {
+  return directory.kind === "directory" || directory.kind === "workspace";
+}
+
 function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolean {
   const launchpad = directory.launchpad;
   if (!launchpad) {
@@ -122,6 +142,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
   >(undefined);
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
+  /**
+   * Suppress the directory summary button's expand/collapse click
+   * when the click is the trailing edge of a drag gesture. Browsers
+   * fire a synthetic `click` on the element under the mouse on
+   * drag-release, which used to expand/collapse whatever row the
+   * user dropped onto — a confusing side-effect of a reorder. Set
+   * on dragStart, cleared on the next macrotask after dragEnd so
+   * the synthetic click sees the flag and bails. Plan
+   * 2026-05-09-002 Unit K follow-up.
+   */
+  const directoryDragJustEndedRef = useRef(false);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -338,8 +369,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * Render a single directory row. Extracted so the pinned and
    * unpinned sections can render the same row markup. The drag
    * handlers attach to `.directory-row__header` only when this is a
-   * pinnable `kind: "directory"` entry AND directory pinning is
-   * enabled (both props provided). Mirrors RecentsList's
+   * pinnable entry (see `isPinnableDirectoryKind`) AND directory
+   * pinning is enabled (both props provided). Mirrors RecentsList's
    * pinned-vs-unpinned `draggable` toggling. See plan
    * 2026-05-09-002 Unit K.
    */
@@ -349,7 +380,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const directoryPinned = isPinnedDirectory(directory);
     const directoryDraggable =
       directoryDragEnabled &&
-      directory.kind === "directory" &&
+      isPinnableDirectoryKind(directory) &&
       // Unpinned directories only become draggable when at least one
       // directory is already pinned (matches the thread-pin pattern:
       // first pin lives via context menu, drag is reordering).
@@ -388,6 +419,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             directoryDraggable
               ? (event) => {
                   setDraggedDirectoryKey(directory.key);
+                  directoryDragJustEndedRef.current = true;
                   event.dataTransfer.effectAllowed = "move";
                   event.dataTransfer.setData(
                     "application/x-pwragent-directory",
@@ -415,7 +447,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   const draggedDirectory = directoryByKey.get(draggedKey);
                   if (
                     !draggedDirectory ||
-                    draggedDirectory.kind !== "directory"
+                    !isPinnableDirectoryKind(draggedDirectory)
                   ) {
                     return;
                   }
@@ -444,6 +476,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   setDraggedDirectoryKey(undefined);
                   setDirectoryDropIndicator(undefined);
                   setDirectoriesPinnedDividerDropTarget(false);
+                  // Clear the suppression flag after the synthetic
+                  // post-release click would have fired. setTimeout
+                  // queues this on a macrotask after the click
+                  // microtask, so the click handler sees `true`
+                  // and bails, then this clears for future
+                  // non-drag clicks.
+                  setTimeout(() => {
+                    directoryDragJustEndedRef.current = false;
+                  }, 0);
                 }
               : undefined
           }
@@ -465,7 +506,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   const draggedDirectory = directoryByKey.get(draggedKey);
                   if (
                     !draggedDirectory ||
-                    draggedDirectory.kind !== "directory"
+                    !isPinnableDirectoryKind(draggedDirectory)
                   ) {
                     return;
                   }
@@ -521,6 +562,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }`}
             type="button"
             onClick={() => {
+              // Suppress the synthetic post-drop click. The drag-end
+              // handler schedules the flag to clear on the next
+              // macrotask, so non-drag clicks always pass through.
+              if (directoryDragJustEndedRef.current) {
+                return;
+              }
               setExpandedByKey((current) => ({
                 ...current,
                 [directory.key]: !expanded,
@@ -528,7 +575,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }}
             onContextMenu={(() => {
               const openMenu = props.onOpenDirectoryContextMenu;
-              if (!openMenu || directory.kind !== "directory") {
+              if (!openMenu || !isPinnableDirectoryKind(directory)) {
                 return undefined;
               }
               return (event) => {
@@ -787,7 +834,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             // unpinned-section's drop target, or context menu).
             if (
               !draggedDirectory ||
-              draggedDirectory.kind !== "directory" ||
+              !isPinnableDirectoryKind(draggedDirectory) ||
               pinnedDirectoryKeys.includes(draggedKey)
             ) {
               event.dataTransfer.dropEffect = "none";
@@ -815,7 +862,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             const draggedDirectory = directoryByKey.get(draggedKey);
             if (
               !draggedDirectory ||
-              draggedDirectory.kind !== "directory" ||
+              !isPinnableDirectoryKind(draggedDirectory) ||
               pinnedDirectoryKeys.includes(draggedKey)
             ) {
               return;

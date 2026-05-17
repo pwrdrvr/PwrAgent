@@ -1861,6 +1861,15 @@ describe("Sidebar directory pinning", () => {
     latestUpdatedAt: 500,
   };
 
+  const unlinkedDirectory: NavigationDirectorySummary = {
+    key: "unlinked",
+    kind: "unlinked",
+    label: "No linked directory",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 300,
+  };
+
   /**
    * The directory row exposes two buttons per row: the summary (with
    * `aria-expanded`) and the launchpad button (with the longer
@@ -2047,7 +2056,7 @@ describe("Sidebar directory pinning", () => {
     expect(onSetDirectoryPin).toHaveBeenCalledWith(pinned, false);
   });
 
-  it("ignores the context menu on workspace and unlinked pseudo-directories", () => {
+  it("opens the context menu for workspace rows (workspaces are pinnable)", async () => {
     const onSetDirectoryPin = vi.fn(async () => undefined);
 
     renderSidebar([workspaceDirectory, projectADirectory], {
@@ -2058,6 +2067,28 @@ describe("Sidebar directory pinning", () => {
     const workspaceSummary = getDirectorySummary(/Workspace/i);
     fireEvent.contextMenu(workspaceSummary);
 
+    const pinItem = await screen.findByRole("menuitem", {
+      name: "Pin Directory",
+    });
+    await clickElement(pinItem);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(workspaceDirectory, true);
+  });
+
+  it("never opens the context menu for the unlinked pseudo-directory bucket", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([unlinkedDirectory, projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const unlinkedSummary = getDirectorySummary(/No linked directory/i);
+    fireEvent.contextMenu(unlinkedSummary);
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Pin Directory" }),
+    ).not.toBeInTheDocument();
     expect(onSetDirectoryPin).not.toHaveBeenCalled();
   });
 });

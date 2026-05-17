@@ -958,12 +958,12 @@ describe("buildDirectorySummaries — directory pin overlay (Unit D)", () => {
     expect(directories[0]?.pinnedRank).toBeUndefined();
   });
 
-  it("does NOT attach pinnedRank to workspace pseudo-directories even with overlay row", () => {
-    // Defensive: the IPC handler also blocks this, but the snapshot
-    // builder enforces the same invariant so a misbehaving caller
-    // (test, future contributor) can't accidentally pin a synthetic
-    // entry. Mirrors the plan's "only kind: directory is pinnable"
-    // rule (Scope Boundaries).
+  it("attaches pinnedRank to workspace pseudo-directories (workspaces are pinnable)", () => {
+    // Policy: both `kind: "directory"` and `kind: "workspace"`
+    // entries are user-pinnable. Workspaces are named entries the
+    // user explicitly browses by clicking, so pinning them keeps
+    // them at the top of the lens. Only `kind: "unlinked"` (the
+    // catch-all bucket) is excluded.
     const directories = buildDirectorySummaries({
       threads: [
         buildThread({
@@ -986,12 +986,36 @@ describe("buildDirectorySummaries — directory pin overlay (Unit D)", () => {
       },
     });
 
-    // The workspace summary may exist (rolled up from threads), but
-    // its `pinnedRank` must stay undefined.
     const workspace = directories.find((dir) => dir.kind === "workspace");
-    if (workspace) {
-      expect(workspace.pinnedRank).toBeUndefined();
-    }
+    expect(workspace).toBeDefined();
+    expect(workspace?.pinnedRank).toBe("1024");
+  });
+
+  it("does NOT attach pinnedRank to the unlinked catch-all even with overlay row", () => {
+    // Defensive: the IPC handler also blocks this, but the snapshot
+    // builder enforces the same invariant so a misbehaving caller
+    // (test, future contributor) can't accidentally pin a synthetic
+    // catch-all entry.
+    const directories = buildDirectorySummaries({
+      threads: [
+        // A thread with no linked directories rolls up into the
+        // unlinked bucket.
+        buildThread({
+          id: "thread-unlinked",
+          linkedDirectories: [],
+        }),
+      ],
+      directoryOverlayByKey: {
+        unlinked: {
+          directoryKey: "unlinked",
+          pinnedRank: "1024",
+        },
+      },
+    });
+
+    const unlinked = directories.find((dir) => dir.kind === "unlinked");
+    expect(unlinked).toBeDefined();
+    expect(unlinked?.pinnedRank).toBeUndefined();
   });
 });
 

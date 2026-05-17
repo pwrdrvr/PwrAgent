@@ -464,17 +464,21 @@ export function buildDirectorySummaries(params: {
     }
   }
 
-  // Directory pin overlay (Unit D). Attach `pinnedRank` only to
-  // existing `kind: "directory"` summaries — workspace/unlinked
-  // summaries (rolled up from threads but synthetic in meaning) are
-  // not user-pinnable, so we defensively skip them here even though
-  // the IPC handler also rejects pinning those keys.
+  // Directory pin overlay (Unit D). Attach `pinnedRank` to
+  // `kind: "directory"` AND `kind: "workspace"` summaries — both
+  // are named entries the user explicitly browses by clicking. The
+  // `unlinked` bucket is a synthetic roll-up of threads with no
+  // linked directory and isn't user-pinnable, so we skip it here
+  // even though the IPC handler also rejects pinning that key.
   for (const [directoryKey, overlay] of Object.entries(params.directoryOverlayByKey ?? {})) {
     if (!overlay?.pinnedRank) {
       continue;
     }
     const summary = summaries.get(directoryKey);
-    if (summary && summary.kind === "directory") {
+    if (
+      summary &&
+      (summary.kind === "directory" || summary.kind === "workspace")
+    ) {
       summary.pinnedRank = overlay.pinnedRank;
     }
   }
