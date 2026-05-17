@@ -31,10 +31,10 @@ What makes the PwrAgent side worth running:
   `>` opens a blockquote, bullet and numbered lists auto-continue.
   Codex Desktop doesn't have this yet.
 - **Persistent draft history** — every keystroke autosaves to a
-  per-profile store. Press **↑** in an empty composer to recover
-  and cycle through the last 20 drafts (unsent *and* sent). Drafts
-  survive thread switches, sidebar refreshes, settings overlays,
-  and full app restarts.
+  per-profile store. Press <kbd>↑</kbd> in an empty composer to
+  recover and cycle through the last 20 drafts (unsent *and* sent).
+  Drafts survive thread switches, sidebar refreshes, settings
+  overlays, and full app restarts.
 - **Profile isolation** — two layered profile mechanisms (PwrAgent
   + Codex) compose into anything from "one install, one identity"
   to "N installs running side-by-side with isolated auth and
@@ -199,21 +199,21 @@ Codex Desktop doesn't have this yet.
 
 ### Undo / redo (per-thread)
 
-While a thread is focused, **Cmd+Z** undoes the most recent change
-to that thread's composer, and **Cmd+Shift+Z** (or **Cmd+Y**)
-redoes. Each thread carries its own independent undo stack —
-switching threads doesn't merge the histories, and undo never
-crosses thread boundaries.
+While a thread is focused, <kbd>Cmd+Z</kbd> undoes the most recent
+change to that thread's composer, and <kbd>Cmd+Shift+Z</kbd> (or
+<kbd>Cmd+Y</kbd>) redoes. Each thread carries its own independent
+undo stack — switching threads doesn't merge the histories, and
+undo never crosses thread boundaries.
 
 Undo also restores a `$skill` chip you just removed with
-**Backspace**, recovering both the chip and its position in the
-surrounding text — so an accidental delete doesn't cost you the
+<kbd>Backspace</kbd>, recovering both the chip and its position in
+the surrounding text — so an accidental delete doesn't cost you the
 chip you spent time picking.
 
 For recovery **across** threads or app restarts, see
 [Composer draft history](#composer-draft-history--recovers-your-last-message)
-below — the **↑** mechanic there reaches further back than the
-per-thread undo stack does.
+below — the <kbd>↑</kbd> mechanic there reaches further back than
+the per-thread undo stack does.
 
 ### Composer draft history (↑ recovers your last message)
 
@@ -230,10 +230,10 @@ that historically lost them in other agent UIs:
 - Closing a thread without sending
 
 To recover a previous draft, focus an **empty** composer and press
-**↑ (ArrowUp)**. The composer fills with the most recent
-candidate. Keep pressing **↑** to cycle further back through up to
-**20 recent candidates** (per-profile); **↓ (ArrowDown)** cycles
-forward through the same list.
+<kbd>↑</kbd> (ArrowUp). The composer fills with the most recent
+candidate. Keep pressing <kbd>↑</kbd> to cycle further back through
+up to **20 recent candidates** (per-profile); <kbd>↓</kbd>
+(ArrowDown) cycles forward through the same list.
 
 Candidates include:
 
@@ -247,7 +247,7 @@ Candidates include:
 
 The recovery cycle is anchored on the *blank composer* state.
 Start typing once you've found the draft you want and the cycle
-ends — the next **↑** will move the cursor in the usual way.
+ends — the next <kbd>↑</kbd> will move the cursor in the usual way.
 
 Draft history is **per PwrAgent profile** — switching profiles via
 `--profile <name>` gives that profile its own independent history.
