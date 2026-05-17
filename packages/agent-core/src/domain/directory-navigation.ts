@@ -26,6 +26,11 @@ function pathBaseName(value?: string): string {
   return parts.at(-1) ?? normalized;
 }
 
+function normalizeComparablePath(value?: string): string | undefined {
+  const normalized = value?.trim().replace(/[\\/]+$/, "");
+  return normalized || undefined;
+}
+
 function isInternalDirectoryLabel(value?: string): boolean {
   return Boolean(value?.startsWith("directory:") || value?.startsWith("workspace:"));
 }
@@ -171,6 +176,29 @@ function ensureSummary(
   return created;
 }
 
+function workspaceRootSet(
+  workspaceRoots?: string[],
+): Set<string> | undefined {
+  const roots = new Set(
+    (workspaceRoots ?? [])
+      .map(normalizeComparablePath)
+      .filter((root): root is string => Boolean(root)),
+  );
+  return roots.size > 0 ? roots : undefined;
+}
+
+function isAllowedWorkspaceRoot(
+  descriptor: DirectoryDescriptor,
+  allowedWorkspaceRoots: Set<string> | undefined,
+): boolean {
+  if (descriptor.kind !== "workspace" || !allowedWorkspaceRoots) {
+    return true;
+  }
+
+  const workspacePath = normalizeComparablePath(descriptor.path);
+  return Boolean(workspacePath && allowedWorkspaceRoots.has(workspacePath));
+}
+
 function hasPersistableLaunchpadState(
   launchpad: DirectoryLaunchpadOverlayState,
 ): boolean {
@@ -185,7 +213,21 @@ function hasPersistableLaunchpadState(
 function compareWorkspaceSummaryPreference(
   left: NavigationDirectorySummary,
   right: NavigationDirectorySummary,
+  preferredWorkspaceRoots?: string[],
 ): number {
+  if (preferredWorkspaceRoots && preferredWorkspaceRoots.length > 0) {
+    const rootRank = new Map(
+      preferredWorkspaceRoots.map((root, index) => [root, index]),
+    );
+    const leftRootRank =
+      rootRank.get(normalizeComparablePath(left.path) ?? "") ?? Number.MAX_SAFE_INTEGER;
+    const rightRootRank =
+      rootRank.get(normalizeComparablePath(right.path) ?? "") ?? Number.MAX_SAFE_INTEGER;
+    if (leftRootRank !== rightRootRank) {
+      return leftRootRank - rightRootRank;
+    }
+  }
+
   const leftLaunchpadUpdatedAt = left.launchpad?.updatedAt ?? 0;
   const rightLaunchpadUpdatedAt = right.launchpad?.updatedAt ?? 0;
   const launchpadUpdatedDelta = rightLaunchpadUpdatedAt - leftLaunchpadUpdatedAt;
@@ -199,6 +241,7 @@ function compareWorkspaceSummaryPreference(
 
 function chooseWorkspaceSummary(
   workspaces: NavigationDirectorySummary[],
+  preferredWorkspaceRoots?: string[],
 ): NavigationDirectorySummary {
   const withPendingLaunchpads = workspaces.filter(
     (workspace) =>
@@ -206,12 +249,15 @@ function chooseWorkspaceSummary(
   );
   const candidates =
     withPendingLaunchpads.length > 0 ? withPendingLaunchpads : workspaces;
-  return [...candidates].sort(compareWorkspaceSummaryPreference)[0]!;
+  return [...candidates].sort((left, right) =>
+    compareWorkspaceSummaryPreference(left, right, preferredWorkspaceRoots),
+  )[0]!;
 }
 
 function collapseWorkspaceSummaries(params: {
   summaries: NavigationDirectorySummary[];
   threads: NavigationThreadSummary[];
+  workspaceRoots?: string[];
 }): NavigationDirectorySummary[] {
   const workspaces = params.summaries.filter(
     (summary) => summary.kind === "workspace",
@@ -220,15 +266,7 @@ function collapseWorkspaceSummaries(params: {
     return params.summaries;
   }
 
-  const pendingWorkspaces = workspaces.filter(
-    (workspace) =>
-      workspace.launchpad && hasPersistableLaunchpadState(workspace.launchpad),
-  );
-  if (pendingWorkspaces.length > 1) {
-    return params.summaries;
-  }
-
-  const preferred = chooseWorkspaceSummary(workspaces);
+  const preferred = chooseWorkspaceSummary(workspaces, params.workspaceRoots);
   const threadOrder = buildThreadCreationOrder(params.threads);
   const inboxByThreadKey = new Map(
     params.threads.map((thread) => [
@@ -302,9 +340,11 @@ export function buildDirectorySummaries(params: {
   threads: NavigationThreadSummary[];
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
   gitStatusByKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+  workspaceRoots?: string[];
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
   const stablePathByLabel = collectStablePathByLabel(params.threads);
+  const allowedWorkspaceRoots = workspaceRootSet(params.workspaceRoots);
 
   for (const thread of params.threads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -347,6 +387,9 @@ export function buildDirectorySummaries(params: {
                 path: stablePath,
               }
             : descriptor;
+      if (!isAllowedWorkspaceRoot(normalizedDescriptor, allowedWorkspaceRoots)) {
+        continue;
+      }
       if (seenDescriptors.has(normalizedDescriptor.key)) {
         continue;
       }
@@ -372,6 +415,19 @@ export function buildDirectorySummaries(params: {
       label: launchpad.directoryLabel,
       path: launchpadPath,
     });
+    if (
+      !isAllowedWorkspaceRoot(
+        {
+          key: directoryKey,
+          kind: launchpad.directoryKind,
+          label: launchpadLabel,
+          path: launchpadPath,
+        },
+        allowedWorkspaceRoots,
+      )
+    ) {
+      continue;
+    }
     const summary = ensureSummary(summaries, {
       key: directoryKey,
       kind: launchpad.directoryKind,
@@ -400,6 +456,9 @@ export function buildDirectorySummaries(params: {
     collapseWorkspaceSummaries({
       summaries: [...summaries.values()],
       threads: params.threads,
+      workspaceRoots: params.workspaceRoots
+        ?.map(normalizeComparablePath)
+        .filter((root): root is string => Boolean(root)),
     }),
     params.threads,
   ).sort((left, right) => left.label.localeCompare(right.label));

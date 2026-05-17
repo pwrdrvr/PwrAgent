@@ -348,10 +348,16 @@ describe("app server ipc", () => {
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
       fetchedAt: expect.any(Number),
+      messagingBindingsByThreadKey: undefined,
       queuedExecutionModesByThreadId: {},
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
+      ],
+      workspaceRoots: [
+        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
+        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
     expect(response).toEqual({

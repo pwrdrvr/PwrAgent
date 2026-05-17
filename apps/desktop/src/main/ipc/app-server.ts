@@ -94,6 +94,7 @@ import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindin
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -453,6 +454,7 @@ class DesktopAppServerService {
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadId,
       threads,
+      workspaceRoots: resolveScratchProjectsRoots(),
     });
     const overlayDurationMs = Date.now() - overlayStartedAt;
     const directoryStartedAt = Date.now();

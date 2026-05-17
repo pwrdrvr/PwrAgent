@@ -376,6 +376,120 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("filters profile-scoped workspace roots outside the active profile", () => {
+    const defaultProjectsRoot = "/Users/huntharo/.pwragent/profiles/default/projects";
+    const preProfileProjectsRoot = "/Users/huntharo/.pwragent/projects";
+    const devProjectsRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const legacyProjectsRoot = "/Users/huntharo/.pwragnt/projects";
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "default-thread",
+          linkedDirectories: [
+            {
+              id: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
+              label: "2026-05-08-9bc2d3",
+              path: `${defaultProjectsRoot}/2026-05-08-9bc2d3`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "pre-profile-thread",
+          linkedDirectories: [
+            {
+              id: `${preProfileProjectsRoot}/2026-05-10-c7d8e9`,
+              label: "2026-05-10-c7d8e9",
+              path: `${preProfileProjectsRoot}/2026-05-10-c7d8e9`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "dev-thread",
+          linkedDirectories: [
+            {
+              id: `${devProjectsRoot}/2026-05-12-605c84`,
+              label: "2026-05-12-605c84",
+              path: `${devProjectsRoot}/2026-05-12-605c84`,
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "legacy-thread",
+          linkedDirectories: [
+            {
+              id: `${legacyProjectsRoot}/2026-05-02-bc16ae`,
+              label: "2026-05-02-bc16ae",
+              path: `${legacyProjectsRoot}/2026-05-02-bc16ae`,
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+      launchpadsByKey: {
+        [`workspace:${defaultProjectsRoot}`]: {
+          directoryKey: `workspace:${defaultProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: defaultProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Default draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 3_000,
+        },
+        [`workspace:${preProfileProjectsRoot}`]: {
+          directoryKey: `workspace:${preProfileProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: preProfileProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Pre-profile draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 5_000,
+        },
+        [`workspace:${devProjectsRoot}`]: {
+          directoryKey: `workspace:${devProjectsRoot}`,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: devProjectsRoot,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Dev draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+        },
+      },
+      workspaceRoots: [
+        defaultProjectsRoot,
+        preProfileProjectsRoot,
+        legacyProjectsRoot,
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: `workspace:${defaultProjectsRoot}`,
+        label: "Workspaces",
+        path: defaultProjectsRoot,
+        threadKeys: expect.arrayContaining([
+          "codex:default-thread",
+          "codex:pre-profile-thread",
+          "codex:legacy-thread",
+        ]),
+        launchpad: expect.objectContaining({
+          prompt: "Default draft",
+        }),
+      }),
+    ]);
+  });
+
   it("collapses current, legacy, and launchpad-only scratch roots into one Workspaces row", () => {
     const directories = buildDirectorySummaries({
       threads: [
@@ -467,7 +581,7 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
-  it("keeps multiple pending workspace drafts selectable instead of collapsing one away", () => {
+  it("collapses multiple pending workspace drafts into one Workspaces row", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
@@ -498,25 +612,21 @@ describe("buildDirectorySummaries", () => {
       },
     });
 
-    expect(directories).toHaveLength(2);
-    expect(directories).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "workspace:/Users/huntharo/.pwragnt/projects",
-          launchpad: expect.objectContaining({
-            directoryKey: "workspace:/Users/huntharo/.pwragnt/projects",
-            prompt: "Legacy draft",
-          }),
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/huntharo/.pwragent/profiles/dev/projects",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 4_000,
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
+          prompt: "Profile draft",
         }),
-        expect.objectContaining({
-          key: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
-          launchpad: expect.objectContaining({
-            directoryKey: "workspace:/Users/huntharo/.pwragent/profiles/dev/projects",
-            prompt: "Profile draft",
-          }),
-        }),
-      ]),
-    );
+      }),
+    ]);
   });
 
   it("keeps same-named Codex worktrees as separate directory rows", () => {

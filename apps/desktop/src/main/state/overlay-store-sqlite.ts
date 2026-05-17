@@ -76,6 +76,7 @@ export class SqliteOverlayStore {
       { mode: ThreadExecutionMode; queuedAt: number } | undefined
     >;
     threads: AppServerThreadSummary[];
+    workspaceRoots?: string[];
   }): Promise<NavigationSnapshot> {
     const backendState = this.getBackend(params.backend);
     const firstSnapshot = !backendState?.lastSnapshotHash;
@@ -154,6 +155,7 @@ export class SqliteOverlayStore {
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
       threads: params.threads,
       unchanged: false,
+      workspaceRoots: params.workspaceRoots,
     });
 
     const nextHash = buildNavigationSnapshotHash({
