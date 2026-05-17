@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.6 - 2026-05-16
+
+- Moved the macOS release pipeline to a two-stage build where the prepare job runs tests, builds the signing input without Apple secrets, hashes the artifact, and hands it to a protected signing job.
+- Scoped Apple signing and notarization secrets to the GitHub `apple-signing` environment so the final release job requires explicit environment approval before secrets are exposed.
+- Kept Universal macOS packaging and the stable `PwrAgent.dmg` latest-download alias while exercising the isolated signing flow.
+- Updated the release runbook and release skill with the new environment approval expectations for beta/stable desktop releases.
+- Added Dependabot workflow and package update coverage, including pinned GitHub Action bumps for the release workflow.
+
 ## v1.0.0-beta.5 - 2026-05-16
 
 - Switched the macOS release build to a Universal Apple Silicon + Intel package, with versioned Universal DMG/ZIP artifacts and a stable `PwrAgent.dmg` alias for latest-release website downloads.
