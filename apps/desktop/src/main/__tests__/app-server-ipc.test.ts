@@ -409,6 +409,11 @@ describe("app server ipc", () => {
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
       ],
+      workspaceRoots: [
+        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
+        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(os.homedir(), ".pwragnt", "projects"),
+      ],
     });
   });
 
@@ -463,6 +468,11 @@ describe("app server ipc", () => {
             }),
           ],
         }),
+      ],
+      workspaceRoots: [
+        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
+        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
   });

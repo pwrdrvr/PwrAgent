@@ -15,6 +15,7 @@ type ArchivedThreadsState = {
   fetchedAt?: number;
   loading: boolean;
   threads: AppServerThreadSummary[];
+  workspaceRoots: string[];
 };
 
 type ArchivedProjectGroup = {
@@ -42,6 +43,7 @@ export function ArchivedThreadsSettings(props: {
   const [state, setState] = useState<ArchivedThreadsState>({
     loading: true,
     threads: [],
+    workspaceRoots: [],
   });
   const [restoringThreadKey, setRestoringThreadKey] = useState<string>();
   const [restoreMessage, setRestoreMessage] = useState<string>();
@@ -54,6 +56,7 @@ export function ArchivedThreadsSettings(props: {
         error: "Desktop bridge is missing listThreads().",
         loading: false,
         threads: [],
+        workspaceRoots: [],
       });
       return;
     }
@@ -70,6 +73,7 @@ export function ArchivedThreadsSettings(props: {
               !restoredThreadKeysRef.current.has(buildArchivedThreadKey(thread)),
           ),
         ),
+        workspaceRoots: response.workspaceRoots ?? [],
       });
     } catch (error) {
       setState((current) => ({
@@ -85,8 +89,8 @@ export function ArchivedThreadsSettings(props: {
   }, [loadArchivedThreads]);
 
   const projectGroups = useMemo(() => {
-    return groupArchivedThreadsByProject(state.threads);
-  }, [state.threads]);
+    return groupArchivedThreadsByProject(state.threads, state.workspaceRoots);
+  }, [state.threads, state.workspaceRoots]);
 
   const fetchedAtLabel = useMemo(() => {
     return state.fetchedAt
@@ -300,10 +304,14 @@ function sortArchivedThreads(
 
 function groupArchivedThreadsByProject(
   threads: AppServerThreadSummary[],
+  workspaceRoots: string[] = [],
 ): ArchivedProjectGroup[] {
   const groups = new Map<string, ArchivedProjectGroup>();
   for (const thread of threads) {
-    const project = resolveArchivedProject(thread);
+    const project = resolveArchivedProject(thread, workspaceRoots);
+    if (!project) {
+      continue;
+    }
     const existing = groups.get(project.key);
     if (existing) {
       existing.threads.push(thread);
@@ -332,7 +340,13 @@ function groupArchivedThreadsByProject(
 
 function resolveArchivedProject(
   thread: AppServerThreadSummary,
-): ArchivedProjectIdentity {
+  workspaceRoots: string[] = [],
+): ArchivedProjectIdentity | null | undefined {
+  const workspaceProject = resolveWorkspaceProject(thread, workspaceRoots);
+  if (workspaceProject !== undefined) {
+    return workspaceProject;
+  }
+
   const repositoryDirectory = resolveRepositoryLinkedDirectory(thread);
   if (repositoryDirectory) {
     return {
@@ -382,6 +396,69 @@ function resolveArchivedProject(
     label: "No project",
     latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
   };
+}
+
+function resolveWorkspaceProject(
+  thread: AppServerThreadSummary,
+  workspaceRoots: string[],
+): ArchivedProjectIdentity | null | undefined {
+  const workspaceRoot = threadWorkspaceRoot(thread);
+  if (!workspaceRoot) {
+    return undefined;
+  }
+
+  const activeRoot = activeWorkspaceRoot(workspaceRoot, workspaceRoots);
+  if (!activeRoot) {
+    return null;
+  }
+
+  return {
+    key: `workspace:${activeRoot}`,
+    label: "Workspaces",
+    latestArchiveTimestamp: resolveArchiveSortTimestamp(thread),
+    path: activeRoot,
+  };
+}
+
+function threadWorkspaceRoot(
+  thread: AppServerThreadSummary,
+): string | undefined {
+  return [
+    thread.projectKey,
+    ...thread.linkedDirectories.flatMap((directory) => [
+      directory.path,
+      directory.worktreePath,
+    ]),
+  ]
+    .map(matchScratchProjectsRoot)
+    .find((root): root is string => Boolean(root));
+}
+
+function activeWorkspaceRoot(
+  candidateRoot: string,
+  workspaceRoots: string[],
+): string | undefined {
+  if (workspaceRoots.length === 0) {
+    return candidateRoot;
+  }
+
+  const normalizedCandidate = normalizeComparablePath(candidateRoot);
+  return workspaceRoots.find(
+    (workspaceRoot) =>
+      normalizeComparablePath(workspaceRoot) === normalizedCandidate,
+  );
+}
+
+function matchScratchProjectsRoot(pathname: string | undefined): string | undefined {
+  const normalized = normalizePath(pathname);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const match = normalized.match(
+    /^(.*\/\.pwrag(?:ent|nt)(?:\/profiles\/[^/]+)?\/projects)(?:\/.*)?$/,
+  );
+  return match?.[1];
 }
 
 function resolveRepositoryLinkedDirectory(
@@ -510,4 +587,8 @@ function isManagedWorktreePath(pathname: string | undefined): boolean {
 
 function normalizePath(pathname: string | undefined): string {
   return pathname?.trim().replace(/\\/g, "/").replace(/\/+$/, "") ?? "";
+}
+
+function normalizeComparablePath(pathname: string | undefined): string {
+  return normalizePath(pathname).replace(/\/+$/, "");
 }

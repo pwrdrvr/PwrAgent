@@ -340,6 +340,7 @@ class DesktopAppServerService {
       backend: backend ?? "all",
       fetchedAt: Date.now(),
       threads: hydratedThreads,
+      workspaceRoots: resolveScratchProjectsRoots(),
     };
   }
 

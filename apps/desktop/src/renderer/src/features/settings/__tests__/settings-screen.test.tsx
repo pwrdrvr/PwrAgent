@@ -781,6 +781,86 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
+    const activeWorkspaceRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      workspaceRoots: [activeWorkspaceRoot],
+      threads: [
+        {
+          id: "thread-dev-workspace-1",
+          title: "lions roar",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 5_000,
+          linkedDirectories: [
+            {
+              id: `${activeWorkspaceRoot}/2026-05-10-844f31`,
+              label: "2026-05-10-844f31",
+              path: `${activeWorkspaceRoot}/2026-05-10-844f31`,
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-dev-workspace-2",
+          title: "what's up",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          projectKey: `${activeWorkspaceRoot}/2026-05-10-883761`,
+          linkedDirectories: [],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-legacy-workspace",
+          title: "Key Lime Pie yum",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 3_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects",
+              label: "projects",
+              path: "/Users/huntharo/.pwragnt/projects",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const workspacesGroup = (await screen.findByRole("heading", {
+      name: "Workspaces",
+    })).closest("section")!;
+    expect(within(workspacesGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText("lions roar")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText("what's up")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText(activeWorkspaceRoot)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "2026-05-10-844f31" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "2026-05-10-883761" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Key Lime Pie yum")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "projects" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("limits each archived project to the 20 most recent archive timestamps", async () => {
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,

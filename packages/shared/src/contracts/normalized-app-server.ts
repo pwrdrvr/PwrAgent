@@ -344,6 +344,7 @@ export type AppServerListThreadsResponse = {
   backend: AppServerBackendScope;
   fetchedAt: number;
   threads: AppServerThreadSummary[];
+  workspaceRoots?: string[];
 };
 
 export type ArchiveThreadCleanupResult = {
