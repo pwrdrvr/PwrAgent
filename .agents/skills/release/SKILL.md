@@ -34,6 +34,9 @@ Read these files before changing release metadata:
 - Always use a leading-`v` tag such as `v1.0.0-alpha.5`.
 - The tag version, `apps/desktop/package.json` version, and
   `CHANGELOG.md` release heading must match.
+- Before pushing a release tag, verify the `apple-signing` GitHub Environment
+  exists, requires reviewer approval, is scoped to release tags, and has the
+  Apple signing/notarization secrets required by the workflow.
 - Do not create or push the tag until the version and changelog are committed
   and present on the repository default branch.
 - Do not create the GitHub Release by hand before the build succeeds. Let
@@ -112,6 +115,11 @@ then **squash merge** the PR. Do not use rebase merge for release metadata PRs:
 GitHub may rewrite the commit SHA, which makes it too easy to tag the pre-merge
 commit instead of the actual default-branch release commit.
 
+Remember that a GitHub squash merge creates a GitHub-authored commit on `main`,
+not the original locally signed commit. If the user requires the release
+metadata commit on `main` itself to be locally signed, use the direct-push path
+or ask before using the PR fallback.
+
 ```bash
 git switch -c release/v<version>
 git push -u origin release/v<version>
@@ -163,7 +171,9 @@ git push origin v<version>
 ```
 
 The tag push triggers `Release Desktop (macOS universal)`. The workflow must
-pass `Check release metadata` before build/sign/notarize/publish starts.
+pass `Check release metadata` in the no-secret `Test and prepare signing input`
+job before the environment-gated `Sign, notarize, publish` job can request
+approval and access Apple signing secrets.
 
 For a manual dispatch, verify the tag already exists on GitHub:
 
@@ -181,6 +191,11 @@ sleep for 5-10 minutes before deciding it failed to start.
 gh run list --workflow release.yml --limit 10
 gh run watch <run-id>
 ```
+
+The `Sign, notarize, publish` job pauses for `apple-signing` Environment
+approval. Treat that pause as expected. Before approving, verify the workflow
+run is for the intended tag, the tag points at the intended default-branch
+commit, and the version/changelog metadata match the tag.
 
 On failure, inspect logs yourself:
 
