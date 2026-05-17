@@ -22,9 +22,12 @@ const log = getMainLogger("pwragent:updater");
 const GITHUB_RELEASES_URL =
   "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30";
 const RELEASE_FETCH_TIMEOUT_MS = 5_000;
+export const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
+let periodicUpdateCheckTimer: ReturnType<typeof setInterval> | undefined;
+let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
 
 type GitHubRelease = {
   draft?: boolean;
@@ -67,6 +70,105 @@ function configureAutoUpdaterChannel(): void {
     allowPrerelease: autoUpdater.allowPrerelease,
     updateChannel,
   });
+}
+
+function productionUpdatesEnabled(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function developmentUpdateCheckResult(): AppUpdateCheckResult {
+  return {
+    status: "skipped",
+    reason: "auto-update disabled in development",
+  };
+}
+
+function preserveDownloadedStatus(nextStatus: AppUpdateStatus): boolean {
+  if (updateStatus.status !== "downloaded") {
+    return false;
+  }
+  return (
+    nextStatus.status === "checking" ||
+    nextStatus.status === "no-update" ||
+    nextStatus.status === "error"
+  );
+}
+
+function setUpdateStatusUnlessDownloaded(nextStatus: AppUpdateStatus): void {
+  const currentStatus = updateStatus;
+  if (
+    currentStatus.status === "downloaded" &&
+    preserveDownloadedStatus(nextStatus)
+  ) {
+    log.info("keeping downloaded update status during follow-up check", {
+      currentVersion: currentStatus.version,
+      nextStatus: nextStatus.status,
+    });
+    return;
+  }
+  setUpdateStatus(nextStatus);
+}
+
+export async function checkForAppUpdatesNow(
+  trigger: "startup" | "periodic" | "manual" | "menu" = "manual",
+): Promise<AppUpdateCheckResult> {
+  if (!productionUpdatesEnabled()) {
+    const result = developmentUpdateCheckResult();
+    setUpdateStatus(result);
+    return result;
+  }
+
+  if (updateCheckInFlight) {
+    log.info("joining in-flight update check", { trigger });
+    return updateCheckInFlight;
+  }
+
+  updateCheckInFlight = (async () => {
+    try {
+      log.info("checking for app updates", { trigger });
+      configureAutoUpdaterChannel();
+      const result = await autoUpdater.checkForUpdates();
+      if (updateStatus.status === "downloaded") {
+        return { status: "downloaded", version: updateStatus.version };
+      }
+      if (!result || !result.updateInfo) {
+        return {
+          status: "no-update",
+          version: result?.updateInfo?.version ?? "unknown",
+        };
+      }
+      const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
+      if (result.updateInfo.version === currentVersion) {
+        return { status: "no-update", version: currentVersion };
+      }
+      return { status: "available", version: result.updateInfo.version };
+    } catch (err) {
+      const result = {
+        status: "error",
+        message: err instanceof Error ? err.message : String(err),
+      } as const;
+      setUpdateStatusUnlessDownloaded(result);
+      log.warn("checkForUpdates failed", {
+        message: result.message,
+        trigger,
+      });
+      return result;
+    } finally {
+      updateCheckInFlight = undefined;
+    }
+  })();
+
+  return updateCheckInFlight;
+}
+
+function startPeriodicUpdateChecks(): void {
+  if (periodicUpdateCheckTimer) {
+    return;
+  }
+  periodicUpdateCheckTimer = setInterval(() => {
+    void checkForAppUpdatesNow("periodic");
+  }, APP_UPDATE_CHECK_INTERVAL_MS);
+  periodicUpdateCheckTimer.unref?.();
 }
 
 function releaseInfoFromGitHubRelease(
@@ -146,12 +248,9 @@ export function initAutoUpdater(): void {
   // Skip in development. The dev binary isn't signed and Squirrel.Mac would
   // refuse to apply any update anyway. Skipping cleanly avoids spurious
   // 404s when running `pnpm dev` without a release feed.
-  if (process.env.NODE_ENV !== "production") {
+  if (!productionUpdatesEnabled()) {
     log.info("auto-update disabled in non-production");
-    setUpdateStatus({
-      status: "skipped",
-      reason: "auto-update disabled in development",
-    });
+    setUpdateStatus(developmentUpdateCheckResult());
     return;
   }
 
@@ -167,7 +266,7 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on("checking-for-update", () => {
     log.info("checking-for-update");
-    setUpdateStatus({ status: "checking" });
+    setUpdateStatusUnlessDownloaded({ status: "checking" });
   });
   autoUpdater.on("update-available", (info) => {
     log.info("update-available", { version: info.version });
@@ -175,7 +274,7 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-not-available", (info) => {
     log.info("update-not-available", { version: info.version });
-    setUpdateStatus({ status: "no-update", version: info.version });
+    setUpdateStatusUnlessDownloaded({ status: "no-update", version: info.version });
   });
   autoUpdater.on("download-progress", (progress) => {
     log.info("download-progress", {
@@ -199,20 +298,11 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("error", (err: Error) => {
     log.warn("auto-update error", { message: err.message });
-    setUpdateStatus({ status: "error", message: err.message });
+    setUpdateStatusUnlessDownloaded({ status: "error", message: err.message });
   });
 
-  autoUpdater
-    .checkForUpdates()
-    .catch((err) => {
-      setUpdateStatus({
-        status: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      log.warn("checkForUpdates failed", {
-        message: err instanceof Error ? err.message : String(err),
-      });
-    });
+  startPeriodicUpdateChecks();
+  void checkForAppUpdatesNow("startup");
 }
 
 export function registerAppUpdateIpcHandlers(): void {
@@ -254,34 +344,7 @@ export function registerAppUpdateIpcHandlers(): void {
   ipcMain.handle(
     APP_UPDATE_CHECK_CHANNEL,
     async (): Promise<AppUpdateCheckResult> => {
-      if (process.env.NODE_ENV !== "production") {
-        const result = {
-          status: "skipped",
-          reason: "auto-update disabled in development",
-        } as const;
-        setUpdateStatus(result);
-        return result;
-      }
-      try {
-        configureAutoUpdaterChannel();
-        const result = await autoUpdater.checkForUpdates();
-        if (updateStatus.status === "downloaded") {
-          return { status: "downloaded", version: updateStatus.version };
-        }
-        if (!result || !result.updateInfo) {
-          return { status: "no-update", version: result?.updateInfo?.version ?? "unknown" };
-        }
-        const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
-        if (result.updateInfo.version === currentVersion) {
-          return { status: "no-update", version: currentVersion };
-        }
-        return { status: "available", version: result.updateInfo.version };
-      } catch (err) {
-        return {
-          status: "error",
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
+      return await checkForAppUpdatesNow("manual");
     },
   );
 }

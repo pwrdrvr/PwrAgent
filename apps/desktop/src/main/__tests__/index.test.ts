@@ -14,6 +14,7 @@ const disposeAppMetadataIpcHandlersMock = vi.fn();
 const registerAppUpdateIpcHandlersMock = vi.fn();
 const disposeAppUpdateIpcHandlersMock = vi.fn();
 const initAutoUpdaterMock = vi.fn();
+const checkForAppUpdatesNowMock = vi.fn();
 const showAppLogWindowMock = vi.fn();
 const showChangelogWindowMock = vi.fn();
 const showThirdPartyNoticesWindowMock = vi.fn();
@@ -132,6 +133,7 @@ vi.mock("../ipc/app-metadata", () => ({
 }));
 
 vi.mock("../auto-updater", () => ({
+  checkForAppUpdatesNow: checkForAppUpdatesNowMock,
   registerAppUpdateIpcHandlers: registerAppUpdateIpcHandlersMock,
   disposeAppUpdateIpcHandlers: disposeAppUpdateIpcHandlersMock,
   initAutoUpdater: initAutoUpdaterMock,
@@ -263,6 +265,10 @@ describe("bootstrapApp", () => {
     disposeAgentIpcHandlersMock.mockReset();
     registerApplicationIpcHandlersMock.mockReset();
     disposeApplicationIpcHandlersMock.mockReset();
+    registerAppUpdateIpcHandlersMock.mockReset();
+    disposeAppUpdateIpcHandlersMock.mockReset();
+    initAutoUpdaterMock.mockReset();
+    checkForAppUpdatesNowMock.mockReset();
     showAppLogWindowMock.mockReset();
     showChangelogWindowMock.mockReset();
     showThirdPartyNoticesWindowMock.mockReset();
@@ -449,6 +455,9 @@ describe("bootstrapApp", () => {
     const helpMenu = template?.find((item) => item.role === "help");
     const item = (label: string) =>
       helpMenu?.submenu?.find((menuItem) => menuItem.label === label);
+
+    item("Check for Updates")?.click?.();
+    expect(checkForAppUpdatesNowMock).toHaveBeenCalledWith("menu");
 
     item("Third-Party Notices")?.click?.();
     expect(showThirdPartyNoticesWindowMock).toHaveBeenCalledOnce();
