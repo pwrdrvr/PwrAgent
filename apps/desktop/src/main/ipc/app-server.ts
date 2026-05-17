@@ -39,8 +39,12 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationSnapshot,
+  ReorderDirectoryPinsRequest,
+  ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetDirectoryPinRequest,
+  SetDirectoryPinResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadReactionRequest,
@@ -77,8 +81,10 @@ import {
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -107,6 +113,30 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     "readDirectoryGitStatusCache" | "writeDirectoryGitStatusCacheEntry"
   >;
 const appServerLog = getMainLogger("pwragent:app-server");
+
+/**
+ * Reject pin requests that target the synthetic catch-all bucket
+ * (`unlinked`). Directory pinning is a user-curated order for
+ * named entries the user actually browses — both real directories
+ * (`directory:*`) and workspaces (`workspace:*`) qualify, since the
+ * user picks them by name in the sidebar. The `unlinked` bucket is
+ * a roll-up of threads with no linked directory and doesn't model
+ * a single entry, so pinning it is meaningless. The snapshot
+ * builder (`buildDirectorySummaries`) also defends against this on
+ * the read side, but rejecting here keeps the overlay store free
+ * of stale rows that would otherwise accumulate without any
+ * read-side effect. See plan 2026-05-09-002, Unit G.
+ */
+function rejectNonDirectoryPinKey(directoryKey: string): void {
+  if (
+    !directoryKey.startsWith("directory:") &&
+    !directoryKey.startsWith("workspace:")
+  ) {
+    throw new Error(
+      `Cannot pin synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are pinnable)`,
+    );
+  }
+}
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {
@@ -991,6 +1021,89 @@ class DesktopAppServerService {
     return { backend, pinnedRanks };
   }
 
+  /**
+   * Directory pin handlers (plan 2026-05-09-002, Unit G). Mirror of
+   * `setThreadPin` / `reorderThreadPins` with the `backend` dim
+   * dropped. The handlers reject pseudo-directory keys (workspace /
+   * unlinked) — these are synthesized aggregator entries that don't
+   * represent a user-picked folder, so pinning them is meaningless.
+   * The check is on the key prefix rather than a snapshot lookup
+   * because the overlay store doesn't have visibility into the
+   * snapshot at write time, and we want the rejection to be
+   * deterministic.
+   *
+   * `publishLocalEvent` reuses the existing local-bus infrastructure
+   * (no per-directory bus scope — these are global events on the
+   * default backend `codex` for routing purposes; the renderer
+   * listens for the `method` regardless of `backend`).
+   */
+  async setDirectoryPin(
+    request: SetDirectoryPinRequest,
+  ): Promise<SetDirectoryPinResponse> {
+    rejectNonDirectoryPinKey(request.directoryKey);
+
+    const overlay = await this.getOverlayStore().setDirectoryPin({
+      directoryKey: request.directoryKey,
+      pinnedRank: request.pinnedRank,
+    });
+
+    logDebug("setDirectoryPin", {
+      directoryKey: request.directoryKey,
+      pinnedRank: overlay.pinnedRank ?? null,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: overlay.pinnedRank
+        ? {
+            method: "directory/pin/added",
+            params: {
+              directoryKey: request.directoryKey,
+              pinnedRank: overlay.pinnedRank,
+            },
+          }
+        : {
+            method: "directory/pin/removed",
+            params: {
+              directoryKey: request.directoryKey,
+            },
+          },
+    });
+
+    return {
+      directoryKey: request.directoryKey,
+      pinnedRank: overlay.pinnedRank,
+    };
+  }
+
+  async reorderDirectoryPins(
+    request: ReorderDirectoryPinsRequest,
+  ): Promise<ReorderDirectoryPinsResponse> {
+    for (const directoryKey of request.directoryKeys) {
+      rejectNonDirectoryPinKey(directoryKey);
+    }
+
+    const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
+      directoryKeys: request.directoryKeys,
+    });
+
+    logDebug("reorderDirectoryPins", {
+      pinCount: request.directoryKeys.length,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/pin/reordered",
+        params: {
+          pinnedRanks,
+        },
+      },
+    });
+
+    return { pinnedRanks };
+  }
+
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -1324,6 +1437,26 @@ export function registerAppServerIpcHandlers(): void {
       request: ReorderThreadPinsRequest,
     ): Promise<ReorderThreadPinsResponse> => {
       return await appServerService.reorderThreadPins(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_DIRECTORY_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+    async (
+      _event,
+      request: SetDirectoryPinRequest,
+    ): Promise<SetDirectoryPinResponse> => {
+      return await appServerService.setDirectoryPin(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
+    async (
+      _event,
+      request: ReorderDirectoryPinsRequest,
+    ): Promise<ReorderDirectoryPinsResponse> => {
+      return await appServerService.reorderDirectoryPins(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);

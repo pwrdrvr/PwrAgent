@@ -197,6 +197,13 @@ CREATE INDEX IF NOT EXISTS idx_directory_git_status_fetched
   ON directory_git_status(fetched_at DESC);
 `;
 
+const DIRECTORY_OVERLAY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS directory_overlay (
+  directory_key TEXT PRIMARY KEY,
+  payload       TEXT NOT NULL
+);
+`;
+
 const COMPOSER_DRAFT_RECOVERY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS composer_draft_latest (
   scope_key    TEXT PRIMARY KEY,
@@ -304,6 +311,17 @@ export class StateDb {
       db.transaction(() => {
         db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
         db.pragma("user_version = 6");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 7) {
+      db.transaction(() => {
+        // Directory pin persistence — see plan
+        // 2026-05-09-002-feat-directory-pinning-plan.md Unit B.
+        // Additive table, no data migration; the same DDL also
+        // lives in `ensureCurrentSchema` so re-instantiated dbs
+        // converge.
+        db.exec(DIRECTORY_OVERLAY_SCHEMA);
+        db.pragma("user_version = 7");
       })();
     }
 
@@ -444,6 +462,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
   db.transaction(() => {
     db.exec(SCHEMA_V4);
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
+    db.exec(DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");

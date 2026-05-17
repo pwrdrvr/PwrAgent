@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildDirectorySummaries } from "../domain/directory-navigation";
-import { materializeNavigationThreads } from "../domain/navigation-state";
+import {
+  buildNavigationSnapshotHash,
+  materializeNavigationThreads,
+} from "../domain/navigation-state";
 
 function buildThread(
   overrides: Partial<NavigationThreadSummary> = {},
@@ -888,5 +891,194 @@ describe("materializeNavigationThreads", () => {
         kind: "worktree",
       },
     ]);
+  });
+});
+
+/**
+ * Unit D + Unit E coverage from plan
+ * `2026-05-09-002-feat-directory-pinning-plan.md`. The two units are
+ * tightly coupled — without Unit E's hash inclusion, Unit D's
+ * pinnedRank attachment doesn't propagate to the renderer.
+ *
+ * Unit E is the GATE: if the directories hash doesn't include
+ * `pinnedRank`, pin mutations look like no-ops because the overlay
+ * store's `reconcileNavigationSnapshot` short-circuits on identical
+ * hashes (overlay-store-sqlite.ts:161-174). Add a hash mutation
+ * test before the rest of the feature lands.
+ */
+describe("buildDirectorySummaries — directory pin overlay (Unit D)", () => {
+  it("attaches pinnedRank from the directoryOverlayByKey input", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/me/code/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+      directoryOverlayByKey: {
+        "directory:/Users/me/code/PwrAgent": {
+          directoryKey: "directory:/Users/me/code/PwrAgent",
+          pinnedRank: "1024",
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/me/code/PwrAgent",
+        pinnedRank: "1024",
+      }),
+    ]);
+  });
+
+  it("leaves pinnedRank undefined for directories with no overlay row", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/me/code/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories[0]?.pinnedRank).toBeUndefined();
+  });
+
+  it("attaches pinnedRank to workspace pseudo-directories (workspaces are pinnable)", () => {
+    // Policy: both `kind: "directory"` and `kind: "workspace"`
+    // entries are user-pinnable. Workspaces are named entries the
+    // user explicitly browses by clicking, so pinning them keeps
+    // them at the top of the lens. Only `kind: "unlinked"` (the
+    // catch-all bucket) is excluded.
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "scratch",
+              path: "/Users/me/.pwragent/projects/scratch",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+      directoryOverlayByKey: {
+        "workspace:/Users/me/.pwragent/projects": {
+          directoryKey: "workspace:/Users/me/.pwragent/projects",
+          pinnedRank: "1024",
+        },
+      },
+    });
+
+    const workspace = directories.find((dir) => dir.kind === "workspace");
+    expect(workspace).toBeDefined();
+    expect(workspace?.pinnedRank).toBe("1024");
+  });
+
+  it("does NOT attach pinnedRank to the unlinked catch-all even with overlay row", () => {
+    // Defensive: the IPC handler also blocks this, but the snapshot
+    // builder enforces the same invariant so a misbehaving caller
+    // (test, future contributor) can't accidentally pin a synthetic
+    // catch-all entry.
+    const directories = buildDirectorySummaries({
+      threads: [
+        // A thread with no linked directories rolls up into the
+        // unlinked bucket.
+        buildThread({
+          id: "thread-unlinked",
+          linkedDirectories: [],
+        }),
+      ],
+      directoryOverlayByKey: {
+        unlinked: {
+          directoryKey: "unlinked",
+          pinnedRank: "1024",
+        },
+      },
+    });
+
+    const unlinked = directories.find((dir) => dir.kind === "unlinked");
+    expect(unlinked).toBeDefined();
+    expect(unlinked?.pinnedRank).toBeUndefined();
+  });
+});
+
+describe("buildNavigationSnapshotHash — directory pin invariant (Unit E, GATE)", () => {
+  function buildBaseHashInput() {
+    return {
+      backend: "all" as const,
+      threads: [],
+      directories: [
+        {
+          key: "directory:/Users/me/code/PwrAgent",
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/me/code/PwrAgent",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 1_000,
+        },
+      ],
+    };
+  }
+
+  it("changes the hash when a directory's pinnedRank changes (GATE)", () => {
+    // This is the "fix the recurring footgun" assertion. Without
+    // `pinnedRank` in the hashed directory slice, mutations don't
+    // invalidate the snapshot cache and the renderer keeps stale
+    // pin state. If this test fails, the feature looks broken from
+    // the renderer's perspective even though the overlay store is
+    // working correctly.
+    const base = buildBaseHashInput();
+    const unpinnedHash = buildNavigationSnapshotHash(base);
+
+    const pinned = {
+      ...base,
+      directories: [
+        { ...base.directories[0]!, pinnedRank: "1024" },
+      ],
+    };
+    const pinnedHash = buildNavigationSnapshotHash(pinned);
+
+    expect(pinnedHash).not.toBe(unpinnedHash);
+  });
+
+  it("changes the hash when the pinnedRank value changes (reorder case)", () => {
+    const base = buildBaseHashInput();
+    const rankA = {
+      ...base,
+      directories: [{ ...base.directories[0]!, pinnedRank: "1024" }],
+    };
+    const rankB = {
+      ...base,
+      directories: [{ ...base.directories[0]!, pinnedRank: "2048" }],
+    };
+
+    expect(buildNavigationSnapshotHash(rankA)).not.toBe(
+      buildNavigationSnapshotHash(rankB),
+    );
+  });
+
+  it("produces identical hashes for identical inputs", () => {
+    const input = buildBaseHashInput();
+    expect(buildNavigationSnapshotHash(input)).toBe(
+      buildNavigationSnapshotHash(input),
+    );
   });
 });

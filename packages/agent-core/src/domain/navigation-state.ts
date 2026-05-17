@@ -1,5 +1,6 @@
 import type {
   DirectoryLaunchpadOverlayState,
+  DirectoryOverlayState,
   CodexEnvironmentOption,
   NavigationDirectoryGitStatus,
   AppServerBackendScope,
@@ -191,6 +192,13 @@ export function buildNavigationSnapshot(params: {
   gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
   launchpadDefaults?: NavigationLaunchpadDefaults;
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
+  /**
+   * Per-directory overlay (currently `pinnedRank` only) — see
+   * `buildDirectorySummaries` for the contract. Plumbed through here
+   * so the caller (SqliteOverlayStore.reconcileNavigationSnapshot)
+   * doesn't have to call the builder twice.
+   */
+  directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
   messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
@@ -217,6 +225,7 @@ export function buildNavigationSnapshot(params: {
       threads,
       launchpadsByKey: params.launchpadsByKey,
       gitStatusByKey: params.gitStatusByDirectoryKey,
+      directoryOverlayByKey: params.directoryOverlayByKey,
       workspaceRoots: params.workspaceRoots,
     }),
     launchpadDefaults: params.launchpadDefaults ?? {
@@ -380,6 +389,11 @@ export function buildNavigationSnapshotHash(params: {
       threadKeys: directory.threadKeys,
       needsAttentionCount: directory.needsAttentionCount,
       latestUpdatedAt: directory.latestUpdatedAt ?? null,
+      // Unit E (plan 2026-05-09-002): directory pinning. Include
+      // `pinnedRank` in the hash so pin mutations invalidate the
+      // unchanged-snapshot short-circuit. Without this, the renderer
+      // never sees the new pin state.
+      pinnedRank: directory.pinnedRank ?? null,
       launchpad: directory.launchpad
         ? {
             backend: directory.launchpad.backend,

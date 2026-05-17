@@ -2400,6 +2400,12 @@ textarea,
      summary min-height + 34px launchpad button meant each
      directory header took ~54px. Recovered ~20px per row by halving
      the top padding and tightening the summary geometry below. */
+  /* `position: relative` is the containing block for the directory
+     drop-indicator pseudo-elements (`.directory-row.is-drop-target-*
+     ::before/::after`) so they can stretch across the full expanded
+     section instead of only the sticky header. Plan 2026-05-09-002
+     Unit K follow-up. */
+  position: relative;
   padding: 4px 0 0;
   border-top: 1px solid var(--border-subtle);
 }
@@ -2420,6 +2426,86 @@ textarea,
   gap: 4px;
   align-items: center;
   background: var(--bg-sidebar);
+}
+
+/* Directory pin drop-indicator (plan 2026-05-09-002 Units L + K
+   follow-up). Same visual treatment as
+   `.thread-row-shell.is-drop-target-*`: 3px accent bar with a soft
+   glow, positioned just above (`-before`) or just below (`-after`)
+   the directory section. Attached to `.directory-row` (the outer
+   section) rather than the header so the indicator stretches to
+   the bottom of the expanded section when threads are visible.
+   That makes the "drop below this directory" target hit-able
+   anywhere over the expanded threads area, not just the 3px sliver
+   below the header. */
+.directory-row__header[draggable="true"] {
+  cursor: grab;
+}
+
+.directory-row__header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.directory-row.is-drop-target-before::before,
+.directory-row.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.directory-row.is-drop-target-before::before {
+  top: -3px;
+}
+
+.directory-row.is-drop-target-after::after {
+  bottom: -3px;
+}
+
+/* Pinned-directories divider — promote-to-pinned drop target
+   between the pinned and unpinned sections of the Directories
+   lens. Mirrors `.recents-pinned-divider` token-for-token; the
+   only difference is the section label. */
+.directories-pinned-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.directories-pinned-divider.is-drop-target {
+  color: var(--accent-bright);
+}
+
+.directories-pinned-divider::before,
+.directories-pinned-divider::after {
+  content: "";
+  min-width: 16px;
+  height: 1px;
+  flex: 1;
+  background: var(--border-subtle);
+}
+
+.directories-pinned-divider.is-drop-target::before,
+.directories-pinned-divider.is-drop-target::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
 }
 
 .directory-row__summary {

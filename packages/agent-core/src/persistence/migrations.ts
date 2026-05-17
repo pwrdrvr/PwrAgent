@@ -1,3 +1,4 @@
+import type { DirectoryOverlayState } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -12,7 +13,7 @@ import type {
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 
-export const CURRENT_OVERLAY_STORE_VERSION = 5;
+export const CURRENT_OVERLAY_STORE_VERSION = 6;
 
 export type OverlayStoreData = {
   version: number;
@@ -36,6 +37,14 @@ export type OverlayStoreData = {
   >;
   launchpadDefaults: NavigationLaunchpadDefaults;
   directoryLaunchpads: Record<string, DirectoryLaunchpadOverlayState>;
+  /**
+   * Per-directory overlay (currently just pin state). Bumped to
+   * version 6 alongside this addition; older serialized stores get
+   * an empty object backfilled by `migrateOverlayStoreData` so
+   * unpinned directories work the same as before.
+   * Plan: 2026-05-09-002-feat-directory-pinning-plan.md.
+   */
+  directoryOverlays: Record<string, DirectoryOverlayState>;
   threads: Record<string, ThreadOverlayState>;
 };
 
@@ -74,6 +83,7 @@ const EMPTY_OVERLAY_STORE_DATA: OverlayStoreData = {
     workMode: "local",
   },
   directoryLaunchpads: {},
+  directoryOverlays: {},
   threads: {},
 };
 
@@ -258,6 +268,31 @@ function migrateRetainedBranchDriftPairs(
   return pairs.length > 0 ? pairs : undefined;
 }
 
+/**
+ * Migrate the directory overlay map (plan 2026-05-09-002). New in
+ * version 6; pre-v6 stores get an empty `{}` from the parent
+ * migrator. The shape is intentionally minimal — currently just
+ * `pinnedRank` — so the migrator only validates the key + filters
+ * malformed payloads.
+ */
+function migrateDirectoryOverlays(
+  raw: Record<string, unknown>,
+): Record<string, DirectoryOverlayState> {
+  const result: Record<string, DirectoryOverlayState> = {};
+  for (const [directoryKey, value] of Object.entries(raw)) {
+    const record = asRecord(value);
+    if (!record) {
+      continue;
+    }
+    const pinnedRank =
+      typeof record.pinnedRank === "string" && record.pinnedRank.trim()
+        ? record.pinnedRank
+        : undefined;
+    result[directoryKey] = { directoryKey, pinnedRank };
+  }
+  return result;
+}
+
 export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   const record = asRecord(raw);
   if (!record) {
@@ -375,6 +410,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
           } satisfies DirectoryLaunchpadOverlayState,
         ];
       }),
+    ),
+    directoryOverlays: migrateDirectoryOverlays(
+      asRecord(record.directoryOverlays) ?? {},
     ),
     threads: Object.fromEntries(
       Object.entries(threadsRecord).map(([rawKey, value]) => {

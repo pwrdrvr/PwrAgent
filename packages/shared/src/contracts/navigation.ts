@@ -223,6 +223,16 @@ export type NavigationDirectorySummary = {
   latestUpdatedAt?: number;
   gitStatus?: NavigationDirectoryGitStatus;
   launchpad?: NavigationLaunchpadDraft;
+  /**
+   * User-curated position in the pinned section of the Directories
+   * lens. Lower numeric ranks (parsed from the string) sort first;
+   * undefined means unpinned. Only `kind: "directory"` summaries can
+   * carry a `pinnedRank` — the synthesized `workspace` and `unlinked`
+   * pseudo-directories are filtered at both the snapshot builder
+   * (`buildDirectorySummaries`) and the IPC handler
+   * (`setDirectoryPin`) so this field stays meaningful.
+   */
+  pinnedRank?: string;
 };
 
 export type NavigationDirectoryGitStatusUpdatedNotification = {
@@ -317,6 +327,34 @@ export type ReorderThreadPinsResponse = {
   pinnedRanks: Record<ThreadIdentifier, string>;
 };
 
+/**
+ * Directory pinning (mirror of thread pinning, sans the `backend`
+ * dimension). Directory keys are globally unique — a directory
+ * contains threads from any backend, so the pin order is global, not
+ * per-backend. The IPC handler additionally rejects non-`directory`
+ * `kind` summaries (workspace / unlinked pseudo-directories cannot
+ * be pinned).
+ */
+export type SetDirectoryPinRequest = {
+  directoryKey: string;
+  /** Rank within the pinned section. Null/undefined removes the pin. */
+  pinnedRank?: string | null;
+};
+
+export type SetDirectoryPinResponse = {
+  directoryKey: string;
+  pinnedRank?: string;
+};
+
+export type ReorderDirectoryPinsRequest = {
+  /** Complete pinned order, first item at the top. */
+  directoryKeys: string[];
+};
+
+export type ReorderDirectoryPinsResponse = {
+  pinnedRanks: Record<string, string>;
+};
+
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -370,6 +408,27 @@ export type GhStatus = {
 export type GetGhStatusRequest = {
   /** When true, invalidate the cached `gh --version` probe and re-check. */
   recheck?: boolean;
+};
+
+/**
+ * Persisted per-directory overlay. Today this only carries
+ * `pinnedRank` (directory pinning), but the shape is intentionally
+ * extensible so future per-directory state (e.g., a user-curated
+ * label, a tracked-only-when-active flag, etc.) lands here rather
+ * than in scattered tables. Mirrors `ThreadOverlayState`'s "single
+ * JSON payload per row, keyed by identity" pattern.
+ */
+export type DirectoryOverlayState = {
+  /**
+   * Stable directory key from the navigation snapshot. Matches the
+   * `key` field on `NavigationDirectorySummary`. For `kind:
+   * "directory"` summaries this is `"directory:<path>"`; the pin
+   * IPC handler rejects any non-directory key so workspace /
+   * unlinked summaries never land here.
+   */
+  directoryKey: string;
+  /** User-curated position in the pinned section. Undefined = unpinned. */
+  pinnedRank?: string;
 };
 
 export type ThreadOverlayState = {

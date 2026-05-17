@@ -5,6 +5,7 @@ import type {
   AppServerBackendScope,
   AppServerThreadSummary,
   DirectoryLaunchpadOverlayState,
+  DirectoryOverlayState,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   NavigationDirectoryGitStatus,
@@ -91,6 +92,7 @@ export class OverlayStore {
         gitStatusByDirectoryKey: params.gitStatusByDirectoryKey,
         launchpadDefaults: data.launchpadDefaults,
         launchpadsByKey: data.directoryLaunchpads,
+        directoryOverlayByKey: data.directoryOverlays,
         overlayByThreadKey,
         previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
         threads: params.threads,
@@ -508,6 +510,58 @@ export class OverlayStore {
         };
       });
       return pinnedRanks;
+    });
+  }
+
+  /**
+   * Directory pin mutators — mirror of `setThreadPin` /
+   * `reorderThreadPins` minus the `backend` dimension. Directory
+   * keys are globally unique so pin order is global. See plan
+   * 2026-05-09-002-feat-directory-pinning-plan.md.
+   */
+  async setDirectoryPin(params: {
+    directoryKey: string;
+    pinnedRank?: string | null;
+  }): Promise<DirectoryOverlayState> {
+    return await this.withData(async (data) => {
+      const pinnedRank = params.pinnedRank?.trim();
+      const nextState: DirectoryOverlayState = {
+        directoryKey: params.directoryKey,
+        pinnedRank: pinnedRank || undefined,
+      };
+      data.directoryOverlays[params.directoryKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async reorderDirectoryPins(params: {
+    directoryKeys: string[];
+  }): Promise<Record<string, string>> {
+    return await this.withData(async (data) => {
+      const pinnedRanks: Record<string, string> = {};
+      params.directoryKeys.forEach((directoryKey, index) => {
+        const pinnedRank = String((index + 1) * 1024);
+        pinnedRanks[directoryKey] = pinnedRank;
+        data.directoryOverlays[directoryKey] = {
+          directoryKey,
+          pinnedRank,
+        };
+      });
+      return pinnedRanks;
+    });
+  }
+
+  async getDirectoryOverlayState(params: {
+    directoryKey: string;
+  }): Promise<DirectoryOverlayState | undefined> {
+    return await this.withData(async (data) => {
+      return data.directoryOverlays[params.directoryKey];
+    });
+  }
+
+  async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
+    return await this.withData(async (data) => {
+      return { ...data.directoryOverlays };
     });
   }
 

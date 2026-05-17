@@ -907,4 +907,33 @@ export type AppServerNotification =
         pinnedRanks: Record<string, string>;
       };
     }
+  /**
+   * Directory pin lifecycle — mirror of `thread/pin/*` minus the
+   * implicit per-backend dimension (directories are
+   * backend-agnostic, so pin order is global). Emitted by the IPC
+   * handlers in `app-server.ts` after the overlay store write
+   * succeeds. The renderer's `useThreadNavigation` listens for these
+   * and patches the local snapshot in place so cross-window pin
+   * mutations propagate within one bus tick.
+   * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit F.
+   */
+  | {
+      method: "directory/pin/added";
+      params: {
+        directoryKey: string;
+        pinnedRank: string;
+      };
+    }
+  | {
+      method: "directory/pin/removed";
+      params: {
+        directoryKey: string;
+      };
+    }
+  | {
+      method: "directory/pin/reordered";
+      params: {
+        pinnedRanks: Record<string, string>;
+      };
+    }
   | AppServerPendingRequestNotification;

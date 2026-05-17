@@ -9,6 +9,7 @@ export * from "./contracts/navigation";
 export * from "./contracts/settings";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
+export * from "./directory-pins";
 export * from "./thread-pins";
 export * from "./thread-titles";
 export * from "./worktree-paths";

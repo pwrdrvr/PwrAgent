@@ -383,6 +383,8 @@ function DesktopAppShell(props: {
         onSetThreadReaction={navigation.setThreadReaction}
         onSetThreadPin={navigation.setThreadPin}
         onReorderThreadPins={navigation.reorderThreadPins}
+        onSetDirectoryPin={navigation.setDirectoryPin}
+        onReorderDirectoryPins={navigation.reorderDirectoryPins}
         onPrefetchPullRequests={pullRequests.prefetch}
         onUnbindMessagingBinding={async (_thread, binding) => {
           if (!desktopApi?.unbindMessagingThread) return;

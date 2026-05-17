@@ -85,6 +85,18 @@ type SidebarProps = {
     threadIds: string[],
   ) => Promise<void>;
   /**
+   * Directory pinning (plan 2026-05-09-002). Mirror of thread-pin
+   * props minus the per-backend dimension. Both must be provided
+   * for the DirectoriesList to render the pinned section + accept
+   * drag-pin gestures; passing only one (e.g. testing) leaves the
+   * other path as a no-op.
+   */
+  onSetDirectoryPin?: (
+    directory: NavigationDirectorySummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
    * fresh PR status before they click in.
@@ -111,12 +123,29 @@ const browseModeLabels = {
 
 export function Sidebar(props: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const directoryContextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<
     | {
         requestedPosition: ThreadContextMenuPosition;
         position?: { x: number; y: number };
         thread: NavigationThreadSummary;
+      }
+    | undefined
+  >();
+  /**
+   * Directory context menu — parallel to `contextMenu` (the thread
+   * context menu) but only carries a "Pin Directory" / "Unpin
+   * Directory" action today. Kept as its own state instead of
+   * polymorphizing the thread menu because the thread menu has many
+   * thread-shaped actions (Rename / Archive / Copy / Unbind) that
+   * don't make sense on directories. Plan 2026-05-09-002 Unit M.
+   */
+  const [directoryContextMenu, setDirectoryContextMenu] = useState<
+    | {
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
+        directory: NavigationDirectorySummary;
       }
     | undefined
   >();
@@ -220,6 +249,26 @@ export function Sidebar(props: SidebarProps) {
   }, [contextMenu]);
 
   useEffect(() => {
+    if (!directoryContextMenu) {
+      return;
+    }
+
+    const closeMenu = (): void => setDirectoryContextMenu(undefined);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [directoryContextMenu]);
+
+  useEffect(() => {
     if (!profileMenuOpen) {
       return;
     }
@@ -269,6 +318,35 @@ export function Sidebar(props: SidebarProps) {
   }, [contextMenu]);
 
   useLayoutEffect(() => {
+    if (!directoryContextMenu) {
+      return;
+    }
+
+    const menu = directoryContextMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const menuRect = menu.getBoundingClientRect();
+    const nextPosition = placeThreadContextMenu(
+      directoryContextMenu.requestedPosition,
+      menuRect,
+    );
+
+    if (
+      directoryContextMenu.position?.x === nextPosition.x &&
+      directoryContextMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setDirectoryContextMenu({
+      ...directoryContextMenu,
+      position: nextPosition,
+    });
+  }, [directoryContextMenu]);
+
+  useLayoutEffect(() => {
     if (!renameThread) {
       return;
     }
@@ -283,6 +361,13 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition
   ): void => {
     setRenameThread(undefined);
+    // Symmetric with `openDirectoryContextMenu`'s
+    // `setContextMenu(undefined)` — a `contextmenu` event doesn't
+    // trigger the document-level `click` listener that normally
+    // dismisses menus, so without this explicit clear a user could
+    // right-click a directory and then right-click a thread and
+    // see both menus stacked on top of each other.
+    setDirectoryContextMenu(undefined);
     setContextMenu({ requestedPosition: position, thread });
   };
 
@@ -301,6 +386,22 @@ export function Sidebar(props: SidebarProps) {
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     void props.onSetThreadPin?.(thread, !thread.pinnedRank);
+  };
+
+  const openDirectoryContextMenu = (
+    directory: NavigationDirectorySummary,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    setContextMenu(undefined);
+    setRenameThread(undefined);
+    setDirectoryContextMenu({ requestedPosition: position, directory });
+  };
+
+  const togglePinDirectoryFromContextMenu = (
+    directory: NavigationDirectorySummary,
+  ): void => {
+    setDirectoryContextMenu(undefined);
+    void props.onSetDirectoryPin?.(directory, !directory.pinnedRank);
   };
 
   const copyFromContextMenu = (value: string): void => {
@@ -504,6 +605,11 @@ export function Sidebar(props: SidebarProps) {
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onReorderThreadPins={props.onReorderThreadPins}
+              onSetDirectoryPin={props.onSetDirectoryPin}
+              onReorderDirectoryPins={props.onReorderDirectoryPins}
+              onOpenDirectoryContextMenu={
+                props.onSetDirectoryPin ? openDirectoryContextMenu : undefined
+              }
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -635,6 +741,38 @@ export function Sidebar(props: SidebarProps) {
                 Copy Branch Name
               </button>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {directoryContextMenu ? (
+        <div
+          ref={directoryContextMenuRef}
+          className="thread-context-menu"
+          role="menu"
+          style={{
+            left:
+              directoryContextMenu.position?.x ??
+              directoryContextMenu.requestedPosition.x,
+            top:
+              directoryContextMenu.position?.y ??
+              directoryContextMenu.requestedPosition.y,
+            visibility: directoryContextMenu.position ? undefined : "hidden",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() =>
+                togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
+              }
+            >
+              {directoryContextMenu.directory.pinnedRank
+                ? "Unpin Directory"
+                : "Pin Directory"}
+            </button>
           </div>
         </div>
       ) : null}

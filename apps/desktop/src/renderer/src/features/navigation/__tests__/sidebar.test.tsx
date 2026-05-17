@@ -1808,3 +1808,515 @@ describe("Sidebar", () => {
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Directory pinning (plan 2026-05-09-002 Unit O). Mirrors the
+ * thread-pin sidebar tests above but on the directory rail of the
+ * Directories lens. Covers: drag-pin via divider, drag-reorder
+ * among pinned directories, context-menu pin/unpin toggle, and
+ * workspace/unlinked exclusion (only `kind: "directory"` entries
+ * carry pin affordances).
+ */
+describe("Sidebar directory pinning", () => {
+  function createDirectoryDataTransfer(directoryKey: string) {
+    return {
+      effectAllowed: "move",
+      getData: vi.fn((type: string) =>
+        type === "application/x-pwragent-directory" || type === "text/plain"
+          ? directoryKey
+          : "",
+      ),
+      setDragImage: vi.fn(),
+      setData: vi.fn(),
+    };
+  }
+
+  const projectADirectory: NavigationDirectorySummary = {
+    key: "directory:/Users/huntharo/pwrdrvr/ProjectA",
+    kind: "directory",
+    label: "ProjectA",
+    path: "/Users/huntharo/pwrdrvr/ProjectA",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 1000,
+  };
+
+  const projectBDirectory: NavigationDirectorySummary = {
+    key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+    kind: "directory",
+    label: "ProjectB",
+    path: "/Users/huntharo/pwrdrvr/ProjectB",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 2000,
+  };
+
+  const workspaceDirectory: NavigationDirectorySummary = {
+    key: "workspace:/Users/huntharo/code",
+    kind: "workspace",
+    label: "Workspace",
+    path: "/Users/huntharo/code",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 500,
+  };
+
+  const unlinkedDirectory: NavigationDirectorySummary = {
+    key: "unlinked",
+    kind: "unlinked",
+    label: "No linked directory",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 300,
+  };
+
+  /**
+   * The directory row exposes two buttons per row: the summary (with
+   * `aria-expanded`) and the launchpad button (with the longer
+   * `Open new thread launchpad for X` aria-label). Both match a
+   * `/ProjectA/i` name regex, so we filter to the summary by
+   * `aria-expanded`.
+   */
+  function getDirectorySummary(label: RegExp): HTMLElement {
+    const matches = screen.getAllByRole("button", { name: label });
+    const summary = matches.find((button) =>
+      button.hasAttribute("aria-expanded"),
+    );
+    if (!summary) {
+      throw new Error(
+        `Could not find directory summary button matching ${label}`,
+      );
+    }
+    return summary;
+  }
+
+  function renderSidebar(
+    directoriesArg: NavigationDirectorySummary[],
+    overrides: {
+      onSetDirectoryPin?: (
+        directory: NavigationDirectorySummary,
+        pinned: boolean,
+      ) => Promise<void>;
+      onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+    } = {},
+  ): void {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directoriesArg}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={overrides.onSetDirectoryPin}
+        onReorderDirectoryPins={overrides.onReorderDirectoryPins}
+      />,
+    );
+  }
+
+  it("renders pinned directories above the divider and unpinned below", () => {
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned, projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const divider = screen.getByRole("separator", {
+      name: "Unpinned directories",
+    });
+    const pinnedSummary = getDirectorySummary(/ProjectA/i);
+    const unpinnedSummary = getDirectorySummary(/ProjectB/i);
+
+    // Pinned directory renders before the divider; unpinned after.
+    expect(
+      pinnedSummary.compareDocumentPosition(divider) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      divider.compareDocumentPosition(unpinnedSummary) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("pins an unpinned directory when it is dropped on the pinned divider", () => {
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned, projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins,
+    });
+
+    fireEvent.drop(
+      screen.getByRole("separator", { name: "Unpinned directories" }),
+      { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
+    );
+
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
+      pinned.key,
+      projectBDirectory.key,
+    ]);
+  });
+
+  it("reorders pinned directories when one is dropped on another pinned directory", () => {
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+    };
+
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins,
+    });
+
+    // Drop pinnedB onto pinnedA's header. With JSDOM's default
+    // bounding rect (all zeros), getDropIndicatorPosition returns
+    // "before", so moveDirectoryKey relocates pinnedB to the slot
+    // before pinnedA → [B, A]. This locks the call site without
+    // depending on a synthesized clientY/rect interaction.
+    const pinnedASummary = getDirectorySummary(/ProjectA/i);
+    const headerA = pinnedASummary.closest(".directory-row__header");
+    expect(headerA).not.toBeNull();
+
+    fireEvent.drop(headerA!, {
+      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    });
+
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
+      pinnedB.key,
+      pinnedA.key,
+    ]);
+  });
+
+  it("opens a context menu offering Pin Directory on an unpinned row", async () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const summary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(summary);
+
+    const pinItem = await screen.findByRole("menuitem", {
+      name: "Pin Directory",
+    });
+    expect(pinItem).toBeInTheDocument();
+    await clickElement(pinItem);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(projectADirectory, true);
+    // Menu dismisses on action — the menuitem should no longer be
+    // mounted after the click.
+    expect(
+      screen.queryByRole("menuitem", { name: "Pin Directory" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens a context menu offering Unpin Directory on a pinned row", async () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const summary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(summary);
+
+    const unpinItem = await screen.findByRole("menuitem", {
+      name: "Unpin Directory",
+    });
+    await clickElement(unpinItem);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(pinned, false);
+  });
+
+  it("opens the context menu for workspace rows (workspaces are pinnable)", async () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([workspaceDirectory, projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const workspaceSummary = getDirectorySummary(/Workspace/i);
+    fireEvent.contextMenu(workspaceSummary);
+
+    const pinItem = await screen.findByRole("menuitem", {
+      name: "Pin Directory",
+    });
+    await clickElement(pinItem);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(workspaceDirectory, true);
+  });
+
+  it("never opens the context menu for the unlinked pseudo-directory bucket", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([unlinkedDirectory, projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const unlinkedSummary = getDirectorySummary(/No linked directory/i);
+    fireEvent.contextMenu(unlinkedSummary);
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Pin Directory" }),
+    ).not.toBeInTheDocument();
+    expect(onSetDirectoryPin).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the synthetic post-drag click on the directory summary button", () => {
+    // Regression: an earlier ref-based suppression flag could get
+    // stuck `true` if `dragend` didn't fire (e.g., React detached
+    // the listener during a re-render that moved the row between
+    // pinned/unpinned). The current implementation stores a
+    // timestamp at every drag-end and bails on clicks within
+    // POST_DRAG_CLICK_SUPPRESS_MS. This test covers both halves:
+    // (1) a click immediately after drag-end is suppressed, and
+    // (2) a click well after drag-end fires the expand toggle.
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+      threadKeys: ["codex:thread-1"],
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+      threadKeys: [],
+    };
+
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    // Initial state: ProjectA's row is collapsed (no selected
+    // thread, no launchpad selected). aria-expanded === "false".
+    const summary = getDirectorySummary(/ProjectA/i);
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+
+    // Drop something on the section (simulates the trailing edge
+    // of a reorder gesture). This stamps the suppression
+    // timestamp via the section's onDrop handler.
+    const sectionA = summary.closest(".directory-row") as HTMLElement;
+    fireEvent.drop(sectionA, {
+      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    });
+
+    // The synthetic post-drag click that browsers fire on the
+    // element under the mouse should be suppressed — the row must
+    // stay collapsed.
+    fireEvent.click(summary);
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+
+    // After the suppression window elapses, a normal click toggles
+    // expand again. POST_DRAG_CLICK_SUPPRESS_MS is 150ms; wait
+    // longer than that, then click.
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        fireEvent.click(summary);
+        expect(summary.getAttribute("aria-expanded")).toBe("true");
+        resolve();
+      }, 200);
+    });
+  });
+
+  it("does not re-expand a user-collapsed directory when another directory is unpinned", async () => {
+    // Regression: the auto-expand effect in DirectoriesList runs on
+    // every `props.directories` reference change, not just on
+    // `selectedItemKey` change. Its skip check used
+    // `if (current[directory.key])` — but `false` (user explicitly
+    // collapsed) is falsy, so the effect re-overrode the user's
+    // collapse every time directories changed. Triggered visibly
+    // when right-clicking → "Unpin Directory" on directory A:
+    //   1. unpin mutates `directories` (A loses pinnedRank)
+    //   2. effect re-runs, finds B contains the selected thread,
+    //      sees current[B] === false, overwrites to true
+    //   3. B silently expands behind the user's back
+    const threadInB = {
+      ...sharedThread,
+      id: "thread-in-projectb",
+      title: "Work happening in ProjectB",
+      linkedDirectories: [
+        {
+          id: "dir-projectb",
+          label: "ProjectB",
+          path: projectBDirectory.path!,
+          kind: "local" as const,
+        },
+      ],
+    };
+    const threadKey = "codex:thread-in-projectb";
+
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+      threadKeys: [threadKey],
+    };
+
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[pinnedA, pinnedB]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={threadKey}
+        threads={[threadInB]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // The auto-expand effect runs on mount with `selectedItemKey`
+    // pointing at a thread in B → B opens automatically. That's
+    // the intended behavior (drop the user into the directory
+    // they're working in).
+    const bSummary = getDirectorySummary(/ProjectB/i);
+    await waitFor(() => {
+      expect(bSummary.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    // User explicitly collapses B (they don't want the threads list
+    // taking sidebar space right now). expandedByKey[B] = false.
+    fireEvent.click(bSummary);
+    expect(bSummary.getAttribute("aria-expanded")).toBe("false");
+
+    // Now: user right-clicks A and unpins it. The IPC fan-out
+    // produces a new `directories` array with A's pinnedRank
+    // gone (modeled here as a direct rerender — the optimistic
+    // patcher in useThreadNavigation does the equivalent).
+    const unpinnedA: NavigationDirectorySummary = {
+      ...pinnedA,
+      pinnedRank: undefined,
+    };
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[unpinnedA, pinnedB]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={threadKey}
+        threads={[threadInB]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // The user's explicit collapse of B must survive the unrelated
+    // unpin of A. Before the fix, the auto-expand effect would
+    // re-fire and silently re-open B.
+    const bSummaryAfter = getDirectorySummary(/ProjectB/i);
+    expect(bSummaryAfter.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("dismisses any open directory context menu when a thread context menu opens", async () => {
+    // Regression: a `contextmenu` event doesn't fire the
+    // document-level `click` listener that normally dismisses
+    // open menus. Before the fix, right-clicking a directory →
+    // right-clicking a thread (without an intervening left-click)
+    // left both menus stacked on top of each other.
+    //
+    // The directory→thread direction was already symmetric
+    // (`openDirectoryContextMenu` clears `contextMenu` itself),
+    // so this test locks the formerly-broken direction only.
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+      threadKeys: ["codex:thread-1"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[pinnedA]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        // selectedItemKey points at the thread inside A so the
+        // auto-expand effect opens A on mount — that's the only
+        // way a thread row inside the Directories lens becomes
+        // visible to right-click.
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={onSetThreadPin}
+        onSetDirectoryPin={async () => undefined}
+        onReorderDirectoryPins={async () => undefined}
+      />,
+    );
+
+    // Right-click directory A → directory menu opens.
+    const directorySummary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(directorySummary);
+    await screen.findByRole("menuitem", { name: "Unpin Directory" });
+
+    // Right-click the thread row inside A (no intervening left
+    // click) → `openThreadContextMenu` runs. The directory menu
+    // must dismiss as a side-effect.
+    const threadRow = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    fireEvent.contextMenu(threadRow);
+
+    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    expect(
+      screen.queryByRole("menuitem", { name: "Unpin Directory" }),
+    ).not.toBeInTheDocument();
+  });
+});

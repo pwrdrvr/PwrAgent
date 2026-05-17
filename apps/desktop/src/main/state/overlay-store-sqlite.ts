@@ -2,6 +2,7 @@ import type {
   AppServerBackendScope,
   AppServerThreadSummary,
   DirectoryLaunchpadOverlayState,
+  DirectoryOverlayState,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
@@ -142,6 +143,11 @@ export class SqliteOverlayStore {
 
     const launchpadDefaults = this.readLaunchpadDefaults();
     const launchpadsByKey = this.readAllDirectoryLaunchpads();
+    // Unit D (plan 2026-05-09-002): pull the directory pin overlay
+    // map and pass it through so `buildDirectorySummaries` attaches
+    // `pinnedRank` to each summary. Mirrors how `launchpadsByKey`
+    // is loaded.
+    const directoryOverlayByKey = this.readAllDirectoryOverlaysSync();
 
     const snapshot = buildNavigationSnapshot({
       backend: params.backend,
@@ -150,6 +156,7 @@ export class SqliteOverlayStore {
       gitStatusByDirectoryKey: params.gitStatusByDirectoryKey,
       launchpadDefaults,
       launchpadsByKey,
+      directoryOverlayByKey,
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
@@ -345,6 +352,57 @@ export class SqliteOverlayStore {
     });
     write();
     return pinnedRanks;
+  }
+
+  /**
+   * Directory pin mutators — mirror of `setThreadPin` /
+   * `reorderThreadPins` with the `backend` dimension dropped.
+   * Directory keys are globally unique so pin order is global. The
+   * IPC handler (`navigation:set-directory-pin`) is responsible for
+   * rejecting non-directory keys (workspace / unlinked
+   * pseudo-directories) before reaching this method — the store
+   * itself is generic and will happily persist any string key.
+   * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit C.
+   */
+  async setDirectoryPin(params: {
+    directoryKey: string;
+    pinnedRank?: string | null;
+  }): Promise<DirectoryOverlayState> {
+    const pinnedRank = params.pinnedRank?.trim();
+    const nextState: DirectoryOverlayState = {
+      directoryKey: params.directoryKey,
+      pinnedRank: pinnedRank || undefined,
+    };
+    this.putDirectoryOverlay(params.directoryKey, nextState);
+    return nextState;
+  }
+
+  async reorderDirectoryPins(params: {
+    directoryKeys: string[];
+  }): Promise<Record<string, string>> {
+    const pinnedRanks: Record<string, string> = {};
+    const write = this.stateDb.raw.transaction(() => {
+      params.directoryKeys.forEach((directoryKey, index) => {
+        const pinnedRank = String((index + 1) * 1024);
+        pinnedRanks[directoryKey] = pinnedRank;
+        this.putDirectoryOverlay(directoryKey, {
+          directoryKey,
+          pinnedRank,
+        });
+      });
+    });
+    write();
+    return pinnedRanks;
+  }
+
+  async getDirectoryOverlayState(params: {
+    directoryKey: string;
+  }): Promise<DirectoryOverlayState | undefined> {
+    return this.getDirectoryOverlay(params.directoryKey);
+  }
+
+  async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
+    return this.readAllDirectoryOverlaysSync();
   }
 
   async setThreadPullRequests(params: {
@@ -829,6 +887,42 @@ export class SqliteOverlayStore {
       rows.map((r) => [r.directory_path, JSON.parse(r.payload)]),
     );
   }
+
+  /**
+   * Directory pin persistence helpers (Unit B). Mirror `getThread` /
+   * `putThread` / `readAllDirectoryLaunchpads`: a single JSON
+   * `payload` column keyed by `directory_key`, INSERT OR REPLACE on
+   * write. The `directoryKey` is duplicated inside the payload so
+   * `readAllDirectoryOverlays` can return a self-contained
+   * `DirectoryOverlayState` without re-deriving the key.
+   */
+  private getDirectoryOverlay(directoryKey: string): DirectoryOverlayState | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT payload FROM directory_overlay WHERE directory_key = ?")
+      .get(directoryKey) as { payload: string } | undefined;
+    return row ? (JSON.parse(row.payload) as DirectoryOverlayState) : undefined;
+  }
+
+  private putDirectoryOverlay(
+    directoryKey: string,
+    state: DirectoryOverlayState,
+  ): void {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO directory_overlay(directory_key, payload)
+         VALUES (?, ?)`,
+      )
+      .run(directoryKey, JSON.stringify(state));
+  }
+
+  private readAllDirectoryOverlaysSync(): Record<string, DirectoryOverlayState> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT directory_key, payload FROM directory_overlay")
+      .all() as { directory_key: string; payload: string }[];
+    return Object.fromEntries(
+      rows.map((r) => [r.directory_key, JSON.parse(r.payload) as DirectoryOverlayState]),
+    );
+  }
 }
 
 /** Check whether a linked directory was created by the handoff service. */
@@ -851,6 +945,10 @@ export type OverlayStoreLike = Pick<
   | "setThreadReaction"
   | "setThreadPin"
   | "reorderThreadPins"
+  | "setDirectoryPin"
+  | "reorderDirectoryPins"
+  | "getDirectoryOverlayState"
+  | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"

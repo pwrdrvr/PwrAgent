@@ -40,8 +40,12 @@ import type {
   HandoffThreadWorkspaceResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
+  ReorderDirectoryPinsRequest,
+  ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
+  SetDirectoryPinRequest,
+  SetDirectoryPinResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadReactionRequest,
@@ -215,9 +219,11 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+  NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -562,6 +568,17 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  setDirectoryPin: async (
+    request: SetDirectoryPinRequest,
+  ): Promise<SetDirectoryPinResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_DIRECTORY_PIN_CHANNEL, request),
+  reorderDirectoryPins: async (
+    request: ReorderDirectoryPinsRequest,
+  ): Promise<ReorderDirectoryPinsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
+      request,
+    ),
   refreshThreadPullRequests: async (
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> =>

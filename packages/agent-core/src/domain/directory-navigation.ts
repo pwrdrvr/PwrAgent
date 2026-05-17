@@ -1,5 +1,6 @@
 import type {
   DirectoryLaunchpadOverlayState,
+  DirectoryOverlayState,
   LinkedDirectorySummary,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
@@ -340,6 +341,17 @@ export function buildDirectorySummaries(params: {
   threads: NavigationThreadSummary[];
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
   gitStatusByKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+  /**
+   * Per-directory overlay state (currently only carries `pinnedRank`
+   * for the Directories-lens pin order). Keyed by the same directory
+   * key the snapshot exposes on `NavigationDirectorySummary.key`.
+   * Only `kind: "directory"` summaries receive `pinnedRank` from
+   * this map — workspace and unlinked pseudo-directories ignore
+   * overlay rows even if a misbehaving caller stores one (defense
+   * in depth with the IPC handler's validation).
+   * See plan: 2026-05-09-002-feat-directory-pinning-plan.md Unit D.
+   */
+  directoryOverlayByKey?: Record<string, DirectoryOverlayState | undefined>;
   workspaceRoots?: string[];
 }): NavigationDirectorySummary[] {
   const summaries = new Map<string, NavigationDirectorySummary>();
@@ -449,6 +461,25 @@ export function buildDirectorySummaries(params: {
     const summary = summaries.get(directoryKey);
     if (summary) {
       summary.gitStatus = gitStatus;
+    }
+  }
+
+  // Directory pin overlay (Unit D). Attach `pinnedRank` to
+  // `kind: "directory"` AND `kind: "workspace"` summaries — both
+  // are named entries the user explicitly browses by clicking. The
+  // `unlinked` bucket is a synthetic roll-up of threads with no
+  // linked directory and isn't user-pinnable, so we skip it here
+  // even though the IPC handler also rejects pinning that key.
+  for (const [directoryKey, overlay] of Object.entries(params.directoryOverlayByKey ?? {})) {
+    if (!overlay?.pinnedRank) {
+      continue;
+    }
+    const summary = summaries.get(directoryKey);
+    if (
+      summary &&
+      (summary.kind === "directory" || summary.kind === "workspace")
+    ) {
+      summary.pinnedRank = overlay.pinnedRank;
     }
   }
 

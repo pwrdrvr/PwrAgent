@@ -444,6 +444,83 @@ describe("Tangerine Terminal theme contract", () => {
     expect(activityCurrent).toContain("color: var(--text-primary);");
   });
 
+  it("mirrors thread-row drop-indicator + recents divider tokens for directory pinning", () => {
+    // Plan 2026-05-09-002 Units L + P. The directory-pin CSS is
+    // explicitly a steal-the-pattern of the thread-pin CSS: the
+    // drop-indicator pseudo-elements on `.directory-row__header`
+    // mirror `.thread-row-shell.is-drop-target-*`, and the
+    // `.directories-pinned-divider` rules mirror
+    // `.recents-pinned-divider` token-for-token (only the label
+    // text differs). If a future PR retunes the thread-pin look
+    // without touching the directory-pin look, the brand starts
+    // drifting between the Recents and Directories lenses. Lock
+    // the token parity so that kind of drift is caught at PR
+    // time, not visually after merge.
+    const draggableRule = extractRuleBody(
+      css,
+      '.directory-row__header[draggable="true"]',
+    );
+    expect(draggableRule).toContain("cursor: grab;");
+    const activeRule = extractRuleBody(
+      css,
+      '.directory-row__header[draggable="true"]:active',
+    );
+    expect(activeRule).toContain("cursor: grabbing;");
+
+    // Drop-indicator pseudo-elements: 3px accent bar with shadow,
+    // positioned above (before) / below (after) the directory
+    // section. Attached to `.directory-row` (not the header) so
+    // the indicator stretches the full height of an expanded
+    // directory's drop zone.
+    expect(css).toMatch(
+      /\.directory-row\.is-drop-target-before::before,\s*\.directory-row\.is-drop-target-after::after\s*\{[\s\S]*?height:\s*3px;[\s\S]*?background:\s*var\(--accent\);[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.directory-row\.is-drop-target-before::before\s*\{[\s\S]*?top:\s*-3px;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.directory-row\.is-drop-target-after::after\s*\{[\s\S]*?bottom:\s*-3px;[\s\S]*?\}/,
+    );
+
+    // The pinned-directories divider must read identically to the
+    // Recents pinned divider — same layout, same color, same
+    // active state. Compare rule bodies token-for-token.
+    const recentsDivider = extractRuleBody(css, ".recents-pinned-divider");
+    const directoriesDivider = extractRuleBody(
+      css,
+      ".directories-pinned-divider",
+    );
+    for (const fragment of [
+      "display: flex;",
+      "gap: 8px;",
+      "margin: 2px 6px;",
+      "color: var(--text-muted);",
+      "font-size: 11px;",
+      "font-weight: 600;",
+      "text-transform: uppercase;",
+    ]) {
+      expect(recentsDivider).toContain(fragment);
+      expect(directoriesDivider).toContain(fragment);
+    }
+
+    const recentsActive = extractRuleBody(
+      css,
+      ".recents-pinned-divider.is-drop-target",
+    );
+    const directoriesActive = extractRuleBody(
+      css,
+      ".directories-pinned-divider.is-drop-target",
+    );
+    expect(recentsActive).toContain("color: var(--accent-bright);");
+    expect(directoriesActive).toContain("color: var(--accent-bright);");
+
+    // Active-state pseudo-elements turn the rule strands into the
+    // 3px accent bar.
+    expect(css).toMatch(
+      /\.directories-pinned-divider\.is-drop-target::before,\s*\.directories-pinned-divider\.is-drop-target::after\s*\{[\s\S]*?height:\s*3px;[\s\S]*?background:\s*var\(--accent\);[\s\S]*?\}/,
+    );
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");
