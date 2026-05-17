@@ -133,7 +133,7 @@ Legacy files are left in place (not renamed or deleted) so older app versions ca
 Run a second isolated instance for testing:
 
 ```bash
-PWRAGENT_HOME=~/.pwragent-dev pnpm --filter @pwragent/desktop dev
+PWRAGENT_HOME=~/.pwragent-dev pnpm dev
 ```
 
 This creates a fully independent state directory with its own `state.db`, config, and secrets.
