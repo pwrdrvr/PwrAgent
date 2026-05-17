@@ -13,6 +13,10 @@
  *       --no-publish  : build + package signed/notarized, no publish (local
  *                       end-to-end verification — Phase E5 in the release
  *                       packaging plan)
+ *       --prepare-only: build + prepare release-stage, no package/sign/publish
+ *       --sign-stage-only:
+ *                       sign/notarize/publish an already prepared release-stage
+ *                       without reinstalling dependencies or rerunning tests
  *       (default)     : build + package signed/notarized + publish to the
  *                       channel configured in electron-builder.yml
  *   - In CI, the App Store Connect API key may arrive as a base64-encoded
@@ -23,7 +27,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -37,7 +41,14 @@ const stageDir = join(desktopRoot, "release-stage");
 const args = process.argv.slice(2);
 const dryrun = args.includes("--dryrun");
 const noPublish = args.includes("--no-publish");
-const publish = !dryrun && !noPublish;
+const prepareOnly = args.includes("--prepare-only");
+const signStageOnly = args.includes("--sign-stage-only");
+
+if (prepareOnly && signStageOnly) {
+  throw new Error("--prepare-only and --sign-stage-only cannot be combined");
+}
+
+const publish = !dryrun && !noPublish && !prepareOnly;
 
 function step(label) {
   console.log(`\n→ ${label}`);
@@ -60,6 +71,14 @@ function runChecked(file, args, opts = {}) {
   }
 }
 
+function electronBuilderCli() {
+  const cli = join(desktopRoot, "node_modules", "electron-builder", "cli.js");
+  if (!existsSync(cli)) {
+    throw new Error(`electron-builder CLI is missing at ${cli}; signing jobs must use the prepared release artifact`);
+  }
+  return cli;
+}
+
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
 function maybeDecodeAppleApiKey() {
   if (process.env.APPLE_API_KEY && existsSync(process.env.APPLE_API_KEY)) {
@@ -75,51 +94,62 @@ function maybeDecodeAppleApiKey() {
   }
   const target = join(tmpdir(), `AuthKey_${keyId}.p8`);
   writeFileSync(target, Buffer.from(base64, "base64"));
+  chmodSync(target, 0o600);
   process.env.APPLE_API_KEY = target;
-  console.log(`  decoded APPLE_API_KEY_BASE64 -> ${target}`);
+  console.log("  decoded APPLE_API_KEY_BASE64 -> temporary App Store Connect key file");
 }
 
-// 2. Build (electron-vite -> apps/desktop/out/).
-step("license notices check");
-runChecked("pnpm", ["licenses:check"], { cwd: repoRoot });
+if (!signStageOnly) {
+  // 2. Build (electron-vite -> apps/desktop/out/).
+  step("license notices check");
+  runChecked("pnpm", ["licenses:check"], { cwd: repoRoot });
 
-step("electron-vite build");
-runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
+  step("electron-vite build");
+  runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
-// 3. Materialize a self-contained, flat node_modules under stage.
-step("pnpm deploy --prod -> release-stage");
-if (existsSync(stageDir)) {
-  rmSync(stageDir, { recursive: true, force: true });
-}
-mkdirSync(stageDir, { recursive: true });
-runChecked(
-  "pnpm",
-  ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
-  { cwd: repoRoot },
-);
-
-// 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
-//    electron-builder finds them at well-known paths.
-//    pnpm deploy copies the package source tree (including out/ if it exists)
-//    into the stage. Remove stale copies before our controlled cp to avoid
-//    macOS cp -R nesting (cp -R src dst/ creates dst/src/ when dst exists).
-step("seed stage with build output + builder inputs");
-for (const dir of ["out", "build"]) {
-  const target = join(stageDir, dir);
-  if (existsSync(target)) {
-    rmSync(target, { recursive: true, force: true });
+  // 3. Materialize a self-contained, flat node_modules under stage.
+  step("pnpm deploy --prod -> release-stage");
+  if (existsSync(stageDir)) {
+    rmSync(stageDir, { recursive: true, force: true });
   }
-  run(`cp -R ${join(desktopRoot, dir)} ${target}`);
-}
-run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
-for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
-  run(`cp ${join(repoRoot, file)} ${join(stageDir, file)}`);
+  mkdirSync(stageDir, { recursive: true });
+  runChecked(
+    "pnpm",
+    ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
+    { cwd: repoRoot },
+  );
+
+  // 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
+  //    electron-builder finds them at well-known paths.
+  //    pnpm deploy copies the package source tree (including out/ if it exists)
+  //    into the stage. Remove stale copies before our controlled cp to avoid
+  //    macOS cp -R nesting (cp -R src dst/ creates dst/src/ when dst exists).
+  step("seed stage with build output + builder inputs");
+  for (const dir of ["out", "build"]) {
+    const target = join(stageDir, dir);
+    if (existsSync(target)) {
+      rmSync(target, { recursive: true, force: true });
+    }
+    run(`cp -R ${join(desktopRoot, dir)} ${target}`);
+  }
+  run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
+  for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
+    run(`cp ${join(repoRoot, file)} ${join(stageDir, file)}`);
+  }
+
+  if (prepareOnly) {
+    step("prepared release-stage");
+    console.log(`  stage: ${stageDir}`);
+    process.exit(0);
+  }
+} else if (!existsSync(stageDir)) {
+  throw new Error(`release-stage is missing at ${stageDir}`);
 }
 
 // 5. electron-builder.
 step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
 maybeDecodeAppleApiKey();
-const builderArgs = ["electron-builder", "--mac", "--universal"];
+const builderArgs = ["--mac", "--universal"];
 if (dryrun) {
   // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
   // electron-builder modifies the Electron binary to set fuses, which
@@ -131,7 +161,7 @@ if (dryrun) {
 }
 builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
-runChecked("npx", cleanedArgs, { cwd: stageDir });
+runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
 
 // 6. Post-build asar contents check — fails if forbidden files (TS sources,
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the

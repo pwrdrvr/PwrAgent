@@ -32,14 +32,26 @@ packaging plan as Phase A.
      with the **Developer** role (least privilege that can notarize).
    - Downloaded the `.p8` file (one-time).
    - Stored in 1Password alongside the Key ID and Issuer ID.
-4. **GitHub repository secrets** (for the release CI workflow):
-   - `CSC_LINK` — `.p12` base64-encoded
-   - `CSC_KEY_PASSWORD` — the `.p12` password
-   - `APPLE_API_KEY_BASE64` — `.p8` base64-encoded
-   - `APPLE_API_KEY_ID` — the Key ID
-   - `APPLE_API_ISSUER` — the Issuer ID
-   - `RELEASES_PAT` (optional) — fine-grained PAT scoped to `Contents: Read & Write`
-     on `pwrdrvr/PwrAgent`. Falls back to `GITHUB_TOKEN` if absent.
+4. **GitHub `apple-signing` Environment**.
+   - Create the `apple-signing` environment in `pwrdrvr/PwrAgent`.
+   - Add required reviewers and limit approval to **`huntharo`**.
+   - Limit the environment to protected release refs/tags when GitHub's
+     environment controls allow it.
+   - Store the Apple signing/notarization secrets on this environment, not as
+     repository secrets:
+     - `CSC_LINK` — `.p12` base64-encoded
+     - `CSC_KEY_PASSWORD` — the `.p12` password
+     - `APPLE_API_KEY_BASE64` — `.p8` base64-encoded
+     - `APPLE_API_KEY_ID` — the Key ID
+     - `APPLE_API_ISSUER` — the Issuer ID
+   - Optional publish secret, also environment-scoped if used:
+     `RELEASES_PAT` — fine-grained PAT scoped to `Contents: Read & Write` on
+     `pwrdrvr/PwrAgent`. The workflow falls back to `GITHUB_TOKEN` if absent.
+5. **GitHub repository secrets**.
+   - Do **not** keep Apple signing/notarization material as repository secrets
+     after the `apple-signing` environment secrets are configured.
+   - Non-release CI secrets, such as live smoke-test service keys, may remain as
+     repository secrets if their workflows require them.
 
 `APPLE_TEAM_ID` is hardcoded in `.github/workflows/release.yml` to `T44CNHC4UH`
 since it is not a secret.
@@ -69,8 +81,21 @@ git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
 git push origin v1.0.0-alpha.7
 ```
 
-The `Release Desktop (macOS universal)` workflow on `macos-15` triggers, runs
-typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
+The `Release Desktop (macOS universal)` workflow on `macos-15` triggers as two
+separate jobs:
+
+1. `Test and prepare signing input`, with `contents: read`, explicit
+   `id-token: none`, no Apple secrets, and checkout credentials disabled. It
+   installs dependencies, runs release metadata checks, typecheck, tests, and
+   `apps/desktop/scripts/release.mjs --prepare-only`.
+2. `Sign, notarize, publish`, gated by the protected `apple-signing`
+   environment, with `contents: write` and explicit `id-token: none`. It does
+   not check out the repository or run dependency installation/postinstall
+   scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
+   expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only`
+   with the environment-scoped Apple secrets.
+
+The no-secret prepare job:
 
 1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
 2. Builds main/preload/renderer with electron-vite.
@@ -78,22 +103,32 @@ typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
    `apps/desktop/release-stage/`.
 4. Seeds the stage with `out/`, `build/`, `electron-builder.yml`, `LICENSE`,
    and `THIRD_PARTY_LICENSES`.
-5. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
-6. Runs `electron-builder --mac --universal --publish always` which signs every
+5. Archives the prepared stage plus the already-resolved `electron-builder`
+   toolchain into the `desktop-release-signing-input` workflow artifact.
+
+The environment-gated signing job:
+
+1. Verifies the prepared artifact SHA-256 from the build job output.
+2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
+3. Runs `electron-builder --mac --universal --publish always` from the
+   downloaded artifact, without invoking `pnpm install`, `npx`, or dependency
+   lifecycle scripts. `electron-builder` signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and universal updater ZIP, generates `latest-mac.yml`, and uploads
    everything to a GitHub Release on `pwrdrvr/PwrAgent`.
-7. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
+4. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
    links.
 
 Cycle time target: ≤ 12 minutes.
 
-Do not create the GitHub Release manually before the build succeeds. A manually
-created release appears before signing/notarization finishes. The current flow
-lets electron-builder create or update the release from the successful CI build;
-afterward, edit the release to mark prerelease tags as prereleases and replace
-the generated/empty notes with the matching `CHANGELOG.md` content.
+Do not approve the `apple-signing` environment unless the tag, commit, and
+metadata are the intended release. Do not create the GitHub Release manually
+before the build succeeds. A manually created release appears before
+signing/notarization finishes. The current flow lets electron-builder create or
+update the release from the successful CI build; afterward, edit the release to
+mark prerelease tags as prereleases and replace the generated/empty notes with
+the matching `CHANGELOG.md` content.
 
 If direct push to `main` is rejected, use the repo-local release skill fallback:
 open a short-lived release PR, wait for checks, squash merge it, then tag the
@@ -134,7 +169,7 @@ export GH_TOKEN=ghp_xxx_fine_grained_PAT_with_Contents_Read_Write_on_pwrdrvr_Pwr
 EOF
 source .envrc.release
 
-# 2. Run the orchestrator. Three modes:
+# 2. Run the orchestrator. Common local modes:
 pnpm --filter @pwragent/desktop package:dryrun  # unsigned, no publish
 pnpm --filter @pwragent/desktop package         # signed + notarized, no publish
 pnpm --filter @pwragent/desktop release         # signed + notarized + publish
