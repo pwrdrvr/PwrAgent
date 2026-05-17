@@ -293,7 +293,7 @@ installed ACP backends without losing explicit Codex/Grok handling.
 - Existing Codex/Grok navigation behavior is unchanged.
 - No dependency-cruiser rule is loosened or violated.
 
-- [ ] **Unit 2: Add ACP Registry, Allowlist, and Profile State Stores**
+- [x] **Unit 2: Add ACP Registry, Allowlist, and Profile State Stores**
 
 **Goal:** Fetch and normalize ACP registry entries, apply PwrAgent launch
 allowlist policy, cache registry metadata, and persist installed-agent

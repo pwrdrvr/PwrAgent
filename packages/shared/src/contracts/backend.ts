@@ -1,5 +1,41 @@
 import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 
+export type BackendSourceKind = "builtin" | "acp";
+
+export type BackendAcpDistributionKind = "npx" | "uvx" | "binary";
+export type BackendAcpInstallStatus =
+  | "not-installed"
+  | "installed"
+  | "installing"
+  | "install-failed"
+  | "unavailable";
+export type BackendAcpAuthStatus =
+  | "not-required"
+  | "required"
+  | "in-progress"
+  | "authenticated"
+  | "failed";
+export type BackendAcpVerificationStatus =
+  | "verified"
+  | "unverified-allowed"
+  | "unverified-blocked"
+  | "not-applicable";
+
+export type BackendAcpSummary = {
+  registryId: string;
+  version?: string;
+  license?: string;
+  distributionKinds: BackendAcpDistributionKind[];
+  installStatus: BackendAcpInstallStatus;
+  authStatus: BackendAcpAuthStatus;
+  verificationStatus: BackendAcpVerificationStatus;
+  installedAt?: number;
+  updatedAt?: number;
+  repositoryUrl?: string;
+  websiteUrl?: string;
+  allowlistRuleId?: string;
+};
+
 export type BackendCapabilities = {
   listThreads: boolean;
   createThread: boolean;
@@ -57,8 +93,10 @@ export type BackendRateLimitSummary = {
 
 export type BackendSummary = {
   kind: AppServerBackendKind;
+  source?: BackendSourceKind;
   label: string;
   available: boolean;
+  acp?: BackendAcpSummary;
   account?: BackendAccountSummary;
   rateLimits?: BackendRateLimitSummary[];
   serverName?: string;
