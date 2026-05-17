@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("ComposerDraftRecoveryStore", () => {
   it("creates the durable draft schema at the current state DB version", () => {
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(6);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(7);
     expect(
       stateDb.raw
         .prepare(
