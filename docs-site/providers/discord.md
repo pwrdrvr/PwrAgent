@@ -52,7 +52,11 @@ flow or discovery-mode logging will surface it after the bot is online.
 11. **Try `/resume`.** Send `/resume` from the DM or any allowlisted
     channel; the bot replies with the thread picker.
 
-![Settings → Messaging → Discord panel](../assets/screenshots/settings-messaging-discord.png)
+{% include figure.html
+   src="/assets/screenshots/settings-messaging-discord.png"
+   alt="Settings → Messaging → Discord panel"
+   caption="<strong>Settings → Messaging → Discord</strong>. <strong>Test</strong> confirms PwrAgent can reach Discord's Gateway; <strong>Authorized User IDs</strong> is populated by the <a href='../../messaging/pairing/'>Pairing</a> flow."
+%}
 
 ## Pairing
 

@@ -79,7 +79,11 @@ below.
   instead of their `U…` ID.
 - `commands` — only if you're registering Slack slash commands.
 
-![Settings → Messaging → Slack panel](../assets/screenshots/settings-messaging-slack.png)
+{% include figure.html
+   src="/assets/screenshots/settings-messaging-slack.png"
+   alt="Settings → Messaging → Slack panel"
+   caption="<strong>Settings → Messaging → Slack</strong>. <strong>Test</strong> confirms PwrAgent can reach the Slack API; <strong>Authorized User IDs</strong> is populated by the <a href='../../messaging/pairing/'>Pairing</a> flow."
+%}
 
 ## Pairing
 

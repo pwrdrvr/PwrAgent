@@ -26,7 +26,11 @@ In **Settings → Messaging → \<platform\>**, click the **Generate**
 button on the Pairing field. PwrAgent shows a short one-time code
 that expires after a few minutes.
 
-![Pairing — generated, code visible in the Pairing field](../assets/screenshots/messaging-pairing-frame-1.png)
+{% include figure.html
+   src="/assets/screenshots/messaging-pairing-frame-1.png"
+   alt="Pairing — generated, code visible in the Pairing field"
+   caption="<strong>Step 1: token generated.</strong> The short one-time code appears in the <strong>Pairing</strong> row of Settings → Messaging → &lt;platform&gt;. Send it to the bot from the account you want to authorize."
+%}
 
 ### 2. Send the code to the bot
 
@@ -36,7 +40,11 @@ want to pair when the platform doesn't have DMs. PwrAgent observes
 the bot receiving the code; the actor's resolved name and chat
 appear in the Pairing row, and the row prompts you to **Approve**.
 
-![Pairing — observed, approval prompt visible with the resolved actor](../assets/screenshots/messaging-pairing-frame-2.png)
+{% include figure.html
+   src="/assets/screenshots/messaging-pairing-frame-2.png"
+   alt="Pairing — observed, approval prompt visible with the resolved actor"
+   caption="<strong>Step 2: token observed.</strong> PwrAgent sees the code arrive, resolves the actor's display name from the platform, and shows an <strong>Approve</strong> prompt with the resolved identity inline so you can sanity-check who's about to be authorized."
+%}
 
 ### 3. Approve
 
@@ -45,7 +53,11 @@ user's stable platform ID to the **Authorized User IDs** list
 below, with the resolved display name beside it for your benefit.
 The approval prompt clears.
 
-![Pairing — approved, user in authorized list with resolved name](../assets/screenshots/messaging-pairing-frame-3.png)
+{% include figure.html
+   src="/assets/screenshots/messaging-pairing-frame-3.png"
+   alt="Pairing — approved, user in authorized list with resolved name"
+   caption="<strong>Step 3: approved.</strong> The actor's stable platform ID is now in the <strong>Authorized User IDs</strong> list, with the resolved name beside it for your benefit. The Pairing prompt clears."
+%}
 
 ### Phase 2: pair a shared space
 
@@ -66,7 +78,11 @@ under the **Attention** section so you can see what's stuck and
 copy the peer / actor / channel ID into the allowlist directly if
 the pairing flow doesn't work.
 
-![Messaging Activity panel showing rejected inbound entries with copyable peer IDs](../assets/screenshots/messaging-activity-blocked.png)
+{% include figure.html
+   src="/assets/screenshots/messaging-activity-blocked.png"
+   alt="Messaging Activity panel showing rejected inbound entries with copyable peer IDs"
+   caption="<strong>Settings → Messaging → Activity (Attention).</strong> Inbound messages from non-authorized peers are silently rejected and logged here with copyable peer / actor / channel IDs — useful when the Pairing flow doesn't observe (most often: the bot isn't actually receiving messages on that platform yet)."
+%}
 
 What this surface gives you for each rejected message:
 

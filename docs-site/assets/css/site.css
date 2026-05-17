@@ -240,6 +240,49 @@ body {
   line-height: 1.5;
 }
 
+/* ----- In-page screenshot figure -----
+ * Used by `_includes/figure.html` for every body-level screenshot.
+ * Caption sits inside the bordered frame as a strip beneath the
+ * image — the image + caption read as one figure object so a
+ * reader can decode the screenshot without scrolling back to the
+ * surrounding prose. */
+
+.screenshot {
+  margin: 1.6em 0 2em;
+  padding: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+.screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+}
+
+.screenshot figcaption {
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.screenshot figcaption strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.screenshot figcaption code {
+  font-size: 0.92em;
+}
+
 .site-nav {
   display: flex;
   align-items: center;

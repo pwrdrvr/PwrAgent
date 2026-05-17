@@ -87,7 +87,11 @@ Broad shortcut: `im:message` covers multiple message read/send
 capabilities. Fine for a private internal app; narrower scopes above
 are easier to get approved.
 
-![Settings → Messaging → Feishu / Lark panel](../assets/screenshots/settings-messaging-feishu.png)
+{% include figure.html
+   src="/assets/screenshots/settings-messaging-feishu.png"
+   alt="Settings → Messaging → Feishu / Lark panel"
+   caption="<strong>Settings → Messaging → Feishu / Lark</strong>. <strong>Tenant region</strong> picks the Feishu (China) vs. Lark (international) API endpoint; <strong>Authorized open_ids</strong> is populated by the <a href='../../messaging/pairing/'>Pairing</a> flow."
+%}
 
 ## Pairing
 
