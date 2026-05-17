@@ -1,4 +1,4 @@
-name: Release Desktop (macOS arm64)
+name: Release Desktop (macOS universal)
 
 on:
   push:
@@ -63,8 +63,22 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
         run: pnpm --filter @pwragent/desktop release
 
+      - name: Publish stable-name DMG alias
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd apps/desktop/release-stage/dist
+          versioned=$(ls PwrAgent-*-universal.dmg | head -n 1)
+          cp "$versioned" PwrAgent.dmg
+          gh release upload "$RELEASE_TAG" \
+            PwrAgent.dmg \
+            --repo pwrdrvr/PwrAgent \
+            --clobber
+
       - name: Upload release artifacts (debug retention)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
           name: desktop-release-artifacts

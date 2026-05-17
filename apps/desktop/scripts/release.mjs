@@ -117,9 +117,9 @@ for (const file of ["LICENSE", "THIRD_PARTY_LICENSES", "CHANGELOG.md"]) {
 }
 
 // 5. electron-builder.
-step(`electron-builder --mac --arm64 (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
+step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
 maybeDecodeAppleApiKey();
-const builderArgs = ["electron-builder", "--mac", "--arm64"];
+const builderArgs = ["electron-builder", "--mac", "--universal"];
 if (dryrun) {
   // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
   // electron-builder modifies the Electron binary to set fuses, which
@@ -137,8 +137,33 @@ runChecked("npx", cleanedArgs, { cwd: stageDir });
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the
 //    bundle. Exclusions are configured in electron-builder.yml; this script
 //    is a belt-and-braces guard against accidental edits to that YAML.
+const builtApp = join(stageDir, "dist", "mac-universal", "PwrAgent.app");
+
+step("verify universal binary slices");
+runChecked("lipo", [
+  join(builtApp, "Contents", "MacOS", "PwrAgent"),
+  "-verify_arch",
+  "x86_64",
+  "arm64",
+]);
+runChecked("lipo", [
+  join(
+    builtApp,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "better-sqlite3",
+    "build",
+    "Release",
+    "better_sqlite3.node",
+  ),
+  "-verify_arch",
+  "x86_64",
+  "arm64",
+]);
+
 step("verify packaged asar contents");
-const builtApp = join(stageDir, "dist", "mac-arm64", "PwrAgent.app");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
 
 step("done");

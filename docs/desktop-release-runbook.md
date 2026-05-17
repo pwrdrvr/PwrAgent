@@ -4,9 +4,10 @@
 >
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
-This runbook covers cutting v1.x desktop releases. Apple Silicon (arm64) only;
-distribution is outside the Mac App Store via signed/notarized DMG with auto-
-update through `electron-updater` against the private `pwrdrvr/PwrAgent` repo.
+This runbook covers cutting v1.x desktop releases. macOS releases ship as
+universal Apple Silicon + Intel binaries; distribution is outside the Mac App
+Store via signed/notarized DMG with auto-update through `electron-updater`
+against the private `pwrdrvr/PwrAgent` repo.
 
 ---
 
@@ -68,7 +69,7 @@ git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
 git push origin v1.0.0-alpha.7
 ```
 
-The `Release Desktop (macOS arm64)` workflow on `macos-15` triggers, runs
+The `Release Desktop (macOS universal)` workflow on `macos-15` triggers, runs
 typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
 
 1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
@@ -78,11 +79,13 @@ typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
 4. Seeds the stage with `out/`, `build/`, `electron-builder.yml`, `LICENSE`,
    and `THIRD_PARTY_LICENSES`.
 5. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
-6. Runs `electron-builder --mac --arm64 --publish always` which signs every
+6. Runs `electron-builder --mac --universal --publish always` which signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
-   and ZIP, generates `latest-mac.yml`, and uploads everything to a GitHub
-   Release on `pwrdrvr/PwrAgent`.
+   and universal updater ZIP, generates `latest-mac.yml`, and uploads
+   everything to a GitHub Release on `pwrdrvr/PwrAgent`.
+7. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
+   links.
 
 Cycle time target: ≤ 12 minutes.
 
@@ -95,6 +98,22 @@ the generated/empty notes with the matching `CHANGELOG.md` content.
 If direct push to `main` is rejected, use the repo-local release skill fallback:
 open a short-lived release PR, wait for checks, squash merge it, then tag the
 merged `main` commit.
+
+Stable landing-page URL:
+
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg
+```
+
+For the current arm64-only beta, backfill the stable alias:
+
+```bash
+tmpdir=$(mktemp -d)
+cd "$tmpdir"
+gh release download v1.0.0-beta.4 --repo pwrdrvr/PwrAgent --pattern "*arm64.dmg"
+mv PwrAgent-*-arm64.dmg PwrAgent.dmg
+gh release upload v1.0.0-beta.4 PwrAgent.dmg --repo pwrdrvr/PwrAgent --clobber
+```
 
 ---
 
@@ -128,10 +147,14 @@ dependencies changed, run `pnpm licenses:generate`, review the
 Verify the produced `.app`:
 
 ```bash
-APP=apps/desktop/release-stage/dist/mac-arm64/PwrAgent.app
+APP=apps/desktop/release-stage/dist/mac-universal/PwrAgent.app
 
 # Identity must be PwrDrvr LLC
 codesign -dv --verbose=4 "$APP"
+
+# Main executable and native addon must contain both Apple Silicon and Intel slices
+lipo -archs "$APP/Contents/MacOS/PwrAgent"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
 
 # Gatekeeper-approved (Notarized Developer ID)
 spctl -a -vv "$APP"

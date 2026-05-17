@@ -98,9 +98,9 @@ mac:
     LSApplicationCategoryType: public.app-category.developer-tools
   target:
     - target: dmg
-      arch: [arm64]
+      arch: [universal]
     - target: zip
-      arch: [arm64]
+      arch: [universal]
 
 dmg:
   background: build/dmg-background.png

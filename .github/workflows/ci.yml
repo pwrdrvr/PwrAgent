@@ -142,7 +142,7 @@ jobs:
         run: xvfb-run --auto-servernum pnpm run test:desktop-e2e
 
       - name: Upload desktop Playwright artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:

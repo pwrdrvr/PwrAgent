@@ -1,4 +1,4 @@
-name: Preview Build (macOS arm64)
+name: Preview Build (macOS universal)
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
 jobs:
   preview:
     name: Build preview DMG
-    if: github.event.label.name == 'build-preview'
+    if: github.event.label.name == 'ci:build-preview'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -45,7 +45,7 @@ jobs:
         run: pnpm --filter @pwragent/desktop package:dryrun
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: PwrAgent-${{ steps.version.outputs.version }}-preview
           path: apps/desktop/release-stage/dist/*.dmg

@@ -14,6 +14,9 @@
 - Treat plan documents as decision artifacts, not implementation scripts.
 - Keep changes aligned with the current active plan unless the user explicitly changes scope.
 - Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories.
+- GitHub Actions labels that intentionally trigger workflow behavior are
+  documented in [.github/workflows/README.md](.github/workflows/README.md).
+  Check that list before adding or using a CI-triggering PR label.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches by default. Only search it when the task is specifically about captured E2E protocol snippets.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
