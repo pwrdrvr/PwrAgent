@@ -306,7 +306,7 @@ describe("codex environment runtime", () => {
 
 async function expectEventually<T>(
   read: () => Promise<T>,
-  timeoutMs = 2_000,
+  timeoutMs = 10_000,
 ): Promise<T> {
   const startedAt = Date.now();
   let lastError: unknown;

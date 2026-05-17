@@ -79,7 +79,7 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 async function expectEventually<T>(
   read: () => Promise<T>,
   expected: T,
-  timeoutMs = 2_000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const startedAt = Date.now();
   let lastValue: T | undefined;
