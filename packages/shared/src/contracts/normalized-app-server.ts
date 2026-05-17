@@ -1,4 +1,6 @@
-export type AppServerBackendKind = "codex" | "grok";
+export type AppServerBuiltinBackendKind = "codex" | "grok";
+export type AcpBackendId = `acp:${string}`;
+export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
 export type ThreadExecutionMode = "default" | "full-access";
 

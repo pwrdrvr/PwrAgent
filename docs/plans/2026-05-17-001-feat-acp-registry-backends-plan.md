@@ -231,7 +231,7 @@ replay data.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Generalize Backend Identity Contracts**
+- [x] **Unit 1: Generalize Backend Identity Contracts**
 
 **Goal:** Make the normalized PwrAgent contract capable of representing
 installed ACP backends without losing explicit Codex/Grok handling.

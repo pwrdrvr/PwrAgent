@@ -69,6 +69,27 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("uses escaped dynamic backend ids in directory thread keys", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          source: "acp:gemini",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories[0]?.threadKeys).toEqual(["acp%3Agemini:thread-1"]);
+  });
+
   it("orders directory threads by creation time instead of last update time", () => {
     const directories = buildDirectorySummaries({
       threads: [

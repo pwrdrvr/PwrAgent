@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AppServerBackendKind,
   EnsureDirectoryLaunchpadResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -68,7 +69,7 @@ function buildEnsureSpy() {
       directoryLabel: string;
       directoryPath: string;
       currentBranch?: string;
-      preferredBackend?: "codex" | "grok";
+      preferredBackend?: AppServerBackendKind;
       registeredAt?: number;
     }) => Promise<EnsureDirectoryLaunchpadResponse>
   >(async (request) => {
