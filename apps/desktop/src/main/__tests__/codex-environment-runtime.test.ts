@@ -302,6 +302,46 @@ describe("codex environment runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("times out setup commands that do not finish", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-"));
+
+    try {
+      let error: unknown;
+      try {
+        await applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: "printf before && sleep 10 && printf after",
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+          setupTimeoutMs: 50,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toMatchObject({
+        message: expect.stringContaining("timed out after 50ms"),
+        phase: "setup",
+        runtime: {
+          setupStatus: "failed",
+        },
+      });
+      expect(
+        ((error as { runtime?: { setupOutput?: string } }).runtime?.setupOutput ?? ""),
+      ).not.toContain("after");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 async function expectEventually<T>(
