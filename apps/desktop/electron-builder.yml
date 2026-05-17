@@ -49,6 +49,10 @@ files:
   - "!**/.eslintrc*"
   - "!**/.prettierrc*"
   - "!**/.github/**"
+  # Dev-only Electron native prebuilds are single-arch. electron-builder
+  # rebuilds build/Release for each target arch before creating the universal
+  # app, so including electron-native would break universal merge.
+  - "!**/electron-native/**"
   # Our own workspace package metadata is unused at runtime — vite inlines.
   - "!**/node_modules/@pwragent/*/AGENTS.md"
   - "!**/node_modules/@pwragent/*/src/**"

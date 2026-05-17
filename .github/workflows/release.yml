@@ -13,21 +13,28 @@ on:
         type: string
 
 permissions:
-  contents: write # publish releases to the same repo
+  contents: read
+  id-token: none
 
 jobs:
-  release:
-    name: Build, sign, notarize, publish
+  prepare:
+    name: Test and prepare signing input
     runs-on: macos-15 # Apple Silicon GH-hosted runner; matches Phase A signing identity
-    timeout-minutes: 60
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    outputs:
+      signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@7c109865ae9af59c6fcd2f2a0e8cc851f6ded26a # v1
         with:
           node-version: 24.x
 
@@ -42,9 +49,69 @@ jobs:
       - name: Test (unit)
         run: pnpm test
 
-      - name: Build, sign, notarize, publish
+      - name: Prepare release stage
+        run: node apps/desktop/scripts/release.mjs --prepare-only
+
+      - name: Archive signing input
+        id: archive
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/desktop-release-signing-input.tgz"
+          tar -czf "$tarball" \
+            package.json \
+            pnpm-lock.yaml \
+            pnpm-workspace.yaml \
+            apps/desktop/release-stage \
+            apps/desktop/scripts/release.mjs \
+            apps/desktop/scripts/verify-asar-contents.mjs \
+            apps/desktop/node_modules \
+            node_modules
+          sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          printf "%s  desktop-release-signing-input.tgz\n" "$sha256" > "$RUNNER_TEMP/desktop-release-signing-input.tgz.sha256"
+
+      - name: Upload signing input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-release-signing-input
+          path: |
+            ${{ runner.temp }}/desktop-release-signing-input.tgz
+            ${{ runner.temp }}/desktop-release-signing-input.tgz.sha256
+          retention-days: 7
+
+  sign:
+    name: Sign, notarize, publish
+    runs-on: macos-15
+    needs: prepare
+    timeout-minutes: 60
+    environment: apple-signing
+    permissions:
+      contents: write # publish releases to the same repo
+      id-token: none
+    steps:
+      - name: Download signing input
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: desktop-release-signing-input
+          path: .release-input
+
+      - name: Verify signing input
+        env:
+          EXPECTED_SHA256: ${{ needs.prepare.outputs.signing-input-sha256 }}
+        run: |
+          set -euo pipefail
+          cd .release-input
+          actual="$(shasum -a 256 desktop-release-signing-input.tgz | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          shasum -a 256 --check desktop-release-signing-input.tgz.sha256
+
+      - name: Expand signing input
+        run: tar -xzf .release-input/desktop-release-signing-input.tgz
+
+      - name: Sign, notarize, publish
         env:
           # Code signing (Developer ID Application: PwrDrvr LLC, T44CNHC4UH).
+          # Store these in the apple-signing GitHub Environment, not as repo secrets.
           # CSC_LINK is the .p12 base64-encoded; CSC_KEY_PASSWORD is its password.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -60,12 +127,12 @@ jobs:
           # Publish to the existing private pwrdrvr/PwrAgent repo.
           # Phase 1 (solo dogfooding). Phase 2 channel migration is in
           # docs/desktop-distribution-phase-2-runbook.md.
-          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
-        run: pnpm --filter @pwragent/desktop release
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
+        run: node apps/desktop/scripts/release.mjs --sign-stage-only
 
       - name: Publish stable-name DMG alias
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
@@ -78,7 +145,7 @@ jobs:
             --clobber
 
       - name: Upload release artifacts (debug retention)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !cancelled() }}
         with:
           name: desktop-release-artifacts
