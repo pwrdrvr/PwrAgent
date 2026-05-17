@@ -200,6 +200,15 @@ describe("App", () => {
       updates: {
         channel: { value: "latest", source: "default" },
       },
+      onboarding: {
+        completed: true,
+        threadPresentation: "mission_control",
+        codexProfileModel: "shared",
+        messaging: {
+          acknowledgedAt: null,
+          checkedProviders: [],
+        },
+      },
       messaging: {
         enabled: { value: true, source: "default" },
         allowFullAccessEscalation: { value: true, source: "default" },

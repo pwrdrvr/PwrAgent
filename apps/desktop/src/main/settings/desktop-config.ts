@@ -6,6 +6,8 @@ import type {
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopOnboardingCodexProfileModel,
+  DesktopOnboardingThreadPresentation,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
@@ -22,6 +24,8 @@ import {
   isDesktopAppearanceTheme,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
+  isDesktopOnboardingCodexProfileModel,
+  isDesktopOnboardingThreadPresentation,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
@@ -72,6 +76,15 @@ export type DesktopSettingsConfig = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+  };
+  onboarding?: {
+    completed?: boolean;
+    threadPresentation?: DesktopOnboardingThreadPresentation;
+    codexProfileModel?: DesktopOnboardingCodexProfileModel;
+    messaging?: {
+      acknowledgedAt?: string | null;
+      checkedProviders?: string[];
+    };
   };
   messaging?: {
     enabled?: boolean;
@@ -385,6 +398,41 @@ export function desktopSettingsPatchToEdits(
     } else {
       set(["updates", "channel"], patch.updates.channel);
     }
+  }
+
+  if (patch.onboarding?.completed !== undefined) {
+    set(["onboarding", "completed"], patch.onboarding.completed);
+  }
+  if (patch.onboarding?.threadPresentation !== undefined) {
+    set(
+      ["onboarding", "thread_presentation"],
+      patch.onboarding.threadPresentation,
+    );
+  }
+  if (patch.onboarding?.codexProfileModel !== undefined) {
+    set(
+      ["onboarding", "codex_profile_model"],
+      patch.onboarding.codexProfileModel,
+    );
+  }
+  if (patch.onboarding?.messaging?.acknowledgedAt !== undefined) {
+    if (patch.onboarding.messaging.acknowledgedAt === null) {
+      edits.push({
+        op: "delete",
+        path: ["onboarding", "messaging", "acknowledged_at"],
+      });
+    } else {
+      set(
+        ["onboarding", "messaging", "acknowledged_at"],
+        patch.onboarding.messaging.acknowledgedAt,
+      );
+    }
+  }
+  if (patch.onboarding?.messaging?.checkedProviders !== undefined) {
+    set(
+      ["onboarding", "messaging", "checked_providers"],
+      patch.onboarding.messaging.checkedProviders,
+    );
   }
 
   if (patch.messaging?.inputDebounceMs !== undefined) {
@@ -718,6 +766,8 @@ function normalizeDesktopConfig(
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
   const updates = tables["updates"];
+  const onboarding = tables["onboarding"];
+  const onboardingMessaging = tables["onboarding.messaging"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -757,6 +807,19 @@ function normalizeDesktopConfig(
     },
     updates: {
       channel: readUpdateChannel(updates?.channel),
+    },
+    onboarding: {
+      completed: readBoolean(onboarding?.completed),
+      threadPresentation: readOnboardingThreadPresentation(
+        onboarding?.thread_presentation,
+      ),
+      codexProfileModel: readOnboardingCodexProfileModel(
+        onboarding?.codex_profile_model,
+      ),
+      messaging: {
+        acknowledgedAt: readString(onboardingMessaging?.acknowledged_at),
+        checkedProviders: readStringArray(onboardingMessaging?.checked_providers),
+      },
     },
     messaging: {
       enabled: readBoolean(messaging?.enabled),
@@ -938,6 +1001,29 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   if (config.updates && hasDefinedValue(config.updates)) {
     pruned.updates = config.updates;
+  }
+
+  const onboardingMessaging = config.onboarding?.messaging;
+  const onboarding = config.onboarding;
+  if (
+    onboarding?.completed !== undefined ||
+    onboarding?.threadPresentation !== undefined ||
+    onboarding?.codexProfileModel !== undefined ||
+    (onboardingMessaging && hasDefinedValue(onboardingMessaging))
+  ) {
+    pruned.onboarding = {};
+    if (onboarding?.completed !== undefined) {
+      pruned.onboarding.completed = onboarding.completed;
+    }
+    if (onboarding?.threadPresentation !== undefined) {
+      pruned.onboarding.threadPresentation = onboarding.threadPresentation;
+    }
+    if (onboarding?.codexProfileModel !== undefined) {
+      pruned.onboarding.codexProfileModel = onboarding.codexProfileModel;
+    }
+    if (onboardingMessaging && hasDefinedValue(onboardingMessaging)) {
+      pruned.onboarding.messaging = onboardingMessaging;
+    }
   }
 
   const attachments = config.messaging?.attachments;
@@ -1130,6 +1216,23 @@ function readFullAccessWarningGlobalPolicy(
   value: TomlScalar | undefined,
 ): DesktopMessagingFullAccessWarningGlobalPolicy | undefined {
   return value === "always" || value === "dismissable" || value === "never"
+    ? value
+    : undefined;
+}
+
+function readOnboardingThreadPresentation(
+  value: TomlScalar | undefined,
+): DesktopOnboardingThreadPresentation | undefined {
+  return typeof value === "string" &&
+    isDesktopOnboardingThreadPresentation(value)
+    ? value
+    : undefined;
+}
+
+function readOnboardingCodexProfileModel(
+  value: TomlScalar | undefined,
+): DesktopOnboardingCodexProfileModel | undefined {
+  return typeof value === "string" && isDesktopOnboardingCodexProfileModel(value)
     ? value
     : undefined;
 }

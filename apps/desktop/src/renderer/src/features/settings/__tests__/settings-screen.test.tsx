@@ -76,6 +76,15 @@ function createSnapshot(
     updates: {
       channel: { value: "latest", source: "default" },
     },
+    onboarding: {
+      completed: true,
+      threadPresentation: "mission_control",
+      codexProfileModel: "shared",
+      messaging: {
+        acknowledgedAt: null,
+        checkedProviders: [],
+      },
+    },
     messaging: {
       enabled: { value: true, source: "default" },
       allowFullAccessEscalation: { value: true, source: "default" },
@@ -349,6 +358,20 @@ describe("SettingsScreen", () => {
       "aria-checked",
       "true",
     );
+    const threadPresentationGroup = screen.getByRole("radiogroup", {
+      name: "Thread Presentation",
+    });
+    expect(
+      within(threadPresentationGroup).getByRole("radio", {
+        name: "Mission Control",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    const codexProfileModelGroup = screen.getByRole("radiogroup", {
+      name: "Codex Profile Model",
+    });
+    expect(
+      within(codexProfileModelGroup).getByRole("radio", { name: "Shared" }),
+    ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(screen.getByRole("radio", { name: "4096 patches" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

@@ -229,6 +229,7 @@ import {
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  ONBOARDING_REPLAY_CHANNEL,
   PRELOAD_LOG_CHANNEL,
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
@@ -662,6 +663,13 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    };
+  },
+  onOnboardingReplay: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(ONBOARDING_REPLAY_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(ONBOARDING_REPLAY_CHANNEL, listener);
     };
   },
   getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>

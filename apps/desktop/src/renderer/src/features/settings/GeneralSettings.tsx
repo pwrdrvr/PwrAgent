@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
+  DesktopOnboardingCodexProfileModel,
+  DesktopOnboardingThreadPresentation,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
 } from "@pwragent/shared";
@@ -95,6 +97,23 @@ function releaseHelpText(
   }
   return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
 }
+
+const THREAD_PRESENTATION_LABELS: Record<
+  DesktopOnboardingThreadPresentation,
+  string
+> = {
+  compact: "Compact",
+  mission_control: "Mission Control",
+};
+
+const CODEX_PROFILE_MODEL_LABELS: Record<
+  DesktopOnboardingCodexProfileModel,
+  string
+> = {
+  isolated: "Isolated",
+  multiple: "Multiple",
+  shared: "Shared",
+};
 
 export function GeneralSettings(props: {
   appearanceController?: AppearanceController;
@@ -331,6 +350,114 @@ export function GeneralSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Onboarding"
+        title="Thread Presentation"
+        chip="Set during onboarding"
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Thread row density"
+            sub={
+              THREAD_PRESENTATION_LABELS[
+                props.snapshot.onboarding.threadPresentation
+              ]
+            }
+            help="The onboarding wizard sets how thread rows are presented in navigation surfaces."
+            control={
+              <PlaceholderSegmented
+                ariaLabel="Thread Presentation"
+                options={["Compact", "Mission Control"]}
+                selected={
+                  THREAD_PRESENTATION_LABELS[
+                    props.snapshot.onboarding.threadPresentation
+                  ]
+                }
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Onboarding"
+        title="Codex Profile Model"
+        chip="Set during onboarding"
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Profile isolation"
+            sub={
+              CODEX_PROFILE_MODEL_LABELS[
+                props.snapshot.onboarding.codexProfileModel
+              ]
+            }
+            help="The onboarding wizard sets how future threads map to Codex auth profiles."
+            control={
+              <PlaceholderSegmented
+                ariaLabel="Codex Profile Model"
+                options={["Shared", "Isolated", "Multiple"]}
+                selected={
+                  CODEX_PROFILE_MODEL_LABELS[
+                    props.snapshot.onboarding.codexProfileModel
+                  ]
+                }
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Onboarding"
+        title="Messaging acknowledgment"
+        chip="Set during onboarding"
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Safety acknowledgment"
+            sub="Set during onboarding."
+            help="This placeholder becomes editable when the Messaging onboarding step lands."
+            control={
+              <PlaceholderSegmented
+                ariaLabel="Messaging acknowledgment placeholder"
+                options={["Not acknowledged"]}
+                selected="Not acknowledged"
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function PlaceholderSegmented(props: {
+  ariaLabel: string;
+  options: string[];
+  selected: string;
+}) {
+  return (
+    <div
+      className="settings-segmented"
+      role="radiogroup"
+      aria-label={props.ariaLabel}
+    >
+      {props.options.map((option) => (
+        <button
+          key={option}
+          aria-checked={option === props.selected}
+          className={`settings-segmented__button${
+            option === props.selected ? " is-active" : ""
+          }`}
+          disabled
+          role="radio"
+          type="button"
+        >
+          {option}
+        </button>
+      ))}
+    </div>
   );
 }

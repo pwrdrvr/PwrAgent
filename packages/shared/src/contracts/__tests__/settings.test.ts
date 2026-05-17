@@ -48,6 +48,15 @@ describe("desktop settings contracts", () => {
       updates: {
         channel: { value: "latest", source: "default" },
       },
+      onboarding: {
+        completed: false,
+        threadPresentation: "mission_control",
+        codexProfileModel: "shared",
+        messaging: {
+          acknowledgedAt: null,
+          checkedProviders: [],
+        },
+      },
       messaging: {
         enabled: {
           value: true,

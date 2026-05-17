@@ -22,6 +22,7 @@ import {
   PWRAGENT_DOCUMENTATION_URL,
   PWRAGENT_HOMEPAGE_URL,
 } from "../shared/app-metadata";
+import { ONBOARDING_REPLAY_CHANNEL } from "../shared/ipc";
 import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
@@ -194,6 +195,11 @@ function installApplicationMenu(): void {
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
+      },
+      replayOnboardingWizard: () => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          window.webContents.send(ONBOARDING_REPLAY_CHANNEL);
+        }
       },
       showAboutPanel: () => {
         app.showAboutPanel();

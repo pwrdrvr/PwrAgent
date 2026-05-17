@@ -324,6 +324,18 @@ export class DesktopSettingsService {
       updates: {
         channel: this.resolveUpdateChannelValue(config.updates?.channel),
       },
+      onboarding: {
+        completed: config.onboarding?.completed ?? false,
+        threadPresentation:
+          config.onboarding?.threadPresentation ?? "mission_control",
+        codexProfileModel: config.onboarding?.codexProfileModel ?? "shared",
+        messaging: {
+          acknowledgedAt:
+            config.onboarding?.messaging?.acknowledgedAt?.trim() || null,
+          checkedProviders:
+            config.onboarding?.messaging?.checkedProviders?.filter(Boolean) ?? [],
+        },
+      },
       messaging: {
         enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
         allowFullAccessEscalation: this.resolveConfigBoolean(

@@ -16,6 +16,7 @@ function buildTemplate(
       openIssueReporter: vi.fn(),
       openSettings: options?.openSettings ?? vi.fn(),
       openWebsite: vi.fn(),
+      replayOnboardingWizard: vi.fn(),
       showAboutPanel: vi.fn(),
       showChangelogWindow: vi.fn(),
       showLicenseWindow: vi.fn(),

@@ -169,6 +169,33 @@ export type DesktopGeneralSettingsSnapshot = {
   appearance: DesktopAppearanceSnapshot;
 };
 
+export const DESKTOP_ONBOARDING_THREAD_PRESENTATIONS = [
+  "compact",
+  "mission_control",
+] as const;
+
+export type DesktopOnboardingThreadPresentation =
+  (typeof DESKTOP_ONBOARDING_THREAD_PRESENTATIONS)[number];
+
+export const DESKTOP_ONBOARDING_CODEX_PROFILE_MODELS = [
+  "shared",
+  "isolated",
+  "multiple",
+] as const;
+
+export type DesktopOnboardingCodexProfileModel =
+  (typeof DESKTOP_ONBOARDING_CODEX_PROFILE_MODELS)[number];
+
+export type DesktopOnboardingSettingsSnapshot = {
+  completed: boolean;
+  threadPresentation: DesktopOnboardingThreadPresentation;
+  codexProfileModel: DesktopOnboardingCodexProfileModel;
+  messaging: {
+    acknowledgedAt: string | null;
+    checkedProviders: string[];
+  };
+};
+
 export type DesktopCodexCandidateSource =
   | "env"
   | "config"
@@ -340,6 +367,7 @@ export type DesktopSettingsSnapshot = {
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
+  onboarding: DesktopOnboardingSettingsSnapshot;
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
     allowFullAccessEscalation: DesktopSettingsValue<boolean>;
@@ -458,6 +486,15 @@ export type DesktopSettingsConfigPatch = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+  };
+  onboarding?: {
+    completed?: boolean;
+    threadPresentation?: DesktopOnboardingThreadPresentation;
+    codexProfileModel?: DesktopOnboardingCodexProfileModel;
+    messaging?: {
+      acknowledgedAt?: string | null;
+      checkedProviders?: string[];
+    };
   };
   messaging?: {
     enabled?: boolean;
@@ -729,6 +766,22 @@ export function isDesktopAppearanceDensity(
 ): value is DesktopAppearanceDensity {
   return DESKTOP_APPEARANCE_DENSITIES.includes(
     value as DesktopAppearanceDensity,
+  );
+}
+
+export function isDesktopOnboardingThreadPresentation(
+  value: string,
+): value is DesktopOnboardingThreadPresentation {
+  return DESKTOP_ONBOARDING_THREAD_PRESENTATIONS.includes(
+    value as DesktopOnboardingThreadPresentation,
+  );
+}
+
+export function isDesktopOnboardingCodexProfileModel(
+  value: string,
+): value is DesktopOnboardingCodexProfileModel {
+  return DESKTOP_ONBOARDING_CODEX_PROFILE_MODELS.includes(
+    value as DesktopOnboardingCodexProfileModel,
   );
 }
 

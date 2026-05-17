@@ -12,6 +12,10 @@ import {
   type SettingsSection,
 } from "./features/settings/SettingsScreen";
 import {
+  OnboardingWizard,
+  type OnboardingWizardMode,
+} from "./features/onboarding/OnboardingWizard";
+import {
   useDesktopSettings,
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
@@ -104,6 +108,7 @@ function DesktopAppShell(props: {
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSection | undefined
   >(undefined);
+  const [manualOnboardingOpen, setManualOnboardingOpen] = useState(false);
   const [threadViewReady, setThreadViewReady] = useState(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
@@ -139,6 +144,14 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });
+  useEffect(() => {
+    if (!desktopApi?.onOnboardingReplay) {
+      return undefined;
+    }
+    return desktopApi.onOnboardingReplay(() => {
+      setManualOnboardingOpen(true);
+    });
+  }, [desktopApi]);
   useEffect(() => {
     if (threadViewReady || mainView !== "thread" || navigation.loading) {
       return;
@@ -318,6 +331,37 @@ function DesktopAppShell(props: {
     setSidebarWidth(Math.min(560, Math.max(280, nextWidth)));
   };
 
+  const autoOnboardingOpen = settings.snapshot?.onboarding.completed === false;
+  const onboardingMode: OnboardingWizardMode | undefined = manualOnboardingOpen
+    ? "manual"
+    : autoOnboardingOpen
+      ? "auto"
+      : undefined;
+  const completeOnboarding = async (): Promise<void> => {
+    if (onboardingMode === "auto") {
+      const saved = await settings.writeConfig({
+        onboarding: { completed: true },
+      });
+      if (!saved) {
+        throw new Error("Could not save the onboarding preference.");
+      }
+      return;
+    }
+    setManualOnboardingOpen(false);
+  };
+  const skipOnboarding = async (): Promise<void> => {
+    if (onboardingMode === "auto") {
+      const saved = await settings.writeConfig({
+        onboarding: { completed: true },
+      });
+      if (!saved) {
+        throw new Error("Could not save the onboarding preference.");
+      }
+      return;
+    }
+    setManualOnboardingOpen(false);
+  };
+
   const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
     event.preventDefault();
     const startX = event.clientX;
@@ -411,6 +455,37 @@ function DesktopAppShell(props: {
             onOpenMessagingActivity={openMessagingActivityWindow}
           />
         </div>
+      ) : null}
+
+      {onboardingMode ? (
+        <OnboardingWizard
+          codexProfileModel={
+            settings.snapshot?.onboarding.codexProfileModel ?? "shared"
+          }
+          mode={onboardingMode}
+          saving={settings.saving}
+          threadPresentation={
+            settings.snapshot?.onboarding.threadPresentation ?? "mission_control"
+          }
+          onComplete={completeOnboarding}
+          onCodexProfileModelChange={async (codexProfileModel) => {
+            const saved = await settings.writeConfig({
+              onboarding: { codexProfileModel },
+            });
+            if (!saved) {
+              throw new Error("Could not save the Codex profile model.");
+            }
+          }}
+          onSkip={skipOnboarding}
+          onThreadPresentationChange={async (threadPresentation) => {
+            const saved = await settings.writeConfig({
+              onboarding: { threadPresentation },
+            });
+            if (!saved) {
+              throw new Error("Could not save the thread presentation.");
+            }
+          }}
+        />
       ) : null}
 
       <AppUpdateBanner desktopApi={desktopApi} />

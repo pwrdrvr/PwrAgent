@@ -6,6 +6,7 @@ export type ApplicationMenuActions = {
   openIssueReporter: () => void | Promise<void>;
   openSettings: () => void;
   openWebsite: () => void | Promise<void>;
+  replayOnboardingWizard: () => void;
   showAboutPanel: () => void;
   showChangelogWindow: () => void;
   showLicenseWindow: () => void;
@@ -156,6 +157,12 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
       {
         label: "Logs",
         click: options.actions.showLogsWindow,
+      },
+      { type: "separator" },
+      {
+        id: "replay-onboarding-wizard",
+        label: "Replay onboarding wizard",
+        click: options.actions.replayOnboardingWizard,
       },
     ],
   };

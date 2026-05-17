@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +47,7 @@ export async function launchElectronApp(params: {
   fixturePath: string;
   env?: Record<string, string | undefined>;
   homeRoot?: string;
+  onboardingCompleted?: boolean;
   windowSize?: {
     width: number;
     height: number;
@@ -104,6 +105,9 @@ export async function launchElectronApp(params: {
       },
     },
   );
+  if (params.onboardingCompleted !== false) {
+    await seedOnboardingCompleted(seedHomeRoot);
+  }
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
@@ -215,4 +219,27 @@ export async function launchElectronApp(params: {
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+async function seedOnboardingCompleted(homeRoot: string): Promise<void> {
+  const configPath = path.join(
+    homeRoot,
+    ".pwragent/profiles/default/config.toml",
+  );
+  await mkdir(path.dirname(configPath), { recursive: true });
+  let current = "";
+  try {
+    current = await readFile(configPath, "utf8");
+  } catch {
+    current = "";
+  }
+  if (/^\s*\[onboarding\]\s*$/m.test(current)) {
+    return;
+  }
+  const prefix = current.trim().length > 0 ? `${current.trimEnd()}\n\n` : "";
+  await writeFile(
+    configPath,
+    `${prefix}[onboarding]\ncompleted = true\n`,
+    "utf8",
+  );
 }

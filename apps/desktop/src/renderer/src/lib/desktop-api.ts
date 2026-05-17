@@ -435,6 +435,7 @@ export type DesktopApi = {
   ) => () => void;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
+  onOnboardingReplay?: (callback: () => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;
   /**
    * Main → renderer push: fires when the user invokes the app's
