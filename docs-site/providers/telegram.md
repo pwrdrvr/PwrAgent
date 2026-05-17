@@ -54,7 +54,11 @@ discards the unauthorized message and logs your Telegram user ID
 there. Copy the ID into the authorized list. The pairing flow is just
 the friendlier version of that same path.
 
-![Settings → Messaging → Telegram panel](../assets/screenshots/settings-messaging-telegram.png)
+{% include figure.html
+   src="/assets/screenshots/settings-messaging-telegram.png"
+   alt="Settings → Messaging → Telegram panel"
+   caption="<strong>Settings → Messaging → Telegram</strong>. <strong>Test</strong> confirms PwrAgent can reach the Telegram Bot API; <strong>Authorized User IDs</strong> is populated by the <a href='../../messaging/pairing/'>Pairing</a> flow."
+%}
 
 For the captured walkthrough of the pairing flow (generate → send
 code → approve), and for the troubleshooting Activity screen that

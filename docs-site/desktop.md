@@ -58,7 +58,11 @@ desktop **does**, what's not in it yet, and what's on the roadmap.
 
 ### Sidebar lenses
 
-![Sidebar with the Updated lens active, showing pinned threads at the top and recent activity below](assets/screenshots/desktop-recents.png)
+{% include figure.html
+   src="/assets/screenshots/desktop-recents.png"
+   alt="Sidebar with the Updated lens active, showing pinned threads at the top and recent activity below"
+   caption="The <strong>Updated</strong> lens, populated. Pins sit in a statically-ordered shelf at the top; unpinned threads sort by most-recent activity below."
+%}
 
 The left sidebar carries three thread lenses you can switch between
 with the segmented toggle at the top of the list. All three start
@@ -257,7 +261,11 @@ Codex Desktop doesn't have this yet either.
 
 ### Multi-message queueing
 
-![Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread; "Review changes against main" (a queued /review against the base branch) and "now squash and push --force-with-lease" stacked as queued chips above the composer](assets/screenshots/desktop-queued-turns.png)
+{% include figure.html
+   src="/assets/screenshots/desktop-queued-turns.png"
+   alt='Composer with a turn in flight on the "Convert OAuth flow to PKCE" thread; "Review changes against main" (a queued /review against the base branch) and "now squash and push --force-with-lease" stacked as queued chips above the composer'
+   caption="The two <strong>QUEUED</strong> chips above the composer will fire FIFO when the in-flight <em>make a branch and PR</em> turn finishes. The composer's <strong>Send</strong> is replaced by <strong>Stop / Queue</strong> while a turn is active."
+%}
 
 You don't have to wait for the agent to finish a turn before
 queueing the next thing. While a turn is running, the composer's
@@ -293,7 +301,11 @@ list immediately, and vice versa.
 
 ### Skills browser ($ autocomplete and chips)
 
-![Composer mid-message ("Let's use $ce") with the Skills autocomplete listbox open below it, showing matching skill rows like $ce:plan, $ce:brainstorm, $ce:compound](assets/screenshots/desktop-skills-autocomplete.png)
+{% include figure.html
+   src="/assets/screenshots/desktop-skills-autocomplete.png"
+   alt='Composer mid-message ("Let&#39;s use $ce") with the Skills autocomplete listbox open below it, showing matching skill rows like $ce:plan, $ce:brainstorm, $ce:compound'
+   caption="Typing <code>$</code> in the composer opens the Skills listbox. Subsequent characters filter incrementally — here <code>$ce</code> narrows to skills whose names start with <code>ce</code>. Pick a row to insert it as an inline chip."
+%}
 
 PwrAgent surfaces **Codex skills** (including plugin-exposed
 skills) directly in the composer. Type **`$`** and an autocomplete
@@ -411,7 +423,11 @@ Both kinds of profiles are managed from **Settings → Profiles**:
   profile from the same panel triggers the appropriate `codex login`
   flow against the isolated `CODEX_HOME`.
 
-![Settings → Profiles panel listing PwrAgent profiles](assets/screenshots/settings-profiles.png)
+{% include figure.html
+   src="/assets/screenshots/settings-profiles.png"
+   alt="Settings → Profiles panel listing PwrAgent profiles"
+   caption="<strong>Settings → Profiles</strong>. Every PwrAgent profile under <code>~/.pwragent/profiles/</code> is listed; the active one is highlighted. Switching restarts the app under the selected profile."
+%}
 
 ### Launching a profile from the command line
 

@@ -51,7 +51,11 @@ images and want to keep the per-turn token cost low.
 | `4096 patches` | Allows roughly a 2048×2048 square image before model-specific multipliers. |
 | `Actual size` | Preserves pasted image dimensions before upload. |
 
-![Settings → General panel showing the pasted image patch budget options](assets/screenshots/settings-general.png)
+{% include figure.html
+   src="/assets/screenshots/settings-general.png"
+   alt="Settings → General panel showing the pasted image patch budget options"
+   caption="<strong>Settings → General → Pasted images</strong>. The <strong>Image patch budget</strong> picker controls how aggressively large pasted images are downscaled before forwarding to the model."
+%}
 
 The same patch budget affects messaging-side image attachments
 similarly. See [Using Codex via Messaging → Image upload profile](../using-codex/#image-upload-profile)
@@ -73,7 +77,11 @@ If the auto-discovery picks the wrong binary or doesn't find one,
 override the path in **Settings → Applications**. Paths are
 per-tool; an explicit value beats the auto-discovered one.
 
-![Settings → Applications panel showing discovered terminal, editor, git, and gh CLI paths](assets/screenshots/settings-applications.png)
+{% include figure.html
+   src="/assets/screenshots/settings-applications.png"
+   alt="Settings → Applications panel showing discovered terminal, editor, git, and gh CLI paths"
+   caption="<strong>Settings → Applications</strong>. PwrAgent auto-discovers your terminal, editor, <code>git</code>, and <code>gh</code> CLI paths. A green status indicator next to each row means the tool was found."
+%}
 
 Codex App Server discovery is its own beast — see
 [Models / Codex App Server](#models--codex-app-server) below.
@@ -92,7 +100,11 @@ delete PwrAgent profiles. Each row shows the on-disk profile dir,
 the Codex auth profile bound to it, and which one's active /
 configured to launch by default.
 
-![Settings → Profiles panel listing PwrAgent profiles with the active one highlighted](assets/screenshots/settings-profiles.png)
+{% include figure.html
+   src="/assets/screenshots/settings-profiles.png"
+   alt="Settings → Profiles panel listing PwrAgent profiles with the active one highlighted"
+   caption="<strong>Settings → Profiles</strong>. Active profile is highlighted; <strong>New profile</strong> creates a fresh <code>~/.pwragent/profiles/&lt;name&gt;/</code> directory and switches to it on next launch."
+%}
 
 Launches via `--profile <name>` (or `PWRAGENT_PROFILE=<name>`)
 still override the startup default — see
@@ -110,7 +122,11 @@ storage location**. Pick a path on the same filesystem as your
 repos — `git worktree` requires that, and putting the storage on a
 different volume will produce surprising errors at handoff.
 
-![Settings → Worktrees panel showing the default storage location](assets/screenshots/settings-worktrees.png)
+{% include figure.html
+   src="/assets/screenshots/settings-worktrees.png"
+   alt="Settings → Worktrees panel showing the default storage location"
+   caption="<strong>Settings → Worktrees</strong>. Default storage location for managed git worktrees (<code>~/.pwragent/worktrees/</code>). Change to any path on disk if you want them somewhere else."
+%}
 
 When PwrAgent creates a worktree for a thread, it lands at
 `<worktree-storage>/<hash>/<project-folder-name>` where `<hash>` is
@@ -134,7 +150,11 @@ your threads. The version currently in use is shown in **Settings →
 Models** — same panel where you'd verify which models are available
 and which one PwrAgent thinks you're logged into.
 
-![Settings → Models panel showing Codex App Server version, source, and model list](assets/screenshots/settings-models.png)
+{% include figure.html
+   src="/assets/screenshots/settings-models.png"
+   alt="Settings → Models panel showing Codex App Server version, source, and model list"
+   caption="<strong>Settings → Models / Codex App Server</strong>. Shows the detected Codex App Server version, the source it was discovered from (Codex Desktop or CLI), the active OpenAI account, and the picker for switching Codex auth profiles."
+%}
 
 ### Keeping the App Server up to date
 
@@ -195,7 +215,11 @@ Opt-in features that are still in flux. Today the panel hosts:
   diff payloads bloat past comfortable model-context sizes; off by
   default.
 
-![Settings → Experimental panel showing the diff condensation toggle](assets/screenshots/settings-experimental.png)
+{% include figure.html
+   src="/assets/screenshots/settings-experimental.png"
+   alt="Settings → Experimental panel showing the diff condensation toggle"
+   caption="<strong>Settings → Experimental</strong>. Opt-in features still in flux. Toggles here don't carry stability guarantees and may change shape between releases."
+%}
 
 Expect this section to grow as features cycle through the
 experimental phase before promotion.

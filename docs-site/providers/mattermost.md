@@ -128,7 +128,11 @@ Set `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` to that value
 in the environment, or store it in the Settings UI. The HMAC pin is
 **strongly recommended** for any production deployment.
 
-![Settings → Messaging → Mattermost panel](../assets/screenshots/settings-messaging-mattermost.png)
+{% include figure.html
+   src="/assets/screenshots/settings-messaging-mattermost.png"
+   alt="Settings → Messaging → Mattermost panel"
+   caption="<strong>Settings → Messaging → Mattermost</strong>. The <strong>Callback Base URL</strong> field is where the public tunnel hostname goes; <strong>HMAC Secret</strong> pins the callback so only Mattermost can deliver. <strong>Authorized User IDs</strong> is populated by the <a href='../../messaging/pairing/'>Pairing</a> flow."
+%}
 
 ## Pairing
 
