@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   SettingsPanelHead,
   SettingsSection,
@@ -55,6 +56,7 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
       if (!response.ok) {
         setError(response.error ?? "ACP agent install failed.");
       }
+      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
       setConfirming(undefined);
       await refresh(false);
     } catch (installError) {

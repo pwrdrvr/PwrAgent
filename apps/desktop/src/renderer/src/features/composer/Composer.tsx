@@ -4475,7 +4475,7 @@ export function Composer(props: ComposerProps) {
               disabled={launchpadSubmitting}
               value={props.launchpad.backend}
               options={providerOptions.map((candidate) => ({
-                label: formatBackendLabel(candidate.kind),
+                label: formatBackendLabel(candidate.kind, props.backends),
                 value: candidate.kind,
               }))}
               onChange={(value) => {
@@ -4511,7 +4511,7 @@ export function Composer(props: ComposerProps) {
             />
           ) : props.thread ? (
             <span className="composer__fixed-value" aria-label="Provider">
-              {formatBackendLabel(props.thread.source)}
+              {formatBackendLabel(props.thread.source, props.backends)}
             </span>
           ) : null}
 

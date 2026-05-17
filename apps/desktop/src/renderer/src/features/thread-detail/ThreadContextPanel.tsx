@@ -21,6 +21,7 @@ import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import { CopyIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   formatBackendAccountText,
@@ -647,7 +648,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             <dl className="context-grid">
               <div>
                 <dt>Backend</dt>
-                <dd>{props.thread.source}</dd>
+                <dd>{formatBackendLabel(props.thread.source, props.backends)}</dd>
               </div>
               <div>
                 <dt>Thread ID</dt>

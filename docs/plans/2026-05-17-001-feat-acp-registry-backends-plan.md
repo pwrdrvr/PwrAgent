@@ -668,7 +668,7 @@ trust/provenance review, install confirmation, auth/setup status, and retry.
   executes.
 - Renderer continues to use shared/preload contracts only.
 
-- [ ] **Unit 7: Make Thread, Composer, Navigation, and Backend Labels Dynamic**
+- [x] **Unit 7: Make Thread, Composer, Navigation, and Backend Labels Dynamic**
 
 **Goal:** Ensure the everyday PwrAgent workflow can create, browse, read, and
 send turns to installed ACP backends without Codex/Grok label assumptions.
