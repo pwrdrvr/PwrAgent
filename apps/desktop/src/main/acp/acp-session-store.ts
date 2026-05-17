@@ -1,0 +1,90 @@
+import type { AcpBackendId, ThreadExecutionMode } from "@pwragent/shared";
+import type { StateDb } from "../state/state-db.js";
+
+export type AcpSessionMetadata = {
+  backendId: AcpBackendId;
+  sessionId: string;
+  title: string;
+  cwd?: string;
+  createdAt: number;
+  updatedAt: number;
+  executionMode: ThreadExecutionMode;
+  status: "active" | "idle" | "failed" | "unknown";
+  lastError?: string;
+};
+
+export class AcpSessionStore {
+  constructor(private readonly stateDb: StateDb) {}
+
+  upsertSession(metadata: AcpSessionMetadata): void {
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO acp_sessions(
+           backend_id,
+           session_id,
+           created_at,
+           updated_at,
+           payload
+         )
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        metadata.backendId,
+        metadata.sessionId,
+        metadata.createdAt,
+        metadata.updatedAt,
+        JSON.stringify(metadata),
+      );
+  }
+
+  listSessions(backendId: AcpBackendId): AcpSessionMetadata[] {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM acp_sessions
+         WHERE backend_id = ?
+         ORDER BY updated_at DESC`,
+      )
+      .all(backendId) as Array<{ payload: string }>;
+    return rows.flatMap((row) => {
+      const parsed = parseJson(row.payload);
+      return isSessionMetadata(parsed) ? [parsed] : [];
+    });
+  }
+
+  getSession(
+    backendId: AcpBackendId,
+    sessionId: string,
+  ): AcpSessionMetadata | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM acp_sessions
+         WHERE backend_id = ? AND session_id = ?`,
+      )
+      .get(backendId, sessionId) as { payload: string } | undefined;
+    const parsed = row ? parseJson(row.payload) : undefined;
+    return isSessionMetadata(parsed) ? parsed : undefined;
+  }
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSessionMetadata(value: unknown): value is AcpSessionMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.backendId === "string" &&
+    record.backendId.startsWith("acp:") &&
+    typeof record.sessionId === "string" &&
+    typeof record.title === "string" &&
+    typeof record.createdAt === "number" &&
+    typeof record.updatedAt === "number"
+  );
+}

@@ -1,0 +1,224 @@
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+  AppServerThreadMessage,
+  AppServerThreadPlanEntry,
+  AppServerThreadReplay,
+  AppServerThreadStatus,
+} from "@pwragent/shared";
+
+export type AcpSessionUpdate = {
+  sessionId: string;
+  update: Record<string, unknown>;
+  receivedAt?: number;
+};
+
+export class AcpSessionReplayNormalizer {
+  private entries: AppServerThreadEntry[] = [];
+  private messages: AppServerThreadMessage[] = [];
+  private status: AppServerThreadStatus = "idle";
+
+  apply(update: AcpSessionUpdate): AppServerThreadReplay {
+    const kind = readKind(update.update);
+    const createdAt = update.receivedAt ?? Date.now();
+
+    if (kind === "agent_message_chunk") {
+      this.applyAgentMessageChunk(update, createdAt);
+    } else if (kind === "plan") {
+      this.upsertPlan(update, createdAt);
+    } else if (kind === "tool_call" || kind === "tool_call_update") {
+      this.upsertActivity(toolActivity(update, kind, createdAt));
+    } else if (kind === "file" || kind === "terminal") {
+      this.upsertActivity(toolActivity(update, kind, createdAt));
+    } else if (kind === "turn_started") {
+      this.status = "active";
+    } else if (kind === "turn_finished") {
+      this.status = "idle";
+    } else {
+      this.upsertActivity(unknownActivity(update, kind, createdAt));
+    }
+
+    return this.replay();
+  }
+
+  replay(): AppServerThreadReplay {
+    return {
+      entries: this.entries,
+      messages: this.messages,
+      lastUserMessage: undefined,
+      lastAssistantMessage: [...this.messages]
+        .reverse()
+        .find((message) => message.role === "assistant")?.text,
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: this.status,
+    };
+  }
+
+  private applyAgentMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
+    const text = readString(update.update, "content") ?? readString(update.update, "text") ?? "";
+    const id = readString(update.update, "messageId") ?? `assistant:${update.sessionId}`;
+    const existingMessage = this.messages.find((message) => message.id === id);
+    if (existingMessage) {
+      existingMessage.text += text;
+    } else {
+      this.messages.push({
+        id,
+        role: "assistant",
+        text,
+        createdAt,
+      });
+    }
+
+    const existingEntry = this.entries.find(
+      (entry): entry is AppServerThreadEntry & { type: "message" } =>
+        entry.type === "message" && entry.id === id,
+    );
+    if (existingEntry) {
+      existingEntry.text += text;
+    } else {
+      this.entries.push({
+        type: "message",
+        id,
+        role: "assistant",
+        text,
+        createdAt,
+      });
+    }
+  }
+
+  private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
+    const id = readString(update.update, "planId") ?? `plan:${update.sessionId}`;
+    const steps = readPlanSteps(update.update);
+    const plan: AppServerThreadPlanEntry = {
+      type: "plan",
+      id,
+      createdAt,
+      explanation: readString(update.update, "explanation"),
+      markdown: readString(update.update, "markdown"),
+      steps,
+    };
+    this.upsertEntry(plan);
+  }
+
+  private upsertActivity(activity: AppServerThreadActivityEntry): void {
+    this.upsertEntry(activity);
+  }
+
+  private upsertEntry(entry: AppServerThreadEntry): void {
+    const index = this.entries.findIndex((existing) => existing.id === entry.id);
+    if (index === -1) {
+      this.entries.push(entry);
+      return;
+    }
+    this.entries[index] = entry;
+  }
+}
+
+function readKind(update: Record<string, unknown>): string {
+  return (
+    readString(update, "kind") ??
+    readString(update, "type") ??
+    readString(update, "sessionUpdate") ??
+    "unknown"
+  );
+}
+
+function readString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {
+  const steps = Array.isArray(record.steps) ? record.steps : [];
+  return steps.flatMap((step) => {
+    if (typeof step === "string") {
+      return [{ step, status: "pending" as const }];
+    }
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      return [];
+    }
+    const stepRecord = step as Record<string, unknown>;
+    const text = readString(stepRecord, "step") ?? readString(stepRecord, "content");
+    if (!text) {
+      return [];
+    }
+    const status = readString(stepRecord, "status");
+    return [
+      {
+        step: text,
+        status:
+          status === "in_progress" || status === "completed"
+            ? status
+            : "pending",
+      },
+    ];
+  });
+}
+
+function toolActivity(
+  update: AcpSessionUpdate,
+  kind: string,
+  createdAt: number,
+): AppServerThreadActivityEntry {
+  const id =
+    readString(update.update, "toolCallId") ??
+    readString(update.update, "id") ??
+    `${kind}:${update.sessionId}`;
+  const label =
+    readString(update.update, "title") ??
+    readString(update.update, "name") ??
+    kind.replaceAll("_", " ");
+  const status = readString(update.update, "status");
+  const path = readString(update.update, "path");
+  const command = readString(update.update, "command");
+
+  return {
+    type: "activity",
+    id,
+    createdAt,
+    summary: label,
+    status:
+      status === "completed" ||
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "in_progress"
+        ? status
+        : undefined,
+    details: [
+      {
+        id: `${id}:detail`,
+        kind: command ? "command" : path ? "write" : "read",
+        label,
+        path,
+        command: command ? { displayCommand: command, rawCommand: command } : undefined,
+      },
+    ],
+  };
+}
+
+function unknownActivity(
+  update: AcpSessionUpdate,
+  kind: string,
+  createdAt: number,
+): AppServerThreadActivityEntry {
+  const id = `unknown:${update.sessionId}:${createdAt}`;
+  return {
+    type: "activity",
+    id,
+    createdAt,
+    summary: `ACP update: ${kind}`,
+    details: [
+      {
+        id: `${id}:detail`,
+        kind: "read",
+        label: "Unknown ACP session update",
+      },
+    ],
+  };
+}

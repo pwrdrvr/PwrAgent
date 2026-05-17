@@ -439,7 +439,7 @@ binary registry distributions with explicit confirmation and provenance.
 - No installer path executes arbitrary shell strings.
 - Failed installs are recoverable and do not create launchable partial state.
 
-- [ ] **Unit 4: Build the ACP JSON-RPC Client and Session Normalizer**
+- [x] **Unit 4: Build the ACP JSON-RPC Client and Session Normalizer**
 
 **Goal:** Launch ACP agent processes, initialize sessions, send prompts, handle
 client requests, and normalize streamed ACP updates into PwrAgent thread replay
