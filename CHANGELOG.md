@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0-beta.5 - 2026-05-16
+
+- Switched the macOS release build to a Universal Apple Silicon + Intel package, with versioned Universal DMG/ZIP artifacts and a stable `PwrAgent.dmg` alias for latest-release website downloads.
+- Added persistent composer draft recovery so previous draft text can be restored with the Up Arrow after navigation, reloads, and app restarts.
+- Fixed release and license help links so About/Settings opens the PwrAgent release page and bundled license disclosures in branded app windows.
+- Fixed profile-scoped directory filtering so workspace rows and scratch projects stay tied to the active PwrAgent profile.
+- Fixed Codex environment setup commands so actions run from the thread workspace instead of the wrong directory.
+- Updated docs for composer draft recovery, Universal release packaging, and the public latest-DMG download flow.
+- Updated the release skill and release runbook to match the Universal macOS workflow and stable `PwrAgent.dmg` alias.
+
 ## v1.0.0-beta.4 - 2026-05-16
 
 - Added PwrAgent and Codex profile management, including profile-scoped settings, Codex account email display, and faster default-profile startup.
