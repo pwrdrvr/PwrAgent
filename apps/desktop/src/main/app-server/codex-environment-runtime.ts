@@ -8,6 +8,8 @@ import { getMainLogger } from "../log";
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
 export const DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS = 10 * 60 * 1_000;
+export const CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV =
+  "PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS";
 
 export class CodexEnvironmentCommandError extends Error {
   durationMs?: number;
@@ -142,7 +144,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: params.env,
         mode: "wait",
         timeoutMs:
-          params.setupTimeoutMs ?? DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS,
+          params.setupTimeoutMs ??
+          readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
         onProgress: (event) => {
           emitSetupProgress(event);
         },
@@ -456,6 +459,24 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
     key.startsWith("PRELOAD_VITE_") ||
     key.startsWith("RENDERER_VITE_")
   );
+}
+
+function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const rawValue = env[CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]?.trim();
+  if (!rawValue) {
+    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    environmentRuntimeLog.warn("codex-environment-setup-timeout-invalid", {
+      env: CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
+      value: rawValue,
+    });
+    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+  }
+
+  return Math.round(parsed);
 }
 
 function wrapShellCommand(shell: string, command: string): string {

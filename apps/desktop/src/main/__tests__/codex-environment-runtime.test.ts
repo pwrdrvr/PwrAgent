@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyLocalCodexEnvironmentSelection,
+  CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
   startLocalCodexEnvironmentAction,
 } from "../app-server/codex-environment-runtime";
 
@@ -119,15 +120,22 @@ describe("codex environment runtime", () => {
         actionStatus: "started",
       });
 
-      await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
-        [
-          "renderer=unset",
-          "run_as_node=unset",
-          "vite=unset",
-          "hydrated=hydrated",
-          "",
-        ].join("\n"),
-      );
+      const expectedOutput = [
+        "renderer=unset",
+        "run_as_node=unset",
+        "vite=unset",
+        "hydrated=hydrated",
+        "",
+      ].join("\n");
+      await expect(
+        expectEventually(async () => {
+          const output = await readFile(outputPath, "utf8");
+          if (output !== expectedOutput) {
+            throw new Error(`Output is not complete yet: ${JSON.stringify(output)}`);
+          }
+          return output;
+        }),
+      ).resolves.toBe(expectedOutput);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -311,6 +319,9 @@ describe("codex environment runtime", () => {
       try {
         await applyLocalCodexEnvironmentSelection({
           cwd: root,
+          env: {
+            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "50",
+          },
           selection: {
             environment: {
               id: "env",
@@ -322,7 +333,6 @@ describe("codex environment runtime", () => {
             executionTarget: "local",
             setupEnabled: true,
           },
-          setupTimeoutMs: 50,
         });
       } catch (caught) {
         error = caught;
