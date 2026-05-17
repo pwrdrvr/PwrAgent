@@ -83,4 +83,40 @@ describe("AppUpdateBanner", () => {
       screen.queryByText("Restart to update to v1.2.3."),
     ).not.toBeInTheDocument();
   });
+
+  it("does not let a stale initial read hide a newer downloaded event", async () => {
+    let listener: ((status: AppUpdateStatus) => void) | undefined;
+    let resolveInitialStatus:
+      | ((status: AppUpdateStatus) => void)
+      | undefined;
+    const initialStatus = new Promise<AppUpdateStatus>((resolve) => {
+      resolveInitialStatus = resolve;
+    });
+    const desktopApi = {
+      readAppUpdateStatus: vi.fn(async () => await initialStatus),
+      onAppUpdateStatus: vi.fn((callback: (status: AppUpdateStatus) => void) => {
+        listener = callback;
+        return vi.fn();
+      }),
+      installAppUpdate: vi.fn(async () => ({ status: "restarting" as const })),
+    } satisfies DesktopApi;
+
+    render(<AppUpdateBanner desktopApi={desktopApi} />);
+    await waitFor(() => {
+      expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
+    });
+
+    listener?.({ status: "downloaded", version: "1.2.3" });
+    expect(
+      await screen.findByText("Restart to update to v1.2.3."),
+    ).toBeInTheDocument();
+
+    resolveInitialStatus?.({ status: "available", version: "1.2.3" });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Restart to update to v1.2.3."),
+      ).toBeInTheDocument();
+    });
+  });
 });

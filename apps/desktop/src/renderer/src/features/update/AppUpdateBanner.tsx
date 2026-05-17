@@ -13,13 +13,15 @@ export function AppUpdateBanner(props: { desktopApi?: DesktopApi }) {
 
   useEffect(() => {
     let cancelled = false;
+    let receivedEvent = false;
+    const unsubscribe = desktopApi?.onAppUpdateStatus?.((status) => {
+      receivedEvent = true;
+      setUpdateStatus(status);
+    });
     void desktopApi?.readAppUpdateStatus?.().then((status) => {
-      if (!cancelled) {
+      if (!cancelled && !receivedEvent) {
         setUpdateStatus(status);
       }
-    });
-    const unsubscribe = desktopApi?.onAppUpdateStatus?.((status) => {
-      setUpdateStatus(status);
     });
     return () => {
       cancelled = true;

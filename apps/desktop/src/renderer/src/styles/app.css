@@ -2494,7 +2494,7 @@ textarea,
 
 .app-update-banner {
   position: fixed;
-  z-index: 130;
+  z-index: 80;
   left: 16px;
   bottom: 16px;
   display: grid;
