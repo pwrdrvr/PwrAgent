@@ -1808,3 +1808,240 @@ describe("Sidebar", () => {
     expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Directory pinning (plan 2026-05-09-002 Unit O). Mirrors the
+ * thread-pin sidebar tests above but on the directory rail of the
+ * Directories lens. Covers: drag-pin via divider, drag-reorder
+ * among pinned directories, context-menu pin/unpin toggle, and
+ * workspace/unlinked exclusion (only `kind: "directory"` entries
+ * carry pin affordances).
+ */
+describe("Sidebar directory pinning", () => {
+  function createDirectoryDataTransfer(directoryKey: string) {
+    return {
+      effectAllowed: "move",
+      getData: vi.fn((type: string) =>
+        type === "application/x-pwragent-directory" || type === "text/plain"
+          ? directoryKey
+          : "",
+      ),
+      setDragImage: vi.fn(),
+      setData: vi.fn(),
+    };
+  }
+
+  const projectADirectory: NavigationDirectorySummary = {
+    key: "directory:/Users/huntharo/pwrdrvr/ProjectA",
+    kind: "directory",
+    label: "ProjectA",
+    path: "/Users/huntharo/pwrdrvr/ProjectA",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 1000,
+  };
+
+  const projectBDirectory: NavigationDirectorySummary = {
+    key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+    kind: "directory",
+    label: "ProjectB",
+    path: "/Users/huntharo/pwrdrvr/ProjectB",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 2000,
+  };
+
+  const workspaceDirectory: NavigationDirectorySummary = {
+    key: "workspace:/Users/huntharo/code",
+    kind: "workspace",
+    label: "Workspace",
+    path: "/Users/huntharo/code",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 500,
+  };
+
+  /**
+   * The directory row exposes two buttons per row: the summary (with
+   * `aria-expanded`) and the launchpad button (with the longer
+   * `Open new thread launchpad for X` aria-label). Both match a
+   * `/ProjectA/i` name regex, so we filter to the summary by
+   * `aria-expanded`.
+   */
+  function getDirectorySummary(label: RegExp): HTMLElement {
+    const matches = screen.getAllByRole("button", { name: label });
+    const summary = matches.find((button) =>
+      button.hasAttribute("aria-expanded"),
+    );
+    if (!summary) {
+      throw new Error(
+        `Could not find directory summary button matching ${label}`,
+      );
+    }
+    return summary;
+  }
+
+  function renderSidebar(
+    directoriesArg: NavigationDirectorySummary[],
+    overrides: {
+      onSetDirectoryPin?: (
+        directory: NavigationDirectorySummary,
+        pinned: boolean,
+      ) => Promise<void>;
+      onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+    } = {},
+  ): void {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directoriesArg}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={overrides.onSetDirectoryPin}
+        onReorderDirectoryPins={overrides.onReorderDirectoryPins}
+      />,
+    );
+  }
+
+  it("renders pinned directories above the divider and unpinned below", () => {
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned, projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const divider = screen.getByRole("separator", {
+      name: "Unpinned directories",
+    });
+    const pinnedSummary = getDirectorySummary(/ProjectA/i);
+    const unpinnedSummary = getDirectorySummary(/ProjectB/i);
+
+    // Pinned directory renders before the divider; unpinned after.
+    expect(
+      pinnedSummary.compareDocumentPosition(divider) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      divider.compareDocumentPosition(unpinnedSummary) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("pins an unpinned directory when it is dropped on the pinned divider", () => {
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned, projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins,
+    });
+
+    fireEvent.drop(
+      screen.getByRole("separator", { name: "Unpinned directories" }),
+      { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
+    );
+
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
+      pinned.key,
+      projectBDirectory.key,
+    ]);
+  });
+
+  it("reorders pinned directories when one is dropped on another pinned directory", () => {
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+    };
+
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins,
+    });
+
+    // Drop pinnedB onto pinnedA's header. With JSDOM's default
+    // bounding rect (all zeros), getDropIndicatorPosition returns
+    // "before", so moveDirectoryKey relocates pinnedB to the slot
+    // before pinnedA → [B, A]. This locks the call site without
+    // depending on a synthesized clientY/rect interaction.
+    const pinnedASummary = getDirectorySummary(/ProjectA/i);
+    const headerA = pinnedASummary.closest(".directory-row__header");
+    expect(headerA).not.toBeNull();
+
+    fireEvent.drop(headerA!, {
+      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    });
+
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
+      pinnedB.key,
+      pinnedA.key,
+    ]);
+  });
+
+  it("toggles pin state from the directory row context menu", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const summary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(summary);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(projectADirectory, true);
+  });
+
+  it("unpins a pinned directory from the row context menu", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const summary = getDirectorySummary(/ProjectA/i);
+    fireEvent.contextMenu(summary);
+
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(pinned, false);
+  });
+
+  it("ignores the context menu on workspace and unlinked pseudo-directories", () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+
+    renderSidebar([workspaceDirectory, projectADirectory], {
+      onSetDirectoryPin,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    const workspaceSummary = getDirectorySummary(/Workspace/i);
+    fireEvent.contextMenu(workspaceSummary);
+
+    expect(onSetDirectoryPin).not.toHaveBeenCalled();
+  });
+});
