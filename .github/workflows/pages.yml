@@ -83,15 +83,21 @@ jobs:
           bundler-cache: true
           working-directory: docs-site
 
+      # Note: every other workflow in this repo uses
+      # `pwrdrvr/configure-nodejs@v1`, which detects the package
+      # manager from a lockfile and runs a full project install.
+      # This job doesn't have (or want) a `docs-site/package.json`
+      # — pa11y-ci and http-server are installed globally as a
+      # one-shot. `actions/setup-node@v5` is the right shape for
+      # "give me Node, that's it."
+      #
+      # `package-manager-cache: false` because setup-node otherwise
+      # auto-detects the repo root's `pnpm-lock.yaml`, tries to
+      # enable the pnpm cache, and fails (pnpm isn't pre-installed
+      # on the runner).
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-          # We install pa11y-ci + http-server globally as a one-shot;
-          # no project package.json in docs-site. Disable the auto-
-          # detected pnpm cache (the repo root has a pnpm-lock.yaml
-          # that setup-node would otherwise try to honor, but pnpm
-          # isn't pre-installed on the runner so the cache step
-          # fails with "Unable to locate executable file: pnpm").
           package-manager-cache: false
 
       - name: Build Jekyll site for a11y audit
