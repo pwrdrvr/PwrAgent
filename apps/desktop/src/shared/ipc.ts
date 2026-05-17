@@ -44,6 +44,18 @@ export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
+/**
+ * Directory pin IPC (plan 2026-05-09-002, Unit G). Mirror of the
+ * thread-pin channels with the per-backend dimension dropped —
+ * directory keys are globally unique, so pin order is global. The
+ * main-process handler validates that the directoryKey corresponds
+ * to a `kind: "directory"` summary (workspace / unlinked pseudo-
+ * directories are rejected) before writing to the overlay store.
+ */
+export const NAVIGATION_SET_DIRECTORY_PIN_CHANNEL =
+  "navigation:set-directory-pin";
+export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
+  "navigation:reorder-directory-pins";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_GET_GH_STATUS_CHANNEL =
