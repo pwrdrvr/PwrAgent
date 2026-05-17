@@ -2174,6 +2174,83 @@ textarea,
   background: var(--bg-sidebar);
 }
 
+/* Directory pin drop-indicator (plan 2026-05-09-002 Unit L). Same
+   visual treatment as `.thread-row-shell.is-drop-target-*`: 3px
+   accent bar with a soft glow, positioned just above (`-before`)
+   or just below (`-after`) the header. Attaches to the
+   `directory-row__header` itself rather than introducing a new
+   wrapper element — the header is already `position: sticky`
+   which acts as a containing block for absolute pseudo-elements. */
+.directory-row__header[draggable="true"] {
+  cursor: grab;
+}
+
+.directory-row__header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.directory-row__header.is-drop-target-before::before,
+.directory-row__header.is-drop-target-after::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 6;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.directory-row__header.is-drop-target-before::before {
+  top: -3px;
+}
+
+.directory-row__header.is-drop-target-after::after {
+  bottom: -3px;
+}
+
+/* Pinned-directories divider — promote-to-pinned drop target
+   between the pinned and unpinned sections of the Directories
+   lens. Mirrors `.recents-pinned-divider` token-for-token; the
+   only difference is the section label. */
+.directories-pinned-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.directories-pinned-divider.is-drop-target {
+  color: var(--accent-bright);
+}
+
+.directories-pinned-divider::before,
+.directories-pinned-divider::after {
+  content: "";
+  min-width: 16px;
+  height: 1px;
+  flex: 1;
+  background: var(--border-subtle);
+}
+
+.directories-pinned-divider.is-drop-target::before,
+.directories-pinned-divider.is-drop-target::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 14px var(--accent-shadow);
+}
+
 .directory-row__summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

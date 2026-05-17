@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import type {
   AppServerBackendKind,
   MessagingThreadBindingSummary,
@@ -7,8 +7,11 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  comparePinnedDirectories,
   comparePinnedThreads,
+  isPinnedDirectory,
   isPinnedThread,
+  moveDirectoryKey,
   moveThreadKey,
 } from "@pwragent/shared";
 import {
@@ -94,6 +97,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
+  // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
+  // the per-thread state above but tracks directory keys rather
+  // than thread keys. The `directoriesPinnedDividerDropTarget`
+  // boolean toggles the divider's "promote to pinned" affordance
+  // when an unpinned directory is dragged over it.
+  const [draggedDirectoryKey, setDraggedDirectoryKey] = useState<
+    string | undefined
+  >(undefined);
+  const [directoryDropIndicator, setDirectoryDropIndicator] = useState<
+    DropIndicatorState | undefined
+  >(undefined);
+  const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
+    useState(false);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -118,6 +134,57 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [pinnedThreads],
   );
+
+  // Directory pinning (plan 2026-05-09-002 Unit K). Same shape as
+  // pinnedThreads above. The `pinnedDirectoryKeys` array is the
+  // input to `moveDirectoryKey` for drag-reorder calculations.
+  const directoryDragEnabled = Boolean(
+    props.onSetDirectoryPin && props.onReorderDirectoryPins,
+  );
+  const pinnedDirectories = useMemo(
+    () =>
+      props.directories
+        .filter(isPinnedDirectory)
+        .sort(comparePinnedDirectories),
+    [props.directories],
+  );
+  const pinnedDirectoryKeys = useMemo(
+    () => pinnedDirectories.map((directory) => directory.key),
+    [pinnedDirectories],
+  );
+  const unpinnedDirectories = useMemo(
+    () => props.directories.filter((directory) => !isPinnedDirectory(directory)),
+    [props.directories],
+  );
+  const directoryByKey = useMemo(
+    () => new Map(props.directories.map((directory) => [directory.key, directory])),
+    [props.directories],
+  );
+
+  const reorderDirectoryPins = (nextKeys: string[]): void => {
+    void props.onReorderDirectoryPins?.(nextKeys);
+  };
+
+  const movePinnedDirectoryByKeyboard = (
+    directory: NavigationDirectorySummary,
+    direction: "up" | "down",
+  ): void => {
+    const currentIndex = pinnedDirectoryKeys.indexOf(directory.key);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    const targetKey = pinnedDirectoryKeys[targetIndex];
+    if (!targetKey) return;
+
+    reorderDirectoryPins(
+      moveDirectoryKey(
+        pinnedDirectoryKeys,
+        directory.key,
+        targetKey,
+        direction === "up" ? "before" : "after",
+      ),
+    );
+  };
 
   const pinnedThreadKeysForBackend = (backend: AppServerBackendKind): string[] =>
     pinnedThreads
@@ -255,84 +322,248 @@ export function DirectoriesList(props: DirectoriesListProps) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
 
-  return (
-    <div className="directory-list sidebar-list sidebar-list--dense">
-      {props.directories.map((directory) => {
-        const selectedLaunchpad =
-          props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
-        const selectedThreadInDirectory = directory.threadKeys.includes(
-          props.selectedItemKey ?? ""
-        );
-        const expanded =
-          expandedByKey[directory.key] ??
-          (selectedLaunchpad || selectedThreadInDirectory);
-        const visibleThreads = directory.threadKeys
-          .map((threadKey) => threadsByKey.get(threadKey))
-          .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-        const directoryPinnedThreads = visibleThreads
-          .filter(isPinnedThread)
-          .sort(comparePinnedThreads);
-        const directoryUnpinnedThreads = visibleThreads.filter(
-          (thread) => !isPinnedThread(thread),
-        );
+  /**
+   * Render a single directory row. Extracted so the pinned and
+   * unpinned sections can render the same row markup. The drag
+   * handlers attach to `.directory-row__header` only when this is a
+   * pinnable `kind: "directory"` entry AND directory pinning is
+   * enabled (both props provided). Mirrors RecentsList's
+   * pinned-vs-unpinned `draggable` toggling. See plan
+   * 2026-05-09-002 Unit K.
+   */
+  const renderDirectoryRow = (
+    directory: NavigationDirectorySummary,
+  ): ReactElement => {
+    const directoryPinned = isPinnedDirectory(directory);
+    const directoryDraggable =
+      directoryDragEnabled &&
+      directory.kind === "directory" &&
+      // Unpinned directories only become draggable when at least one
+      // directory is already pinned (matches the thread-pin pattern:
+      // first pin lives via context menu, drag is reordering).
+      (directoryPinned || pinnedDirectories.length > 0);
+    const isDirectoryDropTarget =
+      directoryDropIndicator?.targetKey === directory.key;
 
-        return (
-          <section key={directory.key} className="directory-row">
-            <div className="directory-row__header">
-              <button
-                aria-expanded={expanded}
-                className={`thread-row thread-row--compact directory-row__summary${
-                  selectedLaunchpad ? " is-selected" : ""
-                }`}
-                type="button"
-                onClick={() => {
-                  setExpandedByKey((current) => ({
-                    ...current,
-                    [directory.key]: !expanded,
-                  }));
-                }}
-              >
-                <span className="directory-row__summary-main">
-                  <span aria-hidden="true" className="directory-row__icon">
-                    {directory.kind === "workspace" ? (
-                      <WorkspaceIcon size={14} />
-                    ) : directory.kind === "unlinked" ? (
-                      <UnlinkedDotIcon size={14} />
-                    ) : (
-                      <FolderIcon size={14} />
-                    )}
-                  </span>
-                  <span className="directory-row__title-wrap">
-                    <span className="thread-row__title">{directory.label}</span>
-                  </span>
+    const selectedLaunchpad =
+      props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
+    const selectedThreadInDirectory = directory.threadKeys.includes(
+      props.selectedItemKey ?? ""
+    );
+    const expanded =
+      expandedByKey[directory.key] ??
+      (selectedLaunchpad || selectedThreadInDirectory);
+    const visibleThreads = directory.threadKeys
+      .map((threadKey) => threadsByKey.get(threadKey))
+      .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+    const directoryPinnedThreads = visibleThreads
+      .filter(isPinnedThread)
+      .sort(comparePinnedThreads);
+    const directoryUnpinnedThreads = visibleThreads.filter(
+      (thread) => !isPinnedThread(thread),
+    );
+
+    const dropIndicatorClass = isDirectoryDropTarget
+      ? ` is-drop-target-${directoryDropIndicator!.position}`
+      : "";
+
+    return (
+      <section key={directory.key} className="directory-row">
+        <div
+          className={`directory-row__header${dropIndicatorClass}`}
+          draggable={directoryDraggable}
+          onDragStart={
+            directoryDraggable
+              ? (event) => {
+                  setDraggedDirectoryKey(directory.key);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData(
+                    "application/x-pwragent-directory",
+                    directory.key,
+                  );
+                  // Set text/plain too so generic drop targets fall
+                  // through cleanly (no accidental "drop directory
+                  // into the thread list" behavior — receivers check
+                  // the directory MIME).
+                  event.dataTransfer.setData("text/plain", directory.key);
+                }
+              : undefined
+          }
+          onDragOver={
+            directoryDragEnabled
+              ? (event) => {
+                  const draggedKey =
+                    draggedDirectoryKey ??
+                    event.dataTransfer.getData(
+                      "application/x-pwragent-directory",
+                    );
+                  if (!draggedKey || draggedKey === directory.key) {
+                    return;
+                  }
+                  const draggedDirectory = directoryByKey.get(draggedKey);
+                  if (
+                    !draggedDirectory ||
+                    draggedDirectory.kind !== "directory"
+                  ) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setDirectoryDropIndicator({
+                    targetKey: directory.key,
+                    position: getDropIndicatorPosition(event),
+                  });
+                  setDirectoriesPinnedDividerDropTarget(false);
+                }
+              : undefined
+          }
+          onDragLeave={
+            directoryDragEnabled
+              ? (event) => {
+                  if (didDragLeaveCurrentTarget(event)) {
+                    setDirectoryDropIndicator(undefined);
+                  }
+                }
+              : undefined
+          }
+          onDragEnd={
+            directoryDragEnabled
+              ? () => {
+                  setDraggedDirectoryKey(undefined);
+                  setDirectoryDropIndicator(undefined);
+                  setDirectoriesPinnedDividerDropTarget(false);
+                }
+              : undefined
+          }
+          onDrop={
+            directoryDragEnabled
+              ? (event) => {
+                  event.preventDefault();
+                  const draggedKey =
+                    draggedDirectoryKey ??
+                    event.dataTransfer.getData(
+                      "application/x-pwragent-directory",
+                    );
+                  setDraggedDirectoryKey(undefined);
+                  setDirectoryDropIndicator(undefined);
+                  setDirectoriesPinnedDividerDropTarget(false);
+                  if (!draggedKey || draggedKey === directory.key) {
+                    return;
+                  }
+                  const draggedDirectory = directoryByKey.get(draggedKey);
+                  if (
+                    !draggedDirectory ||
+                    draggedDirectory.kind !== "directory"
+                  ) {
+                    return;
+                  }
+
+                  const position = getDropIndicatorPosition(event);
+                  // Drop on a pinned target → reorder within pinned
+                  // section. Drop on an unpinned target → drag is
+                  // moving among unpinned (no-op for pin state) OR
+                  // dragging an unpinned over an unpinned (also a
+                  // no-op since they have no pin order). The
+                  // promote-to-pinned path uses the divider as
+                  // drop target.
+                  if (!directoryPinned) {
+                    return;
+                  }
+
+                  const nextKeys = pinnedDirectoryKeys.includes(draggedKey)
+                    ? moveDirectoryKey(
+                        pinnedDirectoryKeys,
+                        draggedKey,
+                        directory.key,
+                        position,
+                      )
+                    : moveDirectoryKey(
+                        [...pinnedDirectoryKeys, draggedKey],
+                        draggedKey,
+                        directory.key,
+                        position,
+                      );
+                  reorderDirectoryPins(nextKeys);
+                }
+              : undefined
+          }
+          onKeyDown={
+            directoryDragEnabled && directoryPinned
+              ? (event) => {
+                  if (!event.metaKey || !event.shiftKey) return;
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    movePinnedDirectoryByKeyboard(directory, "up");
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    movePinnedDirectoryByKeyboard(directory, "down");
+                  }
+                }
+              : undefined
+          }
+        >
+          <button
+            aria-expanded={expanded}
+            className={`thread-row thread-row--compact directory-row__summary${
+              selectedLaunchpad ? " is-selected" : ""
+            }`}
+            type="button"
+            onClick={() => {
+              setExpandedByKey((current) => ({
+                ...current,
+                [directory.key]: !expanded,
+              }));
+            }}
+            onContextMenu={
+              directoryDragEnabled && directory.kind === "directory"
+                ? (event) => {
+                    event.preventDefault();
+                    void props.onSetDirectoryPin?.(directory, !directoryPinned);
+                  }
+                : undefined
+            }
+          >
+            <span className="directory-row__summary-main">
+              <span aria-hidden="true" className="directory-row__icon">
+                {directory.kind === "workspace" ? (
+                  <WorkspaceIcon size={14} />
+                ) : directory.kind === "unlinked" ? (
+                  <UnlinkedDotIcon size={14} />
+                ) : (
+                  <FolderIcon size={14} />
+                )}
+              </span>
+              <span className="directory-row__title-wrap">
+                <span className="thread-row__title">{directory.label}</span>
+              </span>
+            </span>
+
+            <span className="directory-row__summary-meta">
+              {directory.needsAttentionCount > 0 ? (
+                <span className="count-pill directory-row__attention">
+                  {directory.needsAttentionCount}
                 </span>
+              ) : null}
+              <span
+                aria-hidden="true"
+                className={`directory-row__chevron${expanded ? " is-open" : ""}`}
+              />
+            </span>
+          </button>
 
-                <span className="directory-row__summary-meta">
-                  {directory.needsAttentionCount > 0 ? (
-                    <span className="count-pill directory-row__attention">
-                      {directory.needsAttentionCount}
-                    </span>
-                  ) : null}
-                  <span
-                    aria-hidden="true"
-                    className={`directory-row__chevron${expanded ? " is-open" : ""}`}
-                  />
-                </span>
-              </button>
-
-              <button
-                aria-label={`Open new thread launchpad for ${directory.label}`}
-                className={`directory-row__launchpad-button${
-                  hasPendingLaunchpadState(directory) ? " has-draft" : ""
-                }`}
-                type="button"
-                onClick={() => {
-                  void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
-                }}
-              >
-                <NewThreadIcon size={16} />
-              </button>
-            </div>
+          <button
+            aria-label={`Open new thread launchpad for ${directory.label}`}
+            className={`directory-row__launchpad-button${
+              hasPendingLaunchpadState(directory) ? " has-draft" : ""
+            }`}
+            type="button"
+            onClick={() => {
+              void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+            }}
+          >
+            <NewThreadIcon size={16} />
+          </button>
+        </div>
 
             {expanded ? (
               <div className="directory-row__details">
@@ -509,7 +740,71 @@ export function DirectoriesList(props: DirectoriesListProps) {
             ) : null}
           </section>
         );
-      })}
+      };
+
+  return (
+    <div className="directory-list sidebar-list sidebar-list--dense">
+      {pinnedDirectories.map(renderDirectoryRow)}
+      {directoryDragEnabled && pinnedDirectories.length > 0 ? (
+        <div
+          className={`directories-pinned-divider${
+            directoriesPinnedDividerDropTarget ? " is-drop-target" : ""
+          }`}
+          role="separator"
+          aria-label="Unpinned directories"
+          onDragOver={(event) => {
+            const draggedKey =
+              draggedDirectoryKey ??
+              event.dataTransfer.getData("application/x-pwragent-directory");
+            if (!draggedKey) return;
+            const draggedDirectory = directoryByKey.get(draggedKey);
+            // Only allow promote-to-pinned drops here. Pinned →
+            // divider should be a no-op (unpin happens via the
+            // unpinned-section's drop target, or context menu).
+            if (
+              !draggedDirectory ||
+              draggedDirectory.kind !== "directory" ||
+              pinnedDirectoryKeys.includes(draggedKey)
+            ) {
+              event.dataTransfer.dropEffect = "none";
+              setDirectoriesPinnedDividerDropTarget(false);
+              return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDirectoryDropIndicator(undefined);
+            setDirectoriesPinnedDividerDropTarget(true);
+          }}
+          onDragLeave={(event) => {
+            if (didDragLeaveCurrentTarget(event)) {
+              setDirectoriesPinnedDividerDropTarget(false);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const draggedKey =
+              draggedDirectoryKey ??
+              event.dataTransfer.getData("application/x-pwragent-directory");
+            setDraggedDirectoryKey(undefined);
+            setDirectoriesPinnedDividerDropTarget(false);
+            if (!draggedKey) return;
+            const draggedDirectory = directoryByKey.get(draggedKey);
+            if (
+              !draggedDirectory ||
+              draggedDirectory.kind !== "directory" ||
+              pinnedDirectoryKeys.includes(draggedKey)
+            ) {
+              return;
+            }
+            // Append to the end of the pinned list — same as the
+            // RecentsList divider behavior.
+            reorderDirectoryPins([...pinnedDirectoryKeys, draggedKey]);
+          }}
+        >
+          <span>Directories</span>
+        </div>
+      ) : null}
+      {unpinnedDirectories.map(renderDirectoryRow)}
     </div>
   );
 }
