@@ -245,6 +245,7 @@ import {
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
+  WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
@@ -635,6 +636,15 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_FOCUS_SYNC_CHANNEL, listener);
+    };
+  },
+  onOpenSettingsRequested: (callback: () => void): (() => void) => {
+    // Main → renderer push from the PwrAgent → Settings… menu item.
+    // App.tsx subscribes and switches `mainView` to "settings".
+    const listener = () => callback();
+    ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     };
   },
   getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>

@@ -140,6 +140,16 @@ export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
 export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
 export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
+/**
+ * Main → renderer push: fired when the user invokes the app's
+ * "Settings…" menu item (PwrAgent → Settings… on macOS, Help → ...
+ * on Linux/Windows). The renderer's `App` shell listens on this
+ * channel and switches `mainView` to the Settings overlay, mirroring
+ * what the sidebar gear-icon button does. Settings is an in-renderer
+ * overlay (not a separate BrowserWindow) so the menu can't open it
+ * directly from the main process.
+ */
+export const WINDOW_OPEN_SETTINGS_CHANNEL = "window:open-settings";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";

@@ -180,6 +180,20 @@ function DesktopAppShell(props: {
       cancelled = true;
     };
   }, [ThreadViewComponent, threadViewReady]);
+  useEffect(() => {
+    // Subscribe to the PwrAgent → Settings… menu push. The Settings
+    // overlay is in-renderer (not a separate BrowserWindow), so the
+    // main process sends a fire-and-forget message instead of opening
+    // a window directly. Mirrors what the sidebar's gear-icon button
+    // does inline.
+    if (!desktopApi?.onOpenSettingsRequested) {
+      return;
+    }
+    return desktopApi.onOpenSettingsRequested(() => {
+      setSettingsInitialSection(undefined);
+      setMainView("settings");
+    });
+  }, [desktopApi]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,

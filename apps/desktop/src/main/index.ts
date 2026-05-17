@@ -79,6 +79,7 @@ import {
   isAppStateInitialized,
 } from "./state/app-state";
 import { createMainWindow } from "./window";
+import { requestOpenSettings } from "./window-open-settings";
 import { buildApplicationMenuTemplate } from "./menu";
 
 const APP_NAME = "PwrAgent";
@@ -187,6 +188,9 @@ function installApplicationMenu(): void {
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
+      },
+      openSettings: () => {
+        requestOpenSettings();
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);

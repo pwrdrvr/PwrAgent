@@ -420,6 +420,13 @@ export type DesktopApi = {
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;
+  /**
+   * Main → renderer push: fires when the user invokes the app's
+   * "Settings…" menu item. The main-window shell subscribes and
+   * switches its main view to the Settings overlay. Returns an
+   * unsubscribe function.
+   */
+  onOpenSettingsRequested?: (callback: () => void) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   platform?: string;
   versions?: {
