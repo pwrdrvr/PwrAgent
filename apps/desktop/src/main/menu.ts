@@ -4,6 +4,7 @@ export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   openDocumentation: () => void | Promise<void>;
   openIssueReporter: () => void | Promise<void>;
+  openSettings: () => void;
   openWebsite: () => void | Promise<void>;
   showAboutPanel: () => void;
   showChangelogWindow: () => void;
@@ -41,6 +42,19 @@ function buildMacAppMenu(
       {
         label: `About ${options.appName}`,
         click: options.actions.showAboutPanel,
+      },
+      { type: "separator" },
+      // "Settings…" sits where macOS users expect it — directly under
+      // the About item, separated from About by a divider and from
+      // the Services/Hide cluster below by another divider. The "…"
+      // suffix is the standard hint that the item opens a configurable
+      // surface (mirrors Mail, Safari, System Settings). Mapped to
+      // ⌘, by `accelerator: "CmdOrCtrl+,"` which is the universal
+      // Mac "preferences" shortcut.
+      {
+        label: "Settings…",
+        accelerator: "CmdOrCtrl+,",
+        click: options.actions.openSettings,
       },
       { type: "separator" },
       { role: "services" },
@@ -96,6 +110,15 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
             {
               label: `About ${options.appName}`,
               click: options.actions.showAboutPanel,
+            },
+            { type: "separator" as const },
+            // Non-Mac platforms don't get the macOS app-menu treatment
+            // — surface Settings here next to About + its standard
+            // shortcut so the menu path stays discoverable.
+            {
+              label: "Settings…",
+              accelerator: "CmdOrCtrl+," as const,
+              click: options.actions.openSettings,
             },
             { type: "separator" as const },
           ]
