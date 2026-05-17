@@ -41,6 +41,10 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   ReorderDirectoryPinsRequest,
@@ -186,6 +190,8 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+  ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_INSTALL_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
   APP_LOG_ENTRY_EVENT_CHANNEL,
@@ -421,6 +427,14 @@ const desktopApi = Object.freeze({
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
     await ipcRenderer.invoke(BACKEND_LIST_CHANNEL, request),
+  listAcpAgents: async (
+    request?: ListAcpAgentSettingsRequest,
+  ): Promise<ListAcpAgentSettingsResponse> =>
+    await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  installAcpAgent: async (
+    request: InstallAcpAgentRequest,
+  ): Promise<InstallAcpAgentResponse> =>
+    await ipcRenderer.invoke(ACP_AGENT_INSTALL_CHANNEL, request),
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>

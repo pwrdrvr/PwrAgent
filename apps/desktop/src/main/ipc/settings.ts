@@ -1,6 +1,8 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import type {
+  AcpAgentSettingsEntry,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -14,6 +16,10 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsWriteResponse,
   DesktopSettingsSnapshot,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   PickGhCommandResponse,
@@ -33,6 +39,8 @@ import {
 } from "@pwragent/shared";
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
+  ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_INSTALL_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -65,6 +73,19 @@ import {
   resolveDefaultCodexHome,
 } from "../settings/codex-profiles";
 import { getMainLogger } from "../log";
+import { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpInstaller } from "../acp/acp-installer";
+import { describeDistributionSource } from "../acp/acp-install-provenance";
+import { AcpRegistryService } from "../acp/acp-registry-service";
+import type {
+  AcpInstalledAgentRecord,
+  AcpRegistryAgent,
+  AcpRegistryAgentWithPolicy,
+  AcpRegistryDistribution,
+  AcpRegistrySnapshot,
+} from "../acp/acp-registry-types";
+import { getAppStateDb } from "../state/app-state";
+import { resolveActiveProfileDir } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const activeCodexLoginProcesses = new Map<
@@ -86,6 +107,181 @@ async function refreshModelBackendsIfNeeded(params: {
   ) {
     await disposeDesktopBackendRegistry();
   }
+}
+
+async function listAcpAgentSettings(
+  request: ListAcpAgentSettingsRequest = {},
+): Promise<ListAcpAgentSettingsResponse> {
+  const store = new AcpAgentStore(getAppStateDb());
+  const registryService = new AcpRegistryService();
+  let snapshot: AcpRegistrySnapshot | undefined;
+  let error: string | undefined;
+
+  if (request.refresh !== false) {
+    try {
+      snapshot = await registryService.fetchRegistry();
+      store.saveRegistrySnapshot(snapshot);
+    } catch (fetchError) {
+      error = fetchError instanceof Error ? fetchError.message : String(fetchError);
+    }
+  }
+
+  snapshot ??= store.readRegistrySnapshot();
+  const installed = store.listInstalledAgents();
+  const entries = snapshot
+    ? registryService
+        .applyAllowlist(snapshot)
+        .filter((agent) => agent.allowlist.allowed)
+        .flatMap((agent) => {
+          const entry = acpAgentSettingsEntry({
+            agent,
+            installed: installed.find((record) => record.backendId === agent.backendId),
+          });
+          return entry ? [entry] : [];
+        })
+    : installed.map((record) => installedAcpAgentSettingsEntry(record));
+
+  return {
+    fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+    entries,
+    ...(error ? { error } : {}),
+  };
+}
+
+async function installAcpAgent(
+  request: InstallAcpAgentRequest,
+): Promise<InstallAcpAgentResponse> {
+  if (!request.confirmed) {
+    return { ok: false, error: "install-not-confirmed" };
+  }
+
+  const store = new AcpAgentStore(getAppStateDb());
+  const registryService = new AcpRegistryService();
+  const snapshot = await readAcpSnapshotForInstall(store, registryService);
+  const agent = registryService
+    .applyAllowlist(snapshot)
+    .find((candidate) => candidate.backendId === request.backendId);
+  if (!agent || !agent.allowlist.allowed || !agent.installable) {
+    return {
+      ok: false,
+      error: agent?.unavailableReason ?? "ACP agent is not installable",
+    };
+  }
+
+  const distribution = selectAcpDistribution(agent, request.distributionKind);
+  if (!distribution) {
+    return { ok: false, error: "No allowed distribution is available." };
+  }
+
+  const installer = new AcpInstaller({ store });
+  const result = await installer.install({
+    agent,
+    distribution,
+    allowlistRuleId: agent.allowlist.ruleId ?? "allowlist",
+    installRoot: path.join(resolveActiveProfileDir(), "state", "acp-agents"),
+    confirmed: true,
+  });
+  await disposeDesktopBackendRegistry();
+  const entry = installedAcpAgentSettingsEntry(result.record);
+  return result.ok
+    ? { ok: true, entry }
+    : { ok: false, entry, error: result.record.lastError ?? "install-failed" };
+}
+
+async function readAcpSnapshotForInstall(
+  store: AcpAgentStore,
+  registryService: AcpRegistryService,
+): Promise<AcpRegistrySnapshot> {
+  try {
+    const snapshot = await registryService.fetchRegistry();
+    store.saveRegistrySnapshot(snapshot);
+    return snapshot;
+  } catch (error) {
+    const cached = store.readRegistrySnapshot();
+    if (cached) {
+      return cached;
+    }
+    throw error;
+  }
+}
+
+function acpAgentSettingsEntry(params: {
+  agent: AcpRegistryAgentWithPolicy;
+  installed?: AcpInstalledAgentRecord;
+}): AcpAgentSettingsEntry | undefined {
+  if (params.installed) {
+    return installedAcpAgentSettingsEntry(params.installed, params.agent);
+  }
+
+  const distribution = selectAcpDistribution(params.agent);
+  if (!distribution) {
+    return undefined;
+  }
+  return {
+    backendId: params.agent.backendId,
+    registryId: params.agent.id,
+    name: params.agent.name,
+    description: params.agent.description,
+    version: params.agent.version,
+    license: params.agent.license,
+    authors: params.agent.authors,
+    repositoryUrl: params.agent.repositoryUrl,
+    websiteUrl: params.agent.websiteUrl,
+    distributionKind: distribution.kind,
+    distributionSource: describeDistributionSource(distribution),
+    installable: params.agent.installable,
+    installed: false,
+    installStatus: params.agent.installable ? "not-installed" : "unavailable",
+    authStatus: params.agent.auth.required ? "required" : "not-required",
+    verificationStatus: params.agent.verificationStatus,
+    allowlistRuleId: params.agent.allowlist.allowed
+      ? params.agent.allowlist.ruleId
+      : undefined,
+    unavailableReason: params.agent.unavailableReason,
+  };
+}
+
+function installedAcpAgentSettingsEntry(
+  record: AcpInstalledAgentRecord,
+  registryAgent?: AcpRegistryAgent,
+): AcpAgentSettingsEntry {
+  const agent = registryAgent ?? record.registryAgent;
+  return {
+    backendId: record.backendId,
+    registryId: record.registryId,
+    name: record.name,
+    description: agent?.description,
+    version: record.version,
+    license: agent?.license,
+    authors: agent?.authors ?? [],
+    repositoryUrl: agent?.repositoryUrl,
+    websiteUrl: agent?.websiteUrl,
+    distributionKind: record.distributionKind,
+    distributionSource: record.distributionSource,
+    installable: record.installStatus !== "installed",
+    installed: record.installStatus === "installed",
+    installStatus: record.installStatus,
+    authStatus: record.authStatus,
+    verificationStatus: record.verificationStatus,
+    allowlistRuleId: record.allowlistRuleId,
+    installedAt: record.installedAt,
+    updatedAt: record.updatedAt,
+    lastError: record.lastError,
+  };
+}
+
+function selectAcpDistribution(
+  agent: Pick<AcpRegistryAgent, "distributions">,
+  preferredKind?: AcpRegistryDistribution["kind"],
+): AcpRegistryDistribution | undefined {
+  const distributions = preferredKind
+    ? agent.distributions.filter((distribution) => distribution.kind === preferredKind)
+    : agent.distributions;
+  return (
+    distributions.find((distribution) => distribution.kind === "npx") ??
+    distributions.find((distribution) => distribution.kind === "uvx") ??
+    distributions[0]
+  );
 }
 
 async function resolveCodexCommandForProfileWorkflow(
@@ -573,6 +769,24 @@ export function registerSettingsIpcHandlers(
     ) => void | Promise<void>;
   },
 ): void {
+  ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
+  ipcMain.handle(
+    ACP_AGENTS_LIST_CHANNEL,
+    async (
+      _event,
+      request?: ListAcpAgentSettingsRequest,
+    ): Promise<ListAcpAgentSettingsResponse> => await listAcpAgentSettings(request),
+  );
+
+  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
+  ipcMain.handle(
+    ACP_AGENT_INSTALL_CHANNEL,
+    async (
+      _event,
+      request: InstallAcpAgentRequest,
+    ): Promise<InstallAcpAgentResponse> => await installAcpAgent(request),
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -826,6 +1040,8 @@ export function disposeSettingsIpcHandlers(): void {
     child.kill();
   }
   activeCodexLoginProcesses.clear();
+  ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
+  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);

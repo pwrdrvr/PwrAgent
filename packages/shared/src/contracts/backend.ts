@@ -122,3 +122,49 @@ export type ListBackendsResponse = {
   fetchedAt: number;
   backends: BackendSummary[];
 };
+
+export type AcpAgentSettingsEntry = {
+  backendId: AppServerBackendKind;
+  registryId: string;
+  name: string;
+  description?: string;
+  version?: string;
+  license?: string;
+  authors: string[];
+  repositoryUrl?: string;
+  websiteUrl?: string;
+  distributionKind: BackendAcpDistributionKind;
+  distributionSource: string;
+  installable: boolean;
+  installed: boolean;
+  installStatus: BackendAcpInstallStatus;
+  authStatus: BackendAcpAuthStatus;
+  verificationStatus: BackendAcpVerificationStatus;
+  allowlistRuleId?: string;
+  installedAt?: number;
+  updatedAt?: number;
+  unavailableReason?: string;
+  lastError?: string;
+};
+
+export type ListAcpAgentSettingsRequest = {
+  refresh?: boolean;
+};
+
+export type ListAcpAgentSettingsResponse = {
+  fetchedAt: number;
+  entries: AcpAgentSettingsEntry[];
+  error?: string;
+};
+
+export type InstallAcpAgentRequest = {
+  backendId: AppServerBackendKind;
+  distributionKind?: BackendAcpDistributionKind;
+  confirmed: boolean;
+};
+
+export type InstallAcpAgentResponse = {
+  ok: boolean;
+  entry?: AcpAgentSettingsEntry;
+  error?: string;
+};

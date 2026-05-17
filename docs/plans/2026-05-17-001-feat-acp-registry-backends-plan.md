@@ -606,7 +606,7 @@ messaging bindings.
   dynamic backend ids.
 - Messaging parity works for dynamic backend ids without special ACP-only paths.
 
-- [ ] **Unit 6: Add Settings Registry and Installation UI**
+- [x] **Unit 6: Add Settings Registry and Installation UI**
 
 **Goal:** Provide a user-facing Settings surface for ACP registry discovery,
 trust/provenance review, install confirmation, auth/setup status, and retry.

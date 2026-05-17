@@ -985,6 +985,29 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
   });
 
+  it("opens the Agents settings section", async () => {
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="agents"
+        settings={createSettingsState()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "ACP registry" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
   it("can restart login for an existing Codex auth profile", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.profiles.profiles[1]!.hasAuthFile = false;
