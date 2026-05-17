@@ -114,6 +114,7 @@ import { mergeLoginShellEnvIntoEnv } from "../shell-environment";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
+  defaultDeveloperMode?: boolean;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -280,6 +281,12 @@ export class DesktopSettingsService {
         },
       },
       secretStorage,
+      general: {
+        developerMode: this.resolveConfigBoolean(
+          config.general?.developerMode,
+          this.defaultDeveloperMode(),
+        ),
+      },
       experimental: {
         chatReplyComposer: this.resolveComposer(
           config.experimental?.chatReplyComposer,
@@ -599,6 +606,13 @@ export class DesktopSettingsService {
       .value;
   }
 
+  resolveDeveloperMode(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.developerMode,
+      this.defaultDeveloperMode(),
+    ).value;
+  }
+
   async writeConfigPatch(
     patch: DesktopSettingsConfigPatch,
   ): Promise<DesktopSettingsSnapshot> {
@@ -760,6 +774,10 @@ export class DesktopSettingsService {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private defaultDeveloperMode(): boolean {
+    return this.options.defaultDeveloperMode ?? this.env.NODE_ENV !== "production";
   }
 
   private resolveComposer(

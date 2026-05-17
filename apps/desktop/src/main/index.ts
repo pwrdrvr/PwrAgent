@@ -14,7 +14,10 @@ import {
 } from "./auto-updater";
 import { showAppLogWindow } from "./app-log-window";
 import { showChangelogWindow } from "./changelog-window";
-import { showThirdPartyNoticesWindow } from "./license-document-window";
+import {
+  showLicenseWindow,
+  showThirdPartyNoticesWindow,
+} from "./license-document-window";
 import {
   PWRAGENT_DOCUMENTATION_URL,
   PWRAGENT_HOMEPAGE_URL,
@@ -76,9 +79,12 @@ import {
   isAppStateInitialized,
 } from "./state/app-state";
 import { createMainWindow } from "./window";
+import { buildApplicationMenuTemplate } from "./menu";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
+const PWRAGENT_ISSUE_REPORTER_URL =
+  "https://github.com/pwrdrvr/PwrAgent/issues/new";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -167,60 +173,33 @@ function installDevelopmentDockIcon(): void {
 }
 
 function installApplicationMenu(): void {
-  const template: Electron.MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: "appMenu" as const }] : []),
-    { role: "fileMenu" },
-    { role: "editMenu" },
-    { role: "viewMenu" },
-    { role: "windowMenu" },
-    {
-      role: "help",
-      submenu: [
-        {
-          label: `About ${APP_NAME}`,
-          click: () => {
-            app.showAboutPanel();
-          },
-        },
-        {
-          label: "Check for Updates",
-          click: () => {
-            void checkForAppUpdatesNow("menu");
-          },
-        },
-        {
-          label: "Changelog",
-          click: () => {
-            showChangelogWindow();
-          },
-        },
-        {
-          label: "Third-Party Notices",
-          click: () => {
-            showThirdPartyNoticesWindow();
-          },
-        },
-        {
-          label: "Logs",
-          click: () => {
-            showAppLogWindow();
-          },
-        },
-        {
-          label: "PwrAgent Website",
-          click: async () => {
-            await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
-          },
-        },
-        {
-          label: "Documentation",
-          click: async () => {
-            await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
-          },
-        },
-      ],
+  const developerMode = getDesktopSettingsService().resolveDeveloperMode();
+  const template = buildApplicationMenuTemplate({
+    appName: APP_NAME,
+    developerMode,
+    isMac,
+    actions: {
+      checkForUpdates: () => {
+        void checkForAppUpdatesNow("menu");
+      },
+      openDocumentation: async () => {
+        await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
+      },
+      openIssueReporter: async () => {
+        await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
+      },
+      openWebsite: async () => {
+        await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
+      },
+      showAboutPanel: () => {
+        app.showAboutPanel();
+      },
+      showChangelogWindow,
+      showLicenseWindow,
+      showLogsWindow: showAppLogWindow,
+      showThirdPartyNoticesWindow,
     },
-  ];
+  });
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -251,7 +230,13 @@ export function bootstrapApp(): void {
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers();
     registerRendererErrorIpcHandlers();
-    registerSettingsIpcHandlers();
+    registerSettingsIpcHandlers(undefined, {
+      onConfigPatchWritten: async (patch) => {
+        if (patch.general?.developerMode !== undefined) {
+          installApplicationMenu();
+        }
+      },
+    });
     registerWindowPointerIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();

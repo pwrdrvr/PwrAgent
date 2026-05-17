@@ -46,6 +46,12 @@ function createSnapshot(
       backend: "memory",
       encrypted: false,
     },
+    general: {
+      developerMode: {
+        value: false,
+        source: "default",
+      },
+    },
     experimental: {
       chatReplyComposer: {
         value: "tiptap-wysiwyg-markdown-chips",
@@ -311,6 +317,19 @@ describe("SettingsScreen", () => {
       "aria-checked",
       "true",
     );
+    expect(screen.getByRole("switch", { name: "Developer Mode" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Developer Mode" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          developerMode: true,
+        },
+      });
+    });
+
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /Prerelease/ }));
     await waitFor(() => {

@@ -17,6 +17,7 @@ const initAutoUpdaterMock = vi.fn();
 const checkForAppUpdatesNowMock = vi.fn();
 const showAppLogWindowMock = vi.fn();
 const showChangelogWindowMock = vi.fn();
+const showLicenseWindowMock = vi.fn();
 const showThirdPartyNoticesWindowMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
@@ -59,6 +60,7 @@ const buildFromTemplateMock = vi.fn((template: unknown) => ({
 const shellOpenExternalMock = vi.fn(async () => undefined);
 const setNameMock = vi.fn();
 const setAboutPanelOptionsMock = vi.fn();
+const showAboutPanelMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
@@ -76,14 +78,19 @@ const startupProfilerInstance = {
 const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
   return startupProfilerInstance;
 });
+const resolveDeveloperModeMock = vi.fn(() => true);
+const getDesktopSettingsServiceMock = vi.fn(() => ({
+  resolveDeveloperMode: resolveDeveloperModeMock,
+}));
 
 vi.mock("electron", () => ({
   app: {
     setName: setNameMock,
     setAboutPanelOptions: setAboutPanelOptionsMock,
+    isPackaged: false,
     getAppPath: getAppPathMock,
     getVersion: getVersionMock,
-    showAboutPanel: vi.fn(),
+    showAboutPanel: showAboutPanelMock,
     whenReady: whenReadyMock,
     dock: {
       setIcon: dockSetIconMock,
@@ -148,6 +155,7 @@ vi.mock("../changelog-window", () => ({
 }));
 
 vi.mock("../license-document-window", () => ({
+  showLicenseWindow: showLicenseWindowMock,
   showThirdPartyNoticesWindow: showThirdPartyNoticesWindowMock,
 }));
 
@@ -221,6 +229,10 @@ vi.mock("../state/app-state", () => ({
   isAppStateInitialized: isAppStateInitializedMock,
 }));
 
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: getDesktopSettingsServiceMock,
+}));
+
 const runtimeMessagingLeaseCoordinatorMock = {
   start: messagingLeaseStartMock,
   shutdownSync: messagingLeaseShutdownSyncMock,
@@ -271,6 +283,7 @@ describe("bootstrapApp", () => {
     checkForAppUpdatesNowMock.mockReset();
     showAppLogWindowMock.mockReset();
     showChangelogWindowMock.mockReset();
+    showLicenseWindowMock.mockReset();
     showThirdPartyNoticesWindowMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
@@ -320,8 +333,12 @@ describe("bootstrapApp", () => {
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
     setAboutPanelOptionsMock.mockReset();
+    showAboutPanelMock.mockReset();
     getAppPathMock.mockClear();
     getVersionMock.mockClear();
+    resolveDeveloperModeMock.mockReset();
+    resolveDeveloperModeMock.mockReturnValue(true);
+    getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
     nativeImageMock.isEmpty.mockReturnValue(false);
@@ -462,12 +479,20 @@ describe("bootstrapApp", () => {
     item("Third-Party Notices")?.click?.();
     expect(showThirdPartyNoticesWindowMock).toHaveBeenCalledOnce();
 
+    item("View License")?.click?.();
+    expect(showLicenseWindowMock).toHaveBeenCalledOnce();
+
     await item("PwrAgent Website")?.click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith("https://pwragent.ai");
 
     await item("Documentation")?.click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
       "https://docs.pwragent.ai",
+    );
+
+    await item("Report an Issue")?.click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/issues/new",
     );
 
     expect(item(["Visit", "Website"].join(" "))).toBeUndefined();

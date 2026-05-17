@@ -11,17 +11,47 @@ import {
 } from "./window-channels";
 
 const log = getMainLogger("pwragent:license-document-window");
+const LICENSE_HASH = "license";
 const THIRD_PARTY_NOTICES_HASH = "third-party-notices";
 
+let licenseWindow: BrowserWindow | undefined;
 let thirdPartyNoticesWindow: BrowserWindow | undefined;
 
+export function showLicenseWindow(): void {
+  showLicenseDocumentWindow({
+    hash: LICENSE_HASH,
+    title: "MIT License - PwrAgent",
+    windowRef: () => licenseWindow,
+    setWindowRef: (window) => {
+      licenseWindow = window;
+    },
+  });
+}
+
 export function showThirdPartyNoticesWindow(): void {
-  if (thirdPartyNoticesWindow && !thirdPartyNoticesWindow.isDestroyed()) {
-    if (thirdPartyNoticesWindow.isMinimized()) {
-      thirdPartyNoticesWindow.restore();
+  showLicenseDocumentWindow({
+    hash: THIRD_PARTY_NOTICES_HASH,
+    title: "Third-Party Notices - PwrAgent",
+    windowRef: () => thirdPartyNoticesWindow,
+    setWindowRef: (window) => {
+      thirdPartyNoticesWindow = window;
+    },
+  });
+}
+
+function showLicenseDocumentWindow(options: {
+  hash: string;
+  title: string;
+  windowRef: () => BrowserWindow | undefined;
+  setWindowRef: (window: BrowserWindow | undefined) => void;
+}): void {
+  const existingWindow = options.windowRef();
+  if (existingWindow && !existingWindow.isDestroyed()) {
+    if (existingWindow.isMinimized()) {
+      existingWindow.restore();
     }
-    thirdPartyNoticesWindow.show();
-    thirdPartyNoticesWindow.focus();
+    existingWindow.show();
+    existingWindow.focus();
     return;
   }
 
@@ -31,7 +61,7 @@ export function showThirdPartyNoticesWindow(): void {
     minWidth: 640,
     minHeight: 480,
     show: false,
-    title: "Third-Party Notices - PwrAgent",
+    title: options.title,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
     backgroundColor: "#000000",
@@ -48,9 +78,9 @@ export function showThirdPartyNoticesWindow(): void {
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {
-    void window.loadURL(`${rendererEntry.value}#${THIRD_PARTY_NOTICES_HASH}`);
+    void window.loadURL(`${rendererEntry.value}#${options.hash}`);
   } else {
-    void window.loadFile(rendererEntry.value, { hash: THIRD_PARTY_NOTICES_HASH });
+    void window.loadFile(rendererEntry.value, { hash: options.hash });
   }
 
   window.once("ready-to-show", () => {
@@ -58,10 +88,10 @@ export function showThirdPartyNoticesWindow(): void {
   });
 
   window.on("closed", () => {
-    thirdPartyNoticesWindow = undefined;
-    log.debug("third-party notices window closed");
+    options.setWindowRef(undefined);
+    log.debug("license document window closed", { hash: options.hash });
   });
 
-  thirdPartyNoticesWindow = window;
-  log.debug("third-party notices window created");
+  options.setWindowRef(window);
+  log.debug("license document window created", { hash: options.hash });
 }

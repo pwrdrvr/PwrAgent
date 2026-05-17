@@ -15,6 +15,7 @@ import {
   SettingsSectionStack,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   description: string;
@@ -71,6 +72,7 @@ export function GeneralSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
+  onDeveloperModeChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
 }) {
@@ -79,6 +81,7 @@ export function GeneralSettings(props: {
   >();
   const pastedImageMaxPatches =
     props.snapshot.imageUploads.pastedImageMaxPatches;
+  const developerMode = props.snapshot.general.developerMode;
   const updateChannel = props.snapshot.updates.channel;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
     (option) => option.value === pastedImageMaxPatches.value,
@@ -103,6 +106,30 @@ export function GeneralSettings(props: {
         title="General settings"
         help="Defaults that apply across PwrAgent surfaces."
       />
+
+      <SettingsSection
+        eyebrow="General"
+        title="Developer mode"
+        chip={sourceBadge(developerMode)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Developer Mode"
+            sub="Expose Reload, Force Reload, and Developer Tools menu shortcuts."
+            source={sourceBadge(developerMode)}
+            control={
+              <SettingsSwitch
+                checked={developerMode.value}
+                disabled={props.saving}
+                label="Developer Mode"
+                onChange={(next) => {
+                  void props.onDeveloperModeChange(next);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"
