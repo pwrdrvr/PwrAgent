@@ -304,7 +304,7 @@ list immediately, and vice versa.
 {% include figure.html
    src="/assets/screenshots/desktop-skills-autocomplete.png"
    alt='Composer mid-message ("Let&#39;s use $ce") with the Skills autocomplete listbox open below it, showing matching skill rows like $ce:plan, $ce:brainstorm, $ce:compound'
-   caption="Typing <code>$ce</code> in the composer opens the Skills listbox. Filtering is incremental — keep typing to narrow (<code>$ce:p</code>) or pick a row to insert it as an inline chip."
+   caption="Typing <code>$</code> in the composer opens the Skills listbox. Subsequent characters filter incrementally — here <code>$ce</code> narrows to skills whose names start with <code>ce</code>. Pick a row to insert it as an inline chip."
 %}
 
 PwrAgent surfaces **Codex skills** (including plugin-exposed
