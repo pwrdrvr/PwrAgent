@@ -197,6 +197,24 @@ The composer parses Markdown as you type:
 
 Codex Desktop doesn't have this yet.
 
+### Undo / redo (per-thread)
+
+While a thread is focused, **Cmd+Z** undoes the most recent change
+to that thread's composer, and **Cmd+Shift+Z** (or **Cmd+Y**)
+redoes. Each thread carries its own independent undo stack —
+switching threads doesn't merge the histories, and undo never
+crosses thread boundaries.
+
+Undo also restores a `$skill` chip you just removed with
+**Backspace**, recovering both the chip and its position in the
+surrounding text — so an accidental delete doesn't cost you the
+chip you spent time picking.
+
+For recovery **across** threads or app restarts, see
+[Composer draft history](#composer-draft-history--recovers-your-last-message)
+below — the **↑** mechanic there reaches further back than the
+per-thread undo stack does.
+
 ### Composer draft history (↑ recovers your last message)
 
 Every keystroke in the composer is autosaved to a per-profile
