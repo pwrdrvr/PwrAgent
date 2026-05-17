@@ -1804,11 +1804,17 @@ export class DesktopBackendRegistry {
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "codex") {
-      const threads = await this.listCodexThreads({
+      const threads = await this.filterArchivedThreadsPresentInActiveList({
         archived: params.archived,
-        enrichDirectories: params.enrichDirectories,
+        backend: "codex",
+        diagnostics,
         filter: params.filter,
-      }, diagnostics);
+        threads: await this.listCodexThreads({
+          archived: params.archived,
+          enrichDirectories: params.enrichDirectories,
+          filter: params.filter,
+        }, diagnostics),
+      });
       this.scheduleThreadListArchiveStateCleanup({
         backend: "codex",
         filter: params.filter,
@@ -1819,14 +1825,20 @@ export class DesktopBackendRegistry {
     }
 
     if (params.backend === "grok") {
-      const threads = this.withPendingStartedThreads(
-        "grok",
-        await this.grokClient.listThreads({
-          archived: params.archived,
-          filter: params.filter,
-        }, diagnostics),
-        params,
-      );
+      const threads = await this.filterArchivedThreadsPresentInActiveList({
+        archived: params.archived,
+        backend: "grok",
+        diagnostics,
+        filter: params.filter,
+        threads: this.withPendingStartedThreads(
+          "grok",
+          await this.grokClient.listThreads({
+            archived: params.archived,
+            filter: params.filter,
+          }, diagnostics),
+          params,
+        ),
+      });
       this.scheduleThreadListArchiveStateCleanup({
         backend: "grok",
         filter: params.filter,
@@ -1856,6 +1868,67 @@ export class DesktopBackendRegistry {
     return threadLists
       .flat()
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  }
+
+  private async filterArchivedThreadsPresentInActiveList(params: {
+    archived?: boolean;
+    backend: AppServerBackendKind;
+    diagnostics: {
+      callerReason: ThreadListCallerReason;
+      ownerId: string;
+    };
+    filter?: string;
+    threads: AppServerThreadSummary[];
+  }): Promise<AppServerThreadSummary[]> {
+    if (params.archived !== true || params.threads.length === 0) {
+      return params.threads;
+    }
+
+    try {
+      const activeThreads =
+        params.backend === "codex"
+          ? await this.listCodexThreads({
+              archived: false,
+              enrichDirectories: false,
+              filter: params.filter,
+            }, {
+              ...params.diagnostics,
+              callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+            })
+          : this.withPendingStartedThreads(
+              "grok",
+              await this.grokClient.listThreads({
+                archived: false,
+                filter: params.filter,
+              }, {
+                ...params.diagnostics,
+                callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+              }),
+              { archived: false, filter: params.filter },
+            );
+      const activeThreadIds = new Set(activeThreads.map((thread) => thread.id));
+      const filteredThreads = params.threads.filter(
+        (thread) => !activeThreadIds.has(thread.id),
+      );
+      const filteredCount = params.threads.length - filteredThreads.length;
+      if (filteredCount > 0) {
+        backendRegistryLog.info("archived thread list filtered active duplicates", {
+          backend: params.backend,
+          filteredCount,
+          threadIds: params.threads
+            .filter((thread) => activeThreadIds.has(thread.id))
+            .slice(0, 10)
+            .map((thread) => thread.id),
+        });
+      }
+      return filteredThreads;
+    } catch (error) {
+      backendRegistryLog.warn("archived thread active-state filter failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return params.threads;
+    }
   }
 
   async listSkills(params: {

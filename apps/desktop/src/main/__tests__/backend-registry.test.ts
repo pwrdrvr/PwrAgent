@@ -548,6 +548,17 @@ class MockBackendClient {
     enrichDirectories?: boolean;
     filter?: string;
   };
+  listThreadsCalls: Array<{
+    diagnostics?: {
+      callerReason?: string;
+      ownerId?: string;
+    };
+    params?: {
+      archived?: boolean;
+      enrichDirectories?: boolean;
+      filter?: string;
+    };
+  }> = [];
 
   constructor(
     private readonly options: {
@@ -601,6 +612,7 @@ class MockBackendClient {
     this.listThreadsCallCount += 1;
     this.lastListThreadsDiagnostics = diagnostics;
     this.lastListThreadsParams = params;
+    this.listThreadsCalls.push({ diagnostics, params });
     if (this.options.listThreadsError) {
       throw this.options.listThreadsError;
     }
@@ -4885,7 +4897,7 @@ command = "pnpm dev"
       threadId: "thread-1",
     });
 
-    expect(codexClient.lastListThreadsParams).toMatchObject({
+    expect(codexClient.listThreadsCalls[0]?.params).toMatchObject({
       archived: true,
     });
     expect(restoreDetached).toHaveBeenCalledWith({
@@ -5292,6 +5304,48 @@ command = "pnpm dev"
     expect(messagingStore.revokedBindingIds).toEqual(["binding-telegram"]);
     expect(messagingStore.deletedPendingThreads).toEqual([
       { backend: "codex", threadId: "thread-1" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("hides archived records for threads that are active again", async () => {
+    const restoredThread: AppServerThreadSummary = {
+      id: "thread-restored",
+      title: "Restored elsewhere",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const stillArchivedThread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Still archived",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 1,
+    };
+    const codexClient = new MockBackendClient({
+      archivedThreads: [restoredThread, stillArchivedThread],
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [restoredThread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex", archived: true }),
+    ).resolves.toEqual([expect.objectContaining({ id: "thread-archived" })]);
+
+    expect(codexClient.listThreadsCalls.map((call) => call.params)).toEqual([
+      { archived: true, enrichDirectories: true },
+      { archived: false, enrichDirectories: false },
     ]);
 
     await registry.close();
