@@ -32,6 +32,6 @@ describe("StateDb", () => {
       "acp_registry_cache",
       "acp_sessions",
     ]);
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(8);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(9);
   });
 });

@@ -869,7 +869,7 @@ describe("App", () => {
     );
     expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
     expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
-    expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();

@@ -6,6 +6,8 @@
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;
   --bg-panel-elevated: #101010;
+  --panel: var(--bg-panel);
+  --panel-elevated: var(--bg-panel-elevated);
   --bg-panel-hover: #14110d;
   --bg-row-active: #120800;
   --bg-input: #080808;

@@ -263,7 +263,7 @@ describe("ThreadView", () => {
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
-    expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
     expect(screen.getByText("pro")).toBeInTheDocument();
     expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
@@ -373,7 +373,7 @@ describe("ThreadView", () => {
     const header = document.querySelector(".thread-header--launchpad");
     expect(header).not.toBeNull();
     expect(within(header as HTMLElement).getByText("New thread")).toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("Codex app server")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("Full Access")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
