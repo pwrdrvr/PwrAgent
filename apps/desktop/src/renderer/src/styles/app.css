@@ -1383,7 +1383,11 @@ textarea,
   overflow-y: auto;
   min-height: 0;
   padding-left: 0;
-  padding-right: 0;
+  /* 4px right padding holds row content (notably the selected
+     thread row's accent-border) clear of the scrollbar gutter so
+     the row's right border doesn't visually kiss the thumb. Left
+     stays at 0 — the title-width gain there is intentional. */
+  padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
   /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
@@ -1400,7 +1404,7 @@ textarea,
   overflow-y: auto;
   padding-top: 0;
   padding-left: 0;
-  padding-right: 0;
+  padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
   scrollbar-gutter: stable;
@@ -2271,12 +2275,9 @@ textarea,
   color: var(--text-muted);
   font-size: 16px;
   line-height: 1;
-  /* Hold the icon a few pixels in from the scrollbar gutter. The
-     hover-state outline can still bleed right up to the gutter —
-     that's only a 1-frame visual on hover and not worth padding
-     out — but the icon glyph itself should never touch the
-     scrollbar thumb when the list is scrolled. */
-  margin-right: 4px;
+  /* The list wrapper carries `padding-right: 4px` so the icon
+     glyph already sits clear of the scrollbar gutter — no
+     additional margin needed here. */
 }
 
 .directory-row__launchpad-button:hover,
