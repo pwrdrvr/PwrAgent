@@ -33,9 +33,43 @@ export type BootstrapAppearance = {
 
 export const BOOTSTRAP_APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 
-export function readBootstrapAppearance(): BootstrapAppearance {
+/**
+ * Pre-tinted BrowserWindow `backgroundColor` values. Mirrors the
+ * `--bg` token's resolved value in each theme so the OS-level window
+ * fill matches the renderer's first paint and we don't flash a dark
+ * window before a light renderer (or vice versa). Keep in sync with
+ * the `--bg` values in `app.css` `:root` and `:root[data-theme="light"]`.
+ */
+export const WINDOW_BG_DARK = "#10151f";
+export const WINDOW_BG_LIGHT = "#fdfcfa";
+
+/** Pick the right `backgroundColor` for an Electron `BrowserWindow`
+ *  based on the resolved appearance. "system" falls back to dark
+ *  because we can't resolve `prefers-color-scheme` synchronously
+ *  at window-creation time — the renderer's inline bootstrap will
+ *  flip the data-theme attribute if it resolves light, and the
+ *  brief OS-fill mismatch is preferable to blocking on a media query. */
+export function themedWindowBackgroundColor(
+  appearance: BootstrapAppearance,
+): string {
+  return appearance.theme === "light" ? WINDOW_BG_LIGHT : WINDOW_BG_DARK;
+}
+
+/** Build the `webPreferences.additionalArguments` array that surfaces
+ *  the appearance to the preload script. Every BrowserWindow that
+ *  loads the renderer needs this — without it, the preload's
+ *  `__pwragentAppearance` resolves to defaults and the window flashes
+ *  the wrong theme. */
+export function themedWindowAdditionalArguments(
+  appearance: BootstrapAppearance,
+): string[] {
+  return [serializeBootstrapAppearance(appearance)];
+}
+
+export function readBootstrapAppearance(
+  configPath: string = resolveDesktopConfigPath(),
+): BootstrapAppearance {
   try {
-    const configPath = resolveDesktopConfigPath();
     const config = readDesktopSettingsConfig(configPath);
     return {
       theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,

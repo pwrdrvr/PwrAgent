@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 
 const tempRoots: string[] = [];
 
@@ -256,6 +257,87 @@ describe("DesktopSettingsService", () => {
       source: "config",
     });
     expect(service.resolveDeveloperMode()).toBe(true);
+  });
+
+  it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    // Fresh config: defaults everywhere. The bootstrap path (which the
+    // BrowserWindow uses pre-mount) must agree with the service path
+    // (which the renderer reads later via IPC) — they read the same
+    // TOML, so any divergence here is a contract bug.
+    const initialSettings = await service.readSettings();
+    expect(initialSettings.general.appearance.theme).toEqual({
+      value: "system",
+      source: "default",
+    });
+    expect(initialSettings.general.appearance.density).toEqual({
+      value: "mission-control",
+      source: "default",
+    });
+    expect(readBootstrapAppearance(configPath)).toEqual({
+      theme: "system",
+      density: "mission-control",
+    });
+
+    // Write non-default values. The byte-preserving patch path should
+    // create `[general.appearance]` with both keys.
+    await service.writeConfigPatch({
+      general: {
+        appearance: {
+          theme: "light",
+          density: "compact",
+        },
+      },
+    });
+
+    const writtenFile = fs.readFileSync(configPath, "utf8");
+    expect(writtenFile).toContain("[general.appearance]");
+    expect(writtenFile).toContain('theme = "light"');
+    expect(writtenFile).toContain('density = "compact"');
+
+    const afterWrite = await service.readSettings();
+    expect(afterWrite.general.appearance.theme).toEqual({
+      value: "light",
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.density).toEqual({
+      value: "compact",
+      source: "config",
+    });
+    expect(readBootstrapAppearance(configPath)).toEqual({
+      theme: "light",
+      density: "compact",
+    });
+
+    // Restore to defaults: the patch path should DELETE both keys
+    // (defaults aren't written to disk) so the file stays minimal.
+    await service.writeConfigPatch({
+      general: {
+        appearance: {
+          theme: "system",
+          density: "mission-control",
+        },
+      },
+    });
+
+    const restoredFile = fs.readFileSync(configPath, "utf8");
+    expect(restoredFile).not.toContain('theme = "');
+    expect(restoredFile).not.toContain('density = "');
+
+    const afterRestore = await service.readSettings();
+    expect(afterRestore.general.appearance.theme.source).toBe("default");
+    expect(afterRestore.general.appearance.density.source).toBe("default");
+    expect(readBootstrapAppearance(configPath)).toEqual({
+      theme: "system",
+      density: "mission-control",
+    });
   });
 
   it("defaults the image upload profile and only persists non-default values", async () => {

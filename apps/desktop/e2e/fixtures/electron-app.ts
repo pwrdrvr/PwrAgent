@@ -2,8 +2,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
+  ThreadExecutionMode,
+} from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
+import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -54,6 +59,20 @@ export async function launchElectronApp(params: {
    * `<homeRoot>/` is cleaned up on `close()`.
    */
   preLaunchHook?: (homeRoot: string) => void | Promise<void>;
+  /**
+   * Theme + density to seed into the per-test profile's `config.toml`
+   * `[general.appearance]` block. Defaults to `{ theme: "dark" }` so
+   * tests that assert specific colors are deterministic regardless of
+   * the CI runner's `prefers-color-scheme` (which would otherwise let
+   * `theme: "system"` resolve to light on most Linux runners and break
+   * dark-theme color assertions). Pass `{ theme: "light" }` or
+   * `{ theme: "system" }` from tests that need to validate other
+   * appearance modes.
+   */
+  appearance?: {
+    theme?: DesktopAppearanceTheme;
+    density?: DesktopAppearanceDensity;
+  };
 }): Promise<LaunchResult> {
   const homeRoot =
     params.homeRoot ??
@@ -61,6 +80,30 @@ export async function launchElectronApp(params: {
   if (params.preLaunchHook) {
     await params.preLaunchHook(homeRoot);
   }
+  // Seed `[general.appearance]` AFTER the preLaunchHook so hooks that
+  // write the whole config.toml don't clobber the appearance keys. The
+  // patch path edits the file in place, preserving anything the hook
+  // wrote, and creates the file if the hook didn't write one. Defaults
+  // to dark so color-assertion tests don't pick up the runner's OS
+  // theme through `theme: "system"`.
+  //
+  // The seed target follows whatever HOME the launched Electron process
+  // will actually use: tests may pass `env.HOME = <their own tmp>` to
+  // override the helper's `homeRoot`, in which case the appearance has
+  // to land in THEIR tmp dir, not the helper's. If both are unset, fall
+  // back to the helper's `homeRoot`.
+  const seedHomeRoot = params.env?.HOME ?? homeRoot;
+  applyDesktopSettingsPatch(
+    path.join(seedHomeRoot, ".pwragent/profiles/default/config.toml"),
+    {
+      general: {
+        appearance: {
+          theme: params.appearance?.theme ?? "dark",
+          density: params.appearance?.density ?? "mission-control",
+        },
+      },
+    },
+  );
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {

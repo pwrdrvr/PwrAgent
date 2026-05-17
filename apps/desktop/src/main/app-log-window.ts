@@ -10,6 +10,11 @@ import {
   registerWindowChannels,
 } from "./window-channels";
 import { APP_LOG_ENTRY_EVENT_CHANNEL } from "../shared/ipc";
+import {
+  readBootstrapAppearance,
+  themedWindowAdditionalArguments,
+  themedWindowBackgroundColor,
+} from "./settings/appearance-bootstrap";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
@@ -26,6 +31,7 @@ export function showAppLogWindow(): void {
     return;
   }
 
+  const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
     width: 1040,
     height: 760,
@@ -35,12 +41,13 @@ export function showAppLogWindow(): void {
     title: "Logs - PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    backgroundColor: "#000000",
+    backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
 

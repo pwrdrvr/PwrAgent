@@ -9,6 +9,11 @@ import {
   WINDOW_KIND_CHANGELOG,
   registerWindowChannels,
 } from "./window-channels";
+import {
+  readBootstrapAppearance,
+  themedWindowAdditionalArguments,
+  themedWindowBackgroundColor,
+} from "./settings/appearance-bootstrap";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
@@ -25,6 +30,7 @@ export function showChangelogWindow(): void {
     return;
   }
 
+  const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
     width: 920,
     height: 760,
@@ -34,12 +40,13 @@ export function showChangelogWindow(): void {
     title: "Changelog - PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    backgroundColor: "#000000",
+    backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
 
