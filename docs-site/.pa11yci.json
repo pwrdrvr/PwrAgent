@@ -1,0 +1,36 @@
+{
+  "defaults": {
+    "standard": "WCAG2AA",
+    "runners": ["axe", "htmlcs"],
+    "includeWarnings": false,
+    "includeNotices": false,
+    "timeout": 30000,
+    "wait": 250,
+    "chromeLaunchConfig": {
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "hideElements": "kbd"
+  },
+  "urls": [
+    "http://127.0.0.1:4001/",
+    "http://127.0.0.1:4001/desktop/",
+    "http://127.0.0.1:4001/messaging/",
+    "http://127.0.0.1:4001/using-codex/",
+    "http://127.0.0.1:4001/messaging/pairing/",
+    "http://127.0.0.1:4001/settings/",
+    "http://127.0.0.1:4001/streaming/",
+    "http://127.0.0.1:4001/webhook-dangers/",
+    "http://127.0.0.1:4001/rate-limits/",
+    "http://127.0.0.1:4001/providers/",
+    "http://127.0.0.1:4001/providers/telegram/",
+    "http://127.0.0.1:4001/providers/discord/",
+    "http://127.0.0.1:4001/providers/slack/",
+    "http://127.0.0.1:4001/providers/mattermost/",
+    "http://127.0.0.1:4001/providers/feishu/",
+    "http://127.0.0.1:4001/providers/line/"
+  ]
+}

@@ -647,6 +647,25 @@ code {
   border: 1px solid var(--border-subtle);
 }
 
+/* Keyboard key glyphs (<kbd>↑</kbd>, <kbd>Cmd+Z</kbd>). Slightly
+ * heavier border and softer background than <code> so a key reads
+ * as a key, not as code. Inherits text-primary so contrast against
+ * the page background stays at ≈19:1. */
+kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-panel-elevated);
+  padding: 0.1em 0.45em;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 1px 0 var(--border-strong);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 pre {
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
