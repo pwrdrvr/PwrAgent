@@ -43,6 +43,15 @@ type RestoreWorktreeParams = {
   now?: number;
 };
 
+type RestoreDetachedWorktreeParams = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  worktreePath: string;
+  repositoryPath: string;
+  restoreRef?: string;
+  now?: number;
+};
+
 type WorktreeArchiveServiceOptions = {
   gitEnv?: NodeJS.ProcessEnv;
 };
@@ -230,6 +239,45 @@ export class WorktreeArchiveService {
       restoredAt,
       state: "restored",
       unavailableReason: fallbackReason,
+    };
+  }
+
+  async restoreDetached(
+    params: RestoreDetachedWorktreeParams,
+  ): Promise<WorktreeSnapshotSummary> {
+    const worktreePath = path.resolve(params.worktreePath);
+    const repositoryPath = path.resolve(params.repositoryPath);
+    const restoreRef = params.restoreRef?.trim() || "HEAD";
+    const snapshotCommit = trimGitOutput(
+      (await this.runGit(repositoryPath, ["rev-parse", `${restoreRef}^{commit}`]))
+        .stdout,
+    );
+
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+    await this.runGit(repositoryPath, [
+      "worktree",
+      "add",
+      "--detach",
+      worktreePath,
+      snapshotCommit,
+    ]);
+
+    const restoredAt = params.now ?? Date.now();
+    return {
+      id: snapshotIdForPath(worktreePath),
+      backend: params.backend,
+      threadId: params.threadId,
+      worktreePath,
+      repositoryPath,
+      snapshotRef: restoreRef,
+      snapshotCommit,
+      sourceBranch: restoreRef === "HEAD" ? undefined : restoreRef,
+      createdAt: restoredAt,
+      restoredAt,
+      state: "restored",
+      ignoredFilesExcluded: true,
+      unavailableReason:
+        "Restored detached worktree from repository state because no archived snapshot was available.",
     };
   }
 

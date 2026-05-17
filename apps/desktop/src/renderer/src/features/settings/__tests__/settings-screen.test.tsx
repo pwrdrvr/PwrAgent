@@ -2364,6 +2364,35 @@ describe("SettingsScreen", () => {
     expect(label?.textContent?.toLowerCase()).toBe("general");
   });
 
+  it("orders settings nav sections with worktree settings separated", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const buttons = within(nav)
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(buttons).toEqual([
+      "← Exit Settings",
+      "General",
+      "Applications",
+      "Profiles",
+      "Models",
+      "Messaging",
+      "Worktrees",
+      "Archived Threads",
+      "Experimental",
+      "About",
+    ]);
+    expect(within(nav).getByRole("separator")).toHaveClass(
+      "settings-nav__divider",
+    );
+  });
+
   it("shows when messaging is disabled by a runtime override", () => {
     render(
       <SettingsScreen

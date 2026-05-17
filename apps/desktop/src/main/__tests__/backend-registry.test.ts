@@ -4830,6 +4830,87 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("restores deleted archived thread worktrees from retained metadata when no snapshot exists", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archived worktree",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/PwrSnap",
+          label: "PwrSnap",
+          path: "/repo/PwrSnap",
+          kind: "worktree",
+          worktreePath: "/Users/test/.codex/worktrees/mp32wplq/PwrSnap",
+        },
+      ],
+      source: "codex",
+      gitBranch: "fix/float-over-hitbox",
+      updatedAt: 2,
+    };
+    const restoredSnapshot: WorktreeSnapshotSummary = {
+      id: "snapshot-1",
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/Users/test/.codex/worktrees/mp32wplq/PwrSnap",
+      repositoryPath: "/repo/PwrSnap",
+      snapshotRef: "fix/float-over-hitbox",
+      snapshotCommit: "ecce5f83",
+      sourceBranch: "fix/float-over-hitbox",
+      createdAt: 2000,
+      restoredAt: 2000,
+      state: "restored",
+      ignoredFilesExcluded: true,
+      unavailableReason:
+        "Restored detached worktree from repository state because no archived snapshot was available.",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/unarchive"] },
+      archivedThreads: [archivedThread],
+    });
+    const restoreDetached = vi.fn(async () => restoredSnapshot);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      worktreeArchiveService: {
+        restoreDetached,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.restoreThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(codexClient.lastListThreadsParams).toMatchObject({
+      archived: true,
+    });
+    expect(restoreDetached).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/Users/test/.codex/worktrees/mp32wplq/PwrSnap",
+      repositoryPath: "/repo/PwrSnap",
+      restoreRef: "fix/float-over-hitbox",
+    });
+    expect(response).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      worktrees: [
+        {
+          worktreePath: "/Users/test/.codex/worktrees/mp32wplq/PwrSnap",
+          repositoryPath: "/repo/PwrSnap",
+          snapshotRef: "fix/float-over-hitbox",
+          restored: true,
+        },
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("reports failed cleanup when a worktree directory remains after archive", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-sentinel-"));
     const repoPath = path.join(root, "PwrAgnt");

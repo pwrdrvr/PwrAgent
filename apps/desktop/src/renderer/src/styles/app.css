@@ -3236,6 +3236,14 @@ textarea,
   outline: none;
 }
 
+.settings-nav__divider {
+  width: calc(100% - 24px);
+  height: 1px;
+  margin: 8px 12px;
+  border: 0;
+  background: var(--border-subtle);
+}
+
 .settings-content {
   min-height: 0;
   overflow: auto;
