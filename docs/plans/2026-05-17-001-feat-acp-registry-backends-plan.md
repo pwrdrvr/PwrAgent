@@ -533,7 +533,7 @@ state.
 - Access-mode enforcement points are covered by tests and do not silently fall
   back across modes.
 
-- [ ] **Unit 5: Integrate ACP Backends into Desktop Backend Registry and Messaging**
+- [x] **Unit 5: Integrate ACP Backends into Desktop Backend Registry and Messaging**
 
 **Goal:** Make installed ACP agents participate in backend listing, thread
 creation, thread reading, turn lifecycle, notifications, navigation, and

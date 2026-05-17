@@ -5,6 +5,7 @@ import type {
   BackendAcpInstallStatus,
   BackendAcpVerificationStatus,
 } from "@pwragent/shared";
+import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 
 export const ACP_REGISTRY_URL =
   "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -98,7 +99,7 @@ export type AcpInstalledAgentRecord = {
   allowlistRuleId: string;
   installedAt: number;
   updatedAt: number;
-  launchDescriptor?: unknown;
+  launchDescriptor?: AcpLaunchDescriptor;
   lastError?: string;
   registryAgent?: AcpRegistryAgent;
 };

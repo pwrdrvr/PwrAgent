@@ -8,6 +8,7 @@ import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
+  type AcpBackendId,
   isToolManagedWorktreePath,
   shortenDerivedThreadTitle,
   type AgentEvent,
@@ -99,8 +100,11 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpAgentClient } from "../acp/acp-client";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
+import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { AcpAgentStore as SqliteAcpAgentStore } from "../acp/acp-agent-store";
 import { AcpSessionStore as SqliteAcpSessionStore } from "../acp/acp-session-store";
@@ -316,6 +320,22 @@ type BackendClient = {
     configPath?: string;
   }): Promise<{ projectPath: string; configPath?: string }>;
 };
+
+type AcpRuntimeClient = Pick<
+  AcpAgentClient,
+  | "cancelSession"
+  | "dispose"
+  | "initialize"
+  | "readReplay"
+  | "startPrompt"
+  | "startSession"
+>;
+
+type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
+
+type AcpSessionStoreLike =
+  Pick<AcpSessionStore, "getSession" | "listSessions"> &
+  Partial<Pick<AcpSessionStore, "upsertSession">>;
 
 /**
  * Resolve the live workspace CWD for thread-scoped commands.
@@ -1393,6 +1413,22 @@ function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): strin
   return text || undefined;
 }
 
+function inputToAcpPrompt(input: AppServerTurnInputItem[]): string | undefined {
+  const prompt = input
+    .map((item) => {
+      if (item.type === "text") {
+        return item.text.trim();
+      }
+      if (item.type === "image") {
+        return `[Image: ${item.url}]`;
+      }
+      return `[Local image: ${item.path}]`;
+    })
+    .filter(Boolean)
+    .join("\n");
+  return prompt || undefined;
+}
+
 function buildTitleGenerationKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -1584,7 +1620,9 @@ export class DesktopBackendRegistry {
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents">;
-  private readonly acpSessionStore?: Pick<AcpSessionStore, "listSessions" | "getSession">;
+  private readonly acpSessionStore?: AcpSessionStoreLike;
+  private readonly createAcpClient: AcpClientFactory;
+  private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -1680,7 +1718,8 @@ export class DesktopBackendRegistry {
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents"> | null;
-    acpSessionStore?: Pick<AcpSessionStore, "listSessions" | "getSession"> | null;
+    acpSessionStore?: AcpSessionStoreLike | null;
+    createAcpClient?: AcpClientFactory;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     createScratchProjectDirectory?: () => Promise<string>;
@@ -1795,6 +1834,37 @@ export class DesktopBackendRegistry {
           (isAppStateInitialized()
             ? new SqliteAcpSessionStore(getAppStateDb())
             : undefined);
+    this.createAcpClient =
+      options?.createAcpClient ??
+      ((agent) => {
+        if (!agent.launchDescriptor) {
+          throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
+        }
+        if (!this.acpSessionStore?.upsertSession) {
+          throw new Error("ACP session store is unavailable");
+        }
+        return new AcpAgentClient({
+          backendId: agent.backendId,
+          store: this.acpSessionStore as AcpSessionStore,
+          transport: new AcpStdioJsonRpcTransport({
+            launchDescriptor: agent.launchDescriptor,
+          }),
+          onSessionUpdate: async ({ sessionId, replay }) => {
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "thread/status/changed",
+                params: {
+                  threadId: sessionId,
+                  status: {
+                    type: replay.threadStatus ?? "unknown",
+                  },
+                },
+              },
+            });
+          },
+        });
+      });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
@@ -2301,6 +2371,10 @@ export class DesktopBackendRegistry {
     cwds?: string[];
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
+    if (isAcpBackendId(backend)) {
+      return { data: [] };
+    }
+
     const data = await this.getClient(backend).listSkills({
       cwd: params.cwd,
       cwds: params.cwds,
@@ -2331,6 +2405,146 @@ export class DesktopBackendRegistry {
           thread.title.toLowerCase().includes(normalizedFilter) ||
           thread.id.toLowerCase().includes(normalizedFilter),
       );
+  }
+
+  private async readAcpThread(
+    request: AppServerReadThreadRequest,
+    backend: AcpBackendId,
+  ): Promise<AppServerReadThreadResponse> {
+    const session = this.acpSessionStore?.getSession(backend, request.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${request.threadId}`);
+    }
+
+    const replay = await this.readAcpReplay(backend, request.threadId);
+    return {
+      backend,
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      ...(replay.threadStatus ? { threadStatus: replay.threadStatus } : {}),
+      replay,
+    };
+  }
+
+  private async startAcpSession(params: {
+    backend: AcpBackendId;
+    cwd?: string;
+    executionMode: ThreadExecutionMode;
+  }): Promise<{ threadId: string }> {
+    const client = await this.getAcpClient(params.backend);
+    const session = await client.startSession({
+      cwd: params.cwd,
+      executionMode: params.executionMode,
+      title: "ACP session",
+    });
+    return { threadId: session.sessionId };
+  }
+
+  private async startAcpTurn(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    const prompt = inputToAcpPrompt(params.input);
+    if (!prompt) {
+      throw new Error("ACP turns require text input");
+    }
+
+    const client = await this.getAcpClient(params.backend);
+    const syntheticStartedTurnId = `pending:${params.threadId}`;
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: params.threadId,
+          turnId: syntheticStartedTurnId,
+          turn: {
+            id: syntheticStartedTurnId,
+            status: "in_progress",
+            startedAt: Date.now(),
+          },
+        },
+      },
+    });
+
+    try {
+      const result = client.startPrompt({
+        sessionId: params.threadId,
+        prompt,
+      });
+      this.invalidateThreadListCache(params.backend);
+      return {
+        backend: params.backend,
+        threadId: result.sessionId,
+        turnId: result.turnId,
+      };
+    } catch (error) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: params.threadId,
+            turnId: syntheticStartedTurnId,
+            turn: {
+              id: syntheticStartedTurnId,
+              status: "failed",
+              completedAt: Date.now(),
+              error: {
+                message: error instanceof Error ? error.message : String(error),
+              },
+            },
+          },
+        },
+      });
+      throw error;
+    }
+  }
+
+  private async readAcpReplay(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<AppServerThreadReplay> {
+    const client = await this.acpClients.get(backend)?.catch(() => undefined);
+    return client?.readReplay(sessionId) ?? new AcpSessionReplayNormalizer().replay();
+  }
+
+  private async getAcpClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
+    const cached = this.acpClients.get(backend);
+    if (cached) {
+      return await cached;
+    }
+
+    const agent = this.resolveInstalledAcpAgent(backend);
+    const clientPromise = (async () => {
+      const client = this.createAcpClient(agent);
+      await client.initialize();
+      return client;
+    })();
+    this.acpClients.set(backend, clientPromise);
+    clientPromise.catch(() => {
+      if (this.acpClients.get(backend) === clientPromise) {
+        this.acpClients.delete(backend);
+      }
+    });
+    return await clientPromise;
+  }
+
+  private resolveInstalledAcpAgent(backend: AcpBackendId): AcpInstalledAgentRecord {
+    const agent = (this.acpAgentStore?.listInstalledAgents() ?? []).find(
+      (candidate) => candidate.backendId === backend,
+    );
+    if (!agent) {
+      throw new Error(`ACP backend is not installed: ${backend}`);
+    }
+    if (agent.installStatus !== "installed") {
+      throw new Error(`ACP backend is not installed: ${backend}`);
+    }
+    if (agent.authStatus !== "not-required" && agent.authStatus !== "authenticated") {
+      throw new Error(`ACP backend authentication required: ${backend}`);
+    }
+    return agent;
   }
 
   async archiveThread(
@@ -2597,6 +2811,10 @@ export class DesktopBackendRegistry {
   ): Promise<AppServerReadThreadResponse> {
     this.assertNotBootstrap("readThread");
     const backend = request.backend ?? "codex";
+    if (isAcpBackendId(backend)) {
+      return await this.readAcpThread(request, backend);
+    }
+
     const replay =
       backend === "codex"
         ? await this.withCodexThreadClient(request.threadId, async (client) =>
@@ -2693,14 +2911,20 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
-    const result = await this.getClient(backend, executionMode).startThread({
-      ...request,
-      ...modelSettings,
-      cwd,
-      approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-      sandbox: request.sandbox ?? modeSettings.sandbox,
-      codexEnvironmentRuntime: request.codexEnvironmentRuntime,
-    });
+    const result = isAcpBackendId(backend)
+      ? await this.startAcpSession({
+          backend,
+          cwd,
+          executionMode,
+        })
+      : await this.getClient(backend, executionMode).startThread({
+          ...request,
+          ...modelSettings,
+          cwd,
+          approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+          sandbox: request.sandbox ?? modeSettings.sandbox,
+          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+        });
     const startedAt = Date.now();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;
     this.pendingStartedThreads.set(
@@ -2785,6 +3009,14 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    if (isAcpBackendId(params.backend)) {
+      return await this.startAcpTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: params.input,
+      });
+    }
+
     const reserveCodexStart = params.backend === "codex";
     if (reserveCodexStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
@@ -3053,6 +3285,27 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    if (isAcpBackendId(params.backend)) {
+      const client = await this.getAcpClient(params.backend);
+      await client.cancelSession(params.threadId);
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "turn/cancelled",
+          params: {
+            threadId: params.threadId,
+            turnId: params.turnId,
+            turn: {
+              id: params.turnId,
+              status: "cancelled",
+              completedAt: Date.now(),
+            },
+          },
+        },
+      });
+      return params;
+    }
+
     const activeCodexTurnMode =
       params.backend === "codex"
         ? this.activeCodexTurnModes.get(
@@ -4707,6 +4960,14 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
+    const acpClients = [...this.acpClients.values()];
+    this.acpClients.clear();
+    await Promise.all(
+      acpClients.map(async (clientPromise) => {
+        const client = await clientPromise.catch(() => undefined);
+        client?.dispose();
+      }),
+    );
     await this.codexClient.close();
     await this.grokClient.close();
     await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
@@ -4801,6 +5062,10 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
+    if (isAcpBackendId(backend)) {
+      return undefined;
+    }
+
     if (backend === "codex") {
       const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
       return buildLaunchpadOptions(backend, models);
@@ -4851,6 +5116,9 @@ export class DesktopBackendRegistry {
   ): BackendClient {
     if (backend === "grok") {
       return this.grokClient;
+    }
+    if (isAcpBackendId(backend)) {
+      throw new Error(`ACP backend ${backend} is not available through the built-in client router`);
     }
 
     return this.codexClient;

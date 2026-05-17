@@ -8880,7 +8880,8 @@ function readFullAccessRiskContext(
   }
   if (
     value.kind === "resume-thread" &&
-    (value.backend === "codex" || value.backend === "grok") &&
+    typeof value.backend === "string" &&
+    isAppServerBackendKind(value.backend) &&
     typeof value.sessionId === "string" &&
     typeof value.threadId === "string"
   ) {

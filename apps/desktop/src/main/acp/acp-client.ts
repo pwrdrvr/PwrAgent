@@ -11,6 +11,7 @@ import type { AcpSessionMetadata, AcpSessionStore } from "./acp-session-store.js
 
 export type AcpJsonRpcTransport = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  notify?(method: string, params?: Record<string, unknown>): Promise<void>;
   onNotification(
     listener: (method: string, params: Record<string, unknown>) => void,
   ): () => void;
@@ -21,6 +22,11 @@ export type AcpAgentClientOptions = {
   store: AcpSessionStore;
   transport: AcpJsonRpcTransport;
   now?: () => number;
+  onSessionUpdate?: (event: {
+    sessionId: string;
+    replay: AppServerThreadReplay;
+    update: Record<string, unknown>;
+  }) => Promise<void> | void;
 };
 
 export class AcpAgentClient {
@@ -106,6 +112,28 @@ export class AcpAgentClient {
     };
   }
 
+  startPrompt(params: {
+    sessionId: string;
+    prompt: string;
+  }): { sessionId: string; turnId: string } {
+    const turnId = `pending:${params.sessionId}:${this.now()}`;
+    void this.options.transport.request("session/prompt", {
+      sessionId: params.sessionId,
+      prompt: params.prompt,
+    }).catch(() => undefined);
+    return {
+      sessionId: params.sessionId,
+      turnId,
+    };
+  }
+
+  async cancelSession(sessionId: string): Promise<void> {
+    if (!this.options.transport.notify) {
+      throw new Error("ACP transport does not support notifications");
+    }
+    await this.options.transport.notify("session/cancel", { sessionId });
+  }
+
   readReplay(sessionId: string): AppServerThreadReplay {
     return this.normalizerFor(sessionId).replay();
   }
@@ -116,11 +144,18 @@ export class AcpAgentClient {
     if (!sessionId || !update) {
       return;
     }
-    this.normalizerFor(sessionId).apply({
+    const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
       receivedAt: this.now(),
     } satisfies AcpSessionUpdate);
+    void Promise.resolve(
+      this.options.onSessionUpdate?.({
+        sessionId,
+        replay,
+        update,
+      }),
+    ).catch(() => undefined);
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {

@@ -25,11 +25,15 @@ afterEach(() => {
 describe("AcpAgentClient", () => {
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
     const transport = new FakeAcpAgentTransport();
+    const sessionUpdates: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
       store,
       transport,
       now: () => 1000,
+      onSessionUpdate: ({ sessionId }) => {
+        sessionUpdates.push(sessionId);
+      },
     });
 
     await client.initialize();
@@ -58,5 +62,43 @@ describe("AcpAgentClient", () => {
       executionMode: "default",
     });
     expect(client.readReplay("session-1").lastAssistantMessage).toBe("Done");
+    expect(sessionUpdates).toEqual(["session-1"]);
+  });
+
+  it("can start prompts without waiting for completion and cancel sessions", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:codex-acp",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const prompt = client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "keep going",
+    });
+    await client.cancelSession(session.sessionId);
+
+    expect(prompt).toEqual({
+      sessionId: "session-1",
+      turnId: "pending:session-1:1000",
+    });
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/new",
+      "session/prompt",
+    ]);
+    expect(transport.notifications).toEqual([
+      {
+        method: "session/cancel",
+        params: { sessionId: "session-1" },
+      },
+    ]);
   });
 });

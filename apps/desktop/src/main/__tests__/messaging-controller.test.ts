@@ -1189,6 +1189,40 @@ describe("MessagingController", () => {
     });
   });
 
+  it("binds to ACP threads from structured resume callback values", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      id: "session-1",
+      source: "acp:codex-acp",
+      title: "ACP Thread",
+    };
+    const harness = await createHarness({ navigation });
+    const resumeEvent = buildCommandEvent("/resume");
+    await harness.controller.handleInboundEvent(resumeEvent);
+
+    const callbackEvent = buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "acp:codex-acp",
+          threadId: "session-1",
+        },
+      });
+    await harness.controller.handleInboundEvent(callbackEvent);
+
+    const binding = await harness.store.findActiveBindingForChannel(
+      callbackEvent.channel,
+    );
+    expect(binding).toMatchObject({
+      backend: "acp:codex-acp",
+      threadId: "session-1",
+    });
+    expect(harness.readThreadLastAssistantReply).toHaveBeenCalledWith({
+      backend: "acp:codex-acp",
+      threadId: "session-1",
+    });
+  });
+
   it("reposts the last assistant response after selecting a thread to resume", async () => {
     const now = Date.UTC(2026, 4, 15, 13, 30);
     const harness = await createHarness({
