@@ -1382,10 +1382,20 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding-left: 4px;
+  padding-left: 0;
+  /* 4px right padding holds row content (notably the selected
+     thread row's accent-border) clear of the scrollbar gutter so
+     the row's right border doesn't visually kiss the thumb. Left
+     stays at 0 — the title-width gain there is intentional. */
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
+  /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
+     a stable 10px column on the right for the scrollbar so the thumb
+     never overlays row content. The previous overlay-scrollbar
+     behavior intermittently failed to hide on macOS Chromium and
+     visually collided with titles + the per-row launchpad button. */
+  scrollbar-gutter: stable;
 }
 
 .directory-groups {
@@ -1393,10 +1403,11 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  padding-left: 4px;
+  padding-left: 0;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
+  scrollbar-gutter: stable;
 }
 
 .sidebar-list--dense::-webkit-scrollbar,
@@ -2137,7 +2148,11 @@ textarea,
 }
 
 .directory-row {
-  padding: 10px 0 0;
+  /* Sidebar-tightening pass: the previous 10px top padding + 44px
+     summary min-height + 34px launchpad button meant each
+     directory header took ~54px. Recovered ~20px per row by halving
+     the top padding and tightening the summary geometry below. */
+  padding: 4px 0 0;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -2150,8 +2165,11 @@ textarea,
   position: sticky;
   top: 0;
   z-index: 5;
+  /* Gap between summary button and launchpad icon button. Tightened
+     from 8 → 4 — the icon button itself lost its border (no longer
+     reads as a separate "card" the way the framed 34px button did). */
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 4px;
   align-items: center;
   background: var(--bg-sidebar);
 }
@@ -2160,9 +2178,23 @@ textarea,
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  padding: 10px 12px;
+  /* Inner gap between title block and meta block. Tightened from
+     12 → 8 since the meta block now sits tighter against the
+     scrollbar gutter. */
+  gap: 8px;
+  /* Row height tightened 44 → 32. Was set to match the masthead's
+     44px button height, but rows are list entries and don't need
+     that same hit-target generosity. Combined with the row top
+     padding drop, each directory header now reads ~22px taller
+     than the comfortable touch target instead of 54px. */
+  min-height: 32px;
+  /* Lateral inset: 4px on the left mirrors the gap from the
+     selected-row border to the folder icon; 10px on the right gives
+     the chevron the same visual breathing room from the
+     selected-row border on the opposite edge (chevron is a
+     rotated-square glyph so it visually crowds its bounding-box
+     right edge more than the folder icon crowds its left). */
+  padding: 4px 10px 4px 4px;
 }
 
 .directory-row__summary:focus,
@@ -2224,34 +2256,43 @@ textarea,
 }
 
 .directory-row__launchpad-button {
+  /* Sidebar-tightening pass: stripped the 34px framed-button
+     treatment (border + bg-panel + 8px radius) — at directory-row
+     density it read as "another card" inside the row instead of an
+     inline icon affordance. Now a flat 24px icon button that picks
+     up an accent-soft hover state. */
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   appearance: none;
   cursor: pointer;
   padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  color: var(--text-secondary);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
   font-size: 16px;
   line-height: 1;
+  /* The list wrapper carries `padding-right: 4px` so the icon
+     glyph already sits clear of the scrollbar gutter — no
+     additional margin needed here. */
 }
 
 .directory-row__launchpad-button:hover,
 .directory-row__launchpad-button:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--bg-panel-hover);
-  color: var(--text-primary);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
   outline: none;
 }
 
 .directory-row__launchpad-button.has-draft {
-  border-color: var(--accent-border);
-  background: var(--bg-panel-hover);
-  color: var(--text-primary);
+  /* When the directory has an in-flight launchpad draft the user
+     hasn't sent yet, the button is tinted (not boxed) so the cue
+     reads as "the icon is active" rather than "the icon got a
+     new outline". */
+  color: var(--accent-bright);
 }
 
 .directory-row__details {
