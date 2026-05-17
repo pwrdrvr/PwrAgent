@@ -48,9 +48,6 @@ updates:
       include: "scope"
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 7
     groups:
       github-actions-minor-patch:
         patterns:
@@ -97,9 +94,6 @@ updates:
       include: "scope"
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 7
     groups:
       docs-containers-minor-patch:
         patterns:
