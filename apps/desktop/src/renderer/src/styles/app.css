@@ -1609,12 +1609,14 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding-left: 0;
-  /* 4px right padding holds row content (notably the selected
-     thread row's accent-border) clear of the scrollbar gutter so
-     the row's right border doesn't visually kiss the thumb. Left
-     stays at 0 — the title-width gain there is intentional. */
-  padding-right: 4px;
+  /* 4px gutters on both sides hold row content clear of the scroll
+     container's `overflow: hidden` clip. The right gutter also keeps the
+     selected row's accent-border from kissing the scrollbar thumb. The
+     left gutter is what makes the focus-visible outline (2px wide at
+     2px offset → extends 4px outside the row's box) visible on the left
+     edge of the active row — without it the outline gets clipped against
+     the sidebar's left wall and the selected row reads as missing a side. */
+  padding-inline: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
@@ -1630,8 +1632,9 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  padding-left: 0;
-  padding-right: 4px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
+     rationale. */
+  padding-inline: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
