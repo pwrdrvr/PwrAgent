@@ -3,8 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% if page.title and page.url != "/" %}{{ page.title }} — {% endif %}{{ site.title }}</title>
-  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+  {%- assign page_title = site.title -%}
+  {%- if page.title and page.url != "/" -%}
+    {%- assign page_title = page.title | append: " — " | append: site.title -%}
+  {%- endif -%}
+  {%- assign page_description = page.description | default: site.description -%}
+  {%- assign og_image_path = page.og_image | default: site.og_image | default: "/assets/screenshots/desktop-hero.png" -%}
+  {%- assign og_image_url = og_image_path | absolute_url -%}
+  {%- assign og_image_alt = page.og_image_alt | default: site.og_image_alt | default: "PwrAgent desktop showing threads grouped by repo, an in-flight thread mid-conversation, four messenger status icons (Telegram, Discord, Slack, Mattermost), and per-thread model / access / worktree controls." -%}
+  <title>{{ page_title }}</title>
+  <meta name="description" content="{{ page_description }}">
+
+  <!-- Open Graph (Facebook, LinkedIn, Slack unfurls, Discord embeds, …). -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ site.title }}">
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ page_description }}">
+  <meta property="og:url" content="{{ page.url | absolute_url }}">
+  <meta property="og:image" content="{{ og_image_url }}">
+  <meta property="og:image:alt" content="{{ og_image_alt }}">
+  <meta property="og:image:width" content="2880">
+  <meta property="og:image:height" content="1920">
+
+  <!-- Twitter / X Card. summary_large_image gives the wide hero
+       treatment instead of the small thumbnail. -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ page_description }}">
+  <meta name="twitter:image" content="{{ og_image_url }}">
+  <meta name="twitter:image:alt" content="{{ og_image_alt }}">
+
+  <link rel="canonical" href="{{ page.url | absolute_url }}">
   <link rel="icon" type="image/png" sizes="32x32" href="{{ '/assets/favicon-32.png' | relative_url }}">
   <link rel="icon" type="image/png" sizes="16x16" href="{{ '/assets/favicon-16.png' | relative_url }}">
   <link rel="apple-touch-icon" sizes="180x180" href="{{ '/assets/apple-touch-icon.png' | relative_url }}">
