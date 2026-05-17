@@ -1999,7 +1999,7 @@ describe("Sidebar directory pinning", () => {
     ]);
   });
 
-  it("toggles pin state from the directory row context menu", () => {
+  it("opens a context menu offering Pin Directory on an unpinned row", async () => {
     const onSetDirectoryPin = vi.fn(async () => undefined);
 
     renderSidebar([projectADirectory], {
@@ -2010,10 +2010,21 @@ describe("Sidebar directory pinning", () => {
     const summary = getDirectorySummary(/ProjectA/i);
     fireEvent.contextMenu(summary);
 
+    const pinItem = await screen.findByRole("menuitem", {
+      name: "Pin Directory",
+    });
+    expect(pinItem).toBeInTheDocument();
+    await clickElement(pinItem);
+
     expect(onSetDirectoryPin).toHaveBeenCalledWith(projectADirectory, true);
+    // Menu dismisses on action — the menuitem should no longer be
+    // mounted after the click.
+    expect(
+      screen.queryByRole("menuitem", { name: "Pin Directory" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("unpins a pinned directory from the row context menu", () => {
+  it("opens a context menu offering Unpin Directory on a pinned row", async () => {
     const onSetDirectoryPin = vi.fn(async () => undefined);
     const pinned: NavigationDirectorySummary = {
       ...projectADirectory,
@@ -2027,6 +2038,11 @@ describe("Sidebar directory pinning", () => {
 
     const summary = getDirectorySummary(/ProjectA/i);
     fireEvent.contextMenu(summary);
+
+    const unpinItem = await screen.findByRole("menuitem", {
+      name: "Unpin Directory",
+    });
+    await clickElement(unpinItem);
 
     expect(onSetDirectoryPin).toHaveBeenCalledWith(pinned, false);
   });

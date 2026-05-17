@@ -58,6 +58,18 @@ type DirectoriesListProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  /**
+   * Opens the directory context menu at the cursor position. Sidebar
+   * owns the menu (so it can escape the sidebar's scroll container,
+   * mirroring the thread context menu). DirectoriesList only knows
+   * "user right-clicked this directory at (x, y); please show the
+   * menu." Workspace/unlinked rows must not invoke this — see the
+   * row-level guard in `renderDirectoryRow`.
+   */
+  onOpenDirectoryContextMenu?: (
+    directory: NavigationDirectorySummary,
+    position: { x: number; y: number; anchorTop?: number },
+  ) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -514,14 +526,26 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 [directory.key]: !expanded,
               }));
             }}
-            onContextMenu={
-              directoryDragEnabled && directory.kind === "directory"
-                ? (event) => {
-                    event.preventDefault();
-                    void props.onSetDirectoryPin?.(directory, !directoryPinned);
-                  }
-                : undefined
-            }
+            onContextMenu={(() => {
+              const openMenu = props.onOpenDirectoryContextMenu;
+              if (!openMenu || directory.kind !== "directory") {
+                return undefined;
+              }
+              return (event) => {
+                event.preventDefault();
+                const rect = event.currentTarget.getBoundingClientRect();
+                // Anchor at the cursor so the menu lands where the
+                // user clicked, but pass `anchorTop` so the
+                // viewport-flip path in `placeThreadContextMenu`
+                // re-anchors above the row (not above the cursor)
+                // when the menu would overflow the bottom edge.
+                openMenu(directory, {
+                  x: event.clientX,
+                  y: event.clientY,
+                  anchorTop: rect.top,
+                });
+              };
+            })()}
           >
             <span className="directory-row__summary-main">
               <span aria-hidden="true" className="directory-row__icon">
