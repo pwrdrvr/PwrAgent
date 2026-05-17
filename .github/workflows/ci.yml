@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -45,7 +45,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -83,7 +83,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -103,7 +103,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -128,7 +128,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
@@ -160,7 +160,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         timeout-minutes: 10
         with:
           fetch-depth: 0
