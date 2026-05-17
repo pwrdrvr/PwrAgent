@@ -35,5 +35,10 @@
     "jsdom": "^29.0.2",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "^1.16.0"
+    }
   }
 }
