@@ -27,6 +27,7 @@ import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefres
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
+import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 
 export function App() {
   const desktopApi = useDesktopApi();
@@ -360,6 +361,8 @@ function DesktopAppShell(props: {
           />
         </div>
       ) : null}
+
+      <AppUpdateBanner desktopApi={desktopApi} />
     </div>
   );
 }

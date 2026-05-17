@@ -33,6 +33,7 @@
     "inspect:e2e:branch-drift": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.config.ts e2e/thread-branch-drift.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:workspace-handoff": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.config.ts e2e/workspace-handoff-dialog.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:markdown-table": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.config.ts e2e/markdown-findings-table.inspect.spec.ts --headed --timeout=0",
+    "inspect:e2e:update-banner": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.config.ts e2e/update-banner.inspect.spec.ts --headed --timeout=0",
     "screenshot:readme": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_SCREENSHOT_CAPTURE=1 playwright test -c playwright.config.ts e2e/readme-screenshots.inspect.spec.ts --headed && node scripts/filter-noise-screenshots.mjs",
     "screenshot:docs-site": "node scripts/rebuild-native-for-electron.mjs && pnpm build && PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1 playwright test -c playwright.config.ts e2e/docs-site-screenshots.inspect.spec.ts --headed && node scripts/filter-noise-screenshots.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"

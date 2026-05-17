@@ -2492,6 +2492,78 @@ textarea,
   background: var(--bg-app);
 }
 
+.app-update-banner {
+  position: fixed;
+  z-index: 80;
+  left: 16px;
+  bottom: 16px;
+  display: grid;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
+  box-shadow: var(--shadow-popover);
+  animation: app-update-banner-enter 160ms ease-out;
+}
+
+.app-update-banner__content {
+  min-width: 0;
+}
+
+.app-update-banner__eyebrow {
+  margin: 0 0 4px;
+  color: var(--accent-bright);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.app-update-banner__message,
+.app-update-banner__error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.app-update-banner__message {
+  color: var(--text-primary);
+}
+
+.app-update-banner__error {
+  margin-top: 8px;
+  color: var(--danger-text);
+}
+
+.app-update-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-update-banner__restart,
+.app-update-banner__dismiss {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+@keyframes app-update-banner-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .thread-view {
   display: flex;
   flex: 1;
