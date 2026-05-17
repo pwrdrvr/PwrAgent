@@ -460,15 +460,18 @@ describe("Tangerine Terminal theme contract", () => {
     expect(activeRule).toContain("cursor: grabbing;");
 
     // Drop-indicator pseudo-elements: 3px accent bar with shadow,
-    // positioned above (before) / below (after) the header.
+    // positioned above (before) / below (after) the directory
+    // section. Attached to `.directory-row` (not the header) so
+    // the indicator stretches the full height of an expanded
+    // directory's drop zone.
     expect(css).toMatch(
-      /\.directory-row__header\.is-drop-target-before::before,\s*\.directory-row__header\.is-drop-target-after::after\s*\{[\s\S]*?height:\s*3px;[\s\S]*?background:\s*var\(--accent\);[\s\S]*?\}/,
+      /\.directory-row\.is-drop-target-before::before,\s*\.directory-row\.is-drop-target-after::after\s*\{[\s\S]*?height:\s*3px;[\s\S]*?background:\s*var\(--accent\);[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.directory-row__header\.is-drop-target-before::before\s*\{[\s\S]*?top:\s*-3px;[\s\S]*?\}/,
+      /\.directory-row\.is-drop-target-before::before\s*\{[\s\S]*?top:\s*-3px;[\s\S]*?\}/,
     );
     expect(css).toMatch(
-      /\.directory-row__header\.is-drop-target-after::after\s*\{[\s\S]*?bottom:\s*-3px;[\s\S]*?\}/,
+      /\.directory-row\.is-drop-target-after::after\s*\{[\s\S]*?bottom:\s*-3px;[\s\S]*?\}/,
     );
 
     // The pinned-directories divider must read identically to the

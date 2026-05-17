@@ -92,6 +92,14 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
 }
 
 /**
+ * Window in which a post-drag synthetic `click` is suppressed.
+ * Chrome/Electron fire the synthetic click immediately after
+ * `dragend`, well under 50ms apart. 150ms gives margin for slow
+ * frames without swallowing the user's next intentional click.
+ */
+const POST_DRAG_CLICK_SUPPRESS_MS = 150;
+
+/**
  * The user can pin both `kind: "directory"` and `kind: "workspace"`
  * entries — both are named entries they click in the sidebar. Only
  * `kind: "unlinked"` (the synthetic catch-all for threads with no
@@ -146,13 +154,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
    * fire a synthetic `click` on the element under the mouse on
-   * drag-release, which used to expand/collapse whatever row the
-   * user dropped onto — a confusing side-effect of a reorder. Set
-   * on dragStart, cleared on the next macrotask after dragEnd so
-   * the synthetic click sees the flag and bails. Plan
-   * 2026-05-09-002 Unit K follow-up.
+   * drag-release; that click used to expand/collapse whatever row
+   * the user dropped onto — a confusing side-effect of a reorder.
+   *
+   * We record `Date.now()` at every drag-end and drop, and the
+   * summary button's onClick bails if the click arrives within
+   * `POST_DRAG_CLICK_SUPPRESS_MS` of the last drag end. Using a
+   * timestamp (instead of a `boolean` ref cleared on a timer)
+   * means we can never get stuck in "clicks suppressed forever"
+   * mode if a `dragend` handler doesn't fire — the comparison
+   * naturally expires. Plan 2026-05-09-002 Unit K follow-up.
    */
-  const directoryDragJustEndedRef = useRef(false);
+  const lastDirectoryDragEndedAtRef = useRef(0);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -411,15 +424,119 @@ export function DirectoriesList(props: DirectoriesListProps) {
       : "";
 
     return (
-      <section key={directory.key} className="directory-row">
+      <section
+        key={directory.key}
+        className={`directory-row${dropIndicatorClass}`}
+        onDragOver={
+          directoryDragEnabled
+            ? (event) => {
+                // Gate on `draggedDirectoryKey` (state) first; the
+                // `application/x-pwragent-directory` MIME is set on
+                // dragStart but `getData()` returns "" during
+                // dragOver for security, so the state is the
+                // reliable signal for same-document drags. Thread
+                // drags don't set this state, so they fall through
+                // and the inner thread-row handlers take over.
+                const draggedKey =
+                  draggedDirectoryKey ??
+                  event.dataTransfer.getData(
+                    "application/x-pwragent-directory",
+                  );
+                if (!draggedKey || draggedKey === directory.key) {
+                  return;
+                }
+                const draggedDirectory = directoryByKey.get(draggedKey);
+                if (
+                  !draggedDirectory ||
+                  !isPinnableDirectoryKind(draggedDirectory)
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDirectoryDropIndicator({
+                  targetKey: directory.key,
+                  position: getDropIndicatorPosition(event),
+                });
+                setDirectoriesPinnedDividerDropTarget(false);
+              }
+            : undefined
+        }
+        onDragLeave={
+          directoryDragEnabled
+            ? (event) => {
+                if (didDragLeaveCurrentTarget(event)) {
+                  setDirectoryDropIndicator(undefined);
+                }
+              }
+            : undefined
+        }
+        onDrop={
+          directoryDragEnabled
+            ? (event) => {
+                const draggedKey =
+                  draggedDirectoryKey ??
+                  event.dataTransfer.getData(
+                    "application/x-pwragent-directory",
+                  );
+                // Bail without consuming the event for non-directory
+                // drags so inner thread-row drop handlers still fire.
+                if (!draggedKey) {
+                  return;
+                }
+                event.preventDefault();
+                setDraggedDirectoryKey(undefined);
+                setDirectoryDropIndicator(undefined);
+                setDirectoriesPinnedDividerDropTarget(false);
+                lastDirectoryDragEndedAtRef.current = Date.now();
+                if (draggedKey === directory.key) {
+                  return;
+                }
+                const draggedDirectory = directoryByKey.get(draggedKey);
+                if (
+                  !draggedDirectory ||
+                  !isPinnableDirectoryKind(draggedDirectory)
+                ) {
+                  return;
+                }
+
+                const position = getDropIndicatorPosition(event);
+                // Drop on a pinned target → reorder within pinned
+                // section. Drop on an unpinned target → drag is
+                // moving among unpinned (no-op for pin state) OR
+                // dragging an unpinned over an unpinned (also a
+                // no-op since they have no pin order). The
+                // promote-to-pinned path uses the divider as
+                // drop target.
+                if (!directoryPinned) {
+                  return;
+                }
+
+                const nextKeys = pinnedDirectoryKeys.includes(draggedKey)
+                  ? moveDirectoryKey(
+                      pinnedDirectoryKeys,
+                      draggedKey,
+                      directory.key,
+                      position,
+                    )
+                  : moveDirectoryKey(
+                      [...pinnedDirectoryKeys, draggedKey],
+                      draggedKey,
+                      directory.key,
+                      position,
+                    );
+                reorderDirectoryPins(nextKeys);
+              }
+            : undefined
+        }
+      >
         <div
-          className={`directory-row__header${dropIndicatorClass}`}
+          className="directory-row__header"
           draggable={directoryDraggable}
           onDragStart={
             directoryDraggable
               ? (event) => {
                   setDraggedDirectoryKey(directory.key);
-                  directoryDragJustEndedRef.current = true;
                   event.dataTransfer.effectAllowed = "move";
                   event.dataTransfer.setData(
                     "application/x-pwragent-directory",
@@ -433,110 +550,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
               : undefined
           }
-          onDragOver={
-            directoryDragEnabled
-              ? (event) => {
-                  const draggedKey =
-                    draggedDirectoryKey ??
-                    event.dataTransfer.getData(
-                      "application/x-pwragent-directory",
-                    );
-                  if (!draggedKey || draggedKey === directory.key) {
-                    return;
-                  }
-                  const draggedDirectory = directoryByKey.get(draggedKey);
-                  if (
-                    !draggedDirectory ||
-                    !isPinnableDirectoryKind(draggedDirectory)
-                  ) {
-                    return;
-                  }
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  setDirectoryDropIndicator({
-                    targetKey: directory.key,
-                    position: getDropIndicatorPosition(event),
-                  });
-                  setDirectoriesPinnedDividerDropTarget(false);
-                }
-              : undefined
-          }
-          onDragLeave={
-            directoryDragEnabled
-              ? (event) => {
-                  if (didDragLeaveCurrentTarget(event)) {
-                    setDirectoryDropIndicator(undefined);
-                  }
-                }
-              : undefined
-          }
           onDragEnd={
             directoryDragEnabled
               ? () => {
                   setDraggedDirectoryKey(undefined);
                   setDirectoryDropIndicator(undefined);
                   setDirectoriesPinnedDividerDropTarget(false);
-                  // Clear the suppression flag after the synthetic
-                  // post-release click would have fired. setTimeout
-                  // queues this on a macrotask after the click
-                  // microtask, so the click handler sees `true`
-                  // and bails, then this clears for future
-                  // non-drag clicks.
-                  setTimeout(() => {
-                    directoryDragJustEndedRef.current = false;
-                  }, 0);
-                }
-              : undefined
-          }
-          onDrop={
-            directoryDragEnabled
-              ? (event) => {
-                  event.preventDefault();
-                  const draggedKey =
-                    draggedDirectoryKey ??
-                    event.dataTransfer.getData(
-                      "application/x-pwragent-directory",
-                    );
-                  setDraggedDirectoryKey(undefined);
-                  setDirectoryDropIndicator(undefined);
-                  setDirectoriesPinnedDividerDropTarget(false);
-                  if (!draggedKey || draggedKey === directory.key) {
-                    return;
-                  }
-                  const draggedDirectory = directoryByKey.get(draggedKey);
-                  if (
-                    !draggedDirectory ||
-                    !isPinnableDirectoryKind(draggedDirectory)
-                  ) {
-                    return;
-                  }
-
-                  const position = getDropIndicatorPosition(event);
-                  // Drop on a pinned target → reorder within pinned
-                  // section. Drop on an unpinned target → drag is
-                  // moving among unpinned (no-op for pin state) OR
-                  // dragging an unpinned over an unpinned (also a
-                  // no-op since they have no pin order). The
-                  // promote-to-pinned path uses the divider as
-                  // drop target.
-                  if (!directoryPinned) {
-                    return;
-                  }
-
-                  const nextKeys = pinnedDirectoryKeys.includes(draggedKey)
-                    ? moveDirectoryKey(
-                        pinnedDirectoryKeys,
-                        draggedKey,
-                        directory.key,
-                        position,
-                      )
-                    : moveDirectoryKey(
-                        [...pinnedDirectoryKeys, draggedKey],
-                        draggedKey,
-                        directory.key,
-                        position,
-                      );
-                  reorderDirectoryPins(nextKeys);
+                  // Record drag-end so the summary button's click
+                  // handler can suppress the synthetic post-release
+                  // click that browsers fire on drag-release. The
+                  // timestamp naturally expires after
+                  // POST_DRAG_CLICK_SUPPRESS_MS so this can never
+                  // get stuck if `dragend` doesn't fire reliably.
+                  lastDirectoryDragEndedAtRef.current = Date.now();
                 }
               : undefined
           }
@@ -562,10 +588,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }`}
             type="button"
             onClick={() => {
-              // Suppress the synthetic post-drop click. The drag-end
-              // handler schedules the flag to clear on the next
-              // macrotask, so non-drag clicks always pass through.
-              if (directoryDragJustEndedRef.current) {
+              // Suppress the synthetic post-drop click that the
+              // browser fires on the element under the mouse when
+              // a drag releases. The timestamp comparison expires
+              // on its own, so we can never get stuck in a
+              // permanently-suppressed state.
+              if (
+                Date.now() - lastDirectoryDragEndedAtRef.current <
+                POST_DRAG_CLICK_SUPPRESS_MS
+              ) {
                 return;
               }
               setExpandedByKey((current) => ({
@@ -858,6 +889,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               event.dataTransfer.getData("application/x-pwragent-directory");
             setDraggedDirectoryKey(undefined);
             setDirectoriesPinnedDividerDropTarget(false);
+            lastDirectoryDragEndedAtRef.current = Date.now();
             if (!draggedKey) return;
             const draggedDirectory = directoryByKey.get(draggedKey);
             if (

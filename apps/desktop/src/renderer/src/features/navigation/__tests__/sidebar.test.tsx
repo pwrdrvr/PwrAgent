@@ -2091,4 +2091,60 @@ describe("Sidebar directory pinning", () => {
     ).not.toBeInTheDocument();
     expect(onSetDirectoryPin).not.toHaveBeenCalled();
   });
+
+  it("suppresses the synthetic post-drag click on the directory summary button", () => {
+    // Regression: an earlier ref-based suppression flag could get
+    // stuck `true` if `dragend` didn't fire (e.g., React detached
+    // the listener during a re-render that moved the row between
+    // pinned/unpinned). The current implementation stores a
+    // timestamp at every drag-end and bails on clicks within
+    // POST_DRAG_CLICK_SUPPRESS_MS. This test covers both halves:
+    // (1) a click immediately after drag-end is suppressed, and
+    // (2) a click well after drag-end fires the expand toggle.
+    const pinnedA: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+      threadKeys: ["codex:thread-1"],
+    };
+    const pinnedB: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+      threadKeys: [],
+    };
+
+    renderSidebar([pinnedA, pinnedB], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    // Initial state: ProjectA's row is collapsed (no selected
+    // thread, no launchpad selected). aria-expanded === "false".
+    const summary = getDirectorySummary(/ProjectA/i);
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+
+    // Drop something on the section (simulates the trailing edge
+    // of a reorder gesture). This stamps the suppression
+    // timestamp via the section's onDrop handler.
+    const sectionA = summary.closest(".directory-row") as HTMLElement;
+    fireEvent.drop(sectionA, {
+      dataTransfer: createDirectoryDataTransfer(pinnedB.key),
+    });
+
+    // The synthetic post-drag click that browsers fire on the
+    // element under the mouse should be suppressed — the row must
+    // stay collapsed.
+    fireEvent.click(summary);
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+
+    // After the suppression window elapses, a normal click toggles
+    // expand again. POST_DRAG_CLICK_SUPPRESS_MS is 150ms; wait
+    // longer than that, then click.
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        fireEvent.click(summary);
+        expect(summary.getAttribute("aria-expanded")).toBe("true");
+        resolve();
+      }, 200);
+    });
+  });
 });
