@@ -223,7 +223,6 @@ export function bootstrapApp(): void {
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
     applicationVersion: app.getVersion(),
-    version: app.getVersion(),
     copyright: APP_COPYRIGHT,
   });
   initializeMainLogger();

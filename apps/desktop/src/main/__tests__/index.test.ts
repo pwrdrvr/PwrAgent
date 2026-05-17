@@ -313,7 +313,9 @@ describe("bootstrapApp", () => {
     shellOpenExternalMock.mockReset();
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
+    setAboutPanelOptionsMock.mockReset();
     getAppPathMock.mockClear();
+    getVersionMock.mockClear();
     dockSetIconMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
     nativeImageMock.isEmpty.mockReturnValue(false);
@@ -370,6 +372,19 @@ describe("bootstrapApp", () => {
     expect(registerWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets the About panel version without duplicating it as a build value", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(setAboutPanelOptionsMock).toHaveBeenCalledWith({
+      applicationName: "PwrAgent",
+      applicationVersion: "1.0.0-alpha.0",
+      copyright: "Copyright © 2026 PwrDrvr LLC.",
+    });
   });
 
   it("uses the PwrAgent icon for the development Dock icon on macOS", async () => {
