@@ -13,7 +13,7 @@
 
 - Treat plan documents as decision artifacts, not implementation scripts.
 - Keep changes aligned with the current active plan unless the user explicitly changes scope.
-- Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories.
+- Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories. **Don't rewrite plan / brainstorm / solution files that weren't created on your current branch either** — they are point-in-time decision artifacts, a historical record of what was decided when. The one exception: the plan file your current branch is executing is fair game for in-flight updates (progress checkboxes, deferred-to-implementation answers resolved as you work). The root [`.rgignore`](.rgignore) skips all three directories from default `rg` searches; override per-search with `rg --no-ignore` (or `rg -u`) when you actually want to grep them. Full rules in [`docs/plans/AGENTS.md`](docs/plans/AGENTS.md).
 - GitHub Actions labels that intentionally trigger workflow behavior are
   documented in [.github/workflows/README.md](.github/workflows/README.md).
   Check that list before adding or using a CI-triggering PR label.
