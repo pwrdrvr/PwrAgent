@@ -2184,11 +2184,13 @@ textarea,
      padding drop, each directory header now reads ~22px taller
      than the comfortable touch target instead of 54px. */
   min-height: 32px;
-  /* Lateral inset tightened 12 → 4 to recover horizontal space for
-     the title text. Combined with dropping the sidebar-list's
-     padding-left/right above, the title can grow ~30–40px wider in
-     the same sidebar width. */
-  padding: 4px 4px;
+  /* Lateral inset: 4px on the left mirrors the gap from the
+     selected-row border to the folder icon; 10px on the right gives
+     the chevron the same visual breathing room from the
+     selected-row border on the opposite edge (chevron is a
+     rotated-square glyph so it visually crowds its bounding-box
+     right edge more than the folder icon crowds its left). */
+  padding: 4px 10px 4px 4px;
 }
 
 .directory-row__summary:focus,
@@ -2269,6 +2271,12 @@ textarea,
   color: var(--text-muted);
   font-size: 16px;
   line-height: 1;
+  /* Hold the icon a few pixels in from the scrollbar gutter. The
+     hover-state outline can still bleed right up to the gutter —
+     that's only a 1-frame visual on hover and not worth padding
+     out — but the icon glyph itself should never touch the
+     scrollbar thumb when the list is scrolled. */
+  margin-right: 4px;
 }
 
 .directory-row__launchpad-button:hover,
