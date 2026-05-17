@@ -4,35 +4,17 @@
 
 An open-source desktop coding agent. Pair it once with Telegram, Discord, Slack, Mattermost, Feishu / Lark, or LINE — then start, resume, steer, and approve from wherever you happen to be reading.
 
-[![Download for macOS · Universal](https://img.shields.io/badge/Download_for_macOS-Universal_·_signed_·_notarized-ff8a1f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg)
-[![Read the docs](https://img.shields.io/badge/Read_the_docs-docs.pwragent.ai-1a1a1a?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.pwragent.ai)
-[![Marketing site](https://img.shields.io/badge/-pwragent.ai-1a1a1a?style=for-the-badge)](https://pwragent.ai)
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-9d8a6b?style=flat-square)](LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS_(Universal)-9d8a6b?style=flat-square)](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg)
-[![Status: beta](https://img.shields.io/badge/status-beta-d99a3d?style=flat-square)](https://docs.pwragent.ai/desktop/#not-yet)
-[![Built on Codex](https://img.shields.io/badge/built_on-Codex-9d8a6b?style=flat-square)](https://docs.pwragent.ai/)
+<p>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg">
+    <img src="docs/assets/buttons/download-macos.png" alt="Download for macOS" width="440">
+  </a>
+  &nbsp;
+  <a href="https://docs.pwragent.ai">
+    <img src="docs/assets/buttons/read-the-docs.png" alt="Read the docs" width="440">
+  </a>
+</p>
 
 ![PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.](docs-site/assets/screenshots/desktop-hero.png)
-
-## What it is, technically
-
-An Electron + TypeScript desktop app that reads and writes the same on-disk Codex session store your `codex` CLI / Codex Desktop already uses — so PwrAgent threads and Codex threads are the same threads. On top of that base, PwrAgent adds:
-
-- **A thread-first desktop UI** — sidebar lenses (Updated / Created / Directories), per-thread model / access mode / Fast / reasoning controls, in-place Markdown composer, FIFO multi-message queueing, `$skill` autocomplete with chips.
-- **A messaging layer** — six provider adapters (Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE) behind one capability-profile contract. Same UX across providers, per-platform quirks called out inline.
-- **Profile isolation** — layered `PwrAgent profile × Codex profile`. Run multiple installs side-by-side (work / personal / side project) with isolated auth, isolated messaging credentials, isolated state.
-- **All-local state** — sqlite WAL session store at `~/.pwragent/profiles/<name>/state/`, secrets encrypted via Electron `safeStorage` (macOS Keychain backend), no PwrAgent-owned server in the loop.
-
-```
-                              ┌── PwrAgent desktop ──┐
-your laptop:  Codex agent ←→  │  threads · composer  │  ←→ messaging adapter ──→ Telegram / Discord / Slack / …
-                              │  per-thread settings │
-                              └──────────────────────┘
-your phone:                                                                           ↑
-                                                                              (resume · steer ·
-                                                                               approve · queue)
-```
 
 ## Why you might want it
 
