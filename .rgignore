@@ -1,0 +1,16 @@
+# ripgrep auto-picks this up from the repo root. Lists paths to
+# exclude from default `rg` searches because they are large
+# historical-artifact directories that drown out current-truth
+# signal when grepping the live codebase.
+#
+# Override per-search with: `rg --no-ignore <pattern>` or `rg -u`.
+
+# Decision-artifact directories. See `docs/plans/AGENTS.md` for the
+# don't-edit-historical-plans rule that motivates this exclusion.
+docs/plans/
+docs/brainstorms/
+docs/solutions/
+
+# Captured E2E protocol snippets — relevant only when debugging a
+# specific replay fixture. Mirrors the rule in the root AGENTS.md.
+apps/desktop/.local/protocol-captures/
