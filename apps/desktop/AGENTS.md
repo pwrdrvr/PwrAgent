@@ -247,6 +247,29 @@ Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 ## Implementation Notes
 
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.
+- **No raw color literals outside `:root` / `:root[data-theme="..."]`.** All
+  hex / rgb / hsl / `color-mix(in srgb, #..., ...)` constants belong in the
+  token blocks at the top of `styles/app.css`. Use `var(--token)` everywhere
+  else. The renderer ships light and dark themes via `data-theme` attribute
+  selectors plus a synchronous pre-React bootstrap in `index.html` — any new
+  raw color literal in a component rule (or further down in `app.css`) will
+  not flip with the theme and is a regression. Derived alpha overlays should
+  use `color-mix(in srgb, var(--token) <pct>%, transparent)` so they
+  automatically follow the token in every theme.
+- **Theme + density source of truth is per-profile `config.toml`
+  `[general.appearance]`.** The full path: main process
+  `readBootstrapAppearance` (sync TOML read in
+  `src/main/settings/appearance-bootstrap.ts`) → BrowserWindow
+  `webPreferences.additionalArguments` → preload
+  `contextBridge.exposeInMainWorld("__pwragentAppearance", …)` → inline
+  `<script>` in `src/renderer/index.html` sets `<html data-theme/data-density>`
+  before any React code runs. The renderer's `useAppearance` hook adopts
+  the snapshot value when it arrives over IPC and writes changes back via
+  `writeSettingsConfig({ general: { appearance: { theme, density } } })`.
+  The hook lifts to `App.tsx` and threads the controller down — instantiate
+  it once per window so the React state is consistent. Do not reintroduce
+  localStorage as a persistence layer; TOML is authoritative across all
+  windows and profiles.
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
 - For tooltips inside clipped or layered surfaces (sidebar, scroll regions,

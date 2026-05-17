@@ -1,4 +1,6 @@
 import type {
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
@@ -13,6 +15,8 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
+  DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
@@ -286,6 +290,14 @@ export class DesktopSettingsService {
           config.general?.developerMode,
           this.defaultDeveloperMode(),
         ),
+        appearance: {
+          theme: this.resolveAppearanceTheme(
+            config.general?.appearance?.theme,
+          ),
+          density: this.resolveAppearanceDensity(
+            config.general?.appearance?.density,
+          ),
+        },
       },
       experimental: {
         chatReplyComposer: this.resolveComposer(
@@ -892,6 +904,24 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopUpdateChannel> {
     return {
       value: configValue ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveAppearanceTheme(
+    configValue: DesktopAppearanceTheme | undefined,
+  ): DesktopSettingsValue<DesktopAppearanceTheme> {
+    return {
+      value: configValue ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveAppearanceDensity(
+    configValue: DesktopAppearanceDensity | undefined,
+  ): DesktopSettingsValue<DesktopAppearanceDensity> {
+    return {
+      value: configValue ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

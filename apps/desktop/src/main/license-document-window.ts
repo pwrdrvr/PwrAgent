@@ -9,6 +9,11 @@ import {
   WINDOW_KIND_LICENSE_DOCUMENT,
   registerWindowChannels,
 } from "./window-channels";
+import {
+  readBootstrapAppearance,
+  themedWindowAdditionalArguments,
+  themedWindowBackgroundColor,
+} from "./settings/appearance-bootstrap";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
@@ -55,6 +60,7 @@ function showLicenseDocumentWindow(options: {
     return;
   }
 
+  const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
     width: 920,
     height: 760,
@@ -64,12 +70,13 @@ function showLicenseDocumentWindow(options: {
     title: options.title,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    backgroundColor: "#000000",
+    backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
 

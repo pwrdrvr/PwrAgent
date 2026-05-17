@@ -22,7 +22,7 @@
   --accent-shadow: rgba(255, 138, 31, 0.34);
   --focus-ring: var(--accent);
   --danger-soft: rgba(185, 66, 50, 0.24);
-  --danger-border: rgba(255, 176, 161, 0.32);
+  --danger-border: var(--danger-border);
   --danger-text: #ffb0a1;
   --success-soft: rgba(74, 148, 92, 0.18);
   --success-text: #9ce5b3;
@@ -37,6 +37,90 @@
   --status-error: #c45a3a;
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
+
+  /* Theme-following surface overlays. Derived from base tokens via
+     color-mix so they follow whichever theme is active — flip the base
+     and every alpha variant follows automatically. Mathematically
+     equivalent to rgba(base.r, base.g, base.b, alpha) when the base is
+     fully opaque. */
+  --surface-overlay-subtle: color-mix(in srgb, var(--text-primary) 3%, transparent);
+  --surface-overlay-faint: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
+  --surface-overlay-soft: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  --surface-overlay: color-mix(in srgb, var(--text-primary) 5%, transparent);
+
+  /* Popover backdrops use the panel base at high alpha so they read as
+     the same surface as the rest of the panel. */
+  --popover-bg: color-mix(in srgb, var(--bg-panel) 98%, transparent);
+  --popover-bg-soft: color-mix(in srgb, var(--bg-panel) 96%, transparent);
+
+  /* Active-row tint for thread-row hover / pressed states inside scroll
+     containers. Slightly off-brown vs. --bg-row-active because the
+     legacy callsite needed a calmer tone — keep both. */
+  --surface-row-tint: var(--surface-row-tint);
+
+  /* Modal scrims stay dark across both light and dark themes — the
+     standard pattern for modal overlays in either mode. */
+  --scrim-subtle: var(--scrim-subtle);
+  --scrim-medium: var(--shadow-tint-strong);
+  --scrim-strong: rgba(0, 0, 0, 0.62);
+  --scrim-opaque: var(--scrim-opaque);
+
+  /* Scrollbar tones. */
+  --scrollbar-track: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  --scrollbar-thumb: color-mix(in srgb, var(--text-muted) 46%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 58%, transparent);
+
+  /* Text-decoration underline overlay (e.g. dotted underlines on links
+     under secondary text). */
+  --text-secondary-underline: color-mix(in srgb, var(--text-secondary) 42%, transparent);
+
+  /* Accent surface + outline variants beyond the existing --accent-soft
+     (12%) and --accent-border (42%). */
+  --accent-underline: color-mix(in srgb, var(--accent) 55%, transparent);
+  --accent-border-soft: color-mix(in srgb, var(--accent) 24%, transparent);
+  --accent-bg-medium: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-bright-soft: color-mix(in srgb, var(--accent-bright) 28%, transparent);
+
+  /* Warning surface variants (lower-alpha than --info-soft etc.). */
+  --warning-surface-faint: color-mix(in srgb, var(--status-warning) 4.5%, transparent);
+  --warning-surface: color-mix(in srgb, var(--status-warning) 8%, transparent);
+
+  /* Danger base — distinct hue from --status-error. Foundation for
+     --danger-soft (24%) and per-usage variants. */
+  --danger-base: #b94232;
+  --danger-surface-faint: color-mix(in srgb, var(--danger-base) 7.5%, transparent);
+  --danger-surface: color-mix(in srgb, var(--danger-base) 12%, transparent);
+
+  /* Status-error surface variants. */
+  --status-error-border: color-mix(in srgb, var(--status-error) 42%, transparent);
+  --status-error-soft: color-mix(in srgb, var(--status-error) 16%, transparent);
+
+  /* Success-text overlay for borders. */
+  --success-text-overlay: color-mix(in srgb, var(--success-text) 34%, transparent);
+
+  /* One-off accent colors used by specific component surfaces. */
+  --info-teal: #2dd6d0;
+  --brand-purple: #8a6dc4;
+  --danger-text-light: #ffba8a;
+
+  /* Shadow tints. Drop shadows stay dark in both light and dark themes
+     (standard drop-shadow pattern). Theme-neutral. */
+  --shadow-tint-faint: var(--shadow-tint-faint);
+  --shadow-tint-soft: var(--shadow-tint-soft);
+  --shadow-tint-medium: var(--shadow-tint-medium);
+  --shadow-tint-strong: var(--shadow-tint-strong);
+
+  /* Surface-border overlays for inset box-shadows that read as
+     hairline borders. */
+  --surface-border-faint: color-mix(in srgb, var(--text-primary) 8%, transparent);
+
+  /* Active-row tints used inside box-shadow rings. Reference the same
+     base as --bg-row-active so they follow theme. */
+  --row-active-tint-soft: color-mix(in srgb, var(--bg-row-active) 24%, transparent);
+  --row-active-tint-strong: color-mix(in srgb, var(--bg-row-active) 72%, transparent);
+
+  /* Status-error tints used inside box-shadow rings. */
+  --status-error-ring-soft: color-mix(in srgb, var(--status-error) 22%, transparent);
   --thinking-scanner-beam-width: 18px;
   --thinking-scanner-full-offset: 0px;
   --thinking-scanner-mini-offset: 0px;
@@ -50,6 +134,158 @@
      that defeat scanning. Themes / future surfaces can override
      this single token to retune both surfaces in lockstep. */
   --chat-column-max: 940px;
+}
+
+/* ===========================================================================
+   THEMING — Light theme overrides
+
+   Default :root above carries the Dark theme values (Tangerine Terminal on
+   near-black). Light theme is opt-in via `data-theme="light"` on <html>.
+   System-auto theme resolution is handled by the renderer bootstrap script
+   (reads prefers-color-scheme + persisted preference, sets data-theme).
+
+   Tokens declared via color-mix() in :root automatically follow whichever
+   theme is active because the base they reference (e.g. --text-primary,
+   --bg-panel) flips here. Only the bases need to override.
+
+   The Tangerine Terminal accent gets a darker variant (#c45200) for readable
+   contrast on white surfaces. Button text on accent flips from near-black to
+   pure white for the same reason.
+
+   This is a v1 light palette — designed but not Claude-Design-passed yet.
+   Worth a polish pass before shipping wide.
+   =========================================================================== */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces — apex-white through warm-tinted hovers. */
+  --bg-app: #ffffff;
+  --bg-sidebar: #f7f4ef;
+  --bg-panel: #fdfcfa;
+  --bg-panel-elevated: #ffffff;
+  --bg-panel-hover: #f4f0e8;
+  --bg-row-active: #fff5e9;
+  --bg-input: #ffffff;
+
+  /* Borders — darker tints for visibility on light surfaces. */
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.18);
+
+  /* Text — near-black primary, progressively lighter for hierarchy. */
+  --text-primary: #1a1612;
+  --text-secondary: #524a40;
+  --text-muted: #807870;
+  --text-subtle: rgba(26, 22, 18, 0.42);
+
+  /* Accent — darker Tangerine variant for contrast on white. */
+  --accent: #c45200;
+  --accent-strong: #b34a00;
+  --accent-bright: #d96d00;
+  --accent-soft: rgba(196, 82, 0, 0.12);
+  --accent-border: rgba(196, 82, 0, 0.42);
+  --accent-shadow: rgba(196, 82, 0, 0.34);
+  --focus-ring: var(--accent);
+
+  /* Semantic — darker bases for contrast. */
+  --danger-soft: rgba(138, 31, 18, 0.12);
+  --danger-border: rgba(138, 31, 18, 0.28);
+  --danger-text: #8a1f12;
+  --success-soft: rgba(46, 110, 64, 0.14);
+  --success-text: #1a5c2e;
+  --success-border: rgba(46, 110, 64, 0.28);
+  --info-soft: rgba(54, 102, 165, 0.12);
+  --info-border: rgba(54, 102, 165, 0.24);
+  --info-text: #1a4f8a;
+
+  /* Status indicators — darker for visibility on light. */
+  --status-ok: #2e7d3c;
+  --status-warning: #a86b00;
+  --status-suspended: #6b6660;
+  --status-error: #a8472a;
+
+  /* Button text on accent flips: white reads better on the darker
+     light-theme accent (vs. near-black on the brighter dark-theme one). */
+  --button-text: #ffffff;
+
+  /* Lighter drop-shadow on light surface (the dark theme's 42% is too
+     heavy against white). */
+  --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.18);
+
+  /* Danger base override — darker for light theme. */
+  --danger-base: #8a1f12;
+
+  /* One-off accent colors — darker variants for light surface. */
+  --info-teal: #0e9b95;
+  --brand-purple: #6a4ba8;
+  --danger-text-light: #b03517;
+}
+
+/* ===========================================================================
+   DENSITY — Compact vs. Mission Control
+
+   Density is a separate axis from theme. Mission Control is the default
+   (full chip rendering, current README hero behavior); Compact suppresses
+   metadata chips in the thread list to maximize row density. Chips on the
+   thread title bar (when a thread is open) stay visible in both modes — the
+   suppression applies to .thread-row__chip inside the list only.
+
+   Pin markers and user-added reaction emojis stay visible in Compact (they're
+   user-curated signals, not system metadata).
+
+   The default :root values target Mission Control behavior; the explicit
+   data-density attribute selector only carries overrides.
+   =========================================================================== */
+/* Suppress directory / PR / agent / binding chips in the list. Reaction
+   and pin markers stay visible — reactions because they're user-curated
+   signals, pin because the pin marker on its own is information-dense. */
+:root[data-density="compact"] .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
+  display: none;
+}
+
+:root[data-density="compact"] .thread-row__chips {
+  /* Tighter inter-chip gap when only reactions + pin remain visible. */
+  gap: 4px;
+}
+
+/* Shrink the pin marker so it reads as a marker, not a chip. In Mission
+   Control the full "Pinned" pill is informational; in Compact, the
+   section position + a small marker carries the same signal. */
+:root[data-density="compact"] .thread-row__chip--pin {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* Tighten thread-row vertical real estate. The row keeps its column
+   layout (title row → chips row when chips remain), but every vertical
+   measurement shrinks. The hidden-chips selector zeroes the column gap
+   for rows where every chip is suppressed — :has() lets us detect
+   "container has at least one visible chip" without JS. */
+:root[data-density="compact"] .thread-row {
+  gap: 4px;
+  padding: 6px 10px 6px 12px;
+}
+
+/* Pull the overflow + add-reaction buttons up by the same amount the row
+   shrank its top padding, so they keep aligning with the title line
+   instead of sinking toward the row's geometric center on short
+   single-line rows. .thread-row__actions is a SIBLING of .thread-row
+   under .thread-row-shell, so the override targets it directly. */
+:root[data-density="compact"] .thread-row__actions {
+  top: 3px;
+}
+
+:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--reaction)):not(:has(.thread-row__chip--pin)) {
+  gap: 0;
+}
+
+/* Pull the inter-row gap in tight so the list reads as a scannable
+   index, not a card stack. The section divider (.recents-pinned-divider)
+   keeps its own vertical breathing room. */
+:root[data-density="compact"] .sidebar-list,
+:root[data-density="compact"] .directory-groups {
+  gap: 2px;
 }
 
 * {
@@ -182,7 +418,7 @@ textarea,
 .context-rail__resize-handle:hover::after,
 .context-rail__resize-handle:focus-visible::after {
   background: var(--accent);
-  box-shadow: 0 0 0 1px rgba(255, 138, 31, 0.16);
+  box-shadow: 0 0 0 1px var(--accent-bg-medium);
 }
 
 .sidebar__resize-handle:focus-visible,
@@ -341,7 +577,7 @@ textarea,
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 8px 24px var(--shadow-tint-soft);
   color: var(--text-primary);
   font-size: 11px;
   font-weight: 500;
@@ -379,7 +615,7 @@ textarea,
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px var(--shadow-tint-medium);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -792,23 +1028,23 @@ textarea,
 }
 
 .log-window__line:hover {
-  background: rgba(247, 243, 235, 0.035);
+  background: var(--surface-overlay-faint);
 }
 
 .log-window__line--warn {
-  background: rgba(217, 154, 61, 0.045);
+  background: var(--warning-surface-faint);
 }
 
 .log-window__line--warn:hover {
-  background: rgba(217, 154, 61, 0.08);
+  background: var(--warning-surface);
 }
 
 .log-window__line--error {
-  background: rgba(185, 66, 50, 0.075);
+  background: var(--danger-surface-faint);
 }
 
 .log-window__line--error:hover {
-  background: rgba(185, 66, 50, 0.12);
+  background: var(--danger-surface);
 }
 
 .log-window__line-number {
@@ -836,7 +1072,7 @@ textarea,
 }
 
 .log-window__part--scope {
-  color: #2dd6d0;
+  color: var(--info-teal);
   font-weight: 600;
 }
 
@@ -860,7 +1096,7 @@ textarea,
 
 .log-window__match {
   border-radius: 3px;
-  background: rgba(255, 179, 92, 0.28);
+  background: var(--accent-bright-soft);
   color: var(--text-primary);
 }
 
@@ -1080,8 +1316,8 @@ textarea,
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.32);
+  background: var(--popover-bg);
+  box-shadow: 0 16px 32px var(--shadow-tint-soft);
 }
 
 .sidebar__menu-item {
@@ -1382,14 +1618,16 @@ textarea,
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding-left: 0;
-  /* 4px right padding holds row content (notably the selected
-     thread row's accent-border) clear of the scrollbar gutter so
-     the row's right border doesn't visually kiss the thumb. Left
-     stays at 0 — the title-width gain there is intentional. */
-  padding-right: 4px;
+  /* 4px gutters on both sides hold row content clear of the scroll
+     container's `overflow: hidden` clip. The right gutter also keeps the
+     selected row's accent-border from kissing the scrollbar thumb. The
+     left gutter is what makes the focus-visible outline (2px wide at
+     2px offset → extends 4px outside the row's box) visible on the left
+     edge of the active row — without it the outline gets clipped against
+     the sidebar's left wall and the selected row reads as missing a side. */
+  padding-inline: 4px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   /* Finder-style scrollbar gutter (sidebar-tightening pass): reserve
      a stable 10px column on the right for the scrollbar so the thumb
      never overlays row content. The previous overlay-scrollbar
@@ -1403,10 +1641,11 @@ textarea,
   min-height: 0;
   overflow-y: auto;
   padding-top: 0;
-  padding-left: 0;
-  padding-right: 4px;
+  /* Mirrors `.sidebar-list--dense` — see that block for the gutter
+     rationale. */
+  padding-inline: 4px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(140, 133, 122, 0.46) rgba(247, 243, 235, 0.05);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-gutter: stable;
 }
 
@@ -1417,7 +1656,7 @@ textarea,
 
 .sidebar-list--dense::-webkit-scrollbar-track,
 .directory-groups::-webkit-scrollbar-track {
-  background: rgba(247, 243, 235, 0.05);
+  background: var(--surface-overlay);
   border-radius: 999px;
 }
 
@@ -1425,13 +1664,13 @@ textarea,
 .directory-groups::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
-  background: rgba(140, 133, 122, 0.46);
+  background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
 
 .sidebar-list--dense::-webkit-scrollbar-thumb:hover,
 .directory-groups::-webkit-scrollbar-thumb:hover {
-  background: rgba(184, 176, 165, 0.58);
+  background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
 }
 
@@ -1463,7 +1702,7 @@ textarea,
   border-radius: 999px;
   background: var(--accent);
   box-shadow:
-    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 0 1px var(--row-active-tint-strong),
     0 0 14px var(--accent-shadow);
   pointer-events: none;
 }
@@ -1506,7 +1745,7 @@ textarea,
   height: 3px;
   background: var(--accent);
   box-shadow:
-    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 0 1px var(--row-active-tint-strong),
     0 0 14px var(--accent-shadow);
 }
 
@@ -1544,13 +1783,22 @@ textarea,
   border-color: var(--border-strong);
   background: var(--bg-panel-elevated);
   box-shadow:
-    0 0 0 1px rgba(247, 243, 235, 0.08),
-    0 18px 44px rgba(0, 0, 0, 0.58);
+    0 0 0 1px var(--surface-border-faint),
+    0 18px 44px var(--shadow-tint-strong);
   pointer-events: none;
 }
 
 .thread-row__actions {
   position: absolute;
+  /* Align the overflow button + add-reaction chip with the title line,
+     not the row's geometric center. The 26-px-tall button sits a few
+     pixels into the row's top padding so its vertical midpoint matches
+     the title's line midpoint. When the row is multi-line (chips
+     present) the title is still the FIRST line, so the same offset
+     keeps the button anchored to it. The Compact density variant
+     overrides this `top` (see the density-compact block at the top of
+     the file) so the button stays on the title line when the row's top
+     padding shrinks from 12 → 6. */
   top: 9px;
   right: 9px;
   z-index: 3;
@@ -1676,7 +1924,7 @@ textarea,
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.98);
+  background: var(--popover-bg);
   box-shadow: var(--shadow-popover);
 }
 
@@ -1876,7 +2124,7 @@ textarea,
     radial-gradient(circle at 35% 35%, var(--accent-bright) 0 2px, transparent 2.5px),
     var(--accent);
   box-shadow:
-    inset 0 0 0 2px rgba(18, 8, 0, 0.24),
+    inset 0 0 0 2px var(--row-active-tint-soft),
     0 0 8px var(--accent-shadow);
 }
 
@@ -2004,8 +2252,8 @@ textarea,
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.96);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  background: var(--popover-bg-soft);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
@@ -2123,7 +2371,7 @@ textarea,
 
 .pr-chip--merged .pr-chip__dot {
   /* Desaturated violet — distinct from accent without competing with it. */
-  background: #8a6dc4;
+  background: var(--brand-purple);
 }
 
 .pr-chip--draft .pr-chip__dot,
@@ -2386,7 +2634,7 @@ textarea,
 .transcript-error {
   margin: 12px 0 0;
   padding: 12px;
-  border: 1px solid rgba(255, 176, 161, 0.32);
+  border: 1px solid var(--danger-border);
   border-radius: 8px;
   background: var(--danger-soft);
   color: var(--danger-text);
@@ -2444,7 +2692,7 @@ textarea,
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(18, 14, 10, 0.42);
+  background: var(--surface-row-tint);
 }
 
 .rename-thread-dialog {
@@ -2987,7 +3235,7 @@ textarea,
   background: var(--bg-panel-elevated);
   box-shadow:
     0 1px 0 var(--border-subtle),
-    0 8px 18px rgba(0, 0, 0, 0.18);
+    0 8px 18px var(--shadow-tint-faint);
   cursor: pointer;
   text-align: left;
   transition:
@@ -3332,7 +3580,7 @@ textarea,
 
 .settings-input--invalid {
   border-color: var(--danger-border);
-  box-shadow: 0 0 0 1px rgba(196, 90, 58, 0.22);
+  box-shadow: 0 0 0 1px var(--status-error-ring-soft);
 }
 
 .settings-list-validation {
@@ -3936,7 +4184,7 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 62%);
+  background: var(--scrim-strong);
   isolation: isolate;
 }
 
@@ -5212,7 +5460,7 @@ textarea,
 .transcript-message__link {
   color: var(--accent-bright);
   text-decoration: underline;
-  text-decoration-color: rgba(255, 138, 31, 0.55);
+  text-decoration-color: var(--accent-underline);
   text-underline-offset: 2px;
   word-break: break-word;
 }
@@ -5480,7 +5728,7 @@ textarea,
 
 .transcript-review {
   gap: 12px;
-  border-color: rgba(255, 138, 31, 0.24);
+  border-color: var(--accent-border-soft);
   background:
     linear-gradient(180deg, rgba(255, 138, 31, 0.08), rgba(255, 138, 31, 0.02)),
     var(--bg-panel-elevated);
@@ -5551,7 +5799,7 @@ textarea,
   padding: 4px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(247, 243, 235, 0.04);
+  background: var(--surface-overlay-soft);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -5560,7 +5808,7 @@ textarea,
 }
 
 .transcript-review__badge--success {
-  border-color: rgba(156, 229, 179, 0.34);
+  border-color: var(--success-text-overlay);
   background: var(--success-soft);
   color: var(--success-text);
 }
@@ -5587,7 +5835,7 @@ textarea,
   padding: 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--scrim-subtle);
 }
 
 .transcript-review__finding-head {
@@ -5603,7 +5851,7 @@ textarea,
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(247, 243, 235, 0.04);
+  background: var(--surface-overlay-soft);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -5618,9 +5866,9 @@ textarea,
 }
 
 .transcript-review__priority--p1 {
-  border-color: rgba(196, 90, 58, 0.42);
-  background: rgba(196, 90, 58, 0.16);
-  color: #ffba8a;
+  border-color: var(--status-error-border);
+  background: var(--status-error-soft);
+  color: var(--danger-text-light);
 }
 
 .transcript-review__priority--p2 {
@@ -5676,7 +5924,7 @@ textarea,
   color: var(--text-secondary);
   overflow-wrap: anywhere;
   text-decoration: underline;
-  text-decoration-color: rgba(184, 176, 165, 0.42);
+  text-decoration-color: var(--text-secondary-underline);
   text-underline-offset: 2px;
   word-break: break-word;
 }
@@ -5744,7 +5992,7 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.88);
+  background: var(--scrim-opaque);
 }
 
 .transcript-image-lightbox__content {
@@ -5861,7 +6109,7 @@ textarea,
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-overlay-subtle);
 }
 
 .transcript-mcp__url span {
@@ -5909,7 +6157,7 @@ textarea,
   min-height: 36px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-soft);
   color: var(--text-primary);
   font: inherit;
   padding: 8px 10px;
@@ -5952,7 +6200,7 @@ textarea,
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-overlay-subtle);
   color: var(--text-primary);
   text-align: left;
 }
@@ -6019,7 +6267,7 @@ textarea,
   resize: vertical;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-overlay-soft);
   color: var(--text-primary);
   font: inherit;
   line-height: 1.45;
@@ -6040,7 +6288,7 @@ textarea,
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 138, 31, 0.16);
+  background: var(--accent-bg-medium);
   box-shadow: inset 0 0 0 1px rgba(255, 138, 31, 0.18);
 }
 
@@ -6644,8 +6892,8 @@ textarea,
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
@@ -6663,8 +6911,8 @@ textarea,
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
@@ -7105,7 +7353,7 @@ textarea,
   padding: 7px 9px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface-overlay-faint);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.94em;
@@ -7839,7 +8087,7 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 58%);
+  background: var(--scrim-medium);
 }
 
 .workspace-handoff-dialog {
@@ -8132,7 +8380,7 @@ textarea,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 62%);
+  background: var(--scrim-strong);
   isolation: isolate;
 }
 
@@ -8441,7 +8689,7 @@ textarea,
 }
 
 .composer__meta--error {
-  color: #ffb2a0;
+  color: var(--danger-text);
 }
 
 .composer__actions {
@@ -8517,7 +8765,7 @@ textarea,
   background: var(--bg-input);
   box-shadow:
     var(--context-window-moon-terminator-glow, 1px 0 3px rgba(255, 169, 79, 0.18)),
-    inset var(--context-window-moon-shadow-inset, -1px 0 2px) rgba(255, 138, 31, 0.16);
+    inset var(--context-window-moon-shadow-inset, -1px 0 2px) var(--accent-bg-medium);
   content: "";
 }
 

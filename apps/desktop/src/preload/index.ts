@@ -736,8 +736,42 @@ const desktopApi = Object.freeze({
   }
 });
 
+// Decode the appearance hint passed from main via
+// `webPreferences.additionalArguments`. The inline bootstrap script in
+// index.html reads `window.__pwragentAppearance` synchronously, before
+// any React code runs, to set data-theme / data-density on `<html>` —
+// this is what prevents flash-of-wrong-theme on launch. The TOML
+// (read by `readBootstrapAppearance` in main) is source of truth; the
+// renderer's writeSettingsConfig IPC keeps it in sync.
+const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
+function readBootstrapAppearance(): {
+  theme: "system" | "dark" | "light";
+  density: "mission-control" | "compact";
+} {
+  for (const arg of process.argv) {
+    if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
+    try {
+      const raw = JSON.parse(arg.slice(APPEARANCE_ARG_PREFIX.length));
+      const theme =
+        raw && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
+          ? raw.theme
+          : "system";
+      const density =
+        raw && (raw.density === "mission-control" || raw.density === "compact")
+          ? raw.density
+          : "mission-control";
+      return { theme, density };
+    } catch {
+      break;
+    }
+  }
+  return { theme: "system", density: "mission-control" };
+}
+const bootstrapAppearance = readBootstrapAppearance();
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragent", desktopApi);
+  contextBridge.exposeInMainWorld("__pwragentAppearance", bootstrapAppearance);
   recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });

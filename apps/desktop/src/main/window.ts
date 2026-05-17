@@ -16,6 +16,11 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
 } from "../shared/ipc";
+import {
+  readBootstrapAppearance,
+  themedWindowAdditionalArguments,
+  themedWindowBackgroundColor,
+} from "./settings/appearance-bootstrap";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -169,6 +174,7 @@ export function createMainWindow(options?: {
   };
 }): BrowserWindow {
   const preloadPath = getPreloadPath();
+  const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -178,12 +184,21 @@ export function createMainWindow(options?: {
     title: "PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    backgroundColor: "#10151f",
+    // Pre-tinted so the OS window fill matches the renderer's first
+    // paint and we don't flash dark before a light renderer mounts.
+    backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
       sandbox: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Surfaces theme + density to the preload script via process.argv
+      // so the inline bootstrap in index.html can apply data-*
+      // attributes before any React code runs (avoids flash-of-wrong-
+      // theme). The renderer's writeSettingsConfig IPC keeps the TOML
+      // in sync; the next launch reads the updated value back via this
+      // same path.
+      additionalArguments: themedWindowAdditionalArguments(appearance),
     }
   });
 

@@ -7,6 +7,58 @@
       content="width=device-width, initial-scale=1.0"
     />
     <title>PwrAgnt</title>
+    <script>
+      // Appearance bootstrap — runs BEFORE the React bundle loads so the
+      // first paint matches the persisted theme + density. Without this,
+      // a flash-of-wrong-theme appears on every launch (renders dark for
+      // ~50-150ms, then snaps to light when React mounts the setting).
+      //
+      // Reads `window.__pwragentAppearance`, exposed synchronously by the
+      // preload script (which decodes it from `process.argv`'s
+      // `--pwragent-appearance=...` flag set by main at window-creation).
+      // Main reads the active profile's config.toml `[general.appearance]`
+      // block — the TOML is the single source of truth. The renderer's
+      // useAppearance hook writes back via writeSettingsConfig IPC when
+      // the user changes the toggle, and the next launch reads the new
+      // value through the same path.
+      //
+      // For theme: "system", resolves the active scheme via matchMedia
+      // at this exact instant. If the user's OS theme changes mid-session,
+      // the renderer hook listens for that and updates the attribute live
+      // — no reload needed.
+      (function () {
+        try {
+          var bridged = window.__pwragentAppearance || {};
+          var theme = bridged.theme || "system";
+          var density = bridged.density || "mission-control";
+          var resolvedTheme;
+          if (theme === "light" || theme === "dark") {
+            resolvedTheme = theme;
+          } else {
+            // "system" or unset — resolve via prefers-color-scheme.
+            resolvedTheme = window.matchMedia
+              && window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+          }
+          // Only set data-theme when the resolved theme is light. Dark is
+          // the default the bare :root carries, so omitting the attribute
+          // keeps the CSS cascade simple.
+          if (resolvedTheme === "light") {
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+          // Mission-control is also the default; only set the attribute
+          // when compact is selected.
+          if (density === "compact") {
+            document.documentElement.setAttribute("data-density", "compact");
+          }
+        } catch (_) {
+          // Bridge unavailable or shape wrong — fall back to dark + mission-
+          // control defaults. The useAppearance hook will resync once the
+          // settings snapshot arrives over IPC.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

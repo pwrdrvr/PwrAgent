@@ -51,6 +51,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      appearance: {
+        theme: { value: "system", source: "default" },
+        density: { value: "mission-control", source: "default" },
+      },
     },
     experimental: {
       chatReplyComposer: {
@@ -1092,9 +1096,19 @@ describe("SettingsScreen", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(screen.queryByText(pairingMessage)).not.toBeInTheDocument();
-    });
+    // Bumped from the default 1000ms because CI runners under load take
+    // ~1600ms+ for the pairingChanged → React state update → DOM removal
+    // chain. Locally this completes in <100ms; the 5000ms ceiling
+    // matches @testing-library's `waitForElementToBeRemoved` default,
+    // but keeps `waitFor` so the assertion still succeeds when the
+    // element is removed synchronously inside the act() above (which
+    // `waitForElementToBeRemoved` would treat as an error).
+    await waitFor(
+      () => {
+        expect(screen.queryByText(pairingMessage)).not.toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
   });
 
   it("shows observed pairing IDs and refreshes authorized IDs after approval", async () => {

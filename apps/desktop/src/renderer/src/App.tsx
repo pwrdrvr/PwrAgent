@@ -18,6 +18,7 @@ import {
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -32,12 +33,34 @@ import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
+  // Owns live theme + density state. Source of truth is per-profile
+  // config.toml; the snapshot pulls it in over IPC, the hook adopts it
+  // when available, and setters write back via writeSettingsConfig.
+  // The pre-React bootstrap script in index.html already set the initial
+  // data-* attributes from the preload-bridged value (same TOML, sync
+  // read at window-creation), so first-paint matches and this hook just
+  // keeps the React state aligned + handles system-theme flips. Lifted
+  // to the App root so a single controller instance is shared across the
+  // shell and the Settings → General → Appearance section.
+  const appearanceController = useAppearance({
+    snapshotPreference: settings.snapshot?.general.appearance
+      ? {
+        theme: settings.snapshot.general.appearance.theme.value,
+        density: settings.snapshot.general.appearance.density.value,
+      }
+      : undefined,
+    writeConfig: settings.writeConfig,
+  });
 
   if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen desktopApi={desktopApi} settings={settings} />
+          <SettingsScreen
+            appearanceController={appearanceController}
+            desktopApi={desktopApi}
+            settings={settings}
+          />
         </main>
       </div>
     );
@@ -47,16 +70,27 @@ export function App() {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen desktopApi={desktopApi} settings={settings} />
+          <SettingsScreen
+            appearanceController={appearanceController}
+            desktopApi={desktopApi}
+            settings={settings}
+          />
         </main>
       </div>
     );
   }
 
-  return <DesktopAppShell desktopApi={desktopApi} settings={settings} />;
+  return (
+    <DesktopAppShell
+      appearanceController={appearanceController}
+      desktopApi={desktopApi}
+      settings={settings}
+    />
+  );
 }
 
 function DesktopAppShell(props: {
+  appearanceController: AppearanceController;
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
 }) {
@@ -352,6 +386,7 @@ function DesktopAppShell(props: {
       {mainView === "settings" ? (
         <div className="app-shell__settings-layer">
           <SettingsScreen
+            appearanceController={props.appearanceController}
             desktopApi={desktopApi}
             initialSection={settingsInitialSection}
             profiles={profiles}

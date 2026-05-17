@@ -27,6 +27,19 @@ export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
 
 export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
 
+export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
+export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
+export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
+
+export const DESKTOP_APPEARANCE_DENSITIES = [
+  "mission-control",
+  "compact",
+] as const;
+export type DesktopAppearanceDensity =
+  (typeof DESKTOP_APPEARANCE_DENSITIES)[number];
+export const DESKTOP_APPEARANCE_DENSITY_DEFAULT: DesktopAppearanceDensity =
+  "mission-control";
+
 export type DesktopSettingsNonSecretSource = "default" | "config" | "env";
 export type DesktopSettingsSecretSource = "unset" | "keychain" | "env";
 export type DesktopSettingsSource =
@@ -146,8 +159,14 @@ export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
 };
 
+export type DesktopAppearanceSnapshot = {
+  theme: DesktopSettingsValue<DesktopAppearanceTheme>;
+  density: DesktopSettingsValue<DesktopAppearanceDensity>;
+};
+
 export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
+  appearance: DesktopAppearanceSnapshot;
 };
 
 export type DesktopCodexCandidateSource =
@@ -421,6 +440,10 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     developerMode?: boolean;
+    appearance?: {
+      theme?: DesktopAppearanceTheme;
+      density?: DesktopAppearanceDensity;
+    };
   };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
@@ -693,6 +716,20 @@ export function isDesktopUpdateChannel(
   value: string,
 ): value is DesktopUpdateChannel {
   return DESKTOP_UPDATE_CHANNELS.includes(value as DesktopUpdateChannel);
+}
+
+export function isDesktopAppearanceTheme(
+  value: string,
+): value is DesktopAppearanceTheme {
+  return DESKTOP_APPEARANCE_THEMES.includes(value as DesktopAppearanceTheme);
+}
+
+export function isDesktopAppearanceDensity(
+  value: string,
+): value is DesktopAppearanceDensity {
+  return DESKTOP_APPEARANCE_DENSITIES.includes(
+    value as DesktopAppearanceDensity,
+  );
 }
 
 /**
