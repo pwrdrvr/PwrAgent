@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.7 - 2026-05-17
+
+- Added desktop auto-update restart banner plumbing so installed updates can surface an in-app restart prompt in builds after this bridge release.
+- Improved updater state handling with preload, IPC, renderer, and E2E coverage for update download and restart flows.
+- Fixed the About settings version display so the packaged app no longer repeats the version string.
+- Added Open Graph and Twitter Card metadata to the docs site for cleaner social previews.
+- Updated the repository GitHub Sponsors metadata.
+
 ## v1.0.0-beta.6 - 2026-05-16
 
 - Moved the macOS release pipeline to a two-stage build where the prepare job runs tests, builds the signing input without Apple secrets, hashes the artifact, and hands it to a protected signing job.
