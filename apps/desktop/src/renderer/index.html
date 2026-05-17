@@ -7,6 +7,57 @@
       content="width=device-width, initial-scale=1.0"
     />
     <title>PwrAgnt</title>
+    <script>
+      // Appearance bootstrap — runs BEFORE the React bundle loads so the
+      // first paint matches the persisted theme + density. Without this,
+      // a flash-of-wrong-theme appears on every launch (renders dark for
+      // ~50-150ms, then snaps to light when React hydrates the setting).
+      //
+      // Reads localStorage.pwragentAppearance, a JSON blob mirrored from
+      // the main-process per-profile config on every appearance change.
+      // localStorage is synchronous (unlike IPC), so it's the only safe
+      // pre-mount source. The main-process config remains source of truth;
+      // localStorage is a cache that's rebuilt on first load by the
+      // useAppearance hook.
+      //
+      // For theme: "system", resolves the active scheme via
+      // matchMedia at this exact instant. If the user's OS theme changes
+      // mid-session, the renderer hook listens for that and updates the
+      // attribute live — no reload needed.
+      (function () {
+        try {
+          var raw = localStorage.getItem("pwragentAppearance");
+          var saved = raw ? JSON.parse(raw) : {};
+          var theme = saved.theme || "system";
+          var density = saved.density || "mission-control";
+          var resolvedTheme;
+          if (theme === "light" || theme === "dark") {
+            resolvedTheme = theme;
+          } else {
+            // "system" or unset — resolve via prefers-color-scheme.
+            resolvedTheme = window.matchMedia
+              && window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+          }
+          // Only set data-theme when the resolved theme is light. Dark is
+          // the default the bare :root carries, so omitting the attribute
+          // keeps the CSS cascade simple.
+          if (resolvedTheme === "light") {
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+          // Mission-control is also the default; only set the attribute
+          // when compact is selected.
+          if (density === "compact") {
+            document.documentElement.setAttribute("data-density", "compact");
+          }
+        } catch (_) {
+          // Storage unavailable or parse failed — fall back to dark + mission-
+          // control defaults. The useAppearance hook will sync once it
+          // mounts and the desktopApi is available.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

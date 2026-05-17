@@ -136,6 +136,114 @@
   --chat-column-max: 940px;
 }
 
+/* ===========================================================================
+   THEMING — Light theme overrides
+
+   Default :root above carries the Dark theme values (Tangerine Terminal on
+   near-black). Light theme is opt-in via `data-theme="light"` on <html>.
+   System-auto theme resolution is handled by the renderer bootstrap script
+   (reads prefers-color-scheme + persisted preference, sets data-theme).
+
+   Tokens declared via color-mix() in :root automatically follow whichever
+   theme is active because the base they reference (e.g. --text-primary,
+   --bg-panel) flips here. Only the bases need to override.
+
+   The Tangerine Terminal accent gets a darker variant (#c45200) for readable
+   contrast on white surfaces. Button text on accent flips from near-black to
+   pure white for the same reason.
+
+   This is a v1 light palette — designed but not Claude-Design-passed yet.
+   Worth a polish pass before shipping wide.
+   =========================================================================== */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces — apex-white through warm-tinted hovers. */
+  --bg-app: #ffffff;
+  --bg-sidebar: #f7f4ef;
+  --bg-panel: #fdfcfa;
+  --bg-panel-elevated: #ffffff;
+  --bg-panel-hover: #f4f0e8;
+  --bg-row-active: #fff5e9;
+  --bg-input: #ffffff;
+
+  /* Borders — darker tints for visibility on light surfaces. */
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.18);
+
+  /* Text — near-black primary, progressively lighter for hierarchy. */
+  --text-primary: #1a1612;
+  --text-secondary: #524a40;
+  --text-muted: #807870;
+  --text-subtle: rgba(26, 22, 18, 0.42);
+
+  /* Accent — darker Tangerine variant for contrast on white. */
+  --accent: #c45200;
+  --accent-strong: #b34a00;
+  --accent-bright: #d96d00;
+  --accent-soft: rgba(196, 82, 0, 0.12);
+  --accent-border: rgba(196, 82, 0, 0.42);
+  --accent-shadow: rgba(196, 82, 0, 0.34);
+  --focus-ring: var(--accent);
+
+  /* Semantic — darker bases for contrast. */
+  --danger-soft: rgba(138, 31, 18, 0.12);
+  --danger-border: rgba(138, 31, 18, 0.28);
+  --danger-text: #8a1f12;
+  --success-soft: rgba(46, 110, 64, 0.14);
+  --success-text: #1a5c2e;
+  --success-border: rgba(46, 110, 64, 0.28);
+  --info-soft: rgba(54, 102, 165, 0.12);
+  --info-border: rgba(54, 102, 165, 0.24);
+  --info-text: #1a4f8a;
+
+  /* Status indicators — darker for visibility on light. */
+  --status-ok: #2e7d3c;
+  --status-warning: #a86b00;
+  --status-suspended: #6b6660;
+  --status-error: #a8472a;
+
+  /* Button text on accent flips: white reads better on the darker
+     light-theme accent (vs. near-black on the brighter dark-theme one). */
+  --button-text: #ffffff;
+
+  /* Lighter drop-shadow on light surface (the dark theme's 42% is too
+     heavy against white). */
+  --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.18);
+
+  /* Danger base override — darker for light theme. */
+  --danger-base: #8a1f12;
+
+  /* One-off accent colors — darker variants for light surface. */
+  --info-teal: #0e9b95;
+  --brand-purple: #6a4ba8;
+  --danger-text-light: #b03517;
+}
+
+/* ===========================================================================
+   DENSITY — Compact vs. Mission Control
+
+   Density is a separate axis from theme. Mission Control is the default
+   (full chip rendering, current README hero behavior); Compact suppresses
+   metadata chips in the thread list to maximize row density. Chips on the
+   thread title bar (when a thread is open) stay visible in both modes — the
+   suppression applies to .thread-row__chip inside the list only.
+
+   Pin markers and user-added reaction emojis stay visible in Compact (they're
+   user-curated signals, not system metadata).
+
+   The default :root values target Mission Control behavior; the explicit
+   data-density attribute selector only carries overrides.
+   =========================================================================== */
+:root[data-density="compact"] .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
+  display: none;
+}
+
+:root[data-density="compact"] .thread-row__chips {
+  /* Tighter inter-chip gap when only reactions + pin remain visible. */
+  gap: 4px;
+}
+
 * {
   box-sizing: border-box;
 }

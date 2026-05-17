@@ -18,6 +18,7 @@ import {
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
+import { useAppearance } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -30,6 +31,14 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 
 export function App() {
+  // Owns live theme + density state. The pre-React bootstrap script in
+  // index.html sets the initial data-* attributes synchronously to avoid
+  // flash-of-wrong-theme; this hook then keeps them in sync (system-theme
+  // changes, settings toggles, cross-window storage events). The
+  // controller is consumed by SettingsScreen for the Appearance toggle —
+  // Step 3 of #472 wires it through. For now the hook runs purely for
+  // its side-effects (matchMedia listener + DOM attribute application).
+  useAppearance();
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
 
