@@ -92,6 +92,26 @@ In **Directories**, pins belong to their parent directory rather
 than to the global list, so each directory gets its own statically-
 ordered pin shelf.
 
+The **Directories** lens also lets you pin entire directories
+(and workspaces) above the divider so your active projects stay
+on top regardless of which one most recently woke up. Pinned
+directories carry over across restarts.
+
+To pin or change pin order:
+
+- **Pin or unpin:** right-click a thread or directory row and
+  pick **Pin / Unpin** from the menu. The same menu is reachable
+  from the three-dot overflow button on thread rows.
+- **Drag to reorder:** drag a pinned row up or down inside the
+  pinned section. Drag an unpinned thread or directory above the
+  pinned divider to add it; drop it back below to remove it.
+- **Keyboard reorder:** with a pinned row focused (Tab from the
+  sidebar or click it once), press <kbd>⌘⇧↑</kbd> / <kbd>⌘⇧↓</kbd>
+  to move it up or down. Same shortcut for pinned threads and
+  pinned directories. The chips next to **Move Up** and **Move
+  Down** in the right-click menu surface the same binding —
+  discover once there, use anywhere.
+
 #### Unread marker
 
 When a thread you haven't actively viewed gets new agent output,

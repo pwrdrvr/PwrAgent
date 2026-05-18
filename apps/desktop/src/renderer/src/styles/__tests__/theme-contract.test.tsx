@@ -312,9 +312,38 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
-  it("keeps thread context menu hover states visible", () => {
+  it("keeps thread context menu hover states visible (skipping disabled rows)", () => {
+    // The `:not(:disabled)` qualifier was added so disabled menu
+    // items (Move Up at top of pinned list / Move Down at bottom)
+    // don't pick up the accent hover treatment — they stay muted
+    // to telegraph that nothing happens on click.
     expect(css).toMatch(
-      /\.thread-context-menu button:hover,\s*\.thread-context-menu button:focus-visible\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
+      /\.thread-context-menu button:hover:not\(:disabled\),\s*\.thread-context-menu button:focus-visible:not\(:disabled\)\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
+    );
+    // Disabled state uses text-muted so the row reads as
+    // "present but inert" rather than fully hidden — keeps the
+    // menu height stable as the user walks the pinned list.
+    const disabledRule = extractRuleBody(
+      css,
+      ".thread-context-menu button:disabled",
+    );
+    expect(disabledRule).toContain("color: var(--text-muted);");
+  });
+
+  it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
+    // The `__shortcut` chip is the discoverability surface for
+    // the otherwise-invisible Cmd+(Shift+)Arrow reorder shortcut.
+    // Visual contract: muted color by default, tracks the parent
+    // button's accent color on hover so it doesn't drop out of
+    // the highlighted row.
+    const shortcutRule = extractRuleBody(
+      css,
+      ".thread-context-menu__shortcut",
+    );
+    expect(shortcutRule).toContain("margin-left: auto;");
+    expect(shortcutRule).toContain("color: var(--text-muted);");
+    expect(css).toMatch(
+      /\.thread-context-menu button:hover:not\(:disabled\) \.thread-context-menu__shortcut,\s*\.thread-context-menu button:focus-visible:not\(:disabled\) \.thread-context-menu__shortcut\s*\{[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
     );
   });
 

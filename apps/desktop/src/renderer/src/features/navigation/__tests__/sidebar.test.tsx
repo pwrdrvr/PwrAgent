@@ -871,6 +871,118 @@ describe("Sidebar", () => {
     expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("exposes Move Up / Move Down with shortcut hints on a pinned thread's context menu", async () => {
+    // Discoverability: the Cmd+Arrow keyboard shortcut for
+    // reordering pinned threads is invisible without a surfaced
+    // affordance. Mirrors the macOS-native pattern of showing
+    // the shortcut hint inline on the menu item.
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const pinnedTop = {
+      ...sharedThread,
+      id: "thread-top",
+      title: "Top pinned thread",
+      pinnedRank: "1024",
+    };
+    const pinnedBottom = {
+      ...sharedThread,
+      id: "thread-bottom",
+      title: "Bottom pinned thread",
+      pinnedRank: "2048",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[pinnedTop, pinnedBottom]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    // Open context menu on the TOP pinned thread → Move Up
+    // disabled, Move Down enabled, both shortcut hints visible.
+    const topRow = screen
+      .getByRole("button", { name: /Top pinned thread/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    fireEvent.click(
+      topRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+
+    const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
+    const moveDown = await screen.findByRole("menuitem", {
+      name: /Move Down/i,
+    });
+    expect(moveUp).toBeDisabled();
+    expect(moveDown).not.toBeDisabled();
+    // Unified shortcut with directory pinning (Cmd+Shift+Arrow).
+    expect(moveUp).toHaveTextContent("⌘⇧↑");
+    expect(moveDown).toHaveTextContent("⌘⇧↓");
+    // aria-keyshortcuts so screen readers can announce the binding
+    // independently of the visual chip (which is aria-hidden).
+    expect(moveUp).toHaveAttribute("aria-keyshortcuts", "Meta+Shift+ArrowUp");
+    expect(moveDown).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Meta+Shift+ArrowDown",
+    );
+
+    // Click Move Down on the top thread → swap order.
+    await clickElement(moveDown);
+    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
+      pinnedBottom.id,
+      pinnedTop.id,
+    ]);
+  });
+
+  it("omits Move Up / Move Down from an unpinned thread's context menu", async () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    fireEvent.click(
+      row.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+
+    await screen.findByRole("menuitem", { name: "Pin Thread" });
+    expect(
+      screen.queryByRole("menuitem", { name: /Move Up/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: /Move Down/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders pinned threads above directory threads inside each expanded directory", () => {
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -2318,5 +2430,308 @@ describe("Sidebar directory pinning", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Unpin Directory" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("exposes Move Up / Move Down with shortcut hints on a pinned directory's context menu", async () => {
+    // Discoverability: the Cmd+Shift+Arrow keyboard shortcut for
+    // reordering pinned directories is invisible without a
+    // surfaced affordance. Mirrors the macOS-native pattern of
+    // showing the shortcut hint inline on the menu item.
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinnedTop: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedMiddle: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+    };
+    const pinnedBottom: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/pwrdrvr/ProjectC",
+      kind: "directory",
+      label: "ProjectC",
+      path: "/Users/huntharo/pwrdrvr/ProjectC",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 3000,
+      pinnedRank: "3072",
+    };
+
+    renderSidebar([pinnedTop, pinnedMiddle, pinnedBottom], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins,
+    });
+
+    // Right-click the middle pinned directory — both Move Up and
+    // Move Down should be enabled.
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+    const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
+    const moveDown = await screen.findByRole("menuitem", {
+      name: /Move Down/i,
+    });
+    expect(moveUp).not.toBeDisabled();
+    expect(moveDown).not.toBeDisabled();
+    expect(moveUp).toHaveTextContent("⌘⇧↑");
+    expect(moveDown).toHaveTextContent("⌘⇧↓");
+    expect(moveUp).toHaveAttribute("aria-keyshortcuts", "Meta+Shift+ArrowUp");
+    expect(moveDown).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Meta+Shift+ArrowDown",
+    );
+
+    // Click Move Down → the middle directory should move past the
+    // bottom one, producing [top, bottom, middle].
+    await clickElement(moveDown);
+    expect(onReorderDirectoryPins).toHaveBeenCalledWith([
+      pinnedTop.key,
+      pinnedBottom.key,
+      pinnedMiddle.key,
+    ]);
+  });
+
+  it("disables Move Up on the top pinned directory and Move Down on the bottom", async () => {
+    const pinnedTop: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedBottom: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+    };
+
+    renderSidebar([pinnedTop, pinnedBottom], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    // Top: Move Up disabled, Move Down enabled
+    fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+    expect(
+      await screen.findByRole("menuitem", { name: /Move Up/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", { name: /Move Down/i }),
+    ).not.toBeDisabled();
+
+    // Dismiss + open the bottom row's menu
+    fireEvent.click(document.body);
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+    expect(
+      await screen.findByRole("menuitem", { name: /Move Up/i }),
+    ).not.toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", { name: /Move Down/i }),
+    ).toBeDisabled();
+  });
+
+  it("omits Move Up / Move Down entirely from an unpinned directory's context menu", async () => {
+    renderSidebar([projectADirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+    await screen.findByRole("menuitem", { name: "Pin Directory" });
+    expect(
+      screen.queryByRole("menuitem", { name: /Move Up/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: /Move Down/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the directory menu open after a Move click so the user can chain reorders", async () => {
+    // The keyboard shortcut path lets a user mash Cmd+Shift+↓
+    // repeatedly. The menu path should not force a re-right-click
+    // between every Move — that's a UX downgrade. Pin/Unpin
+    // still dismiss because those are terminal actions.
+    const pinnedTop: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+    const pinnedMiddle: NavigationDirectorySummary = {
+      ...projectBDirectory,
+      pinnedRank: "2048",
+    };
+    const pinnedBottom: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/pwrdrvr/ProjectC",
+      kind: "directory",
+      label: "ProjectC",
+      path: "/Users/huntharo/pwrdrvr/ProjectC",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 3000,
+      pinnedRank: "3072",
+    };
+
+    renderSidebar([pinnedTop, pinnedMiddle, pinnedBottom], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectB/i));
+    const moveDown = await screen.findByRole("menuitem", {
+      name: /Move Down/i,
+    });
+    await clickElement(moveDown);
+
+    // Menu must still be mounted after the Move click — the
+    // Pin / Unpin item is the marker that the same menu is
+    // still open.
+    expect(
+      screen.queryByRole("menuitem", { name: /Unpin Directory/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("dismisses the directory menu after Pin / Unpin (terminal action)", async () => {
+    const pinned: NavigationDirectorySummary = {
+      ...projectADirectory,
+      pinnedRank: "1024",
+    };
+
+    renderSidebar([pinned], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+
+    fireEvent.contextMenu(getDirectorySummary(/ProjectA/i));
+    const unpinItem = await screen.findByRole("menuitem", {
+      name: "Unpin Directory",
+    });
+    await clickElement(unpinItem);
+
+    // Unlike Move, the Unpin item collapses the menu.
+    expect(
+      screen.queryByRole("menuitem", { name: /Unpin Directory/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("Sidebar thread pinning Move items", () => {
+  it("disables Move Down on backend A's bottom pinned thread regardless of backend B's pinned count", async () => {
+    // Per-backend pin-rank invariant: reorder IPC is scoped to
+    // (backend, [threadId, threadId, ...]). Move Down on backend
+    // A's bottom thread must NOT promote into backend B's pinned
+    // slice. Lock the boundary so a future refactor that
+    // accidentally globalizes the sort can't slip past review.
+    const codexOnly = {
+      ...sharedThread,
+      id: "codex-pinned-only",
+      title: "Codex sole pin",
+      source: "codex" as const,
+      pinnedRank: "1024",
+    };
+    const grokTop = {
+      ...sharedThread,
+      id: "grok-top",
+      title: "Grok top pin",
+      source: "grok" as const,
+      pinnedRank: "1024",
+    };
+    const grokBottom = {
+      ...sharedThread,
+      id: "grok-bottom",
+      title: "Grok bottom pin",
+      source: "grok" as const,
+      pinnedRank: "2048",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={[]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[codexOnly, grokTop, grokBottom]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    // Open menu on codex's sole pin (it's at both top AND bottom
+    // of its backend's slice — but grok has TWO pins below).
+    const codexRow = screen
+      .getByRole("button", { name: /Codex sole pin/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    fireEvent.click(
+      codexRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+    );
+
+    const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
+    const moveDown = await screen.findByRole("menuitem", {
+      name: /Move Down/i,
+    });
+    // Per-backend slice has length 1 → both Up and Down disabled
+    // even though the global pin count is 3.
+    expect(moveUp).toBeDisabled();
+    expect(moveDown).toBeDisabled();
+  });
+
+  it("invokes the reorder IPC on Cmd+Shift+ArrowDown on a focused pinned thread row", () => {
+    // Locks the unified shortcut. The thread reorder shortcut
+    // used to be plain Cmd+Arrow; it now matches the directory
+    // reorder shortcut (Cmd+Shift+Arrow). A plain Cmd+Arrow
+    // press should NOT trigger a reorder anymore.
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const pinnedTop = {
+      ...sharedThread,
+      id: "thread-top",
+      title: "Top pinned",
+      pinnedRank: "1024",
+    };
+    const pinnedBottom = {
+      ...sharedThread,
+      id: "thread-bottom",
+      title: "Bottom pinned",
+      pinnedRank: "2048",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={[]}
+        inboxThreads={[]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[pinnedTop, pinnedBottom]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    const topButton = screen.getByRole("button", { name: /Top pinned/i });
+
+    // Old shortcut (Cmd alone) → must NOT fire.
+    fireEvent.keyDown(topButton, { key: "ArrowDown", metaKey: true });
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
+
+    // New shortcut (Cmd + Shift) → fires the reorder, swapping
+    // the top thread with the bottom one.
+    fireEvent.keyDown(topButton, {
+      key: "ArrowDown",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(onReorderThreadPins).toHaveBeenCalledWith("codex", [
+      pinnedBottom.id,
+      pinnedTop.id,
+    ]);
   });
 });

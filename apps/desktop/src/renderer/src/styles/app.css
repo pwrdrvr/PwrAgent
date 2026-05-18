@@ -2758,11 +2758,43 @@ textarea,
   text-align: left;
 }
 
-.thread-context-menu button:hover,
-.thread-context-menu button:focus-visible {
+.thread-context-menu button:hover:not(:disabled),
+.thread-context-menu button:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
+}
+
+.thread-context-menu button:disabled {
+  /* Disabled "Move Up" at the top of the pinned list / "Move
+     Down" at the bottom. Keep the row in the menu so the layout
+     doesn't jump as the user moves items — just de-emphasize and
+     suppress hover. */
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* macOS-native pattern: action label on the left, keyboard
+   shortcut hint chip on the right (margin-left: auto). Used by
+   the pin/move items in the thread + directory context menus so
+   the otherwise-undiscoverable Cmd+(Shift+)Arrow reorder
+   shortcuts have a visible affordance. */
+.thread-context-menu__shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__shortcut,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__shortcut {
+  /* Track the parent button's accent color on hover so the
+     shortcut chip doesn't visually drop out of the highlighted
+     row. */
+  color: var(--accent-bright);
 }
 
 .thread-context-menu__separator {

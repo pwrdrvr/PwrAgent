@@ -13,6 +13,14 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import {
+  comparePinnedDirectories,
+  comparePinnedThreads,
+  isPinnedDirectory,
+  isPinnedThread,
+  moveDirectoryKey,
+  moveThreadKey,
+} from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon } from "../../icons";
@@ -404,6 +412,90 @@ export function Sidebar(props: SidebarProps) {
     void props.onSetDirectoryPin?.(directory, !directory.pinnedRank);
   };
 
+  /**
+   * Pinned-thread order, grouped by backend. The thread reorder
+   * IPC is per-backend (mirrors per-backend pin ranks), so the
+   * "Move Up / Move Down" menu items have to compute per-backend
+   * adjacency to figure out whether the target row is at the top
+   * or bottom of its backend's pinned section.
+   */
+  const pinnedThreadIdsByBackend = useMemo(() => {
+    const byBackend = new Map<AppServerBackendKind, string[]>();
+    for (const thread of [...props.threads]
+      .filter(isPinnedThread)
+      .sort(comparePinnedThreads)) {
+      const list = byBackend.get(thread.source) ?? [];
+      list.push(thread.id);
+      byBackend.set(thread.source, list);
+    }
+    return byBackend;
+  }, [props.threads]);
+
+  /**
+   * Pinned-directory keys in stable user-curated order. Directory
+   * pinning is global (backend-agnostic, see plan 2026-05-09-002),
+   * so a single sorted array is enough to compute Move Up / Move
+   * Down adjacency for the directory context menu.
+   */
+  const pinnedDirectoryKeysInOrder = useMemo(
+    () =>
+      [...props.directories]
+        .filter(isPinnedDirectory)
+        .sort(comparePinnedDirectories)
+        .map((directory) => directory.key),
+    [props.directories],
+  );
+
+  const moveThreadFromContextMenu = (
+    thread: NavigationThreadSummary,
+    direction: "up" | "down",
+  ): void => {
+    const ordered = pinnedThreadIdsByBackend.get(thread.source) ?? [];
+    const currentIndex = ordered.indexOf(thread.id);
+    if (currentIndex === -1) return;
+    const targetIndex =
+      direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= ordered.length) return;
+    const targetId = ordered[targetIndex]!;
+    const nextIds = moveThreadKey(
+      ordered,
+      thread.id,
+      targetId,
+      direction === "up" ? "before" : "after",
+    );
+    // Intentionally do NOT dismiss the menu after a Move — the
+    // user often wants several reorder taps in a row, and
+    // re-right-clicking between every one is a UX downgrade vs
+    // the keyboard shortcut. The menu re-renders with fresh
+    // `pinnedThreadIdsByBackend` on the snapshot reconciliation
+    // tick, so subsequent Move clicks see updated adjacency.
+    // Pin / Unpin / Rename / Archive are terminal actions and
+    // still dismiss the menu.
+    void props.onReorderThreadPins?.(thread.source, nextIds);
+  };
+
+  const moveDirectoryFromContextMenu = (
+    directory: NavigationDirectorySummary,
+    direction: "up" | "down",
+  ): void => {
+    const ordered = pinnedDirectoryKeysInOrder;
+    const currentIndex = ordered.indexOf(directory.key);
+    if (currentIndex === -1) return;
+    const targetIndex =
+      direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= ordered.length) return;
+    const targetKey = ordered[targetIndex]!;
+    const nextKeys = moveDirectoryKey(
+      ordered,
+      directory.key,
+      targetKey,
+      direction === "up" ? "before" : "after",
+    );
+    // See `moveThreadFromContextMenu` for why we don't dismiss
+    // the menu here.
+    void props.onReorderDirectoryPins?.(nextKeys);
+  };
+
   const copyFromContextMenu = (value: string): void => {
     setContextMenu(undefined);
     void copyText(value);
@@ -442,8 +534,53 @@ export function Sidebar(props: SidebarProps) {
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuCanPin = Boolean(contextMenu && props.onSetThreadPin);
+  /**
+   * Move Up / Move Down show as menu items only when the target
+   * thread is pinned (reorder only applies inside the pinned
+   * section) AND the reorder IPC is wired. Each item is then
+   * disabled when the thread is at the top / bottom of its
+   * backend's pinned slice. We render the items even when disabled
+   * so the menu layout doesn't jump as the user walks the list.
+   */
+  const contextMenuShowMoveItems = Boolean(
+    contextMenu?.thread.pinnedRank && props.onReorderThreadPins,
+  );
+  const contextMenuPinnedThreadIndex = contextMenu
+    ? (pinnedThreadIdsByBackend.get(contextMenu.thread.source) ?? []).indexOf(
+        contextMenu.thread.id,
+      )
+    : -1;
+  const contextMenuPinnedThreadCount = contextMenu
+    ? (pinnedThreadIdsByBackend.get(contextMenu.thread.source) ?? []).length
+    : 0;
+  const contextMenuCanMoveUp =
+    contextMenuShowMoveItems && contextMenuPinnedThreadIndex > 0;
+  const contextMenuCanMoveDown =
+    contextMenuShowMoveItems &&
+    contextMenuPinnedThreadIndex >= 0 &&
+    contextMenuPinnedThreadIndex < contextMenuPinnedThreadCount - 1;
   const contextMenuHasTopActions =
-    contextMenuCanPin || contextMenuCanRename || contextMenuCanArchive;
+    contextMenuCanPin ||
+    contextMenuShowMoveItems ||
+    contextMenuCanRename ||
+    contextMenuCanArchive;
+
+  // Same shape as the thread context menu's "Move" items, applied
+  // to the directory context menu. Directory pinning is global so
+  // a single sorted array drives both adjacency checks.
+  const directoryMenuShowMoveItems = Boolean(
+    directoryContextMenu?.directory.pinnedRank &&
+      props.onReorderDirectoryPins,
+  );
+  const directoryMenuPinnedIndex = directoryContextMenu
+    ? pinnedDirectoryKeysInOrder.indexOf(directoryContextMenu.directory.key)
+    : -1;
+  const directoryMenuCanMoveUp =
+    directoryMenuShowMoveItems && directoryMenuPinnedIndex > 0;
+  const directoryMenuCanMoveDown =
+    directoryMenuShowMoveItems &&
+    directoryMenuPinnedIndex >= 0 &&
+    directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -658,6 +795,44 @@ export function Sidebar(props: SidebarProps) {
                   {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
                 </button>
               ) : null}
+              {contextMenuShowMoveItems ? (
+                <>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowUp"
+                    disabled={!contextMenuCanMoveUp}
+                    onClick={() =>
+                      moveThreadFromContextMenu(contextMenu.thread, "up")
+                    }
+                  >
+                    <span>Move Up</span>
+                    <span
+                      className="thread-context-menu__shortcut"
+                      aria-hidden="true"
+                    >
+                      {"⌘⇧↑"}
+                    </span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowDown"
+                    disabled={!contextMenuCanMoveDown}
+                    onClick={() =>
+                      moveThreadFromContextMenu(contextMenu.thread, "down")
+                    }
+                  >
+                    <span>Move Down</span>
+                    <span
+                      className="thread-context-menu__shortcut"
+                      aria-hidden="true"
+                    >
+                      {"⌘⇧↓"}
+                    </span>
+                  </button>
+                </>
+              ) : null}
               {contextMenuCanRename ? (
                 <button
                   role="menuitem"
@@ -773,6 +948,50 @@ export function Sidebar(props: SidebarProps) {
                 ? "Unpin Directory"
                 : "Pin Directory"}
             </button>
+            {directoryMenuShowMoveItems ? (
+              <>
+                <button
+                  role="menuitem"
+                  type="button"
+                  aria-keyshortcuts="Meta+Shift+ArrowUp"
+                  disabled={!directoryMenuCanMoveUp}
+                  onClick={() =>
+                    moveDirectoryFromContextMenu(
+                      directoryContextMenu.directory,
+                      "up",
+                    )
+                  }
+                >
+                  <span>Move Up</span>
+                  <span
+                    className="thread-context-menu__shortcut"
+                    aria-hidden="true"
+                  >
+                    {"⌘⇧↑"}
+                  </span>
+                </button>
+                <button
+                  role="menuitem"
+                  type="button"
+                  aria-keyshortcuts="Meta+Shift+ArrowDown"
+                  disabled={!directoryMenuCanMoveDown}
+                  onClick={() =>
+                    moveDirectoryFromContextMenu(
+                      directoryContextMenu.directory,
+                      "down",
+                    )
+                  }
+                >
+                  <span>Move Down</span>
+                  <span
+                    className="thread-context-menu__shortcut"
+                    aria-hidden="true"
+                  >
+                    {"⌘⇧↓"}
+                  </span>
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}
