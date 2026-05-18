@@ -130,6 +130,90 @@ describe("Git discovery", () => {
     await expect(resolveGitExecutable()).resolves.toBe(homeGit);
   });
 
+  it("uses the supplied hydrated PATH when resolving app-server git", async () => {
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    const hydratedEnv = {
+      PATH: "/nix/profile/bin:/usr/bin",
+    } as NodeJS.ProcessEnv;
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        options: { env?: NodeJS.ProcessEnv },
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (command === "git" && options.env === hydratedEnv) {
+          callback(null, {
+            stdout: args[0] === "--version" ? "git version 2.49.0\n" : "ok\n",
+          });
+          return;
+        }
+        callback(missingError);
+      },
+    );
+    const { runGitCommand } = await import("../app-server/git-executable");
+
+    await expect(
+      runGitCommand("/repo", ["status", "--short"], { env: hydratedEnv }),
+    ).resolves.toEqual({
+      stdout: "ok",
+      stderr: "",
+    });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      ["--version"],
+      expect.objectContaining({ env: hydratedEnv }),
+      expect.any(Function),
+    );
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      ["-C", "/repo", "status", "--short"],
+      expect.objectContaining({ env: hydratedEnv }),
+      expect.any(Function),
+    );
+  });
+
+  it("does not reuse app-server git resolution across different PATH values", async () => {
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    const finderEnv = { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv;
+    const hydratedEnv = {
+      PATH: "/custom/bin:/usr/bin:/bin",
+    } as NodeJS.ProcessEnv;
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        options: { env?: NodeJS.ProcessEnv },
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (
+          command === "git" &&
+          args[0] === "--version" &&
+          options.env === hydratedEnv
+        ) {
+          callback(null, { stdout: "git version 2.49.0\n" });
+          return;
+        }
+        callback(missingError);
+      },
+    );
+    const { resolveGitExecutable } = await import("../app-server/git-executable");
+
+    await expect(resolveGitExecutable(finderEnv)).rejects.toThrow(
+      "Git executable unavailable",
+    );
+
+    await expect(resolveGitExecutable(hydratedEnv)).resolves.toBe("git");
+  });
+
   it("retries app-server git resolution after an initial failure", async () => {
     const missingError = new Error("missing") as NodeJS.ErrnoException;
     missingError.code = "ENOENT";

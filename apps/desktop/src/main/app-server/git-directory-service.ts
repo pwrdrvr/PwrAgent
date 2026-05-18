@@ -16,8 +16,18 @@ import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 import { runGitCommand } from "./git-executable";
 
-async function runGit(cwd: string, args: string[]): Promise<string> {
-  return (await runGitCommand(cwd, args)).stdout;
+type GitCommandRunner = (
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+) => Promise<string>;
+
+async function defaultRunGit(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<string> {
+  return (await runGitCommand(cwd, args, { env })).stdout;
 }
 
 function errorText(error: unknown): string {
@@ -33,9 +43,13 @@ function isNotGitRepositoryError(error: unknown): boolean {
   return errorText(error).includes("not a git repository");
 }
 
-async function readGitRoot(cwd: string): Promise<string | undefined> {
+async function readGitRoot(
+  cwd: string,
+  runGit: GitCommandRunner = defaultRunGit,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
   try {
-    return await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    return await runGit(cwd, ["rev-parse", "--show-toplevel"], env);
   } catch (error) {
     if (isNotGitRepositoryError(error)) {
       return undefined;
@@ -47,6 +61,8 @@ async function readGitRoot(cwd: string): Promise<string | undefined> {
 export async function recordCodexWorktreeOwnerThread(params: {
   worktreePath: string;
   threadId: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit?: GitCommandRunner;
 }): Promise<void> {
   const worktreePath = params.worktreePath.trim();
   const threadId = params.threadId.trim();
@@ -54,11 +70,12 @@ export async function recordCodexWorktreeOwnerThread(params: {
     return;
   }
 
-  const ownerFile = await runGit(worktreePath, [
-    "rev-parse",
-    "--git-path",
-    "codex-thread.json",
-  ]);
+  const runGit = params.runGit ?? defaultRunGit;
+  const ownerFile = await runGit(
+    worktreePath,
+    ["rev-parse", "--git-path", "codex-thread.json"],
+    params.gitEnv,
+  );
   if (!ownerFile) {
     throw new Error(`Unable to resolve Codex worktree owner file for ${worktreePath}`);
   }
@@ -268,28 +285,39 @@ function isProtectedBranch(branch?: string): boolean {
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
   requestedBranch?: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit?: GitCommandRunner;
 }): Promise<string | undefined> {
+  const runGit = params.runGit ?? defaultRunGit;
   const requestedBranch = sanitizeBranchName(params.requestedBranch ?? "");
   if (requestedBranch) {
-    const commit = await runGit(params.repoRoot, [
-      "rev-parse",
-      "--verify",
-      `${requestedBranch}^{commit}`,
-    ]).catch(() => "");
+    const commit = await runGit(
+      params.repoRoot,
+      ["rev-parse", "--verify", `${requestedBranch}^{commit}`],
+      params.gitEnv,
+    ).catch(() => "");
     return commit ? requestedBranch : undefined;
   }
 
   const [currentBranch, branchesOutput, remoteHead] = await Promise.all([
-    runGit(params.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-    runGit(params.repoRoot, [
-      "for-each-ref",
-      "refs/heads",
-      "--sort=-committerdate",
-      "--format=%(refname:short)",
-    ]).catch(() => ""),
-    runGit(params.repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+    runGit(params.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
       () => "",
     ),
+    runGit(
+      params.repoRoot,
+      [
+        "for-each-ref",
+        "refs/heads",
+        "--sort=-committerdate",
+        "--format=%(refname:short)",
+      ],
+      params.gitEnv,
+    ).catch(() => ""),
+    runGit(
+      params.repoRoot,
+      ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+      params.gitEnv,
+    ).catch(() => ""),
   ]);
   const branches = parseGitLines(branchesOutput);
   const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
@@ -300,11 +328,11 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   ]);
 
   for (const branch of candidates) {
-    const commit = await runGit(params.repoRoot, [
-      "rev-parse",
-      "--verify",
-      `${branch}^{commit}`,
-    ]).catch(() => "");
+    const commit = await runGit(
+      params.repoRoot,
+      ["rev-parse", "--verify", `${branch}^{commit}`],
+      params.gitEnv,
+    ).catch(() => "");
     if (commit) {
       return branch;
     }
@@ -329,6 +357,8 @@ type GitDirectoryServiceOptions = {
   statusConcurrency?: number;
   statusMaxUnread?: number;
   codexHome?: string;
+  gitEnv?: NodeJS.ProcessEnv;
+  runGit?: GitCommandRunner;
   resolveWorktreeStorage?: () =>
     | DesktopWorktreeStorageLocation
     | Promise<DesktopWorktreeStorageLocation>;
@@ -341,6 +371,8 @@ export class GitDirectoryService {
   private readonly statusConcurrency: number;
   private readonly statusMaxUnread: number;
   private readonly codexHome?: string;
+  private readonly gitEnv?: NodeJS.ProcessEnv;
+  private readonly runGitCommand: GitCommandRunner;
   private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
   private readonly homeDir: string;
 
@@ -354,6 +386,8 @@ export class GitDirectoryService {
       this.statusConcurrency,
     );
     this.codexHome = normalized.codexHome;
+    this.gitEnv = normalized.gitEnv;
+    this.runGitCommand = normalized.runGit ?? defaultRunGit;
     this.homeDir = normalized.homeDir ?? os.homedir();
     const resolveStorage = normalized.resolveWorktreeStorage;
     this.resolveStorage = async () =>
@@ -445,30 +479,47 @@ export class GitDirectoryService {
   private async loadDirectoryStatus(
     cwd: string,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
-    const repoRoot = await readGitRoot(cwd);
+    const runGit = this.runGitCommand;
+    const gitEnv = this.gitEnv;
+    const repoRoot = await readGitRoot(cwd, runGit, gitEnv);
     if (!repoRoot) {
       return undefined;
     }
 
-    const [currentBranch, branchesOutput, remoteHead, worktreeList] = await Promise.all([
-      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-      runGit(repoRoot, [
-        "for-each-ref",
-        "refs/heads",
-        "--sort=-committerdate",
-        "--format=%(refname:short)",
-      ]).catch(() => ""),
-      runGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
-        () => "",
-      ),
-      runGit(repoRoot, ["worktree", "list", "--porcelain"]).catch(() => ""),
-    ]);
-    const upstreamBranch = await runGit(repoRoot, [
-      "rev-parse",
-      "--abbrev-ref",
-      "--symbolic-full-name",
-      "@{upstream}",
-    ]).catch(() => "");
+    const [currentBranch, branchesOutput, remoteHead, worktreeList] =
+      await Promise.all([
+        runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
+          () => "",
+        ),
+        runGit(
+          repoRoot,
+          [
+            "for-each-ref",
+            "refs/heads",
+            "--sort=-committerdate",
+            "--format=%(refname:short)",
+          ],
+          gitEnv,
+        ).catch(() => ""),
+        runGit(
+          repoRoot,
+          ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
+          gitEnv,
+        ).catch(() => ""),
+        runGit(repoRoot, ["worktree", "list", "--porcelain"], gitEnv).catch(
+          () => "",
+        ),
+      ]);
+    const upstreamBranch = await runGit(
+      repoRoot,
+      [
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+      ],
+      gitEnv,
+    ).catch(() => "");
     const branches = parseGitLines(branchesOutput);
     const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
     if (!currentBranch) {
@@ -497,12 +548,11 @@ export class GitDirectoryService {
       };
     }
 
-    const counts = await runGit(cwd, [
-      "rev-list",
-      "--left-right",
-      "--count",
-      `HEAD...${upstreamBranch}`,
-    ]).catch(() => "");
+    const counts = await runGit(
+      cwd,
+      ["rev-list", "--left-right", "--count", `HEAD...${upstreamBranch}`],
+      gitEnv,
+    ).catch(() => "");
     const [aheadValue, behindValue] = counts
       .split(/\s+/)
       .map((value) => Number.parseInt(value, 10));
@@ -558,7 +608,11 @@ export class GitDirectoryService {
       };
     }
 
-    const repoRoot = await readGitRoot(directoryPath);
+    const repoRoot = await readGitRoot(
+      directoryPath,
+      this.runGitCommand,
+      this.gitEnv,
+    );
     if (!repoRoot) {
       return {
         cwd: directoryPath,
@@ -567,8 +621,10 @@ export class GitDirectoryService {
     }
 
     const baseBranch = await resolveVerifiedWorktreeBaseBranch({
+      gitEnv: this.gitEnv,
       repoRoot,
       requestedBranch: launchpad.branchName,
+      runGit: this.runGitCommand,
     });
     if (!baseBranch) {
       return {
@@ -586,7 +642,11 @@ export class GitDirectoryService {
       homeDir: this.homeDir,
     });
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await runGit(repoRoot, ["worktree", "add", "--detach", worktreePath, baseBranch]);
+    await this.runGitCommand(
+      repoRoot,
+      ["worktree", "add", "--detach", worktreePath, baseBranch],
+      this.gitEnv,
+    );
 
     return {
       cwd: worktreePath,
@@ -599,7 +659,11 @@ export class GitDirectoryService {
     worktreePath: string;
     threadId: string;
   }): Promise<void> {
-    await recordCodexWorktreeOwnerThread(params);
+    await recordCodexWorktreeOwnerThread({
+      ...params,
+      gitEnv: this.gitEnv,
+      runGit: this.runGitCommand,
+    });
   }
 
   async cleanupThreadWorktrees(
@@ -645,6 +709,8 @@ export class GitDirectoryService {
     },
     thread: Pick<AppServerThreadSummary, "gitBranch" | "observedGitBranch">,
   ): Promise<ArchiveThreadCleanupResult> {
+    const runGit = this.runGitCommand;
+    const gitEnv = this.gitEnv;
     const repoPath = path.resolve(candidate.repoPath);
     const worktreePath = path.resolve(candidate.worktreePath);
     const base: ArchiveThreadCleanupResult = {
@@ -661,8 +727,16 @@ export class GitDirectoryService {
     }
 
     try {
-      const repoRoot = await runGit(repoPath, ["rev-parse", "--show-toplevel"]);
-      const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
+      const repoRoot = await runGit(
+        repoPath,
+        ["rev-parse", "--show-toplevel"],
+        gitEnv,
+      );
+      const worktreeList = await runGit(
+        repoRoot,
+        ["worktree", "list", "--porcelain"],
+        gitEnv,
+      );
       const entries = parseGitWorktreeEntries(worktreeList);
       const primaryPath = path.resolve(entries[0]?.path || repoRoot);
       const entry = entries.find((item) => path.resolve(item.path) === worktreePath);
@@ -682,7 +756,7 @@ export class GitDirectoryService {
       }
 
       const branch = entry.branch ?? thread.observedGitBranch ?? thread.gitBranch;
-      await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+      await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath], gitEnv);
       await pruneEmptyWorktreeParents(worktreePath);
 
       const result: ArchiveThreadCleanupResult = {
@@ -705,7 +779,7 @@ export class GitDirectoryService {
         };
       }
 
-      await runGit(repoRoot, ["branch", "-D", branch]);
+      await runGit(repoRoot, ["branch", "-D", branch], gitEnv);
 
       return {
         ...result,

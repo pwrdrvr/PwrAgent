@@ -42,6 +42,10 @@ type RestoreWorktreeParams = {
   now?: number;
 };
 
+type WorktreeArchiveServiceOptions = {
+  gitEnv?: NodeJS.ProcessEnv;
+};
+
 async function runGit(
   cwd: string,
   args: string[],
@@ -135,6 +139,12 @@ function findWorktree(
 }
 
 export class WorktreeArchiveService {
+  private readonly gitEnv?: NodeJS.ProcessEnv;
+
+  constructor(options: WorktreeArchiveServiceOptions = {}) {
+    this.gitEnv = options.gitEnv;
+  }
+
   async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
     const worktreePath = await realpath(path.resolve(params.worktreePath));
     const worktreeListPath = params.repositoryPath
@@ -161,8 +171,8 @@ export class WorktreeArchiveService {
       worktreePath,
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
-    await runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
-    await runGit(repositoryPath, ["worktree", "remove", "--force", worktreePath]);
+    await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
+    await this.runGit(repositoryPath, ["worktree", "remove", "--force", worktreePath]);
 
     const archivedAt = params.now ?? Date.now();
     return {
@@ -186,7 +196,10 @@ export class WorktreeArchiveService {
     const worktreePath = path.resolve(params.worktreePath);
     const repositoryPath = path.resolve(params.repositoryPath);
     const snapshotCommit = trimGitOutput(
-      (await runGit(repositoryPath, ["rev-parse", `${params.snapshotRef}^{commit}`]))
+      (await this.runGit(repositoryPath, [
+        "rev-parse",
+        `${params.snapshotRef}^{commit}`,
+      ]))
         .stdout,
     );
 
@@ -197,7 +210,7 @@ export class WorktreeArchiveService {
     }
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await runGit(repositoryPath, [
+    await this.runGit(repositoryPath, [
       "worktree",
       "add",
       "--detach",
@@ -241,10 +254,10 @@ export class WorktreeArchiveService {
 
     try {
       const env = { GIT_INDEX_FILE: indexPath };
-      await runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
-      await runGit(params.worktreePath, ["add", "-A", "--", "."], { env });
+      await this.runGit(params.worktreePath, ["read-tree", "HEAD"], { env });
+      await this.runGit(params.worktreePath, ["add", "-A", "--", "."], { env });
       const tree = trimGitOutput(
-        (await runGit(params.worktreePath, ["write-tree"], { env })).stdout,
+        (await this.runGit(params.worktreePath, ["write-tree"], { env })).stdout,
       );
       const message = [
         `Snapshot worktree for ${params.backend}:${params.threadId}`,
@@ -266,7 +279,8 @@ export class WorktreeArchiveService {
       };
 
       return trimGitOutput(
-        (await runGit(params.worktreePath, commitArgs, { env: commitEnv })).stdout,
+        (await this.runGit(params.worktreePath, commitArgs, { env: commitEnv }))
+          .stdout,
       );
     } finally {
       await rm(tempDir, { force: true, recursive: true });
@@ -286,8 +300,21 @@ export class WorktreeArchiveService {
   }
 
   private async listWorktrees(repositoryPath: string): Promise<WorktreeInfo[]> {
-    const output = await runGit(repositoryPath, ["worktree", "list", "--porcelain"]);
+    const output = await this.runGit(repositoryPath, ["worktree", "list", "--porcelain"]);
     return parseWorktreeList(output.stdout);
+  }
+
+  private async runGit(
+    cwd: string,
+    args: string[],
+    options: { env?: NodeJS.ProcessEnv } = {},
+  ): Promise<GitResult> {
+    return await runGit(cwd, args, {
+      env: {
+        ...this.gitEnv,
+        ...options.env,
+      },
+    });
   }
 }
 

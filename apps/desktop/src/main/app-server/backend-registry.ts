@@ -1601,16 +1601,19 @@ export class DesktopBackendRegistry {
       options?.gitDirectoryService ??
       new GitDirectoryService({
         codexHome,
+        gitEnv: codexEnv,
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
       });
     this.worktreeArchiveService =
-      options?.worktreeArchiveService ?? new WorktreeArchiveService();
+      options?.worktreeArchiveService ??
+      new WorktreeArchiveService({ gitEnv: codexEnv });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
+        gitEnv: codexEnv,
         worktreeArchiveService: this.worktreeArchiveService,
         resolveWorktreeStorage: () =>
           getDesktopSettingsService().resolveWorktreeStorage(),
