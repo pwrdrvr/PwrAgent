@@ -164,13 +164,19 @@ export function ThreadRow(props: ThreadRowProps) {
         }`}
         type="button"
         onKeyDown={(event) => {
+          // Reorder a pinned thread within its backend's pinned
+          // slice. Unified with the directory-pin shortcut
+          // (Cmd+Shift+Arrow) so users learn one keybind. Plain
+          // Cmd+Arrow used to drive this — that collided with
+          // macOS Finder's "go to parent folder" mental model and
+          // diverged from the directory shortcut.
           if (
             props.onMovePinnedThread &&
             props.thread.pinnedRank &&
             event.metaKey &&
+            event.shiftKey &&
             !event.altKey &&
             !event.ctrlKey &&
-            !event.shiftKey &&
             (event.key === "ArrowUp" || event.key === "ArrowDown")
           ) {
             event.preventDefault();

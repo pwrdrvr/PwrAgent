@@ -463,7 +463,14 @@ export function Sidebar(props: SidebarProps) {
       targetId,
       direction === "up" ? "before" : "after",
     );
-    setContextMenu(undefined);
+    // Intentionally do NOT dismiss the menu after a Move — the
+    // user often wants several reorder taps in a row, and
+    // re-right-clicking between every one is a UX downgrade vs
+    // the keyboard shortcut. The menu re-renders with fresh
+    // `pinnedThreadIdsByBackend` on the snapshot reconciliation
+    // tick, so subsequent Move clicks see updated adjacency.
+    // Pin / Unpin / Rename / Archive are terminal actions and
+    // still dismiss the menu.
     void props.onReorderThreadPins?.(thread.source, nextIds);
   };
 
@@ -484,7 +491,8 @@ export function Sidebar(props: SidebarProps) {
       targetKey,
       direction === "up" ? "before" : "after",
     );
-    setDirectoryContextMenu(undefined);
+    // See `moveThreadFromContextMenu` for why we don't dismiss
+    // the menu here.
     void props.onReorderDirectoryPins?.(nextKeys);
   };
 
@@ -792,6 +800,7 @@ export function Sidebar(props: SidebarProps) {
                   <button
                     role="menuitem"
                     type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowUp"
                     disabled={!contextMenuCanMoveUp}
                     onClick={() =>
                       moveThreadFromContextMenu(contextMenu.thread, "up")
@@ -802,12 +811,13 @@ export function Sidebar(props: SidebarProps) {
                       className="thread-context-menu__shortcut"
                       aria-hidden="true"
                     >
-                      {"⌘↑"}
+                      {"⌘⇧↑"}
                     </span>
                   </button>
                   <button
                     role="menuitem"
                     type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowDown"
                     disabled={!contextMenuCanMoveDown}
                     onClick={() =>
                       moveThreadFromContextMenu(contextMenu.thread, "down")
@@ -818,7 +828,7 @@ export function Sidebar(props: SidebarProps) {
                       className="thread-context-menu__shortcut"
                       aria-hidden="true"
                     >
-                      {"⌘↓"}
+                      {"⌘⇧↓"}
                     </span>
                   </button>
                 </>
@@ -943,6 +953,7 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   role="menuitem"
                   type="button"
+                  aria-keyshortcuts="Meta+Shift+ArrowUp"
                   disabled={!directoryMenuCanMoveUp}
                   onClick={() =>
                     moveDirectoryFromContextMenu(
@@ -962,6 +973,7 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   role="menuitem"
                   type="button"
+                  aria-keyshortcuts="Meta+Shift+ArrowDown"
                   disabled={!directoryMenuCanMoveDown}
                   onClick={() =>
                     moveDirectoryFromContextMenu(

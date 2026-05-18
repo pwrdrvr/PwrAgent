@@ -106,11 +106,11 @@ To pin or change pin order:
   pinned section. Drag an unpinned thread or directory above the
   pinned divider to add it; drop it back below to remove it.
 - **Keyboard reorder:** with a pinned row focused (Tab from the
-  sidebar or click it once), press <kbd>⌘↑</kbd> / <kbd>⌘↓</kbd>
-  to move a pinned thread up or down, or <kbd>⌘⇧↑</kbd> /
-  <kbd>⌘⇧↓</kbd> for a pinned directory. The same shortcuts are
-  surfaced inline on the **Move Up** and **Move Down** items in
-  the right-click menu — discover once there, use anywhere.
+  sidebar or click it once), press <kbd>⌘⇧↑</kbd> / <kbd>⌘⇧↓</kbd>
+  to move it up or down. Same shortcut for pinned threads and
+  pinned directories. The chips next to **Move Up** and **Move
+  Down** in the right-click menu surface the same binding —
+  discover once there, use anywhere.
 
 #### Unread marker
 
