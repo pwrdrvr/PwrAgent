@@ -48,13 +48,15 @@ updates:
       include: "scope"
     cooldown:
       default-days: 7
-    groups:
-      github-actions-minor-patch:
-        patterns:
-          - "*"
+    # We pin actions to major-version tags (e.g. `@v1`). Those tags silently
+    # absorb every minor and patch release upstream, so Dependabot PRs that
+    # rewrite `@v1` to `@v1.0.1` are pure noise. Only surface major bumps,
+    # which actually warrant a human review.
+    ignore:
+      - dependency-name: "*"
         update-types:
-          - "minor"
-          - "patch"
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
 
   - package-ecosystem: "bundler"
     directory: "/docs-site"
