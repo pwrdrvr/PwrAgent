@@ -9,6 +9,7 @@ import {
 } from "react";
 import type {
   DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   DesktopCodexProfileModel,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -18,6 +19,7 @@ import type {
   MessagingPairingScope,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import {
   DiscordIcon,
@@ -71,7 +73,11 @@ function railIndexForStep(step: WizardStep): RailIndex | -1 {
 
 export type OnboardingWizardProps = {
   initialDensity: DesktopAppearanceDensity;
+  initialTheme: DesktopAppearanceTheme;
   initialCodexProfileModel: DesktopCodexProfileModel;
+  /** Live theme + density controller. The wizard calls setTheme / setDensity
+   *  as the operator picks so the app flips in real time. */
+  appearanceController: AppearanceController;
   /** Called once on Finish or Skip with the assembled config patch. */
   onComplete: (patch: DesktopSettingsConfigPatch) => Promise<void> | void;
   /**
@@ -98,6 +104,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
+  const [theme, setTheme] = useState<DesktopAppearanceTheme>(props.initialTheme);
   const [codexProfileModel, setCodexProfileModel] =
     useState<DesktopCodexProfileModel>(props.initialCodexProfileModel);
   const [codexProfileNames, setCodexProfileNames] = useState<string[]>([
@@ -230,7 +237,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         const providers = [...selectedProviders];
         const patch: DesktopSettingsConfigPatch = {
           general: {
-            appearance: { density },
+            appearance: { density, theme },
             codexProfileModel,
             ...(acknowledged
               ? {
@@ -285,6 +292,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       props,
       selectedProviders,
       submitting,
+      theme,
     ],
   );
 
@@ -333,7 +341,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         <div className="onboarding-wizard__body">
           {step === "welcome" ? <WelcomeStep /> : null}
           {step === "thread-presentation" ? (
-            <ThreadPresentationStep value={density} onChange={setDensity} />
+            <ThreadPresentationStep
+              theme={theme}
+              density={density}
+              onThemeChange={(next) => {
+                setTheme(next);
+                props.appearanceController.setTheme(next);
+              }}
+              onDensityChange={(next) => {
+                setDensity(next);
+                props.appearanceController.setDensity(next);
+              }}
+            />
           ) : null}
           {step === "codex-profile" ? (
             <CodexProfileStep
@@ -723,40 +742,72 @@ function WelcomeStep() {
 }
 
 function ThreadPresentationStep(props: {
-  value: DesktopAppearanceDensity;
-  onChange: (value: DesktopAppearanceDensity) => void;
+  theme: DesktopAppearanceTheme;
+  density: DesktopAppearanceDensity;
+  onThemeChange: (value: DesktopAppearanceTheme) => void;
+  onDensityChange: (value: DesktopAppearanceDensity) => void;
 }) {
   return (
     <div>
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
-          How densely do you want your thread list?
+          Pick your appearance and thread density
         </h1>
         <p className="onboarding-wizard__sub">
-          You can switch between these any time from Settings → General →
-          Thread presentation. This choice only affects how thread rows render
-          in the sidebar.
+          Theme follows the OS by default. Density controls how much metadata
+          rides on each thread row. Both flip live as you click, and both
+          persist in Settings → General → Appearance.
         </p>
       </header>
+
+      <div className="onboarding-wizard__theme-row">
+        <span className="onboarding-wizard__theme-label">Theme</span>
+        <div
+          className="onboarding-wizard__segmented onboarding-wizard__segmented--inline"
+          role="radiogroup"
+          aria-label="Theme"
+        >
+          {(
+            [
+              { value: "system" as const, label: "Follow System", meta: "Match OS" },
+              { value: "light" as const, label: "Light", meta: "Always light" },
+              { value: "dark" as const, label: "Dark", meta: "Always dark" },
+            ]
+          ).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={props.theme === option.value}
+              className={`onboarding-wizard__segmented-btn onboarding-wizard__segmented-btn--stacked${props.theme === option.value ? " is-active" : ""}`}
+              onClick={() => props.onThemeChange(option.value)}
+            >
+              <span>{option.label}</span>
+              <span className="onboarding-wizard__segmented-meta">{option.meta}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="onboarding-wizard__choices onboarding-wizard__choices--2">
         <ChoiceCard
           eyebrow="Compact"
-          title="Titles only · maximum density"
-          desc="Title fills the row. No status chips. User-added emoji still render. The orange cookie marker still shows unread state."
-          hint="Best for: power users with many open threads."
-          badge={props.value === "compact" ? "Selected" : undefined}
-          selected={props.value === "compact"}
-          onSelect={() => props.onChange("compact")}
+          title="Just the title — you know what it is"
+          desc="You can remember that this thread is for PR #123 on branch feat/fix-feature-foo and that it's bound to topic SledgeHammer in the Hunters group on Telegram. You don't want all that clutter reminding you of it."
+          hint="Best for: muscle memory, density, many open threads."
+          badge={props.density === "compact" ? "Selected" : undefined}
+          selected={props.density === "compact"}
+          onSelect={() => props.onDensityChange("compact")}
           preview={<DensityCompactPreview />}
         />
         <ChoiceCard
           eyebrow="Mission control"
-          title="Full chips · maximum context"
-          desc="Every row carries status, branch, and messaging-platform chips. More to scan, more context at a glance."
-          hint="Best for: many concurrent threads with different states."
-          badge={props.value === "mission-control" ? "Selected" : undefined}
-          selected={props.value === "mission-control"}
-          onSelect={() => props.onChange("mission-control")}
+          title="Every row, every signal, all visible"
+          desc="It's the 60s and you're at a beautiful console with a custom indicator for every system you're monitoring. All the info you need is right there — without having to remember the temperature at which a rocket engine burns itself as fuel."
+          hint="Best for: at-a-glance scanning across many parallel states."
+          badge={props.density === "mission-control" ? "Selected" : undefined}
+          selected={props.density === "mission-control"}
+          onSelect={() => props.onDensityChange("mission-control")}
           preview={<DensityMissionControlPreview />}
         />
       </div>
@@ -1122,40 +1173,92 @@ function ChoiceCard(props: {
    Embedded mini-previews for Step 1
    ---------------------------------------------------------------- */
 
+/* Mini ThreadRow chips — composed to mirror the live ThreadRow primitive:
+   - .mini-chip-pin renders the "Pinned" pill (accent-bordered, accent text)
+   - .mini-chip-pr renders the "#123" PR pill (dot + number)
+   - .mini-chip-meta renders the gray-fill chips (OpenAI / PwrAgnt / branch)
+   Compact mode keeps Pin + PR + emoji; Mission Control adds the meta row. */
+function MiniPinChip() {
+  return (
+    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--pin">
+      Pinned
+    </span>
+  );
+}
+function MiniPrChip(props: { num: string; status: "ok" | "draft" | "merged" }) {
+  return (
+    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--pr">
+      <span
+        className={`onboarding-wizard__mini-pr-dot is-${props.status}`}
+        aria-hidden
+      />
+      #{props.num}
+    </span>
+  );
+}
+function MiniMetaChip(props: { children: ReactNode }) {
+  return (
+    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--meta">
+      {props.children}
+    </span>
+  );
+}
+
 function DensityCompactPreview() {
   return (
     <div className="onboarding-wizard__mini">
-      <div className="onboarding-wizard__mini-section">Pinned</div>
       <div className="onboarding-wizard__mini-row is-active">
+        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+        <MiniPinChip />
+        <span className="onboarding-wizard__mini-time">2h</span>
+      </div>
+      <div className="onboarding-wizard__mini-row">
+        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
+        <MiniPinChip />
+        <span className="onboarding-wizard__mini-time">May 7</span>
+      </div>
+      <div className="onboarding-wizard__mini-row">
+        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+        <MiniPinChip />
+        <MiniPrChip num="352" status="ok" />
+        <span className="onboarding-wizard__mini-emoji">👀</span>
+        <span className="onboarding-wizard__mini-time">2d</span>
+      </div>
+      <div className="onboarding-wizard__mini-row">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">
-          Migrate auth middleware to v2 contract
-        </span>
+        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+        <MiniPinChip />
+        <MiniPrChip num="376" status="ok" />
+        <span className="onboarding-wizard__mini-emoji">🏃</span>
+        <span className="onboarding-wizard__mini-time">2d</span>
       </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Ship Phase 2 distribution channel cutover
-        </span>
-      </div>
-      <div className="onboarding-wizard__mini-section">Recents</div>
       <div className="onboarding-wizard__mini-row">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">
-          Investigate sqlite WAL lock under concurrent profiles
-        </span>
+        <span className="onboarding-wizard__mini-title">OCR image tags and descriptions</span>
+        <MiniPinChip />
+        <MiniPrChip num="30" status="merged" />
+        <span className="onboarding-wizard__mini-emoji">🙏</span>
+        <span className="onboarding-wizard__mini-time">3h</span>
       </div>
       <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Document branch-drift dialog fixture seed flow
-        </span>
+        <span className="onboarding-wizard__mini-title">App image cache disk usage</span>
+        <MiniPinChip />
+        <MiniPrChip num="46" status="draft" />
+        <span className="onboarding-wizard__mini-emoji">👀</span>
+        <span className="onboarding-wizard__mini-time">4h</span>
       </div>
       <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Tighten messaging adapter contract: capability flags
-        </span>
+        <span className="onboarding-wizard__mini-cookie" />
+        <span className="onboarding-wizard__mini-title">Pass PDFs through directly</span>
+        <MiniPinChip />
+        <MiniPrChip num="386" status="ok" />
+        <span className="onboarding-wizard__mini-time">2d</span>
+      </div>
+      <div className="onboarding-wizard__mini-row">
+        <span className="onboarding-wizard__mini-title">Knock Knock Rock</span>
+        <MiniPinChip />
+        <MiniPrChip num="173" status="draft" />
+        <span className="onboarding-wizard__mini-time">May 10</span>
       </div>
     </div>
   );
@@ -1164,46 +1267,50 @@ function DensityCompactPreview() {
 function DensityMissionControlPreview() {
   return (
     <div className="onboarding-wizard__mini">
-      <div className="onboarding-wizard__mini-section">Pinned</div>
-      <div className="onboarding-wizard__mini-row is-active">
+      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc is-active">
+        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+        <span className="onboarding-wizard__mini-time">2h</span>
+        <div className="onboarding-wizard__mini-meta">
+          <MiniMetaChip>OpenAI</MiniMetaChip>
+          <MiniMetaChip>📁 PwrAgnt</MiniMetaChip>
+          <MiniMetaChip>⌥ main</MiniMetaChip>
+          <MiniPinChip />
+        </div>
+      </div>
+      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
+        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
+        <span className="onboarding-wizard__mini-time">May 7</span>
+        <div className="onboarding-wizard__mini-meta">
+          <MiniMetaChip>OpenAI</MiniMetaChip>
+          <MiniMetaChip>📁 PwrSnap</MiniMetaChip>
+          <MiniMetaChip>⌥ main</MiniMetaChip>
+          <MiniPinChip />
+        </div>
+      </div>
+      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
+        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+        <span className="onboarding-wizard__mini-time">2d</span>
+        <div className="onboarding-wizard__mini-meta">
+          <MiniMetaChip>OpenAI</MiniMetaChip>
+          <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
+          <MiniMetaChip>⌥ feat/messaging-text-mode</MiniMetaChip>
+          <MiniPinChip />
+          <MiniPrChip num="352" status="ok" />
+          <span className="onboarding-wizard__mini-emoji">👀</span>
+        </div>
+      </div>
+      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
         <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">
-          Migrate auth middleware
-        </span>
-        <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--accent">
-          Running
-        </span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Phase 2 distribution
-        </span>
-        <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--ok">
-          Ready
-        </span>
-      </div>
-      <div className="onboarding-wizard__mini-section">Recents</div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">
-          sqlite WAL lock investigation
-        </span>
-        <span className="onboarding-wizard__mini-chip">Blocked</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Branch-drift fixture docs
-        </span>
-        <span className="onboarding-wizard__mini-chip">Draft</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie onboarding-wizard__mini-cookie--off" />
-        <span className="onboarding-wizard__mini-title">
-          Messaging adapter contract
-        </span>
-        <span className="onboarding-wizard__mini-chip">Idle</span>
+        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+        <span className="onboarding-wizard__mini-time">2d</span>
+        <div className="onboarding-wizard__mini-meta">
+          <MiniMetaChip>OpenAI</MiniMetaChip>
+          <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
+          <MiniMetaChip>⌥ feat/automation</MiniMetaChip>
+          <MiniPinChip />
+          <MiniPrChip num="376" status="ok" />
+          <span className="onboarding-wizard__mini-emoji">🏃</span>
+        </div>
       </div>
     </div>
   );
@@ -1381,13 +1488,21 @@ type ProviderField =
       options: ReadonlyArray<{ label: string; value: string }>;
     };
 
+type ProviderPairingOption = {
+  scope: MessagingPairingScope;
+  label: string;
+  help?: ReactNode;
+};
+
 type ProviderSetupConfig = {
   id: OnboardingProvider;
   intro: ReactNode;
   fields: readonly ProviderField[];
-  /** Optional scope for the pairing-token generator. Omit to skip pairing. */
-  pairingScope?: MessagingPairingScope;
-  pairingHelp?: ReactNode;
+  /** Section title shown above the pairing block. Frame it from the
+   *  operator's perspective ("Pair your DMs"), not the app's ("Pair
+   *  this device") — PwrAgent isn't the device the operator pairs FROM. */
+  pairingTitle?: string;
+  pairingOptions?: readonly ProviderPairingOption[];
 };
 
 const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = {
@@ -1408,14 +1523,34 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         placeholder: "0000000000:AAEx………",
       },
     ],
-    pairingScope: "user_dm",
-    pairingHelp: (
-      <>
-        Open the chat with your new bot on Telegram and send the pairing
-        message above. PwrAgent will see the message land and finish pairing
-        automatically.
-      </>
-    ),
+    pairingTitle: "Pair a Telegram conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs",
+        help: (
+          <>
+            From <strong>your</strong> Telegram account, open the chat with
+            your new bot and send the pairing message below. PwrAgent sees the
+            message land and finishes pairing automatically — you can use
+            Telegram on any device, the pairing is between your account and
+            the bot.
+          </>
+        ),
+      },
+      {
+        scope: "bucket",
+        label: "Pair a Supergroup / Forum (just you + the bot)",
+        help: (
+          <>
+            Add the bot to a supergroup or forum that contains only you and
+            it, then send the pairing message inside any topic. Threads will
+            land in that topic. Best for keeping the bot conversation in its
+            own room separate from your DMs.
+          </>
+        ),
+      },
+    ],
   },
   discord: {
     id: "discord",
@@ -1441,14 +1576,21 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         placeholder: "1480556454498009352",
       },
     ],
-    pairingScope: "user_dm",
-    pairingHelp: (
-      <>
-        Invite the bot to a guild (Developer Portal → OAuth2 URL Generator,
-        scopes <code>bot</code> + <code>applications.commands</code>), then DM
-        the bot the pairing message above.
-      </>
-    ),
+    pairingTitle: "Pair a Discord conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs with the bot",
+        help: (
+          <>
+            Invite the bot to a guild (Developer Portal → OAuth2 URL
+            Generator, scopes <code>bot</code> + <code>applications.commands</code>),
+            then DM the bot the pairing message below from your Discord
+            account.
+          </>
+        ),
+      },
+    ],
   },
   mattermost: {
     id: "mattermost",
@@ -1485,7 +1627,19 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         placeholder: "https://pwragent.tail.example.ts.net",
       },
     ],
-    pairingScope: "user_dm",
+    pairingTitle: "Pair a Mattermost conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs with the bot",
+        help: (
+          <>
+            From your Mattermost account, open a direct message with the bot
+            and post the pairing message below.
+          </>
+        ),
+      },
+    ],
   },
   feishu: {
     id: "feishu",
@@ -1525,7 +1679,19 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         label: "Verification token",
       },
     ],
-    pairingScope: "user_dm",
+    pairingTitle: "Pair a Feishu / Lark conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs with the bot",
+        help: (
+          <>
+            Open a 1:1 chat with the bot inside Feishu / Lark and post the
+            pairing message below.
+          </>
+        ),
+      },
+    ],
   },
   slack: {
     id: "slack",
@@ -1567,7 +1733,19 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         placeholder: "https://your-team.slack.com",
       },
     ],
-    pairingScope: "user_dm",
+    pairingTitle: "Pair a Slack conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs with the bot",
+        help: (
+          <>
+            Open a DM with the bot in Slack and post the pairing message
+            below.
+          </>
+        ),
+      },
+    ],
   },
   line: {
     id: "line",
@@ -1601,7 +1779,19 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         placeholder: "https://pwragent.tail.example.ts.net",
       },
     ],
-    pairingScope: "user_dm",
+    pairingTitle: "Pair a LINE conversation",
+    pairingOptions: [
+      {
+        scope: "user_dm",
+        label: "Pair your DMs with the bot",
+        help: (
+          <>
+            From your LINE account, add the bot as a friend and post the
+            pairing message in the 1:1 chat.
+          </>
+        ),
+      },
+    ],
   },
 };
 
@@ -1650,11 +1840,11 @@ function ProviderSetupStep(props: {
           />
         ))}
       </div>
-      {config.pairingScope ? (
+      {config.pairingOptions && config.pairingOptions.length > 0 ? (
         <PairingBlock
           platform={props.provider}
-          scope={config.pairingScope}
-          help={config.pairingHelp}
+          title={config.pairingTitle ?? "Pair a conversation"}
+          options={config.pairingOptions}
           desktopApi={props.desktopApi}
         />
       ) : null}
@@ -1903,10 +2093,13 @@ function SegmentedFieldRow(props: {
 
 function PairingBlock(props: {
   platform: MessagingChannelKind;
-  scope: MessagingPairingScope;
-  help?: ReactNode;
+  title: string;
+  options: readonly ProviderPairingOption[];
   desktopApi?: DesktopApi;
 }) {
+  const [scope, setScope] = useState<MessagingPairingScope>(
+    props.options[0]?.scope ?? "user_dm",
+  );
   const [message, setMessage] = useState<string | undefined>(undefined);
   const [entryId, setEntryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -1916,6 +2109,8 @@ function PairingBlock(props: {
   );
   const entryIdRef = useRef<string | undefined>(undefined);
   entryIdRef.current = entryId;
+
+  const activeOption = props.options.find((o) => o.scope === scope) ?? props.options[0];
 
   useEffect(() => {
     if (!props.desktopApi?.onMessagingPairingChanged) return;
@@ -1936,7 +2131,7 @@ function PairingBlock(props: {
     try {
       const result = await props.desktopApi.generateMessagingPairingToken({
         platform: props.platform,
-        scope: props.scope,
+        scope,
       });
       setMessage(result.message);
       setEntryId(result.entry.id);
@@ -1956,10 +2151,22 @@ function PairingBlock(props: {
     }
   };
 
+  const switchScope = (next: MessagingPairingScope): void => {
+    if (next === scope) return;
+    setScope(next);
+    // Switching scope invalidates the in-flight pairing — the previous
+    // token was scoped to the old kind. Clear it; the operator can
+    // generate a new one for the freshly-selected scope.
+    setMessage(undefined);
+    setEntryId(undefined);
+    setResolution(undefined);
+    setError(undefined);
+  };
+
   return (
     <div className="onboarding-wizard__pairing">
       <div className="onboarding-wizard__pairing-head">
-        <span className="onboarding-wizard__field-label">Pair this device</span>
+        <span className="onboarding-wizard__field-label">{props.title}</span>
         <span className="onboarding-wizard__field-status">
           {resolution === "approved" ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ paired</span>
@@ -1972,8 +2179,24 @@ function PairingBlock(props: {
           ) : null}
         </span>
       </div>
-      {props.help ? (
-        <p className="onboarding-wizard__field-sub">{props.help}</p>
+      {props.options.length > 1 ? (
+        <div className="onboarding-wizard__segmented" role="radiogroup" aria-label="Pairing target">
+          {props.options.map((option) => (
+            <button
+              key={option.scope}
+              type="button"
+              role="radio"
+              aria-checked={scope === option.scope}
+              className={`onboarding-wizard__segmented-btn${scope === option.scope ? " is-active" : ""}`}
+              onClick={() => switchScope(option.scope)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {activeOption?.help ? (
+        <p className="onboarding-wizard__field-sub">{activeOption.help}</p>
       ) : null}
       {message ? (
         <div className="onboarding-wizard__pairing-token">

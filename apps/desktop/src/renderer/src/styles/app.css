@@ -10323,6 +10323,70 @@ textarea,
   background: var(--success-soft);
 }
 
+/* Real-app-mimic chips used in the preview cards. The visual contract
+   mirrors the live ThreadRow primitive — Pin chip uses --accent, PR
+   chip uses a small status dot + #number, Meta chips are gray-on-near-
+   black for OpenAI / directory / branch slots. */
+.onboarding-wizard__mini-chip--pin {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: transparent;
+}
+.onboarding-wizard__mini-chip--pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  background: var(--bg-app);
+  border-color: var(--border-strong);
+}
+.onboarding-wizard__mini-pr-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.onboarding-wizard__mini-pr-dot.is-ok {
+  background: var(--status-ok);
+}
+.onboarding-wizard__mini-pr-dot.is-draft {
+  background: var(--text-subtle);
+}
+.onboarding-wizard__mini-pr-dot.is-merged {
+  background: var(--brand-purple, var(--text-muted));
+}
+.onboarding-wizard__mini-chip--meta {
+  color: var(--text-secondary);
+  background: var(--bg-app);
+  border-color: var(--border-strong);
+}
+.onboarding-wizard__mini-time {
+  font: 500 9px/1 var(--font-mono);
+  color: var(--text-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.onboarding-wizard__mini-emoji {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* Mission-Control rows use a two-line layout: title + time on row 1,
+   chip cluster on row 2. Compact stays single-row (`.mini-row` default). */
+.onboarding-wizard__mini-row--mc {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 8px 9px;
+}
+.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
 /* Codex profile diagrams */
 .onboarding-wizard__codex {
   background: var(--bg-app);
@@ -10848,6 +10912,43 @@ textarea,
 .onboarding-wizard__segmented-btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+.onboarding-wizard__segmented--inline {
+  align-self: center;
+  background: var(--bg-input);
+}
+.onboarding-wizard__segmented-btn--stacked {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 14px;
+}
+.onboarding-wizard__segmented-meta {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+.onboarding-wizard__segmented-btn--stacked.is-active .onboarding-wizard__segmented-meta {
+  color: var(--accent-bright);
+}
+
+.onboarding-wizard__theme-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+.onboarding-wizard__theme-label {
+  font: 600 10px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
 }
 
 /* Pairing block — sits below the field list inside a provider step */

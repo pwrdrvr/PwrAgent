@@ -473,18 +473,28 @@ function DesktopAppShell(props: {
         <OnboardingWizard
           isReplay={onboardingOpen === "replay"}
           initialDensity={settings.snapshot.general.appearance.density.value}
+          initialTheme={settings.snapshot.general.appearance.theme.value}
           initialCodexProfileModel={
             settings.snapshot.general.codexProfileModel.value
           }
+          appearanceController={props.appearanceController}
           settings={settings}
           desktopApi={desktopApi}
           onComplete={async (patch) => {
             await settings.writeConfig(patch);
-            // Adopt the new density immediately — saves a paint cycle
-            // vs. waiting for the snapshot refresh.
+            // The wizard already flips theme + density live via
+            // appearanceController as the operator clicks — the
+            // explicit setters below are a belt-and-suspenders to keep
+            // the controller's React state aligned with whatever the
+            // final patch holds, even if persistAndComplete adjusts.
             if (patch.general?.appearance?.density) {
               props.appearanceController.setDensity(
                 patch.general.appearance.density,
+              );
+            }
+            if (patch.general?.appearance?.theme) {
+              props.appearanceController.setTheme(
+                patch.general.appearance.theme,
               );
             }
             setOnboardingOpen(null);
