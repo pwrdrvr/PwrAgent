@@ -31,6 +31,7 @@ import {
   forgetDeletedProfile,
   isValidProfileName,
   readProfilesRegistry,
+  requestProfileInstanceFocus,
   resolveActiveProfileName,
   resolveDefaultProfileName,
   resolveProfileDir,
@@ -42,6 +43,10 @@ import {
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
 import { discoverCodexAuthProfiles } from "../settings/codex-profiles";
+
+type ProfilesIpcHandlerOptions = {
+  onProfilesChanged?: () => void;
+};
 
 export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesResponse {
   const activeProfile = resolveActiveProfileName();
@@ -108,6 +113,10 @@ export function openDesktopPwrAgentProfile(
   const activeProfile = resolveActiveProfileName();
   if (profile === activeProfile) {
     return { opened: false, profile, reason: "active" };
+  }
+
+  if (requestProfileInstanceFocus(profile)) {
+    return { opened: false, profile, reason: "focused" };
   }
 
   ensureProfileExists({
@@ -220,7 +229,9 @@ export async function setDesktopPwrAgentProfileCodexProfile(
   return { profile, codexProfile };
 }
 
-export function registerProfilesIpcHandlers(): void {
+export function registerProfilesIpcHandlers(
+  options: ProfilesIpcHandlerOptions = {},
+): void {
   ipcMain.removeHandler(PROFILES_LIST_CHANNEL);
   ipcMain.handle(
     PROFILES_LIST_CHANNEL,
@@ -244,8 +255,11 @@ export function registerProfilesIpcHandlers(): void {
     async (
       _event,
       request: CreateDesktopPwrAgentProfileRequest,
-    ): Promise<CreateDesktopPwrAgentProfileResponse> =>
-      createDesktopPwrAgentProfile(request),
+    ): Promise<CreateDesktopPwrAgentProfileResponse> => {
+      const response = createDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
   );
 
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
@@ -264,8 +278,11 @@ export function registerProfilesIpcHandlers(): void {
     async (
       _event,
       request: DeleteDesktopPwrAgentProfileRequest,
-    ): Promise<DeleteDesktopPwrAgentProfileResponse> =>
-      await deleteDesktopPwrAgentProfile(request),
+    ): Promise<DeleteDesktopPwrAgentProfileResponse> => {
+      const response = await deleteDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
   );
 
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);

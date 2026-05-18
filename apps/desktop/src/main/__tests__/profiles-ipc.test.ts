@@ -7,7 +7,12 @@ import {
   PWRAGENT_PROFILE_ENV,
   ensureNamedProfileExists,
   setDefaultProfileName,
+  startProfileRuntimeHeartbeat,
 } from "../profile";
+
+const spawnMock = vi.fn(() => ({
+  unref: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -23,10 +28,15 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: vi.fn(async () => undefined),
 }));
 
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
+}));
+
 const roots: string[] = [];
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  spawnMock.mockClear();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -92,6 +102,35 @@ describe("profile IPC helpers", () => {
     expect(
       replaceProfileLaunchArgs(["/repo/apps/desktop", "--profile=dev"], "work"),
     ).toEqual(["/repo/apps/desktop", "--profile", "work"]);
+  });
+
+  it("focuses an existing profile instance instead of spawning a duplicate", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    ensureNamedProfileExists("scratch", { env });
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      intervalMs: 60_000,
+      processId: process.pid,
+    });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    try {
+      expect(openDesktopPwrAgentProfile({ profile: "scratch" })).toEqual({
+        opened: false,
+        profile: "scratch",
+        reason: "focused",
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      heartbeat.stop();
+    }
   });
 
   it("keeps listing profiles when an inactive profile config is malformed", async () => {

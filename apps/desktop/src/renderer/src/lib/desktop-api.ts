@@ -442,7 +442,9 @@ export type DesktopApi = {
    * switches its main view to the Settings overlay. Returns an
    * unsubscribe function.
    */
-  onOpenSettingsRequested?: (callback: () => void) => () => void;
+  onOpenSettingsRequested?: (
+    callback: (section?: string) => void,
+  ) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   platform?: string;
   versions?: {

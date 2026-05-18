@@ -22,6 +22,7 @@ import {
   PWRAGENT_DOCUMENTATION_URL,
   PWRAGENT_HOMEPAGE_URL,
 } from "../shared/app-metadata";
+import { WINDOW_OPEN_SETTINGS_CHANNEL } from "../shared/ipc";
 import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
@@ -45,6 +46,8 @@ import {
 } from "./ipc/preload-log";
 import {
   disposeProfilesIpcHandlers,
+  listDesktopPwrAgentProfiles,
+  openDesktopPwrAgentProfile,
   registerProfilesIpcHandlers,
 } from "./ipc/profiles";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
@@ -79,8 +82,14 @@ import {
   isAppStateInitialized,
 } from "./state/app-state";
 import { createMainWindow } from "./window";
+import { subscribersForChannel } from "./window-channels";
 import { requestOpenSettings } from "./window-open-settings";
 import { buildApplicationMenuTemplate } from "./menu";
+import {
+  resolveActiveProfileName,
+  startProfileFocusRequestWatcher,
+  type ProfileFocusRequestWatcher,
+} from "./profile";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -90,6 +99,10 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 let mainProcessResourcesDisposed = false;
+let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
+let startupCpuProfilerForNewWindows:
+  | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
+  | undefined;
 
 function prewarmInitialThreadList(): void {
   const startedAt = Date.now();
@@ -122,6 +135,9 @@ function disposeMainProcessResourcesSync(): void {
     return;
   }
   mainProcessResourcesDisposed = true;
+  profileFocusRequestWatcher?.stop();
+  profileFocusRequestWatcher = null;
+  startupCpuProfilerForNewWindows = undefined;
   disposeAgentIpcHandlers();
   disposeApplicationIpcHandlers();
   disposeAppMetadataIpcHandlers();
@@ -173,12 +189,50 @@ function installDevelopmentDockIcon(): void {
   app.dock?.setIcon(icon);
 }
 
+function focusPwrAgentWindows(): void {
+  const windows = subscribersForChannel(WINDOW_OPEN_SETTINGS_CHANNEL)
+    .map((webContents) => BrowserWindow.fromWebContents(webContents))
+    .filter((window): window is BrowserWindow =>
+      Boolean(window && !window.isDestroyed()),
+  );
+  if (windows.length === 0) {
+    createMainWindow(
+      startupCpuProfilerForNewWindows
+        ? { startupCpuProfiler: startupCpuProfilerForNewWindows }
+        : undefined,
+    );
+    app.focus({ steal: true });
+    return;
+  }
+
+  for (const window of windows) {
+    if (window.isMinimized()) {
+      window.restore();
+    }
+    window.show();
+    window.focus();
+  }
+  app.focus({ steal: true });
+}
+
+function installProfileFocusRequestWatcher(): void {
+  profileFocusRequestWatcher?.stop();
+  profileFocusRequestWatcher = startProfileFocusRequestWatcher(
+    resolveActiveProfileName(),
+    {
+      onFocus: focusPwrAgentWindows,
+    },
+  );
+}
+
 function installApplicationMenu(): void {
   const developerMode = getDesktopSettingsService().resolveDeveloperMode();
+  const profiles = listDesktopPwrAgentProfiles().profiles;
   const template = buildApplicationMenuTemplate({
     appName: APP_NAME,
     developerMode,
     isMac,
+    profiles,
     actions: {
       checkForUpdates: () => {
         void checkForAppUpdatesNow("menu");
@@ -188,6 +242,14 @@ function installApplicationMenu(): void {
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
+      },
+      openProfile: (profile) => {
+        void Promise.resolve(openDesktopPwrAgentProfile({ profile })).finally(
+          installApplicationMenu,
+        );
+      },
+      openProfilesSettings: () => {
+        requestOpenSettings("profiles");
       },
       openSettings: () => {
         requestOpenSettings();
@@ -220,9 +282,11 @@ export function bootstrapApp(): void {
 
   app.whenReady().then(async () => {
     const startupCpuProfiler = new StartupCpuProfiler();
+    startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
     installDevelopmentDockIcon();
     initializeAppState();
+    installProfileFocusRequestWatcher();
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
@@ -232,7 +296,7 @@ export function bootstrapApp(): void {
     registerComposerDraftIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
-    registerProfilesIpcHandlers();
+    registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
