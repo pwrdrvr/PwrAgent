@@ -23,6 +23,10 @@ import type {
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import { buildNavigationSnapshot } from "@pwragent/agent-core";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import {
+  CodexEnvironmentCommandError,
+  type CodexEnvironmentCommandRunner,
+} from "../app-server/codex-environment-runtime";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
 const execFileAsync = promisify(execFileCallback);
@@ -3172,11 +3176,29 @@ script = "printf setup-output"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
     });
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
+      expect(params).toMatchObject({
+        cwd: root,
+        command: "printf setup-output",
+        mode: "wait",
+      });
+      params.onProgress?.({
+        phase: "stdout",
+        chunk: "setup-output",
+        at: Date.now(),
+      });
+      return {
+        durationMs: 4,
+        exitCode: 0,
+        output: "setup-output",
+      };
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      codexEnvironmentCommandRunner: commandRunner,
       overlayStore,
     });
 
@@ -3218,6 +3240,7 @@ script = "printf setup-output"
           },
         ],
       });
+      expect(commandRunner).toHaveBeenCalledTimes(1);
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });
@@ -3357,11 +3380,27 @@ script = "printf setup-failed && exit 42"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
+    const commandRunner: CodexEnvironmentCommandRunner = vi.fn(async (params) => {
+      expect(params).toMatchObject({
+        cwd: worktreePath,
+        command: "printf setup-failed && exit 42",
+        mode: "wait",
+      });
+      throw new CodexEnvironmentCommandError(
+        "Codex environment command exited with 42",
+        {
+          durationMs: 3,
+          exitCode: 42,
+          output: "setup-failed",
+        },
+      );
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      codexEnvironmentCommandRunner: commandRunner,
       overlayStore: createOverlayStoreMock(),
       gitDirectoryService: {
         prepareLaunchpadWorkspace: vi.fn(async () => ({
@@ -3407,6 +3446,7 @@ script = "printf setup-failed && exit 42"
         setupExitCode: 42,
         setupOutput: expect.stringContaining("setup-failed"),
       });
+      expect(commandRunner).toHaveBeenCalledTimes(1);
       expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
         worktreePath,
         threadId: "thread-1",

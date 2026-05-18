@@ -113,6 +113,7 @@ export async function launchElectronApp(params: {
   Object.assign(env, {
     HOME: homeRoot,
     NODE_ENV: "production",
+    PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
     PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath,
   });
   delete env.ELECTRON_RENDERER_URL;

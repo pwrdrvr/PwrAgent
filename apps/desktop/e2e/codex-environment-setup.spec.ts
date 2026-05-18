@@ -378,9 +378,13 @@ test("selected Codex environments run setup and show transcript output", async (
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await app.window.getByRole("button", { name: "Codex environment" }).click();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
+    const launchpadTools = app.window.getByLabel("Composer tools");
+    await launchpadTools.getByRole("button", { name: "Codex environment" }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
-    await expect(app.window.getByLabel("Run setup")).toBeChecked();
+    await expect(
+      launchpadTools.locator("label", { hasText: "Run setup" }).locator("input"),
+    ).toBeChecked();
 
     await app.window.getByRole("textbox", { name: "New thread" }).fill("hello env");
     await app.window.getByRole("button", { name: "Start thread" }).click();

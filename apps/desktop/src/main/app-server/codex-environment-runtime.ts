@@ -7,7 +7,11 @@ import { getMainLogger } from "../log";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
-class ShellCommandError extends Error {
+export const DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS = 10 * 60 * 1_000;
+export const CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV =
+  "PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS";
+
+export class CodexEnvironmentCommandError extends Error {
   durationMs?: number;
   exitCode?: number;
   output?: string;
@@ -18,7 +22,7 @@ class ShellCommandError extends Error {
     output?: string;
   }) {
     super(message);
-    this.name = "ShellCommandError";
+    this.name = "CodexEnvironmentCommandError";
     this.durationMs = details?.durationMs;
     this.exitCode = details?.exitCode;
     this.output = details?.output;
@@ -48,13 +52,37 @@ export type CodexEnvironmentSelection = {
   action?: CodexEnvironmentOption["actions"][number];
 };
 
+export type CodexEnvironmentCommandParams = {
+  cwd?: string;
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  mode: "wait" | "detach";
+  timeoutMs?: number;
+  onProgress?: (
+    event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
+  ) => void;
+};
+
+export type CodexEnvironmentCommandResult = {
+  durationMs?: number;
+  exitCode?: number;
+  output?: string;
+  pid?: number;
+};
+
+export type CodexEnvironmentCommandRunner = (
+  params: CodexEnvironmentCommandParams,
+) => Promise<CodexEnvironmentCommandResult>;
+
 export async function applyLocalCodexEnvironmentSelection(params: {
+  commandRunner?: CodexEnvironmentCommandRunner;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   onSetupProgress?: (
     event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
   ) => void;
   selection?: CodexEnvironmentSelection;
+  setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
   const { cwd, selection } = params;
   if (!selection) {
@@ -110,11 +138,14 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         phase: "started",
         at: Date.now(),
       });
-      const result = await runShellCommand({
+      const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.environment.setupScript,
         env: params.env,
         mode: "wait",
+        timeoutMs:
+          params.setupTimeoutMs ??
+          readCodexEnvironmentSetupTimeoutMs(params.env ?? process.env),
         onProgress: (event) => {
           emitSetupProgress(event);
         },
@@ -132,7 +163,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       });
     } catch (error) {
       runtime.setupStatus = "failed";
-      if (error instanceof ShellCommandError) {
+      if (error instanceof CodexEnvironmentCommandError) {
         runtime.setupOutput = error.output;
         runtime.setupExitCode = error.exitCode;
         runtime.setupDurationMs = error.durationMs;
@@ -164,7 +195,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     runtime.actionName = selection.action.name;
     runtime.actionCommand = selection.action.command;
     try {
-      const result = await runShellCommand({
+      const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.action.command,
         env: params.env,
@@ -187,6 +218,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
 
 export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
+  commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   runtime: CodexThreadEnvironmentRuntime;
 }): Promise<CodexThreadEnvironmentRuntime> {
@@ -209,7 +241,7 @@ export async function startLocalCodexEnvironmentAction(params: {
   };
 
   try {
-    const result = await runShellCommand({
+    const result = await (params.commandRunner ?? runShellCommand)({
       cwd: params.runtime.cwd,
       command: action.command,
       env: params.env,
@@ -229,20 +261,9 @@ export async function startLocalCodexEnvironmentAction(params: {
   return nextRuntime;
 }
 
-function runShellCommand(params: {
-  cwd?: string;
-  command: string;
-  env?: NodeJS.ProcessEnv;
-  mode: "wait" | "detach";
-  onProgress?: (
-    event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
-  ) => void;
-}): Promise<{
-  durationMs?: number;
-  exitCode?: number;
-  output?: string;
-  pid?: number;
-}> {
+function runShellCommand(
+  params: CodexEnvironmentCommandParams,
+): Promise<CodexEnvironmentCommandResult> {
   const commandEnv = sanitizeLocalEnvironmentCommandEnv(params.env ?? process.env);
   const shell = commandEnv.SHELL?.trim() || process.env.SHELL?.trim() || "/bin/sh";
   const processId = `pwragent-env-${randomUUID()}`;
@@ -257,13 +278,73 @@ function runShellCommand(params: {
   return new Promise((resolve, reject) => {
     const child = spawn(shell, ["-lc", wrapShellCommand(shell, params.command)], {
       cwd: params.cwd,
-      detached: params.mode === "detach",
+      detached: params.mode === "detach" || Boolean(params.timeoutMs),
       env: commandEnv,
       stdio: params.mode === "detach" ? "ignore" : "pipe",
     });
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let closed = false;
+    let timedOut = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    let killHandle: NodeJS.Timeout | undefined;
+
+    const terminateChild = (signal: NodeJS.Signals) => {
+      if (!child.pid) {
+        return;
+      }
+      try {
+        if (process.platform !== "win32") {
+          process.kill(-child.pid, signal);
+        } else {
+          child.kill(signal);
+        }
+      } catch (error) {
+        environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
+          processId,
+          signal,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
+      if (killHandle) {
+        clearTimeout(killHandle);
+        killHandle = undefined;
+      }
+      callback();
+    };
+
+    if (params.mode === "wait" && params.timeoutMs && params.timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        const durationMs = Date.now() - startedAt;
+        environmentRuntimeLog.warn("codex-environment-command-timeout", {
+          processId,
+          timeoutMs: params.timeoutMs,
+          durationMs,
+        });
+        timedOut = true;
+        timeoutHandle = undefined;
+        terminateChild("SIGTERM");
+        killHandle = setTimeout(() => {
+          if (!closed) {
+            terminateChild("SIGKILL");
+          }
+        }, 2_000);
+      }, params.timeoutMs);
+    }
+
     child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       stdout = `${stdout}${text}`.slice(-32_000);
@@ -288,43 +369,72 @@ function runShellCommand(params: {
         processId,
         message: error.message,
       });
-      reject(error);
+      settle(() => {
+        reject(error);
+      });
     });
 
     if (params.mode === "detach") {
       child.once("spawn", () => {
         child.unref();
-        resolve({ pid: child.pid });
+        settle(() => {
+          resolve({ pid: child.pid });
+        });
       });
       return;
     }
 
     child.once("close", (code, signal) => {
+      closed = true;
+      if (killHandle) {
+        clearTimeout(killHandle);
+        killHandle = undefined;
+      }
       environmentRuntimeLog.info("codex-environment-command-exit", {
         processId,
         code,
         signal,
       });
+      if (timedOut) {
+        settle(() => {
+          reject(
+            new CodexEnvironmentCommandError(
+              `Codex environment command timed out after ${params.timeoutMs}ms`,
+              {
+                durationMs: Date.now() - startedAt,
+                output: [stdout.trimEnd(), stderr.trimEnd()]
+                  .filter(Boolean)
+                  .join("\n"),
+              },
+            ),
+          );
+        });
+        return;
+      }
       if (code === 0) {
-        resolve({
-          durationMs: Date.now() - startedAt,
-          exitCode: code,
-          output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
-          pid: child.pid,
+        settle(() => {
+          resolve({
+            durationMs: Date.now() - startedAt,
+            exitCode: code,
+            output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+            pid: child.pid,
+          });
         });
         return;
       }
       const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
-      reject(
-        new ShellCommandError(
-          `Codex environment command exited with ${code ?? signal ?? "unknown"}${suffix}`,
-          {
-            durationMs: Date.now() - startedAt,
-            exitCode: typeof code === "number" ? code : undefined,
-            output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
-          },
-        ),
-      );
+      settle(() => {
+        reject(
+          new CodexEnvironmentCommandError(
+            `Codex environment command exited with ${code ?? signal ?? "unknown"}${suffix}`,
+            {
+              durationMs: Date.now() - startedAt,
+              exitCode: typeof code === "number" ? code : undefined,
+              output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+            },
+          ),
+        );
+      });
     });
   });
 }
@@ -349,6 +459,24 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
     key.startsWith("PRELOAD_VITE_") ||
     key.startsWith("RENDERER_VITE_")
   );
+}
+
+function readCodexEnvironmentSetupTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const rawValue = env[CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]?.trim();
+  if (!rawValue) {
+    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    environmentRuntimeLog.warn("codex-environment-setup-timeout-invalid", {
+      env: CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
+      value: rawValue,
+    });
+    return DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS;
+  }
+
+  return Math.round(parsed);
 }
 
 function wrapShellCommand(shell: string, command: string): string {

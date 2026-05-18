@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyLocalCodexEnvironmentSelection,
+  CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
   startLocalCodexEnvironmentAction,
 } from "../app-server/codex-environment-runtime";
 
@@ -119,15 +120,22 @@ describe("codex environment runtime", () => {
         actionStatus: "started",
       });
 
-      await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
-        [
-          "renderer=unset",
-          "run_as_node=unset",
-          "vite=unset",
-          "hydrated=hydrated",
-          "",
-        ].join("\n"),
-      );
+      const expectedOutput = [
+        "renderer=unset",
+        "run_as_node=unset",
+        "vite=unset",
+        "hydrated=hydrated",
+        "",
+      ].join("\n");
+      await expect(
+        expectEventually(async () => {
+          const output = await readFile(outputPath, "utf8");
+          if (output !== expectedOutput) {
+            throw new Error(`Output is not complete yet: ${JSON.stringify(output)}`);
+          }
+          return output;
+        }),
+      ).resolves.toBe(expectedOutput);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -298,6 +306,102 @@ describe("codex environment runtime", () => {
       });
 
       await expect(readFile(outputPath, "utf8")).resolves.toBe("before");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("times out setup commands that do not finish", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-"));
+
+    try {
+      let error: unknown;
+      try {
+        await applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "50",
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: "printf before && sleep 10 && printf after",
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toMatchObject({
+        message: expect.stringContaining("timed out after 50ms"),
+        phase: "setup",
+        runtime: {
+          setupStatus: "failed",
+        },
+      });
+      expect(
+        ((error as { runtime?: { setupOutput?: string } }).runtime?.setupOutput ?? ""),
+      ).not.toContain("after");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for timed-out setup commands to exit before reporting failure", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-exit-"));
+    const markerPath = path.join(root, "marker.txt");
+    const markerShellPath = `'${markerPath.replace(/'/g, "'\\''")}'`;
+
+    try {
+      let error: unknown;
+      try {
+        await applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            ...process.env,
+            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "1000",
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: [
+                `printf 'before\\n' > ${markerShellPath}`,
+                [
+                  "trap",
+                  `"printf 'term\\\\n' >> ${markerShellPath}; sleep 0.2; printf 'after-term\\\\n' >> ${markerShellPath}; exit 0"`,
+                  "TERM",
+                ].join(" "),
+                "while true; do sleep 1; done",
+              ].join("\n"),
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toMatchObject({
+        message: expect.stringContaining("timed out after 1000ms"),
+        phase: "setup",
+      });
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "before\nterm\nafter-term\n",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -124,6 +124,7 @@ import {
   applyLocalCodexEnvironmentSelection,
   CodexEnvironmentStartupError,
   startLocalCodexEnvironmentAction,
+  type CodexEnvironmentCommandRunner,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -1469,6 +1470,7 @@ export class DesktopBackendRegistry {
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
+  private readonly codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
@@ -1521,6 +1523,7 @@ export class DesktopBackendRegistry {
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     createScratchProjectDirectory?: () => Promise<string>;
+    codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
   }) {
     const replayClients = createReplayClientsFromEnv();
@@ -1567,6 +1570,7 @@ export class DesktopBackendRegistry {
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
     this.codexEnvironmentCommandEnv = codexEnv;
+    this.codexEnvironmentCommandRunner = options?.codexEnvironmentCommandRunner;
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
@@ -3559,6 +3563,7 @@ export class DesktopBackendRegistry {
     try {
       nextRuntime = await startLocalCodexEnvironmentAction({
         actionId: request.actionId,
+        commandRunner: this.codexEnvironmentCommandRunner,
         env: this.codexEnvironmentCommandEnv,
         runtime: runtimeForAction,
       });
@@ -3758,6 +3763,7 @@ export class DesktopBackendRegistry {
     if (launchpad.backend === "codex") {
       try {
         codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+          commandRunner: this.codexEnvironmentCommandRunner,
           cwd: workspace.cwd,
           env: this.codexEnvironmentCommandEnv,
           onSetupProgress: options?.onCodexEnvironmentSetupProgress
