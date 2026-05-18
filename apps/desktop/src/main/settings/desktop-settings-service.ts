@@ -137,6 +137,29 @@ type ConfigReadResult = {
 
 const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
 const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
+
+/**
+ * Feature gate for the deferred Codex `listThreads` probe.
+ *
+ * When `false` (current default), `isCodexBootstrapDeferred()` always
+ * returns `false` regardless of what's persisted under `[onboarding]` in
+ * the per-profile `config.toml`. Brand-new profiles still receive their
+ * Codex thread list at startup exactly as they did before this gate
+ * landed; the `[onboarding] completed = false` marker is written to disk
+ * but has no read-side effect.
+ *
+ * Flip to `true` in the first-run wizard PR (#491) once the wizard UI
+ * is in place to drive the operator through Shared / Isolated / Multiple
+ * and call `completeOnboardingCodexBootstrap()`. Until then this stays
+ * dormant so a fresh profile created via Settings → Profiles (or
+ * `PWRAGENT_PROFILE=<new>`) without the wizard does not get stranded
+ * with an empty sidebar.
+ *
+ * Tests that exercise the gate's effect inject `isCodexBootstrapDeferred`
+ * directly via the backend-registry constructor option or mock the
+ * settings singleton, so this constant does not block test coverage.
+ */
+export const ONBOARDING_CODEX_GATE_ENABLED = false;
 const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
 const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
 const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
@@ -629,17 +652,36 @@ export class DesktopSettingsService {
   }
 
   /**
-   * Gate for the deferred Codex `listThreads` probe on a brand-new
-   * profile. Returns `true` when the operator has finished the first-run
-   * wizard or when the profile predates the gate (treated as
-   * `"migrated"`). Returns `false` only when the per-profile
-   * `config.toml` contains an explicit `[onboarding] completed = false`
-   * marker — which is written exactly once, when the profile dir is
-   * newly created. See `ensureNamedProfileExists` in `profile.ts`.
+   * Raw read of the persisted onboarding-completed state. Returns
+   * `true` when the wizard has run or when the profile predates the
+   * `[onboarding]` table (treated as `"migrated"`). Returns `false`
+   * only when the per-profile `config.toml` contains an explicit
+   * `[onboarding] completed = false` marker — which is written exactly
+   * once, when the profile dir is newly created. See
+   * `ensureNamedProfileExists` in `profile.ts`.
+   *
+   * Callers that want the *gate* behavior (defer the Codex
+   * `listThreads` probe) should call `isCodexBootstrapDeferred()`
+   * instead — it consults `ONBOARDING_CODEX_GATE_ENABLED` first so the
+   * gate stays dormant until the wizard PR flips the constant.
    */
   resolveOnboardingCompleted(): boolean {
     return this.resolveOnboarding(this.readConfig().config.onboarding)
       .completed.value;
+  }
+
+  /**
+   * Gate for the deferred Codex `listThreads` probe. Returns `true`
+   * only when (a) the gate feature is enabled and (b) the persisted
+   * onboarding state says the wizard has not yet completed. Defaults
+   * to `false` while the gate is dormant so call sites have no
+   * behavior change between this PR and the wizard PR's rebase.
+   */
+  isCodexBootstrapDeferred(): boolean {
+    if (!ONBOARDING_CODEX_GATE_ENABLED) {
+      return false;
+    }
+    return !this.resolveOnboardingCompleted();
   }
 
   async writeConfigPatch(

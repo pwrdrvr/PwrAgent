@@ -6842,7 +6842,7 @@ command = "pnpm dev"
         codexClient,
         grokClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
-        resolveOnboardingCompleted: () => false,
+        isCodexBootstrapDeferred: () => true,
       });
 
       const result = await registry.listThreads({
@@ -6887,7 +6887,7 @@ command = "pnpm dev"
         codexClient,
         grokClient,
         overlayStore: createOverlayStoreMock(),
-        resolveOnboardingCompleted: () => false,
+        isCodexBootstrapDeferred: () => true,
       });
 
       const result = await registry.listThreads({
@@ -6917,7 +6917,7 @@ command = "pnpm dev"
         codexClient,
         grokClient: new MockBackendClient({}),
         overlayStore: createOverlayStoreMock(),
-        resolveOnboardingCompleted: () => true,
+        isCodexBootstrapDeferred: () => false,
       });
 
       const result = await registry.listThreads({

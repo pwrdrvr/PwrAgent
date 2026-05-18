@@ -1513,13 +1513,15 @@ export class DesktopBackendRegistry {
   private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
   /**
-   * Gate for the Codex `listThreads` probe. Returns `false` while the
+   * Gate for the Codex `listThreads` probe. Returns `true` while the
    * first-run wizard is still asking the operator which Codex profile
    * model to use; in that window we must not slurp Codex threads under
    * an arbitrary identity. Tests inject a fixed value; production wires
-   * it to `DesktopSettingsService.resolveOnboardingCompleted`.
+   * it to `DesktopSettingsService.isCodexBootstrapDeferred`, which is
+   * itself dormant (always returns `false`) until the wizard PR flips
+   * `ONBOARDING_CODEX_GATE_ENABLED`.
    */
-  private readonly resolveOnboardingCompletedFn: () => boolean;
+  private readonly isCodexBootstrapDeferredFn: () => boolean;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -1533,7 +1535,7 @@ export class DesktopBackendRegistry {
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
-    resolveOnboardingCompleted?: () => boolean;
+    isCodexBootstrapDeferred?: () => boolean;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -1655,16 +1657,27 @@ export class DesktopBackendRegistry {
       grok: this.grokClient,
     });
 
-    this.resolveOnboardingCompletedFn =
-      options?.resolveOnboardingCompleted ??
+    this.isCodexBootstrapDeferredFn =
+      options?.isCodexBootstrapDeferred ??
       (() => {
         try {
-          return getDesktopSettingsService().resolveOnboardingCompleted();
-        } catch {
-          // Settings service may not be initialized in some test paths;
-          // default to "completed" so the registry behaves as it did
-          // before the gate landed.
-          return true;
+          return getDesktopSettingsService().isCodexBootstrapDeferred();
+        } catch (error) {
+          // The settings singleton can only throw if app-state init
+          // never ran. That should not be reachable in production —
+          // `initializeAppState()` runs before any IPC handler that
+          // reaches the registry. If it does happen, default to "gate
+          // off" so we fall back to the historical behavior (Codex
+          // prewarm runs) rather than presenting an empty sidebar that
+          // the operator has no way to unstick. Surface the failure
+          // loudly so the underlying init bug is fixable.
+          backendRegistryLog.warn(
+            "isCodexBootstrapDeferred fell back to false; settings service unavailable",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
         }
       });
 
@@ -1720,7 +1733,7 @@ export class DesktopBackendRegistry {
     // contaminating it with arbitrary-identity Codex data.
     if (
       (params.backend === "codex" || params.backend === undefined) &&
-      !this.resolveOnboardingCompletedFn()
+      this.isCodexBootstrapDeferredFn()
     ) {
       if (params.backend === "codex") {
         return [];

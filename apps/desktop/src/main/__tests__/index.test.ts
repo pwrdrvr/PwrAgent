@@ -83,10 +83,10 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
   return startupProfilerInstance;
 });
 const resolveDeveloperModeMock = vi.fn(() => true);
-const resolveOnboardingCompletedMock = vi.fn(() => true);
+const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
-  resolveOnboardingCompleted: resolveOnboardingCompletedMock,
+  isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -393,8 +393,8 @@ describe("bootstrapApp", () => {
     getVersionMock.mockClear();
     resolveDeveloperModeMock.mockReset();
     resolveDeveloperModeMock.mockReturnValue(true);
-    resolveOnboardingCompletedMock.mockReset();
-    resolveOnboardingCompletedMock.mockReturnValue(true);
+    isCodexBootstrapDeferredMock.mockReset();
+    isCodexBootstrapDeferredMock.mockReturnValue(false);
     getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
@@ -545,9 +545,9 @@ describe("bootstrapApp", () => {
     });
   });
 
-  it("skips the prewarm when onboarding has not been completed", async () => {
+  it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {
     startupProfilerInstance.start.mockResolvedValue();
-    resolveOnboardingCompletedMock.mockReturnValue(false);
+    isCodexBootstrapDeferredMock.mockReturnValue(true);
     listThreadsMock.mockReturnValue(new Promise(() => {}));
 
     await import("../index");
