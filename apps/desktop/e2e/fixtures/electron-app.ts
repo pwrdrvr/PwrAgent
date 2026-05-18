@@ -102,6 +102,13 @@ export async function launchElectronApp(params: {
           density: params.appearance?.density ?? "mission-control",
         },
       },
+      // Suppress the first-run onboarding wizard for every replay-backed
+      // test. The wizard's modal scrim auto-fires on profiles with
+      // `onboarding.completed === false` (see App.tsx), and the per-test
+      // home root is always fresh, so without this seed the wizard would
+      // intercept clicks in every spec. Tests that explicitly want to
+      // exercise the wizard can override this in their preLaunchHook.
+      onboarding: { completed: true },
     },
   );
   const env: Record<string, string> = {};
