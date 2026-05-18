@@ -1231,7 +1231,6 @@ function upsertLiveFileChangeEntry(
         additions: 0,
         removals: 0,
       }),
-      status: summarizeActivityStatus(mergedDetails),
       details: mergedDetails,
       ...(existing.turn ?? params.turn ? { turn: existing.turn ?? params.turn } : {}),
     };
