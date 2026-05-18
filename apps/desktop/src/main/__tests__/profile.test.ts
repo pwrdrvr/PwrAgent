@@ -74,6 +74,42 @@ describe("PwrAgent profiles", () => {
     expect(resolveActiveProfileName()).toBe("dev");
   });
 
+  it("seeds [onboarding] completed=false in a freshly created profile's config.toml", () => {
+    const { env, root } = createRoot();
+    const result = ensureNamedProfileExists("scratch", { env });
+    expect(result.created).toBe(true);
+
+    const configPath = path.join(root, "profiles", "scratch", "config.toml");
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("[onboarding]");
+    expect(contents).toContain("completed = false");
+
+    // Idempotent: calling again on an existing dir must not stomp the
+    // file. The marker is only seeded when the directory is first
+    // created, otherwise we would wipe out an in-flight wizard's
+    // `completed = true` write between two app launches.
+    fs.writeFileSync(configPath, "[onboarding]\ncompleted = true\n", "utf8");
+    const secondResult = ensureNamedProfileExists("scratch", { env });
+    expect(secondResult.created).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toContain("completed = true");
+  });
+
+  it("does not overwrite an existing config.toml on a re-create of an existing dir", () => {
+    const { env, root } = createRoot();
+    const profileDir = path.join(root, "profiles", "preserved");
+    fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
+    const configPath = path.join(profileDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[general]", "developer_mode = true", ""].join("\n"),
+      "utf8",
+    );
+
+    const result = ensureNamedProfileExists("preserved", { env });
+    expect(result.created).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("[onboarding]");
+  });
+
   it("reads --profile arguments from argv", () => {
     expect(readProfileArg(["PwrAgent", "--profile", "work"])).toBe("work");
     expect(readProfileArg(["PwrAgent", "--profile=dev"])).toBe("dev");

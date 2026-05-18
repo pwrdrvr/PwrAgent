@@ -5,6 +5,8 @@ import type {
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
+  DesktopOnboardingCompletedSource,
+  DesktopOnboardingSnapshot,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
@@ -299,6 +301,7 @@ export class DesktopSettingsService {
           ),
         },
       },
+      onboarding: this.resolveOnboarding(config.onboarding),
       experimental: {
         chatReplyComposer: this.resolveComposer(
           config.experimental?.chatReplyComposer,
@@ -625,6 +628,20 @@ export class DesktopSettingsService {
     ).value;
   }
 
+  /**
+   * Gate for the deferred Codex `listThreads` probe on a brand-new
+   * profile. Returns `true` when the operator has finished the first-run
+   * wizard or when the profile predates the gate (treated as
+   * `"migrated"`). Returns `false` only when the per-profile
+   * `config.toml` contains an explicit `[onboarding] completed = false`
+   * marker — which is written exactly once, when the profile dir is
+   * newly created. See `ensureNamedProfileExists` in `profile.ts`.
+   */
+  resolveOnboardingCompleted(): boolean {
+    return this.resolveOnboarding(this.readConfig().config.onboarding)
+      .completed.value;
+  }
+
   async writeConfigPatch(
     patch: DesktopSettingsConfigPatch,
   ): Promise<DesktopSettingsSnapshot> {
@@ -924,6 +941,35 @@ export class DesktopSettingsService {
       value: configValue ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
+  }
+
+  private resolveOnboarding(
+    configValue: {
+      completed?: boolean;
+      completedSource?: DesktopOnboardingCompletedSource;
+    } | undefined,
+  ): DesktopOnboardingSnapshot {
+    // Reader rule: missing `[onboarding]` table is the migration signal.
+    // Pre-existing profiles have no marker, so they keep the historical
+    // behavior (Codex prewarm runs at startup). A freshly created profile
+    // gets `completed = false` written at create time; the wizard flips
+    // it to `true` with `completed_source = "wizard"` when done.
+    const completedFromConfig = configValue?.completed;
+    const sourceFromConfig = configValue?.completedSource;
+    const inferredMigrated =
+      completedFromConfig === undefined && sourceFromConfig === undefined;
+    const completed: DesktopSettingsValue<boolean> =
+      completedFromConfig === undefined
+        ? { value: inferredMigrated, source: "default" }
+        : { value: completedFromConfig, source: "config" };
+    const completedSource: DesktopSettingsValue<
+      DesktopOnboardingCompletedSource | ""
+    > = sourceFromConfig !== undefined
+      ? { value: sourceFromConfig, source: "config" }
+      : inferredMigrated
+        ? { value: "migrated", source: "default" }
+        : { value: "", source: "default" };
+    return { completed, completedSource };
   }
 
   private resolveNumber(

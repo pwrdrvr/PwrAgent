@@ -9,6 +9,7 @@ import type {
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
+  DesktopOnboardingCompletedSource,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
@@ -20,6 +21,7 @@ import {
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
+  isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
   sanitizeMessagingContactLabel,
@@ -58,6 +60,10 @@ export type DesktopSettingsConfig = {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
     };
+  };
+  onboarding?: {
+    completed?: boolean;
+    completedSource?: DesktopOnboardingCompletedSource;
   };
   experimental?: {
     chatReplyComposer?: StoredChatReplyComposer;
@@ -348,6 +354,13 @@ export function desktopSettingsPatchToEdits(
       set(["general", "appearance", "theme"], patch.general.appearance.theme);
     }
   }
+  if (patch.onboarding?.completed !== undefined) {
+    set(["onboarding", "completed"], patch.onboarding.completed);
+  }
+  if (patch.onboarding?.completedSource !== undefined) {
+    set(["onboarding", "completed_source"], patch.onboarding.completedSource);
+  }
+
   if (patch.general?.appearance?.density !== undefined) {
     if (
       patch.general.appearance.density === DESKTOP_APPEARANCE_DENSITY_DEFAULT
@@ -714,6 +727,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
+  const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
   const imageUploads = tables["image_uploads"];
@@ -739,6 +753,12 @@ function normalizeDesktopConfig(
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
       },
+    },
+    onboarding: {
+      completed: readBoolean(onboarding?.completed),
+      completedSource: readOnboardingCompletedSource(
+        onboarding?.completed_source,
+      ),
     },
     experimental: {
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
@@ -928,6 +948,17 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
   }
 
+  const onboarding = config.onboarding;
+  if (onboarding && hasDefinedValue(onboarding)) {
+    pruned.onboarding = {};
+    if (onboarding.completed !== undefined) {
+      pruned.onboarding.completed = onboarding.completed;
+    }
+    if (onboarding.completedSource !== undefined) {
+      pruned.onboarding.completedSource = onboarding.completedSource;
+    }
+  }
+
   if (config.experimental && hasDefinedValue(config.experimental)) {
     pruned.experimental = config.experimental;
   }
@@ -1092,6 +1123,14 @@ function readAppearanceDensity(
   value: TomlScalar | undefined,
 ): DesktopAppearanceDensity | undefined {
   return typeof value === "string" && isDesktopAppearanceDensity(value)
+    ? value
+    : undefined;
+}
+
+function readOnboardingCompletedSource(
+  value: TomlScalar | undefined,
+): DesktopOnboardingCompletedSource | undefined {
+  return typeof value === "string" && isDesktopOnboardingCompletedSource(value)
     ? value
     : undefined;
 }

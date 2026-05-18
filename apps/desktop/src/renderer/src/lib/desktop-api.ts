@@ -107,6 +107,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CompleteOnboardingCodexBootstrapRequest,
+  CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
   ListComposerDraftLatestResponse,
@@ -297,6 +299,15 @@ export type DesktopApi = {
   checkCodexAuthProfileStatus?: (
     request: CheckDesktopCodexAuthProfileStatusRequest,
   ) => Promise<CheckDesktopCodexAuthProfileStatusResponse>;
+  /**
+   * Wizard-issued signal that the operator picked a Codex profile model
+   * and the deferred Codex `listThreads` probe may now run. Persists
+   * `onboarding.completed = true` (idempotent) and kicks off the same
+   * startup thread-list prefetch. Returns the fresh settings snapshot.
+   */
+  completeOnboardingCodexBootstrap?: (
+    request?: CompleteOnboardingCodexBootstrapRequest,
+  ) => Promise<CompleteOnboardingCodexBootstrapResponse>;
   pickGhCommand?: () => Promise<PickGhCommandResponse>;
   /** Run the per-credential connection-test probe for a settings panel.
    *  Result contains parsed identity (bot username, model IDs, codex

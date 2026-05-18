@@ -1512,6 +1512,14 @@ export class DesktopBackendRegistry {
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
+  /**
+   * Gate for the Codex `listThreads` probe. Returns `false` while the
+   * first-run wizard is still asking the operator which Codex profile
+   * model to use; in that window we must not slurp Codex threads under
+   * an arbitrary identity. Tests inject a fixed value; production wires
+   * it to `DesktopSettingsService.resolveOnboardingCompleted`.
+   */
+  private readonly resolveOnboardingCompletedFn: () => boolean;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -1525,6 +1533,7 @@ export class DesktopBackendRegistry {
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
+    resolveOnboardingCompleted?: () => boolean;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -1646,6 +1655,19 @@ export class DesktopBackendRegistry {
       grok: this.grokClient,
     });
 
+    this.resolveOnboardingCompletedFn =
+      options?.resolveOnboardingCompleted ??
+      (() => {
+        try {
+          return getDesktopSettingsService().resolveOnboardingCompleted();
+        } catch {
+          // Settings service may not be initialized in some test paths;
+          // default to "completed" so the registry behaves as it did
+          // before the gate landed.
+          return true;
+        }
+      });
+
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
   }
@@ -1690,6 +1712,23 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
+    // Gate the deferred Codex probe. When the first-run wizard hasn't
+    // picked a Codex profile model yet, an explicit codex query returns
+    // empty; an unfiltered query falls through to the grok-only path so
+    // grok threads still load and the renderer can render a clean
+    // "Finish setup to see your threads" empty state for Codex without
+    // contaminating it with arbitrary-identity Codex data.
+    if (
+      (params.backend === "codex" || params.backend === undefined) &&
+      !this.resolveOnboardingCompletedFn()
+    ) {
+      if (params.backend === "codex") {
+        return [];
+      }
+      return await this.listThreads({ ...params, backend: "grok" }).catch(
+        () => [],
+      );
+    }
     const normalizedParams = {
       ...params,
       enrichDirectories:

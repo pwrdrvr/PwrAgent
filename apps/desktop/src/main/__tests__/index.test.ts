@@ -83,8 +83,10 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
   return startupProfilerInstance;
 });
 const resolveDeveloperModeMock = vi.fn(() => true);
+const resolveOnboardingCompletedMock = vi.fn(() => true);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
+  resolveOnboardingCompleted: resolveOnboardingCompletedMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -391,6 +393,8 @@ describe("bootstrapApp", () => {
     getVersionMock.mockClear();
     resolveDeveloperModeMock.mockReset();
     resolveDeveloperModeMock.mockReturnValue(true);
+    resolveOnboardingCompletedMock.mockReset();
+    resolveOnboardingCompletedMock.mockReturnValue(true);
     getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
@@ -539,6 +543,20 @@ describe("bootstrapApp", () => {
     expect(listThreadsMock).toHaveBeenCalledWith({
       callerReason: "startup-prewarm",
     });
+  });
+
+  it("skips the prewarm when onboarding has not been completed", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    resolveOnboardingCompletedMock.mockReturnValue(false);
+    listThreadsMock.mockReturnValue(new Promise(() => {}));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(listThreadsMock).not.toHaveBeenCalled();
   });
 
   it("wires release help links to PwrAgent destinations and bundled notices", async () => {
