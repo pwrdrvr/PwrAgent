@@ -101,7 +101,7 @@ To pin or change pin order:
 
 - **Pin or unpin:** right-click a thread or directory row and
   pick **Pin / Unpin** from the menu. The same menu is reachable
-  from the <code>⋯</code> overflow button on thread rows.
+  from the three-dot overflow button on thread rows.
 - **Drag to reorder:** drag a pinned row up or down inside the
   pinned section. Drag an unpinned thread or directory above the
   pinned divider to add it; drop it back below to remove it.
