@@ -1,9 +1,12 @@
 import type { MenuItemConstructorOptions } from "electron";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   openDocumentation: () => void | Promise<void>;
   openIssueReporter: () => void | Promise<void>;
+  openProfile: (profile: string) => void | Promise<void>;
+  openProfilesSettings: () => void;
   openSettings: () => void;
   openWebsite: () => void | Promise<void>;
   showAboutPanel: () => void;
@@ -17,6 +20,7 @@ export type ApplicationMenuOptions = {
   appName: string;
   developerMode: boolean;
   isMac: boolean;
+  profiles: DesktopPwrAgentProfileSummary[];
   actions: ApplicationMenuActions;
 };
 
@@ -28,6 +32,7 @@ export function buildApplicationMenuTemplate(
     buildFileMenu(options),
     { role: "editMenu" },
     buildViewMenu(options.developerMode),
+    buildProfilesMenu(options),
     { role: "windowMenu" },
     buildHelpMenu(options),
   ];
@@ -99,6 +104,52 @@ function buildViewMenu(developerMode: boolean): MenuItemConstructorOptions {
       { role: "togglefullscreen" },
     ],
   };
+}
+
+function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+  const profiles = orderProfilesForMenu(options.profiles);
+  const profileItems: MenuItemConstructorOptions[] = profiles.length
+    ? profiles.map((profile, index) => ({
+        label: profile.displayName || profile.name,
+        type: "checkbox",
+        checked: profile.active,
+        accelerator: index < 3 ? `CmdOrCtrl+${index + 1}` : undefined,
+        click: () => {
+          void options.actions.openProfile(profile.name);
+        },
+      }))
+    : [
+        {
+          label: "No Profiles Found",
+          enabled: false,
+        },
+      ];
+
+  return {
+    label: "Profiles",
+    submenu: [
+      ...profileItems,
+      { type: "separator" },
+      {
+        label: "New Profile…",
+        click: options.actions.openProfilesSettings,
+      },
+      {
+        label: "Manage Profiles…",
+        click: options.actions.openProfilesSettings,
+      },
+    ],
+  };
+}
+
+function orderProfilesForMenu(
+  profiles: DesktopPwrAgentProfileSummary[],
+): DesktopPwrAgentProfileSummary[] {
+  return [...profiles].sort((left, right) => {
+    if (left.name === "default") return -1;
+    if (right.name === "default") return 1;
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {

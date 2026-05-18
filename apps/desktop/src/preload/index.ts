@@ -655,10 +655,13 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(WINDOW_FOCUS_SYNC_CHANNEL, listener);
     };
   },
-  onOpenSettingsRequested: (callback: () => void): (() => void) => {
+  onOpenSettingsRequested: (
+    callback: (section?: string) => void,
+  ): (() => void) => {
     // Main → renderer push from the PwrAgent → Settings… menu item.
     // App.tsx subscribes and switches `mainView` to "settings".
-    const listener = () => callback();
+    const listener = (_event: Electron.IpcRendererEvent, section?: unknown) =>
+      callback(typeof section === "string" ? section : undefined);
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);

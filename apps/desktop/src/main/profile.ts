@@ -27,6 +27,10 @@ export type ProfileRuntimeHeartbeat = {
   stop: () => void;
 };
 
+export type ProfileFocusRequestWatcher = {
+  stop: () => void;
+};
+
 export type ProfileRuntimeMarker = {
   instanceId: string;
   processId: number;
@@ -363,6 +367,83 @@ export function findLiveProfileRuntimeMarkers(
   return markers;
 }
 
+export function requestProfileInstanceFocus(
+  profileName: string,
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: string;
+    now?: number;
+    processId?: number;
+  },
+): boolean {
+  if (findLiveProfileRuntimeMarkers(profileName, options).length === 0) {
+    return false;
+  }
+
+  const requestDir = resolveProfileFocusRequestDir(profileName, options);
+  fs.mkdirSync(requestDir, { recursive: true });
+  const now = options?.now ?? Date.now();
+  const processId = options?.processId ?? process.pid;
+  const requestPath = path.join(
+    requestDir,
+    `${now}-${processId}-${randomUUID()}.json`,
+  );
+  writeJsonAtomic(requestPath, {
+    profileName,
+    processId,
+    requestedAt: now,
+  });
+  return true;
+}
+
+export function startProfileFocusRequestWatcher(
+  profileName = resolveActiveProfileName(),
+  options: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: string;
+    intervalMs?: number;
+    now?: () => number;
+    onFocus: () => void;
+  },
+): ProfileFocusRequestWatcher {
+  const requestDir = resolveProfileFocusRequestDir(profileName, options);
+  fs.mkdirSync(requestDir, { recursive: true });
+  const seen = new Set<string>();
+  const now = options.now ?? Date.now;
+  const scan = (): void => {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(requestDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const requestPath = path.join(requestDir, entry);
+      if (seen.has(requestPath)) {
+        continue;
+      }
+      seen.add(requestPath);
+      const request = readProfileFocusRequest(requestPath);
+      fs.rmSync(requestPath, { force: true });
+      if (!request || request.profileName !== profileName) {
+        continue;
+      }
+      if (now() - request.requestedAt > PROFILE_RUNTIME_HEARTBEAT_TTL_MS) {
+        continue;
+      }
+      options.onFocus();
+    }
+  };
+  scan();
+  const interval = setInterval(scan, options.intervalMs ?? 500);
+  if (interval.unref) interval.unref();
+  return {
+    stop: () => {
+      clearInterval(interval);
+    },
+  };
+}
+
 export function updateLastUsed(
   profileName: string,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
@@ -426,6 +507,13 @@ function resolveProfileRuntimeMarkerDir(
   return path.join(resolveProfileDir(profileName, options), "state", "runtime-instances");
 }
 
+function resolveProfileFocusRequestDir(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  return path.join(resolveProfileDir(profileName, options), "state", "focus-requests");
+}
+
 function readProfileRuntimeMarker(markerPath: string): ProfileRuntimeMarker | undefined {
   try {
     const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as Partial<ProfileRuntimeMarker>;
@@ -437,6 +525,29 @@ function readProfileRuntimeMarker(markerPath: string): ProfileRuntimeMarker | un
       && typeof parsed.heartbeatAt === "number"
     ) {
       return parsed as ProfileRuntimeMarker;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function readProfileFocusRequest(
+  requestPath: string,
+): { profileName: string; requestedAt: number } | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(requestPath, "utf8")) as Partial<{
+      profileName: string;
+      requestedAt: number;
+    }>;
+    if (
+      typeof parsed.profileName === "string"
+      && typeof parsed.requestedAt === "number"
+    ) {
+      return {
+        profileName: parsed.profileName,
+        requestedAt: parsed.requestedAt,
+      };
     }
   } catch {
     return undefined;

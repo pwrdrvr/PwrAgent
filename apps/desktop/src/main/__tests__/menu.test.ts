@@ -1,19 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItemConstructorOptions } from "electron";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 import { buildApplicationMenuTemplate } from "../menu";
 
 function buildTemplate(
   developerMode: boolean,
-  options?: { isMac?: boolean; openSettings?: () => void },
+  options?: {
+    isMac?: boolean;
+    openProfile?: (profile: string) => void;
+    openProfilesSettings?: () => void;
+    openSettings?: () => void;
+    profiles?: DesktopPwrAgentProfileSummary[];
+  },
 ): MenuItemConstructorOptions[] {
   return buildApplicationMenuTemplate({
     appName: "PwrAgent",
     developerMode,
     isMac: options?.isMac ?? true,
+    profiles: options?.profiles ?? [
+      profile("work"),
+      profile("default", { active: true, default: true }),
+      profile("personal"),
+    ],
     actions: {
       checkForUpdates: vi.fn(),
       openDocumentation: vi.fn(),
       openIssueReporter: vi.fn(),
+      openProfile: options?.openProfile ?? vi.fn(),
+      openProfilesSettings: options?.openProfilesSettings ?? vi.fn(),
       openSettings: options?.openSettings ?? vi.fn(),
       openWebsite: vi.fn(),
       showAboutPanel: vi.fn(),
@@ -23,6 +37,30 @@ function buildTemplate(
       showThirdPartyNoticesWindow: vi.fn(),
     },
   });
+}
+
+function profile(
+  name: string,
+  options: Partial<DesktopPwrAgentProfileSummary> = {},
+): DesktopPwrAgentProfileSummary {
+  return {
+    active: false,
+    canDelete: name !== "default",
+    codexProfile: {
+      codexHome: `/codex/${name}`,
+      displayName: name || "default",
+      exists: true,
+      hasAuthFile: true,
+      hasConfigFile: true,
+      name: "",
+      selected: false,
+      source: "default",
+    },
+    default: false,
+    name,
+    profileDir: `/profiles/${name}`,
+    ...options,
+  };
 }
 
 function submenuRoles(
@@ -51,6 +89,74 @@ function findSubmenuByRole(
 }
 
 describe("buildApplicationMenuTemplate", () => {
+  it("places Profiles between View and Window", () => {
+    const labels = buildTemplate(false).map((item) => item.label ?? item.role);
+
+    expect(labels).toEqual([
+      "PwrAgent",
+      "File",
+      "editMenu",
+      "View",
+      "Profiles",
+      "windowMenu",
+      "help",
+    ]);
+  });
+
+  it("orders profiles with default pinned, checks the active profile, and assigns first shortcuts", () => {
+    const items = submenuItems(buildTemplate(false), "Profiles");
+    const profileItems = items.slice(0, 3);
+
+    expect(profileItems.map((item) => item.label)).toEqual([
+      "default",
+      "personal",
+      "work",
+    ]);
+    expect(profileItems.map((item) => item.type)).toEqual([
+      "checkbox",
+      "checkbox",
+      "checkbox",
+    ]);
+    expect(profileItems.map((item) => item.checked)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(profileItems.map((item) => item.accelerator)).toEqual([
+      "CmdOrCtrl+1",
+      "CmdOrCtrl+2",
+      "CmdOrCtrl+3",
+    ]);
+  });
+
+  it("routes profile menu clicks through the shared profile opener", () => {
+    const openProfile = vi.fn();
+    const items = submenuItems(buildTemplate(false, { openProfile }), "Profiles");
+
+    (items.find((item) => item.label === "work")?.click as
+      | (() => void)
+      | undefined)?.();
+
+    expect(openProfile).toHaveBeenCalledWith("work");
+  });
+
+  it("opens the profile settings surface from profile management menu items", () => {
+    const openProfilesSettings = vi.fn();
+    const items = submenuItems(
+      buildTemplate(false, { openProfilesSettings }),
+      "Profiles",
+    );
+
+    (items.find((item) => item.label === "New Profile…")?.click as
+      | (() => void)
+      | undefined)?.();
+    (items.find((item) => item.label === "Manage Profiles…")?.click as
+      | (() => void)
+      | undefined)?.();
+
+    expect(openProfilesSettings).toHaveBeenCalledTimes(2);
+  });
+
   it("hides developer-only View items when Developer Mode is off", () => {
     const roles = submenuRoles(buildTemplate(false), "View");
 

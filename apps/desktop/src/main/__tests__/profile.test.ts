@@ -9,10 +9,12 @@ import {
   ensureNamedProfileExists,
   readProfileArg,
   readProfilesRegistry,
+  requestProfileInstanceFocus,
   resetCachedActiveProfileNameForTests,
   resolveActiveProfileName,
   resolveDefaultProfileName,
   setDefaultProfileName,
+  startProfileFocusRequestWatcher,
   startProfileRuntimeHeartbeat,
 } from "../profile";
 
@@ -140,5 +142,50 @@ describe("PwrAgent profiles", () => {
     expect(readProfilesRegistry({ env }).profiles).not.toContainEqual(
       expect.objectContaining({ name: "scratch" }),
     );
+  });
+
+  it("requests focus only for profiles with a live runtime heartbeat", () => {
+    const { env } = createRoot();
+    ensureNamedProfileExists("scratch", { env });
+
+    expect(requestProfileInstanceFocus("scratch", { env })).toBe(false);
+
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      intervalMs: 60_000,
+      processId: process.pid,
+    });
+    try {
+      expect(requestProfileInstanceFocus("scratch", { env })).toBe(true);
+    } finally {
+      heartbeat.stop();
+    }
+  });
+
+  it("consumes profile focus requests and invokes the focus callback", () => {
+    const { env } = createRoot();
+    ensureNamedProfileExists("scratch", { env });
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      intervalMs: 60_000,
+      processId: process.pid,
+    });
+    const onFocus = vi.fn();
+
+    try {
+      expect(requestProfileInstanceFocus("scratch", { env })).toBe(true);
+      const watcher = startProfileFocusRequestWatcher("scratch", {
+        env,
+        intervalMs: 60_000,
+        onFocus,
+      });
+      try {
+        expect(onFocus).toHaveBeenCalledOnce();
+      } finally {
+        watcher.stop();
+      }
+    } finally {
+      heartbeat.stop();
+    }
   });
 });

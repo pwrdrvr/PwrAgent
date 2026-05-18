@@ -30,6 +30,17 @@ import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 
+const SETTINGS_SECTIONS = new Set<SettingsSection>([
+  "general",
+  "applications",
+  "profiles",
+  "worktrees",
+  "messaging",
+  "models",
+  "experimental",
+  "about",
+]);
+
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
@@ -189,8 +200,10 @@ function DesktopAppShell(props: {
     if (!desktopApi?.onOpenSettingsRequested) {
       return;
     }
-    return desktopApi.onOpenSettingsRequested(() => {
-      setSettingsInitialSection(undefined);
+    return desktopApi.onOpenSettingsRequested((section) => {
+      setSettingsInitialSection(
+        isSettingsSection(section) ? section : undefined,
+      );
       setMainView("settings");
     });
   }, [desktopApi]);
@@ -415,5 +428,13 @@ function DesktopAppShell(props: {
 
       <AppUpdateBanner desktopApi={desktopApi} />
     </div>
+  );
+}
+
+function isSettingsSection(
+  section: string | undefined,
+): section is SettingsSection {
+  return (
+    section !== undefined && SETTINGS_SECTIONS.has(section as SettingsSection)
   );
 }

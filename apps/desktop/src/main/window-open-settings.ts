@@ -18,7 +18,7 @@ import { subscribersForChannel } from "./window-channels";
  * the Settings overlay, so we have to dispatch to the actual main
  * window.
  */
-export function requestOpenSettings(): void {
+export function requestOpenSettings(section?: string): void {
   const focused = BrowserWindow.getFocusedWindow();
   const subscribers = subscribersForChannel(WINDOW_OPEN_SETTINGS_CHANNEL);
 
@@ -32,7 +32,7 @@ export function requestOpenSettings(): void {
     if (focusedSubscriber) {
       // Bring the window forward in case it's behind a sibling.
       focused.show();
-      focusedSubscriber.send(WINDOW_OPEN_SETTINGS_CHANNEL);
+      focusedSubscriber.send(WINDOW_OPEN_SETTINGS_CHANNEL, section);
       return;
     }
   }
@@ -45,5 +45,5 @@ export function requestOpenSettings(): void {
   if (fallbackWindow && !fallbackWindow.isDestroyed()) {
     fallbackWindow.show();
   }
-  fallback.send(WINDOW_OPEN_SETTINGS_CHANNEL);
+  fallback.send(WINDOW_OPEN_SETTINGS_CHANNEL, section);
 }

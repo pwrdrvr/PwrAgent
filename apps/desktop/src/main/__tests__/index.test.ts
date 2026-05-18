@@ -27,6 +27,8 @@ const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerProfilesIpcHandlersMock = vi.fn();
 const disposeProfilesIpcHandlersMock = vi.fn();
+const listDesktopPwrAgentProfilesMock = vi.fn();
+const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
@@ -35,6 +37,7 @@ const disposeSettingsIpcHandlersMock = vi.fn();
 const registerWindowPointerIpcHandlersMock = vi.fn();
 const disposeWindowPointerIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
+const requestOpenSettingsMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const mainLogWarnMock = vi.fn();
 const mainLogErrorMock = vi.fn();
@@ -61,6 +64,7 @@ const shellOpenExternalMock = vi.fn(async () => undefined);
 const setNameMock = vi.fn();
 const setAboutPanelOptionsMock = vi.fn();
 const showAboutPanelMock = vi.fn();
+const appFocusMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
@@ -82,6 +86,11 @@ const resolveDeveloperModeMock = vi.fn(() => true);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
 }));
+const profileFocusRequestWatcherStopMock = vi.fn();
+const resolveActiveProfileNameMock = vi.fn(() => "default");
+const startProfileFocusRequestWatcherMock = vi.fn(() => ({
+  stop: profileFocusRequestWatcherStopMock,
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -91,6 +100,7 @@ vi.mock("electron", () => ({
     getAppPath: getAppPathMock,
     getVersion: getVersionMock,
     showAboutPanel: showAboutPanelMock,
+    focus: appFocusMock,
     whenReady: whenReadyMock,
     dock: {
       setIcon: dockSetIconMock,
@@ -117,6 +127,10 @@ vi.mock("electron", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+}));
+
+vi.mock("../window-open-settings", () => ({
+  requestOpenSettings: requestOpenSettingsMock,
 }));
 
 vi.mock("../ipc/app-server", () => ({
@@ -177,6 +191,8 @@ vi.mock("../ipc/preload-log", () => ({
 vi.mock("../ipc/profiles", () => ({
   registerProfilesIpcHandlers: registerProfilesIpcHandlersMock,
   disposeProfilesIpcHandlers: disposeProfilesIpcHandlersMock,
+  listDesktopPwrAgentProfiles: listDesktopPwrAgentProfilesMock,
+  openDesktopPwrAgentProfile: openDesktopPwrAgentProfileMock,
 }));
 
 vi.mock("../ipc/renderer-error", () => ({
@@ -231,6 +247,11 @@ vi.mock("../state/app-state", () => ({
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: getDesktopSettingsServiceMock,
+}));
+
+vi.mock("../profile", () => ({
+  resolveActiveProfileName: resolveActiveProfileNameMock,
+  startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
 }));
 
 const runtimeMessagingLeaseCoordinatorMock = {
@@ -293,6 +314,36 @@ describe("bootstrapApp", () => {
     disposePreloadLogIpcHandlersMock.mockReset();
     registerProfilesIpcHandlersMock.mockReset();
     disposeProfilesIpcHandlersMock.mockReset();
+    listDesktopPwrAgentProfilesMock.mockReset();
+    listDesktopPwrAgentProfilesMock.mockReturnValue({
+      activeProfile: "default",
+      defaultProfile: "default",
+      profiles: [
+        {
+          active: true,
+          canDelete: false,
+          codexProfile: {
+            codexHome: "/codex/default",
+            displayName: "default",
+            exists: true,
+            hasAuthFile: true,
+            hasConfigFile: true,
+            name: "default",
+            selected: true,
+            source: "default",
+          },
+          default: true,
+          name: "default",
+          profileDir: "/profiles/default",
+        },
+      ],
+    });
+    openDesktopPwrAgentProfileMock.mockReset();
+    openDesktopPwrAgentProfileMock.mockReturnValue({
+      opened: false,
+      profile: "default",
+      reason: "active",
+    });
     registerRendererErrorIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();
@@ -301,6 +352,7 @@ describe("bootstrapApp", () => {
     registerWindowPointerIpcHandlersMock.mockReset();
     disposeWindowPointerIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
+    requestOpenSettingsMock.mockReset();
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
@@ -334,6 +386,7 @@ describe("bootstrapApp", () => {
     setNameMock.mockReset();
     setAboutPanelOptionsMock.mockReset();
     showAboutPanelMock.mockReset();
+    appFocusMock.mockReset();
     getAppPathMock.mockClear();
     getVersionMock.mockClear();
     resolveDeveloperModeMock.mockReset();
@@ -348,6 +401,10 @@ describe("bootstrapApp", () => {
     quitMock.mockReset();
     getAllWindowsMock.mockReset();
     getAllWindowsMock.mockReturnValue([]);
+    profileFocusRequestWatcherStopMock.mockReset();
+    resolveActiveProfileNameMock.mockReset();
+    resolveActiveProfileNameMock.mockReturnValue("default");
+    startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.attachWindow.mockReset();
     StartupCpuProfilerMock.mockClear();
@@ -394,6 +451,10 @@ describe("bootstrapApp", () => {
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(startProfileFocusRequestWatcherMock).toHaveBeenCalledWith(
+      "default",
+      expect.objectContaining({ onFocus: expect.any(Function) }),
+    );
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
 
@@ -437,6 +498,32 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledWith({
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("creates a main window when a profile focus request arrives without one", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const watcherCalls = startProfileFocusRequestWatcherMock.mock.calls as unknown as Array<
+      [string, { onFocus: () => void }]
+    >;
+    const onFocus = watcherCalls[0]?.[1].onFocus;
+    expect(onFocus).toBeTypeOf("function");
+    if (!onFocus) {
+      return;
+    }
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+
+    onFocus();
+
+    expect(createMainWindowMock).toHaveBeenCalledTimes(2);
+    expect(createMainWindowMock).toHaveBeenNthCalledWith(2, {
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(appFocusMock).toHaveBeenCalledWith({ steal: true });
   });
 
   it("prewarms the initial thread list after starting the first window", async () => {
@@ -496,6 +583,76 @@ describe("bootstrapApp", () => {
     );
 
     expect(item(["Visit", "Website"].join(" "))).toBeUndefined();
+  });
+
+  it("wires the Profiles menu to profile opening and profile settings", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    listDesktopPwrAgentProfilesMock.mockReturnValue({
+      activeProfile: "default",
+      defaultProfile: "default",
+      profiles: [
+        {
+          active: true,
+          canDelete: false,
+          codexProfile: {
+            codexHome: "/codex/default",
+            displayName: "default",
+            exists: true,
+            hasAuthFile: true,
+            hasConfigFile: true,
+            name: "default",
+            selected: true,
+            source: "default",
+          },
+          default: true,
+          name: "default",
+          profileDir: "/profiles/default",
+        },
+        {
+          active: false,
+          canDelete: true,
+          codexProfile: {
+            codexHome: "/codex/work",
+            displayName: "work",
+            exists: true,
+            hasAuthFile: true,
+            hasConfigFile: true,
+            name: "work",
+            selected: true,
+            source: "directory",
+          },
+          default: false,
+          name: "work",
+          profileDir: "/profiles/work",
+        },
+      ],
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const template = buildFromTemplateMock.mock.calls[0]?.[0] as
+      | Array<{
+          label?: string;
+          submenu?: Array<{
+            label?: string;
+            click?: () => void | Promise<void>;
+          }>;
+        }>
+      | undefined;
+    const profilesMenu = template?.find((item) => item.label === "Profiles");
+    const item = (label: string) =>
+      profilesMenu?.submenu?.find((menuItem) => menuItem.label === label);
+
+    item("work")?.click?.();
+    await flushMicrotasks();
+    expect(openDesktopPwrAgentProfileMock).toHaveBeenCalledWith({
+      profile: "work",
+    });
+    expect(setApplicationMenuMock).toHaveBeenCalledTimes(2);
+
+    item("Manage Profiles…")?.click?.();
+    expect(requestOpenSettingsMock).toHaveBeenCalledWith("profiles");
   });
 
   it("logs startup thread list prewarm failures without blocking startup", async () => {

@@ -643,7 +643,7 @@ export type OpenDesktopPwrAgentProfileRequest = {
 export type OpenDesktopPwrAgentProfileResponse = {
   opened: boolean;
   profile: string;
-  reason?: "active";
+  reason?: "active" | "focused";
 };
 
 export type CreateDesktopPwrAgentProfileRequest = {
