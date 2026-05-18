@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
@@ -38,6 +45,7 @@ import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
+import { LiveWorkRail, type LiveWorkRailDock } from "./LiveWorkRail";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -50,6 +58,7 @@ import {
   formatChangedFileSummary,
   getBasename,
   mergeActivityDetails,
+  readRendererSequence,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
 
@@ -852,6 +861,28 @@ export function ThreadView(props: ThreadViewProps) {
     useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
+  // Snapshots of the two rail-owned live entries at turn/completed
+  // time. The LiveWorkRail uses these to keep showing what the last
+  // turn produced even after the live state has cleared, until the
+  // next turn starts. `pendingProtocolActivityEntry` (MCP status /
+  // warnings) is not snapshotted because it doesn't belong in the
+  // rail; the dupe-fix that clears it on turn/completed still applies.
+  const [lastCompletedActivityEntry, setLastCompletedActivityEntry] =
+    useState<AppServerThreadActivityEntry>();
+  const [lastCompletedPlanEntry, setLastCompletedPlanEntry] =
+    useState<AppServerThreadPlanEntry>();
+  const [liveWorkRailDock, setLiveWorkRailDock] =
+    useState<LiveWorkRailDock>("above");
+  // Refs mirror the pending state so the turn/completed handler can read
+  // the latest values to snapshot, then clear via setState without
+  // racing or queuing extra micro-renders.
+  const pendingActivityEntryRef = useRef<AppServerThreadActivityEntry | undefined>(
+    undefined,
+  );
+  const pendingProtocolActivityEntryRef = useRef<
+    AppServerThreadActivityEntry | undefined
+  >(undefined);
+  const pendingPlanEntryRef = useRef<AppServerThreadPlanEntry | undefined>(undefined);
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
@@ -886,6 +917,8 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingActivityEntry(undefined);
     setPendingProtocolActivityEntry(undefined);
     setPendingPlanEntry(undefined);
+    setLastCompletedActivityEntry(undefined);
+    setLastCompletedPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
     setSetupFailureArchiving(false);
@@ -901,6 +934,26 @@ export function ThreadView(props: ThreadViewProps) {
     props.selectedThread?.id,
     props.selectedThread?.source,
   ]);
+
+  useEffect(() => {
+    pendingActivityEntryRef.current = pendingActivityEntry;
+    pendingProtocolActivityEntryRef.current = pendingProtocolActivityEntry;
+    pendingPlanEntryRef.current = pendingPlanEntry;
+  }, [pendingActivityEntry, pendingProtocolActivityEntry, pendingPlanEntry]);
+
+  // When a new turn begins, clear the pinned snapshots from the prior
+  // turn so the LiveWorkRail reflects the in-flight turn's work, not
+  // stale history. Triggered by activeTurnId transitioning to a new
+  // non-empty value (turn/started fired upstream).
+  const lastSeenActiveTurnIdRef = useRef<string | undefined>(props.activeTurnId);
+  useEffect(() => {
+    const previous = lastSeenActiveTurnIdRef.current;
+    lastSeenActiveTurnIdRef.current = props.activeTurnId;
+    if (props.activeTurnId && props.activeTurnId !== previous) {
+      setLastCompletedActivityEntry(undefined);
+      setLastCompletedPlanEntry(undefined);
+    }
+  }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
   const selectedLaunchpad = props.selectedLaunchpad;
@@ -1226,6 +1279,65 @@ export function ThreadView(props: ThreadViewProps) {
     [props.activeTurnId]
   );
 
+  // The latest `item/fileChange/outputDelta` activity entry (after #493
+  // these live in optimisticEntries → props.transcriptEntries, not in
+  // a separate pending state slot). We find the most recently created
+  // one tagged by id prefix so the LiveWorkRail can display it as the
+  // current Changed Files section. Re-uses the persisted entry as-is
+  // for the pinned-after-turn case — file-change entries already stay
+  // in optimisticEntries after the turn ends.
+  const liveWorkRailChangedFilesEntry = useMemo(() => {
+    let latest: AppServerThreadActivityEntry | undefined;
+    for (const entry of props.transcriptEntries) {
+      if (
+        entry.type !== "activity" ||
+        !entry.id.startsWith("live-file-change-")
+      ) {
+        continue;
+      }
+      if (!latest) {
+        latest = entry;
+        continue;
+      }
+      // Pick by createdAt, tiebreak by rendererSequence — same order
+      // mergeTranscriptEntries uses so the rail's pick stays
+      // consistent with where the entry sits in the transcript when
+      // wall-clock timestamps collide under fast-CI batching (the
+      // PR #493 scenario).
+      const entryCreatedAt =
+        typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+      const latestCreatedAt =
+        typeof latest.createdAt === "number" ? latest.createdAt : undefined;
+      if (
+        typeof entryCreatedAt === "number" &&
+        typeof latestCreatedAt === "number"
+      ) {
+        if (entryCreatedAt > latestCreatedAt) {
+          latest = entry;
+          continue;
+        }
+        if (entryCreatedAt < latestCreatedAt) {
+          continue;
+        }
+      } else if (typeof entryCreatedAt === "number") {
+        latest = entry;
+        continue;
+      } else if (typeof latestCreatedAt === "number") {
+        continue;
+      }
+      const entrySequence = readRendererSequence(entry);
+      const latestSequence = readRendererSequence(latest);
+      if (
+        typeof entrySequence === "number" &&
+        typeof latestSequence === "number" &&
+        entrySequence > latestSequence
+      ) {
+        latest = entry;
+      }
+    }
+    return latest;
+  }, [props.transcriptEntries]);
+
   useEffect(() => {
     if (!pendingActivityEntry) {
       return;
@@ -1337,27 +1449,35 @@ export function ThreadView(props: ThreadViewProps) {
           const completeEntryTurn = <T extends { turn?: AppServerThreadTurnMetadata }>(
             entry: T | undefined
           ): T | undefined => (entry ? { ...entry, turn: liveTurn } : undefined);
-          setPendingActivityEntry((current) => {
-            const next = completeEntryTurn(current);
-            if (next) {
-              deferLiveTranscriptEntry(next);
-            }
-            return next;
-          });
-          setPendingProtocolActivityEntry((current) => {
-            const next = completeEntryTurn(current);
-            if (next) {
-              deferLiveTranscriptEntry(next);
-            }
-            return next;
-          });
-          setPendingPlanEntry((current) => {
-            const next = completeEntryTurn(current);
-            if (next) {
-              deferLiveTranscriptEntry(next);
-            }
-            return next;
-          });
+          // Defer each live entry into the persistent transcript via
+          // optimisticEntries, snapshot the rail-owned ones (Edited
+          // Files, Plan) for the LiveWorkRail's "pinned to last turn"
+          // display, then clear every pending slot so the transcript
+          // doesn't render the same entry twice (the dupe-row bug
+          // from issue #495). pendingProtocolActivityEntry holds MCP
+          // status / warnings, which the rail doesn't own — we still
+          // clear it to fix the duplicate, but don't snapshot.
+          const completedActivity = completeEntryTurn(pendingActivityEntryRef.current);
+          if (completedActivity) {
+            deferLiveTranscriptEntry(completedActivity);
+            setLastCompletedActivityEntry(completedActivity);
+          }
+          setPendingActivityEntry(undefined);
+
+          const completedProtocolActivity = completeEntryTurn(
+            pendingProtocolActivityEntryRef.current,
+          );
+          if (completedProtocolActivity) {
+            deferLiveTranscriptEntry(completedProtocolActivity);
+          }
+          setPendingProtocolActivityEntry(undefined);
+
+          const completedPlan = completeEntryTurn(pendingPlanEntryRef.current);
+          if (completedPlan) {
+            deferLiveTranscriptEntry(completedPlan);
+            setLastCompletedPlanEntry(completedPlan);
+          }
+          setPendingPlanEntry(undefined);
         }
         return;
       }
@@ -1871,9 +1991,15 @@ export function ThreadView(props: ThreadViewProps) {
               loading={props.loading}
               loadingMore={props.loadingMore}
               pagination={props.transcriptPagination}
-              pendingActivityEntry={pendingActivityEntry}
+              // pendingActivityEntry and pendingPlanEntry render in
+              // the LiveWorkRail above the composer (issue #495); pass
+              // undefined here so the transcript doesn't double-render
+              // the same live state. The persisted/optimistic copies
+              // that settle after `turn/completed` still flow through
+              // `entries`, so the transcript history is unaffected.
+              pendingActivityEntry={undefined}
               pendingAssistantMessage={props.pendingAssistantMessage}
-              pendingPlanEntry={pendingPlanEntry}
+              pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}
               pendingRequestBusy={pendingRequestBusy}
@@ -1901,6 +2027,25 @@ export function ThreadView(props: ThreadViewProps) {
               <p className="transcript-error">{pendingRequestError}</p>
             ) : null}
           </section>
+
+          {liveWorkRailDock === "above" ? (
+            <LiveWorkRail
+              applications={props.applications}
+              changedFilesEntry={liveWorkRailChangedFilesEntry}
+              desktopApi={props.desktopApi}
+              dock="above"
+              editedFilesEntry={
+                pendingActivityEntry ??
+                (props.activeTurnId ? undefined : lastCompletedActivityEntry)
+              }
+              pinned={!props.activeTurnId}
+              planEntry={
+                pendingPlanEntry ??
+                (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+              }
+              onDockChange={setLiveWorkRailDock}
+            />
+          ) : null}
 
           <Composer
             activeTurnId={props.activeTurnId}
@@ -1951,6 +2096,25 @@ export function ThreadView(props: ThreadViewProps) {
             updatingExecutionMode={props.updatingExecutionMode}
           />
         </div>
+
+        {liveWorkRailDock === "sidebar" ? (
+          <LiveWorkRail
+            applications={props.applications}
+            changedFilesEntry={liveWorkRailChangedFilesEntry}
+            desktopApi={props.desktopApi}
+            dock="sidebar"
+            editedFilesEntry={
+              pendingActivityEntry ??
+              (props.activeTurnId ? undefined : lastCompletedActivityEntry)
+            }
+            pinned={!props.activeTurnId}
+            planEntry={
+              pendingPlanEntry ??
+              (props.activeTurnId ? undefined : lastCompletedPlanEntry)
+            }
+            onDockChange={setLiveWorkRailDock}
+          />
+        ) : null}
 
         <ThreadContextPanel
           backendError={props.backendError}

@@ -1606,11 +1606,13 @@ describe("ThreadView", () => {
       });
     });
 
-    const toggle = screen.getByRole("button", { name: /Edited 1 file, \+1, -2/i });
-    expect(toggle).toBeInTheDocument();
-
-    fireEvent.click(toggle);
-
+    // The LiveWorkRail (above the composer per issue #495) renders the
+    // cumulative diff summary as a section heading and each file as
+    // its own expand button — no second click needed to reach the
+    // file list, unlike the old in-transcript activity row.
+    expect(
+      screen.getByRole("heading", { level: 3, name: /Edited 1 file, \+1, -2/i }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
 
@@ -3472,6 +3474,258 @@ describe("ThreadView", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("Environment setup failed"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the edited-files entry visible exactly once after turn/completed (no duplicate-row regression — issue #495)", async () => {
+    // Reproduces the duplicate-row bug from issue #495: prior to the
+    // fix, `turn/completed` deferred the pending entry into
+    // optimisticEntries (and thus the transcript) AND left it as the
+    // pending entry — two rows for the same diff. After the fix, the
+    // rail owns the pending entry, the transcript owns the deferred
+    // entry, and there is exactly one rendering at any given time.
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
+      | undefined;
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -113,2 +113,1 @@",
+      "-<<<<<<< HEAD",
+      "-function appendMessageEntries(",
+      "+function messageMatchesOptimisticEntry(",
+    ].join("\n");
+
+    function Harness() {
+      // Mirrors the real upstream lifecycle: the hook clears
+      // `activeTurnId` on `turn/completed` so the rail flips from
+      // live → pinned. The Harness simulates that here.
+      const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
+      const [entries, setEntries] = useState<any[]>([]);
+      return (
+        <ThreadView
+          activeTurnId={activeTurnId}
+          activeTurnStartedAt={1_000}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{
+            onAgentEvent: (callback) => {
+              const wrapped: typeof callback = (event) => {
+                callback(event);
+                if (event.notification.method === "turn/completed") {
+                  setActiveTurnId(undefined);
+                }
+              };
+              agentEventHandler = wrapped as typeof agentEventHandler;
+              return () => undefined;
+            },
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          selectedThread={{
+            id: "thread-dupe",
+            title: "Dupe-fix regression",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+          skills={[]}
+          transcriptEntries={entries}
+          clearPendingRequest={() => undefined}
+          onLiveTranscriptEntry={(entry) => {
+            setEntries((current) => [...current, entry]);
+          }}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    try {
+      render(<Harness />);
+
+      // During the active turn, the rail (h3 heading) is the single
+      // display surface for the cumulative diff.
+      await act(async () => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/diff/updated",
+            params: { threadId: "thread-dupe", turnId: "turn-1", diff: liveDiff },
+          },
+        });
+      });
+      expect(
+        screen.getAllByRole("heading", { level: 3, name: /Edited 1 file/i }),
+      ).toHaveLength(1);
+
+      // turn/completed → pending cleared, snapshot keeps the rail
+      // showing, deferred entry settles into the transcript via
+      // optimisticEntries. Total "Edited 1 file" visible should still
+      // be exactly one (rail heading) plus zero or one transcript row.
+      await act(async () => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-dupe",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                completedAt: 2_000,
+                output: [],
+              },
+            },
+          },
+        });
+      });
+      // Wait for the deferred microtask + state flushes to settle.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Rail heading stays (pinned snapshot). The transcript also
+      // receives the deferred entry, which renders TranscriptActivity's
+      // toggle button — separate display surface. Two displays of the
+      // same conceptual entry across rail + transcript is the
+      // user-approved post-#495 model; what we strictly forbid is
+      // *duplication within a single surface*.
+      expect(
+        screen.getAllByRole("heading", { level: 3, name: /Edited 1 file/i }),
+      ).toHaveLength(1);
+      expect(
+        screen.queryAllByRole("button", { name: /^Edited 1 file/i }).length,
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("clears the pinned rail when a new turn starts (issue #495)", async () => {
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: AppServerNotification }) => void)
+      | undefined;
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -1,1 +1,2 @@",
+      " existing line",
+      "+added by turn 1",
+    ].join("\n");
+
+    function Harness() {
+      const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
+      const [entries, setEntries] = useState<any[]>([]);
+      return (
+        <>
+          <button type="button" onClick={() => setActiveTurnId("turn-2")}>
+            Start turn 2
+          </button>
+          <ThreadView
+            activeTurnId={activeTurnId}
+            activeTurnStartedAt={1_000}
+            addOptimisticUserMessage={(_text) => "optimistic-1"}
+            backends={[]}
+            composerDisabled={false}
+            desktopApi={{
+              onAgentEvent: (callback) => {
+                const wrapped: typeof callback = (event) => {
+                  callback(event);
+                  if (event.notification.method === "turn/completed") {
+                    setActiveTurnId(undefined);
+                  }
+                };
+                agentEventHandler = wrapped as typeof agentEventHandler;
+                return () => undefined;
+              },
+            }}
+            loading={false}
+            loadingMore={false}
+            messageCount={entries.length}
+            selectedThread={{
+              id: "thread-pin",
+              title: "Pin lifecycle",
+              titleSource: "explicit",
+              source: "codex",
+              updatedAt: Date.now(),
+              linkedDirectories: [],
+              inbox: { inInbox: false },
+            }}
+            skills={[]}
+            transcriptEntries={entries}
+            clearPendingRequest={() => undefined}
+            onLiveTranscriptEntry={(entry) => {
+              setEntries((current) => [...current, entry]);
+            }}
+            onLoadOlder={async () => undefined}
+            removeOptimisticMessage={(_id) => undefined}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/diff/updated",
+          params: { threadId: "thread-pin", turnId: "turn-1", diff: liveDiff },
+        },
+      });
+    });
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-pin",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              completedAt: 2_000,
+              output: [],
+            },
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Rail shows the pinned snapshot from turn 1.
+    expect(
+      screen.getByRole("complementary", { name: /\(last turn\)/i }),
+    ).toBeInTheDocument();
+
+    // Simulate the next turn starting.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start turn 2" }));
+    });
+
+    // Snapshot cleared. The rail still renders the persisted entry
+    // from optimisticEntries (Changed Files section) so it doesn't
+    // disappear entirely, but the Edited Files section is empty until
+    // turn 2 produces its own diff.
+    expect(
+      screen.queryByRole("heading", { level: 3, name: /Edited 1 file/i }),
     ).not.toBeInTheDocument();
   });
 });

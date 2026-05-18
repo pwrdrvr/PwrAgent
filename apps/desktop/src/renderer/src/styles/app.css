@@ -5730,6 +5730,233 @@ textarea,
   color: inherit;
 }
 
+/* LiveWorkRail (issue #495) — sticky cumulative view of the active or
+   most-recently-completed turn's edited files + plan. Two dock modes:
+   "above" flows in the primary column between the transcript and the
+   composer; "sidebar" mounts as a third column at the layout level. */
+.live-work-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.live-work-rail--dock-above {
+  /* Cap at the same width as the composer + transcript reading
+     column (--chat-column-max) so the rail lines up visually with
+     the composer's input. Issue #495 follow-up. */
+  width: min(100%, var(--chat-column-max));
+  align-self: center;
+  margin: 0 16px 8px;
+  /* Bounded height: composer + transcript should still own the
+     vertical space. The rail caps at ~38% of viewport then scrolls
+     internally so a 50-file refactor doesn't push the composer off
+     screen. */
+  max-height: min(38vh, 360px);
+}
+
+.live-work-rail--dock-sidebar {
+  width: 320px;
+  flex: 0 0 320px;
+  margin: 12px 12px 12px 0;
+  border-radius: 8px;
+  max-height: none;
+}
+
+.live-work-rail--pinned {
+  border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border-subtle));
+}
+
+.live-work-rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  /* Children need explicit min-width: 0 to let the title truncate
+     instead of forcing the dock toggle off-screen on narrow
+     viewports. */
+  min-width: 0;
+}
+
+.live-work-rail--collapsed .live-work-rail__header {
+  border-bottom: 0;
+}
+
+.live-work-rail__collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  /* Lets the title inside ellipsize when narrow. */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.live-work-rail__title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  /* Narrow viewports: comma-joined section names can exceed the
+     header width. Truncate with an ellipsis so the dock toggle stays
+     reachable. The full title still reads via the aside's
+     aria-label (e.g. "Plan, Edited Files (last turn)"). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.live-work-rail--pinned .live-work-rail__title {
+  color: color-mix(in srgb, var(--text-muted) 80%, var(--accent));
+}
+
+.live-work-rail__dock-toggle {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.live-work-rail__dock-toggle:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.live-work-rail__chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.live-work-rail__collapse[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.live-work-rail__file-toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(45deg);
+}
+
+.live-work-rail__file-toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-45deg);
+}
+
+.live-work-rail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.live-work-rail__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.live-work-rail__section-heading {
+  margin: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.live-work-rail__file-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.live-work-rail__file-list--static {
+  padding-left: 6px;
+}
+
+.live-work-rail__file-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.live-work-rail__file-row--static {
+  padding: 4px 0;
+  color: var(--text-secondary);
+}
+
+.live-work-rail__file-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.live-work-rail__file-toggle:hover {
+  background: var(--bg-panel-hover);
+}
+
+.live-work-rail__file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-work-rail__file-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-feature-settings: "tnum" 1;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.live-work-rail__file-stat--added {
+  color: var(--success-text);
+}
+
+.live-work-rail__file-stat--removed {
+  color: var(--danger-text);
+}
+
+.live-work-rail__file-diff {
+  padding: 6px 6px 10px 18px;
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   padding: 12px 0 0;
