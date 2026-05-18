@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-beta.9 - 2026-05-18
+
+- Fixed Settings -> Updates so the prerelease channel displays the highest available semver version instead of whichever GitHub prerelease appeared first by publish order.
+- Fixed a transcript ordering race where file-change activity like "Changed 1 file" could appear after later tool or assistant activity during fast event bursts.
+- Improved live file-change transcript handling so repeated file deltas merge through the same session-state path as other optimistic activity.
+
 ## v1.0.0-beta.8 - 2026-05-17
 
 - Added an update channel setting so the desktop app can check either the latest stable release or prerelease builds.
