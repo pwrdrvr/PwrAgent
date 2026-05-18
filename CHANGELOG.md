@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.0-beta.8 - 2026-05-17
+
+- Added an update channel setting so the desktop app can check either the latest stable release or prerelease builds.
+- Added light/dark/auto appearance controls and density variants, with shared theme bootstrapping across desktop windows.
+- Added pinned and manually sorted directories in the sidebar, including navigation persistence, reorder controls, and context-menu shortcuts.
+- Added Settings access from the macOS app menu and gated developer-only menu items behind a desktop setting.
+- Tightened directory row spacing, sidebar scrolling, and pin-reorder affordances.
+- Fixed Codex environment setup path handling so configured setup commands stay bounded to the intended workspace.
+- Cleared the axios advisory set with a pinned dependency override.
+- Updated the README and docs site with stronger download/docs calls to action, accessibility checks, figure captions, and PwrAgent branding.
+
 ## v1.0.0-beta.7 - 2026-05-17
 
 - Added desktop auto-update restart banner plumbing so installed updates can surface an in-app restart prompt in builds after this bridge release.
