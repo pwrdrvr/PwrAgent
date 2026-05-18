@@ -311,6 +311,52 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("includes the tail of stdout in the exit error when the failing command writes its diagnostic to stdout", async () => {
+    // Reproduces the pnpm/vite/npm pattern: an earlier command in the
+    // script left a benign message on stderr (here mimicked with `echo
+    // ... >&2`), then the final command writes its actual error to stdout
+    // and exits non-zero. The exit error suffix must surface the stdout
+    // diagnostic, not the unrelated stderr chatter, so the failure dialog
+    // and main.log line point at the real cause.
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-stdout-error-"));
+    try {
+      let error: unknown;
+      try {
+        await applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            ...process.env,
+            SHELL: "/bin/sh",
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript: [
+                "echo 'unrelated benign chatter' 1>&2",
+                "echo 'ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1'",
+                "exit 1",
+              ].join("\n"),
+              actions: [],
+            },
+            executionTarget: "local",
+            setupEnabled: true,
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeDefined();
+      expect((error as { message?: string }).message).toContain(
+        "ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("times out setup commands that do not finish", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-timeout-"));
 

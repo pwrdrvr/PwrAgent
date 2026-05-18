@@ -8,12 +8,41 @@ import { getMainLogger } from "../log";
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
 const MAX_OUTPUT_PREVIEW_CHARS = 4_000;
+const EXIT_ERROR_SUFFIX_LINES = 8;
 
 function truncateForLog(value: string | undefined): string | undefined {
   if (!value) return value;
   const trimmed = value.trim();
   if (trimmed.length <= MAX_OUTPUT_PREVIEW_CHARS) return trimmed;
   return `${trimmed.slice(0, MAX_OUTPUT_PREVIEW_CHARS)}…[truncated ${trimmed.length - MAX_OUTPUT_PREVIEW_CHARS} chars]`;
+}
+
+/**
+ * Build the suffix attached to `Codex environment command exited with N`.
+ *
+ * Modern CLIs (pnpm, vite, npm, corepack) commonly print fatal errors on
+ * stdout, not stderr — so the previous "stderr.trim() only" suffix would
+ * misleadingly headline an exit failure with whatever stale chatter the
+ * earlier command in a multi-line setup script happened to leave in the
+ * stderr buffer (e.g. nvm's "v24.14.1 is already installed" trailing a
+ * pnpm install that exited 1 with ERR_PNPM_IGNORED_BUILDS on stdout).
+ *
+ * The fix: include the tail of the combined stdout+stderr buffer, the way
+ * a user running the script in a terminal would have seen it. The full
+ * output is still preserved on `CodexEnvironmentCommandError.output` for
+ * the dialog's collapsible details — this is just the headline.
+ */
+function buildExitErrorSuffix(stdout: string, stderr: string): string {
+  const combined = [stdout.trimEnd(), stderr.trimEnd()]
+    .filter(Boolean)
+    .join("\n");
+  if (!combined) return "";
+  const lines = combined.split("\n");
+  const tail =
+    lines.length <= EXIT_ERROR_SUFFIX_LINES
+      ? combined
+      : lines.slice(-EXIT_ERROR_SUFFIX_LINES).join("\n");
+  return `: ${tail}`;
 }
 
 export const DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -570,7 +599,7 @@ function runShellCommand(
         cwd: params.cwd,
         output: truncateForLog(combinedOutput),
       });
-      const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
+      const suffix = buildExitErrorSuffix(stdout, stderr);
       settle(() => {
         reject(
           new CodexEnvironmentCommandError(
