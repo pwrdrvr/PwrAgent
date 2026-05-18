@@ -29,11 +29,14 @@ import {
 } from "../features/thread-detail/mcp-elicitation";
 import {
   appendCommandOutputDelta,
+  buildFileChangeOutputEntry,
   buildLiveActivityEntry,
   buildLiveToolDetails,
   buildMcpProgressDetail,
+  formatChangedFileSummary,
   getNotificationItem,
   mergeActivityDetails,
+  parseFileChangeOutput,
   readRendererSequence,
   summarizeActivityStatus,
   summarizeLiveActivity,
@@ -1196,6 +1199,71 @@ function upsertLiveActivityEntry(
   };
 }
 
+function upsertLiveFileChangeEntry(
+  current: ThreadSessionEntry,
+  params: {
+    delta: string;
+    entryId: string;
+    now: number;
+    turn?: AppServerThreadTurnMetadata;
+  }
+): ThreadSessionEntry {
+  const incomingDetails = parseFileChangeOutput(params.delta, params.entryId);
+  if (incomingDetails.length === 0) {
+    return current;
+  }
+
+  const flushed = flushPendingAssistantToOptimistic(current);
+  const matchingIndex = flushed.optimisticEntries.findIndex(
+    (entry): entry is AppServerThreadActivityEntry =>
+      entry.type === "activity" && entry.id === params.entryId
+  );
+
+  if (matchingIndex !== -1) {
+    const optimisticEntries = [...flushed.optimisticEntries];
+    const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
+    const mergedDetails = mergeActivityDetails(existing.details, incomingDetails);
+    optimisticEntries[matchingIndex] = {
+      ...existing,
+      summary: formatChangedFileSummary({
+        count: mergedDetails.length,
+        prefix: "Changed",
+        additions: 0,
+        removals: 0,
+      }),
+      details: mergedDetails,
+      ...(existing.turn ?? params.turn ? { turn: existing.turn ?? params.turn } : {}),
+    };
+    return {
+      ...flushed,
+      expectOwnUpdate: true,
+      interacted: true,
+      lastTouchedAt: params.now,
+      optimisticEntries,
+    };
+  }
+
+  const entry = buildFileChangeOutputEntry({
+    delta: params.delta,
+    id: params.entryId,
+    createdAt: params.now,
+    rendererSequence: flushed.nextLiveEntrySequence,
+    turn: params.turn,
+  });
+  if (!entry) {
+    return current;
+  }
+
+  return {
+    ...flushed,
+    expectOwnUpdate: true,
+    interacted: true,
+    lastTouchedAt: params.now,
+    nextLiveEntrySequence: flushed.nextLiveEntrySequence + 1,
+    optimisticEntries: [...flushed.optimisticEntries, entry],
+  };
+}
+
 function appendLiveCommandOutputDelta(
   current: ThreadSessionEntry,
   params: {
@@ -2191,16 +2259,16 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/commandExecution/outputDelta") {
-          const params = event.notification.params as Record<string, unknown>;
+          const notifParams = event.notification.params as Record<string, unknown>;
           const delta =
-            typeof params.delta === "string"
-              ? params.delta
+            typeof notifParams.delta === "string"
+              ? notifParams.delta
               : "";
           const itemId =
-            typeof params.itemId === "string"
-              ? params.itemId
-              : typeof params.item_id === "string"
-                ? params.item_id
+            typeof notifParams.itemId === "string"
+              ? notifParams.itemId
+              : typeof notifParams.item_id === "string"
+                ? notifParams.item_id
                 : undefined;
           if (!delta || !itemId) {
             return current;
@@ -2210,6 +2278,37 @@ export function useThreadSessionState(params: {
             delta,
             itemId,
             now: nextLastTouchedAt,
+          });
+        }
+
+        if (event.notification.method === "item/fileChange/outputDelta") {
+          const notifParams = event.notification.params as Record<string, unknown>;
+          const delta = typeof notifParams.delta === "string" ? notifParams.delta : "";
+          if (!delta) {
+            return current;
+          }
+          const itemId =
+            typeof notifParams.itemId === "string"
+              ? notifParams.itemId
+              : typeof notifParams.item_id === "string"
+                ? notifParams.item_id
+                : undefined;
+          const turn = buildTurnMetadata({
+            fallbackId:
+              typeof notifParams.turnId === "string"
+                ? notifParams.turnId
+                : current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "in_progress",
+          });
+          const entryId = `live-file-change-${
+            itemId ?? turn?.id ?? notificationThreadId
+          }`;
+          return upsertLiveFileChangeEntry(current, {
+            delta,
+            entryId,
+            now: nextLastTouchedAt,
+            turn,
           });
         }
 
