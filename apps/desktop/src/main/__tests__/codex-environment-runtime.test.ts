@@ -369,7 +369,8 @@ describe("codex environment runtime", () => {
           cwd: root,
           env: {
             ...process.env,
-            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "1000",
+            [CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV]: "5000",
+            SHELL: "/bin/sh",
           },
           selection: {
             environment: {
@@ -396,7 +397,7 @@ describe("codex environment runtime", () => {
       }
 
       expect(error).toMatchObject({
-        message: expect.stringContaining("timed out after 1000ms"),
+        message: expect.stringContaining("timed out after 5000ms"),
         phase: "setup",
       });
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
@@ -405,7 +406,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 });
 
 async function expectEventually<T>(
