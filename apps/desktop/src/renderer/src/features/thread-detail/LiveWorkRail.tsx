@@ -46,6 +46,16 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
     return null;
   }
 
+  // Title is the comma-joined list of present section names — the rail
+  // is just an affordance for those sections, not a "Live work" / "Last
+  // turn" status surface (the pinned styling carries that signal).
+  const sectionLabels: string[] = [];
+  if (props.planEntry) sectionLabels.push("Plan");
+  if (props.editedFilesEntry) sectionLabels.push("Edited Files");
+  if (props.changedFilesEntry) sectionLabels.push("Changed Files");
+  const railTitle = sectionLabels.join(", ");
+  const railAriaLabel = props.pinned ? `${railTitle} (last turn)` : railTitle;
+
   const dockToggleLabel =
     props.dock === "above" ? "Dock to sidebar" : "Dock above composer";
   const nextDock: LiveWorkRailDock = props.dock === "above" ? "sidebar" : "above";
@@ -56,7 +66,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
         props.pinned ? " live-work-rail--pinned" : ""
       }${collapsed ? " live-work-rail--collapsed" : ""}`}
       role="complementary"
-      aria-label={props.pinned ? "Last turn's work" : "Live work"}
+      aria-label={railAriaLabel}
     >
       <header className="live-work-rail__header">
         <button
@@ -67,9 +77,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           onClick={() => setCollapsed((current) => !current)}
         >
           <span className="live-work-rail__chevron" aria-hidden="true" />
-          <span className="live-work-rail__title">
-            {props.pinned ? "Last turn" : "Live work"}
-          </span>
+          <span className="live-work-rail__title">{railTitle}</span>
         </button>
         <button
           type="button"
@@ -184,7 +192,7 @@ function EditedFileRow(props: {
       </button>
       {expanded ? (
         <div id={diffId} className="live-work-rail__file-diff">
-          <TranscriptDiff detail={props.detail} />
+          <TranscriptDiff detail={props.detail} compact />
         </div>
       ) : null}
     </>

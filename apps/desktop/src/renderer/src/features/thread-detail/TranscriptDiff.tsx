@@ -11,6 +11,13 @@ import { useDesktopApi } from "../../lib/desktop-api";
 
 type TranscriptDiffProps = {
   detail: AppServerThreadActivityDetail;
+  /**
+   * When the parent already shows the file path and additions/removals
+   * stats (e.g. the LiveWorkRail's expanded file row), pass `true` to
+   * hide the redundant `transcript-diff__path` + stats in the diff
+   * header. The zoom toggle still renders.
+   */
+  compact?: boolean;
 };
 
 export function TranscriptDiff(props: TranscriptDiffProps) {
@@ -82,7 +89,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
 
   return (
     <div className="transcript-diff">
-      {props.detail.path ? (
+      {props.detail.path && !props.compact ? (
         <p className="transcript-diff__path" title={props.detail.path}>
           {props.detail.path}
         </p>
@@ -90,14 +97,16 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
 
       <div className="transcript-diff__toolbar">
         <div className="transcript-diff__meta">
-          <div className="transcript-diff__stats" aria-label="Diff summary">
-            <span className="transcript-diff__stat transcript-diff__stat--removed">
-              -{diff.removals}
-            </span>
-            <span className="transcript-diff__stat transcript-diff__stat--added">
-              +{diff.additions}
-            </span>
-          </div>
+          {props.compact ? null : (
+            <div className="transcript-diff__stats" aria-label="Diff summary">
+              <span className="transcript-diff__stat transcript-diff__stat--removed">
+                -{diff.removals}
+              </span>
+              <span className="transcript-diff__stat transcript-diff__stat--added">
+                +{diff.additions}
+              </span>
+            </div>
+          )}
           {hiddenSummary ? (
             <span className="transcript-diff__summary">{hiddenSummary}</span>
           ) : null}

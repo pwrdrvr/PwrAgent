@@ -5746,7 +5746,10 @@ textarea,
 }
 
 .live-work-rail--dock-above {
-  width: min(100%, 760px);
+  /* Cap at the same width as the composer + transcript reading
+     column (--chat-column-max) so the rail lines up visually with
+     the composer's input. Issue #495 follow-up. */
+  width: min(100%, var(--chat-column-max));
   align-self: center;
   margin: 0 16px 8px;
   /* Bounded height: composer + transcript should still own the

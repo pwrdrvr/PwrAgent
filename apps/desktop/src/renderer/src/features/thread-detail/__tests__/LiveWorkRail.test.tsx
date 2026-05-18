@@ -82,7 +82,7 @@ describe("LiveWorkRail", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows the live title when not pinned", () => {
+  it("titles the rail with the present section names when not pinned", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -91,11 +91,15 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
-    expect(screen.getByRole("complementary", { name: "Live work" })).toBeInTheDocument();
-    expect(screen.getByText("Live work")).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Edited Files" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Edited Files/i }),
+    ).toBeInTheDocument();
   });
 
-  it("shows the last-turn title when pinned", () => {
+  it("suffixes the aria label with (last turn) when pinned but keeps the section name in the visible title", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -105,9 +109,29 @@ describe("LiveWorkRail", () => {
       />,
     );
     expect(
-      screen.getByRole("complementary", { name: "Last turn's work" }),
+      screen.getByRole("complementary", { name: "Edited Files (last turn)" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Last turn")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Edited Files/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("joins multiple present section names with commas", () => {
+    render(
+      <LiveWorkRail
+        dock="above"
+        pinned={false}
+        planEntry={buildPlanEntry()}
+        editedFilesEntry={buildEditedFilesEntry()}
+        changedFilesEntry={buildChangedFilesEntry()}
+        onDockChange={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("complementary", {
+        name: "Plan, Edited Files, Changed Files",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("renders the edited-files summary as a section heading and expands a file diff in place", () => {
@@ -173,7 +197,7 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
-    const collapseButton = screen.getByRole("button", { name: /Live work/i });
+    const collapseButton = screen.getByRole("button", { name: /Edited Files/i });
     expect(
       screen.getByRole("heading", { level: 3, name: /Edited 2 files/i }),
     ).toBeInTheDocument();

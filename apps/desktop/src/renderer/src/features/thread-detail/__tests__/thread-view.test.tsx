@@ -3712,7 +3712,7 @@ describe("ThreadView", () => {
 
     // Rail shows the pinned snapshot from turn 1.
     expect(
-      screen.getByRole("complementary", { name: "Last turn's work" }),
+      screen.getByRole("complementary", { name: /\(last turn\)/i }),
     ).toBeInTheDocument();
 
     // Simulate the next turn starting.
