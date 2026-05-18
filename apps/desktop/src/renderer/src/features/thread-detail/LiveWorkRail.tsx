@@ -41,6 +41,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
     props.planEntry || props.editedFilesEntry || props.changedFilesEntry,
   );
   const [collapsed, setCollapsed] = useState(false);
+  const bodyId = useId();
 
   if (!hasContent) {
     return null;
@@ -73,7 +74,7 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           type="button"
           className="live-work-rail__collapse"
           aria-expanded={!collapsed}
-          aria-controls={undefined}
+          aria-controls={bodyId}
           onClick={() => setCollapsed((current) => !current)}
         >
           <span className="live-work-rail__chevron" aria-hidden="true" />
@@ -90,39 +91,28 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
         </button>
       </header>
 
-      {!collapsed ? (
-        <div className="live-work-rail__body">
-          {props.planEntry ? (
-            <LiveWorkSection title="Plan">
-              <TranscriptPlan
-                entry={props.planEntry}
-                applications={props.applications}
-                desktopApi={props.desktopApi}
-              />
-            </LiveWorkSection>
-          ) : null}
+      {/* Body stays mounted across collapse toggles so the
+          `aria-controls` from the header button always points at a
+          live element. `hidden` removes it from the accessibility
+          tree and from layout (display:none equivalent). */}
+      <div id={bodyId} className="live-work-rail__body" hidden={collapsed}>
+        {props.planEntry ? (
+          <TranscriptPlan
+            entry={props.planEntry}
+            applications={props.applications}
+            desktopApi={props.desktopApi}
+          />
+        ) : null}
 
-          {props.editedFilesEntry ? (
-            <EditedFilesSection entry={props.editedFilesEntry} />
-          ) : null}
+        {props.editedFilesEntry ? (
+          <EditedFilesSection entry={props.editedFilesEntry} />
+        ) : null}
 
-          {props.changedFilesEntry ? (
-            <ChangedFilesSection entry={props.changedFilesEntry} />
-          ) : null}
-        </div>
-      ) : null}
+        {props.changedFilesEntry ? (
+          <ChangedFilesSection entry={props.changedFilesEntry} />
+        ) : null}
+      </div>
     </aside>
-  );
-}
-
-function LiveWorkSection(props: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="live-work-rail__section" aria-label={props.title}>
-      {props.children}
-    </section>
   );
 }
 
@@ -190,11 +180,14 @@ function EditedFileRow(props: {
           </span>
         </span>
       </button>
-      {expanded ? (
-        <div id={diffId} className="live-work-rail__file-diff">
-          <TranscriptDiff detail={props.detail} compact />
-        </div>
-      ) : null}
+      {/* Diff container stays in the DOM (with `hidden`) so the
+          row's `aria-controls={diffId}` always resolves. The
+          potentially-heavy TranscriptDiff itself is still
+          conditionally mounted to keep the render cost in line
+          with what the user actually opens. */}
+      <div id={diffId} className="live-work-rail__file-diff" hidden={!expanded}>
+        {expanded ? <TranscriptDiff detail={props.detail} compact /> : null}
+      </div>
     </>
   );
 }

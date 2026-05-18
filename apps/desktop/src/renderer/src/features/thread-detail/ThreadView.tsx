@@ -58,6 +58,7 @@ import {
   formatChangedFileSummary,
   getBasename,
   mergeActivityDetails,
+  readRendererSequence,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
 
@@ -936,13 +937,9 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     pendingActivityEntryRef.current = pendingActivityEntry;
-  }, [pendingActivityEntry]);
-  useEffect(() => {
     pendingProtocolActivityEntryRef.current = pendingProtocolActivityEntry;
-  }, [pendingProtocolActivityEntry]);
-  useEffect(() => {
     pendingPlanEntryRef.current = pendingPlanEntry;
-  }, [pendingPlanEntry]);
+  }, [pendingActivityEntry, pendingProtocolActivityEntry, pendingPlanEntry]);
 
   // When a new turn begins, clear the pinned snapshots from the prior
   // turn so the LiveWorkRail reflects the in-flight turn's work, not
@@ -1298,11 +1295,42 @@ export function ThreadView(props: ThreadViewProps) {
       ) {
         continue;
       }
+      if (!latest) {
+        latest = entry;
+        continue;
+      }
+      // Pick by createdAt, tiebreak by rendererSequence — same order
+      // mergeTranscriptEntries uses so the rail's pick stays
+      // consistent with where the entry sits in the transcript when
+      // wall-clock timestamps collide under fast-CI batching (the
+      // PR #493 scenario).
+      const entryCreatedAt =
+        typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+      const latestCreatedAt =
+        typeof latest.createdAt === "number" ? latest.createdAt : undefined;
       if (
-        !latest ||
-        (typeof entry.createdAt === "number" &&
-          typeof latest.createdAt === "number" &&
-          entry.createdAt >= latest.createdAt)
+        typeof entryCreatedAt === "number" &&
+        typeof latestCreatedAt === "number"
+      ) {
+        if (entryCreatedAt > latestCreatedAt) {
+          latest = entry;
+          continue;
+        }
+        if (entryCreatedAt < latestCreatedAt) {
+          continue;
+        }
+      } else if (typeof entryCreatedAt === "number") {
+        latest = entry;
+        continue;
+      } else if (typeof latestCreatedAt === "number") {
+        continue;
+      }
+      const entrySequence = readRendererSequence(entry);
+      const latestSequence = readRendererSequence(latest);
+      if (
+        typeof entrySequence === "number" &&
+        typeof latestSequence === "number" &&
+        entrySequence > latestSequence
       ) {
         latest = entry;
       }

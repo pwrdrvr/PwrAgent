@@ -5778,6 +5778,10 @@ textarea,
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-subtle);
+  /* Children need explicit min-width: 0 to let the title truncate
+     instead of forcing the dock toggle off-screen on narrow
+     viewports. */
+  min-width: 0;
 }
 
 .live-work-rail--collapsed .live-work-rail__header {
@@ -5794,6 +5798,9 @@ textarea,
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
+  /* Lets the title inside ellipsize when narrow. */
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .live-work-rail__title {
@@ -5802,6 +5809,14 @@ textarea,
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
+  /* Narrow viewports: comma-joined section names can exceed the
+     header width. Truncate with an ellipsis so the dock toggle stays
+     reachable. The full title still reads via the aside's
+     aria-label (e.g. "Plan, Edited Files (last turn)"). */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .live-work-rail--pinned .live-work-rail__title {
@@ -5809,6 +5824,7 @@ textarea,
 }
 
 .live-work-rail__dock-toggle {
+  flex: 0 0 auto;
   padding: 2px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
