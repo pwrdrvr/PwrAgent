@@ -284,6 +284,59 @@ describe("GitDirectoryService", () => {
     expect(branchesAfter).toEqual(branchesBefore);
   });
 
+  it("passes the prepared git environment to worktree creation commands", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-env-"));
+    cleanupPaths.push(repoDir);
+    const preparedEnv = {
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+    } as NodeJS.ProcessEnv;
+    const calls: Array<{
+      args: string[];
+      cwd: string;
+      env?: NodeJS.ProcessEnv;
+    }> = [];
+    const runGit = vi.fn(
+      async (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => {
+        calls.push({ args, cwd, env });
+        if (args.join(" ") === "rev-parse --show-toplevel") {
+          return repoDir;
+        }
+        if (args.join(" ") === "rev-parse --verify main^{commit}") {
+          return "0123456789abcdef0123456789abcdef01234567";
+        }
+        if (args[0] === "worktree" && args[1] === "add") {
+          return "";
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    );
+    const service = new GitDirectoryService({
+      gitEnv: preparedEnv,
+      resolveWorktreeStorage: () => "in-repo",
+      runGit,
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          args: ["worktree", "add", "--detach", workspace.cwd, "main"],
+          cwd: repoDir,
+          env: preparedEnv,
+        }),
+      ]),
+    );
+    expect(calls.every((call) => call.env === preparedEnv)).toBe(true);
+  });
+
   it("creates a worktree under a user-home root when storage is user-home", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
