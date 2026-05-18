@@ -47,6 +47,8 @@ import {
   type PendingMcpInteractionState,
 } from "./mcp-elicitation";
 import {
+  formatChangedFileSummary,
+  getBasename,
   mergeActivityDetails,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
@@ -488,11 +490,6 @@ function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
   });
 }
 
-function getBasename(path: string): string {
-  const segments = path.split(/[\\/]/);
-  return segments[segments.length - 1] || path;
-}
-
 function normalizeDiffPath(path: string | undefined): string | undefined {
   if (!path || path === "/dev/null") {
     return undefined;
@@ -519,23 +516,6 @@ function inferDiffKind(lines: string[]): "add" | "delete" | "update" {
 function buildDiffLabel(kind: "add" | "delete" | "update", path?: string): string {
   const verb = kind[0]?.toUpperCase() + kind.slice(1);
   return `${verb} ${path ? getBasename(path) : "file"}`;
-}
-
-function formatChangedFileSummary(params: {
-  count: number;
-  prefix: "Changed" | "Edited";
-  additions: number;
-  removals: number;
-}): string {
-  const parts = [
-    `${params.prefix} ${params.count} file${params.count === 1 ? "" : "s"}`,
-  ];
-  if (params.additions > 0 || params.removals > 0) {
-    parts.push(
-      `+${params.additions.toLocaleString()}, -${params.removals.toLocaleString()}`
-    );
-  }
-  return parts.join(", ");
 }
 
 function extractDiffDetails(
@@ -626,70 +606,6 @@ function buildPendingDiffEntry(params: {
       prefix: "Edited",
       additions,
       removals,
-    }),
-    details,
-    ...(params.turn ? { turn: params.turn } : {}),
-  };
-}
-
-function parseFileChangeOutput(delta: string, entryId: string): AppServerThreadActivityDetail[] {
-  const changes = new Map<string, Set<"add" | "delete" | "update">>();
-
-  for (const line of delta.replace(/\r\n?/g, "\n").split("\n")) {
-    const match = line.trim().match(/^([ADM])\s+(.+)$/);
-    if (!match) {
-      continue;
-    }
-
-    const kind =
-      match[1] === "A" ? "add" : match[1] === "D" ? "delete" : "update";
-    const path = match[2].trim();
-    if (!path) {
-      continue;
-    }
-
-    const existing = changes.get(path) ?? new Set<"add" | "delete" | "update">();
-    existing.add(kind);
-    changes.set(path, existing);
-  }
-
-  return [...changes.entries()].map(([path, kinds], index) => {
-    const labelKind =
-      kinds.has("add") && kinds.has("delete")
-        ? "Recreated"
-        : kinds.has("add")
-          ? "Added"
-          : kinds.has("delete")
-            ? "Deleted"
-            : "Modified";
-    return {
-      id: `${entryId}-${index + 1}`,
-      kind: "write",
-      label: `${labelKind} ${getBasename(path)}`,
-      path,
-    };
-  });
-}
-
-function buildFileChangeOutputEntry(params: {
-  delta: string;
-  id: string;
-  turn?: AppServerThreadTurnMetadata;
-}): AppServerThreadActivityEntry | undefined {
-  const details = parseFileChangeOutput(params.delta, params.id);
-  if (details.length === 0) {
-    return undefined;
-  }
-
-  return {
-    type: "activity",
-    id: params.id,
-    createdAt: Date.now(),
-    summary: formatChangedFileSummary({
-      count: details.length,
-      prefix: "Changed",
-      additions: 0,
-      removals: 0,
     }),
     details,
     ...(params.turn ? { turn: params.turn } : {}),
@@ -1482,30 +1398,6 @@ export function ThreadView(props: ThreadViewProps) {
                     ? event.notification.params.turnId
                     : undefined
                 ),
-              activeTurnStartedAt: props.activeTurnStartedAt,
-            }),
-          })
-        );
-        return;
-      }
-
-      if (event.notification.method === "item/fileChange/outputDelta") {
-        if (typeof event.notification.params.delta !== "string") {
-          return;
-        }
-
-        const turnId =
-          liveNotificationTurnId(
-            typeof event.notification.params.turnId === "string"
-              ? event.notification.params.turnId
-              : undefined
-          ) ?? selectedThread.id;
-        setPendingProtocolActivityEntry(
-          buildFileChangeOutputEntry({
-            delta: event.notification.params.delta,
-            id: `live-file-change-${event.notification.params.itemId || turnId}`,
-            turn: buildLiveTurnMetadata({
-              turnId,
               activeTurnStartedAt: props.activeTurnStartedAt,
             }),
           })

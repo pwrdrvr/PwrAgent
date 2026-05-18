@@ -545,3 +545,97 @@ export function buildLiveActivityEntry(params: {
       : {}),
   };
 }
+
+export function getBasename(path: string): string {
+  const segments = path.split(/[\\/]/);
+  return segments[segments.length - 1] || path;
+}
+
+export function formatChangedFileSummary(params: {
+  count: number;
+  prefix: "Changed" | "Edited";
+  additions: number;
+  removals: number;
+}): string {
+  const parts = [
+    `${params.prefix} ${params.count} file${params.count === 1 ? "" : "s"}`,
+  ];
+  if (params.additions > 0 || params.removals > 0) {
+    parts.push(
+      `+${params.additions.toLocaleString()}, -${params.removals.toLocaleString()}`
+    );
+  }
+  return parts.join(", ");
+}
+
+export function parseFileChangeOutput(
+  delta: string,
+  entryId: string
+): AppServerThreadActivityDetail[] {
+  const changes = new Map<string, Set<"add" | "delete" | "update">>();
+
+  for (const line of delta.replace(/\r\n?/g, "\n").split("\n")) {
+    const match = line.trim().match(/^([ADM])\s+(.+)$/);
+    if (!match) {
+      continue;
+    }
+
+    const kind =
+      match[1] === "A" ? "add" : match[1] === "D" ? "delete" : "update";
+    const path = match[2].trim();
+    if (!path) {
+      continue;
+    }
+
+    const existing = changes.get(path) ?? new Set<"add" | "delete" | "update">();
+    existing.add(kind);
+    changes.set(path, existing);
+  }
+
+  return [...changes.entries()].map(([path, kinds], index) => {
+    const labelKind =
+      kinds.has("add") && kinds.has("delete")
+        ? "Recreated"
+        : kinds.has("add")
+          ? "Added"
+          : kinds.has("delete")
+            ? "Deleted"
+            : "Modified";
+    return {
+      id: `${entryId}-${index + 1}`,
+      kind: "write",
+      label: `${labelKind} ${getBasename(path)}`,
+      path,
+    };
+  });
+}
+
+export function buildFileChangeOutputEntry(params: {
+  delta: string;
+  id: string;
+  createdAt?: number;
+  rendererSequence?: number;
+  turn?: AppServerThreadTurnMetadata;
+}): AppServerThreadActivityEntry | undefined {
+  const details = parseFileChangeOutput(params.delta, params.id);
+  if (details.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: "activity",
+    id: params.id,
+    createdAt: params.createdAt ?? Date.now(),
+    summary: formatChangedFileSummary({
+      count: details.length,
+      prefix: "Changed",
+      additions: 0,
+      removals: 0,
+    }),
+    details,
+    ...(params.turn ? { turn: params.turn } : {}),
+    ...(typeof params.rendererSequence === "number"
+      ? { [RENDERER_SEQUENCE_KEY]: params.rendererSequence }
+      : {}),
+  };
+}

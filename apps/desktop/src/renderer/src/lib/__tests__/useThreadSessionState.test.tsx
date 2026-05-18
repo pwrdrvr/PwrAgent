@@ -4469,4 +4469,285 @@ describe("useThreadSessionState", () => {
       message: "stale thinking state cleared after idle thread read",
     });
   });
+
+  it("renders item/fileChange/outputDelta as a Changed file activity entry", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "call-file-change",
+            delta:
+              "Success. Updated the following files:\nM apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx\n",
+          },
+        },
+      });
+    });
+
+    const fileChange = result.current.entries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && entry.id === "live-file-change-call-file-change"
+    );
+    expect(fileChange).toBeDefined();
+    expect(fileChange?.summary).toBe("Changed 1 file");
+    expect(fileChange?.turn?.id).toBe("turn-1");
+    expect(fileChange?.details).toEqual([
+      expect.objectContaining({
+        kind: "write",
+        label: "Modified TranscriptList.tsx",
+        path: "apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+      }),
+    ]);
+  });
+
+  it("collapses add+delete deltas for the same path into a Recreated detail", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "call-file-change",
+            delta:
+              "Success. Updated the following files:\nA /Users/huntharo/github/PwrAgent/.local/PR.md\nD /Users/huntharo/github/PwrAgent/.local/PR.md\n",
+          },
+        },
+      });
+    });
+
+    const fileChange = result.current.entries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && entry.id === "live-file-change-call-file-change"
+    );
+    expect(fileChange?.summary).toBe("Changed 1 file");
+    expect(fileChange?.details).toEqual([
+      expect.objectContaining({
+        kind: "write",
+        label: "Recreated PR.md",
+        path: "/Users/huntharo/github/PwrAgent/.local/PR.md",
+      }),
+    ]);
+  });
+
+  it("places file-change between earlier tool activity and a later assistant commentary message", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "command-typecheck",
+              type: "commandExecution",
+              command: "pnpm typecheck",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "call-file-change",
+            delta:
+              "Success. Updated the following files:\nM apps/desktop/src/renderer/src/features/composer/Composer.tsx\n",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "assistant-focused-tests",
+            delta: "The focused composer tests are green.",
+          },
+        },
+      });
+      // Force the pending assistant message into optimisticEntries so it
+      // shows up in `entries` for the ordering assertion below. In live
+      // usage the equivalent flush happens when the next `item/started`
+      // arrives (e.g. the e2e command in plan-autocomplete-order).
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "command-e2e",
+              type: "commandExecution",
+              command: "pnpm test:e2e",
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:pnpm typecheck",
+      "activity:Changed 1 file",
+      "message:The focused composer tests are green.",
+      "activity:pnpm test",
+    ]);
+  });
 });
