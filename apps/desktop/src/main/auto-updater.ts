@@ -186,6 +186,82 @@ function releaseInfoFromGitHubRelease(
   };
 }
 
+type ParsedSemver = {
+  core: [number, number, number];
+  pre: Array<string | number>;
+};
+
+function parseSemver(tag: string | undefined): ParsedSemver | undefined {
+  if (!tag) return undefined;
+  const trimmed = tag.trim().replace(/^v/i, "");
+  const match = trimmed.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+  );
+  if (!match) return undefined;
+  const [, maj, min, patch, pre] = match;
+  return {
+    core: [Number(maj), Number(min), Number(patch)],
+    pre: pre
+      ? pre.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+      : [],
+  };
+}
+
+// Semver 2.0.0 precedence. Returns positive if a > b, negative if a < b.
+// Unparseable tags sort below any valid version so they cannot win a "highest"
+// selection over a real release.
+export function compareSemver(a: string | undefined, b: string | undefined): number {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa && !pb) return 0;
+  if (!pa) return -1;
+  if (!pb) return 1;
+  for (let i = 0; i < 3; i++) {
+    if (pa.core[i] !== pb.core[i]) return pa.core[i] - pb.core[i];
+  }
+  if (pa.pre.length === 0 && pb.pre.length === 0) return 0;
+  // A version without prerelease identifiers has higher precedence than one
+  // with them (SemVer rule 11).
+  if (pa.pre.length === 0) return 1;
+  if (pb.pre.length === 0) return -1;
+  const len = Math.max(pa.pre.length, pb.pre.length);
+  for (let i = 0; i < len; i++) {
+    const ai = pa.pre[i];
+    const bi = pb.pre[i];
+    if (ai === undefined) return -1;
+    if (bi === undefined) return 1;
+    if (typeof ai === "number" && typeof bi === "number") {
+      if (ai !== bi) return ai - bi;
+    } else if (typeof ai === "number") {
+      return -1;
+    } else if (typeof bi === "number") {
+      return 1;
+    } else if (ai !== bi) {
+      return ai < bi ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+// Resolve channel slots by semver precedence, not GitHub publish order:
+//   - `latest`     → highest-precedence release that is NOT a prerelease
+//   - `prerelease` → highest-precedence release across both pools
+// Reporting `max(stable, prerelease)` for the prerelease slot guarantees the
+// prerelease channel never advertises a version older than `latest`. When no
+// newer prerelease exists, both slots show the same version, which truthfully
+// reflects what the updater would install.
+export function selectChannelReleases(
+  releases: GitHubRelease[],
+): { latest: GitHubRelease | undefined; prerelease: GitHubRelease | undefined } {
+  const publicReleases = releases.filter((release) => release.draft !== true);
+  const byPrecedenceDesc = [...publicReleases].sort((a, b) =>
+    compareSemver(b.tag_name, a.tag_name),
+  );
+  const latest = byPrecedenceDesc.find((release) => release.prerelease !== true);
+  const prerelease = byPrecedenceDesc[0];
+  return { latest, prerelease };
+}
+
 function githubReleaseHeaders(): HeadersInit {
   const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
   return {
@@ -212,13 +288,7 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
           typeof release === "object" && release !== null,
         )
       : [];
-    const publicReleases = releases.filter((release) => release.draft !== true);
-    const latest = publicReleases.find(
-      (release) => release.prerelease !== true,
-    );
-    const prerelease = publicReleases.find(
-      (release) => release.prerelease === true,
-    );
+    const { latest, prerelease } = selectChannelReleases(releases);
     return {
       fetchedAt: Date.now(),
       latest: releaseInfoFromGitHubRelease(latest, "No stable release found."),

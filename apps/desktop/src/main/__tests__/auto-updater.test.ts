@@ -126,3 +126,76 @@ describe("auto updater", () => {
     expect(windowSendMock).not.toHaveBeenCalled();
   });
 });
+
+describe("compareSemver", () => {
+  it("orders by major/minor/patch", async () => {
+    const { compareSemver } = await import("../auto-updater");
+    expect(compareSemver("v2.0.0", "v1.9.9")).toBeGreaterThan(0);
+    expect(compareSemver("v1.2.0", "v1.10.0")).toBeLessThan(0);
+    expect(compareSemver("v1.2.3", "v1.2.3")).toBe(0);
+  });
+
+  it("treats stable as higher precedence than prerelease at the same core", async () => {
+    const { compareSemver } = await import("../auto-updater");
+    expect(compareSemver("v1.0.0", "v1.0.0-beta.8")).toBeGreaterThan(0);
+    expect(compareSemver("v1.0.0-beta.8", "v1.0.0")).toBeLessThan(0);
+  });
+
+  it("orders numeric prerelease identifiers numerically, not lexically", async () => {
+    const { compareSemver } = await import("../auto-updater");
+    expect(compareSemver("v1.0.0-beta.9", "v1.0.0-beta.10")).toBeLessThan(0);
+    expect(compareSemver("v1.0.0-beta.2", "v1.0.0-beta.1")).toBeGreaterThan(0);
+  });
+
+  it("sorts unparseable tags below valid versions", async () => {
+    const { compareSemver } = await import("../auto-updater");
+    expect(compareSemver("not-a-version", "v1.0.0-beta.1")).toBeLessThan(0);
+    expect(compareSemver("v0.0.1", "garbage")).toBeGreaterThan(0);
+  });
+});
+
+describe("selectChannelReleases", () => {
+  it("picks the highest-precedence stable for latest and never lets prerelease go backwards", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    // GitHub returns releases newest-first by publish date. Here a newer
+    // stable (beta.8) was promoted after older beta-tagged prereleases were
+    // published — exactly the production scenario behind this bug.
+    const releases = [
+      { tag_name: "v1.0.0-beta.8", prerelease: false, draft: false },
+      { tag_name: "v1.0.0-beta.7", prerelease: true, draft: false },
+      { tag_name: "v1.0.0-beta.2", prerelease: true, draft: false },
+      { tag_name: "v1.0.0-beta.1", prerelease: true, draft: false },
+    ];
+    const { latest, prerelease } = selectChannelReleases(releases);
+    expect(latest?.tag_name).toBe("v1.0.0-beta.8");
+    // The prerelease slot must mirror the latest stable because no published
+    // prerelease has higher precedence than v1.0.0-beta.8.
+    expect(prerelease?.tag_name).toBe("v1.0.0-beta.8");
+  });
+
+  it("prefers a higher prerelease over latest stable when one exists", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.0.0-beta.9", prerelease: true, draft: false },
+      { tag_name: "v1.0.0-beta.8", prerelease: false, draft: false },
+      { tag_name: "v1.0.0-beta.1", prerelease: true, draft: false },
+    ];
+    const { latest, prerelease } = selectChannelReleases(releases);
+    expect(latest?.tag_name).toBe("v1.0.0-beta.8");
+    expect(prerelease?.tag_name).toBe("v1.0.0-beta.9");
+  });
+
+  it("ignores drafts in both channels", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v2.0.0", prerelease: false, draft: true },
+      { tag_name: "v1.5.0", prerelease: false, draft: false },
+      { tag_name: "v1.6.0-rc.1", prerelease: true, draft: true },
+      { tag_name: "v1.5.1-rc.1", prerelease: true, draft: false },
+    ];
+    const { latest, prerelease } = selectChannelReleases(releases);
+    expect(latest?.tag_name).toBe("v1.5.0");
+    // v1.5.1-rc.1 > v1.5.0 by core, and stable rule doesn't override that.
+    expect(prerelease?.tag_name).toBe("v1.5.1-rc.1");
+  });
+});
