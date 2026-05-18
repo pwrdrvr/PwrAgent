@@ -98,8 +98,10 @@ test("renders live plan updates from turn/plan/updated notifications", async () 
     await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
-    const transcript = app.window.getByRole("region", { name: "Transcript" });
-    const planGroups = transcript.getByRole("group", { name: "Task plan" });
+    // After issue #495 the live plan renders in the LiveWorkRail
+    // above the composer (role="complementary"), not inline in the
+    // transcript region. Page-scope query covers either dock mode.
+    const planGroups = app.window.getByRole("group", { name: "Task plan" });
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
