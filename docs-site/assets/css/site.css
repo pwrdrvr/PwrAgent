@@ -137,7 +137,7 @@ body {
 
 .site-brand {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   color: var(--text-primary);
   text-decoration: none;
@@ -147,6 +147,13 @@ body {
   line-height: 1;
   letter-spacing: -0.01em;
   text-transform: none;
+}
+
+.site-brand__logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
 }
 
 .site-brand__mark {
