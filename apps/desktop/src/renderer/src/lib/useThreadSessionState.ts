@@ -2259,16 +2259,16 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/commandExecution/outputDelta") {
-          const params = event.notification.params as Record<string, unknown>;
+          const notifParams = event.notification.params as Record<string, unknown>;
           const delta =
-            typeof params.delta === "string"
-              ? params.delta
+            typeof notifParams.delta === "string"
+              ? notifParams.delta
               : "";
           const itemId =
-            typeof params.itemId === "string"
-              ? params.itemId
-              : typeof params.item_id === "string"
-                ? params.item_id
+            typeof notifParams.itemId === "string"
+              ? notifParams.itemId
+              : typeof notifParams.item_id === "string"
+                ? notifParams.item_id
                 : undefined;
           if (!delta || !itemId) {
             return current;
@@ -2282,21 +2282,21 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/fileChange/outputDelta") {
-          const params = event.notification.params as Record<string, unknown>;
-          const delta = typeof params.delta === "string" ? params.delta : "";
+          const notifParams = event.notification.params as Record<string, unknown>;
+          const delta = typeof notifParams.delta === "string" ? notifParams.delta : "";
           if (!delta) {
             return current;
           }
           const itemId =
-            typeof params.itemId === "string"
-              ? params.itemId
-              : typeof params.item_id === "string"
-                ? params.item_id
+            typeof notifParams.itemId === "string"
+              ? notifParams.itemId
+              : typeof notifParams.item_id === "string"
+                ? notifParams.item_id
                 : undefined;
           const turn = buildTurnMetadata({
             fallbackId:
-              typeof params.turnId === "string"
-                ? params.turnId
+              typeof notifParams.turnId === "string"
+                ? notifParams.turnId
                 : current.activeTurnId,
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "in_progress",
