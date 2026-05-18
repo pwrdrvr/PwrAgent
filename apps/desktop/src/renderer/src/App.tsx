@@ -476,6 +476,8 @@ function DesktopAppShell(props: {
           initialCodexProfileModel={
             settings.snapshot.general.codexProfileModel.value
           }
+          settings={settings}
+          desktopApi={desktopApi}
           onComplete={async (patch) => {
             await settings.writeConfig(patch);
             // Adopt the new density immediately — saves a paint cycle

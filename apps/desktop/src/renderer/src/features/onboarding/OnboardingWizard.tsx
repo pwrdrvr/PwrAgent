@@ -2,14 +2,23 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type ChangeEvent,
   type ReactNode,
 } from "react";
 import type {
   DesktopAppearanceDensity,
   DesktopCodexProfileModel,
   DesktopSettingsConfigPatch,
+  DesktopSettingsSecretName,
+  DesktopSettingsSecretState,
+  DesktopSettingsSnapshot,
+  MessagingChannelKind,
+  MessagingPairingScope,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
+import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import {
   DiscordIcon,
   FeishuIcon,
@@ -31,28 +40,34 @@ type WizardStep =
   | "welcome"
   | "thread-presentation"
   | "codex-profile"
+  | "name-codex-profiles"
   | "messaging-safety"
   | "messaging-providers"
+  | "provider-setup"
   | "done";
 
-const STEP_ORDER: WizardStep[] = [
-  "welcome",
-  "thread-presentation",
-  "codex-profile",
-  "messaging-safety",
-  "messaging-providers",
-  "done",
+type RailIndex = 0 | 1 | 2 | 3;
+
+const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
+  { label: "Thread presentation" },
+  { label: "Codex profile" },
+  { label: "Messaging" },
+  { label: "Review" },
 ];
 
-const RAIL_STEPS: ReadonlyArray<{
-  step: WizardStep;
-  label: string;
-}> = [
-  { step: "thread-presentation", label: "Thread presentation" },
-  { step: "codex-profile", label: "Codex profile" },
-  { step: "messaging-safety", label: "Messaging" },
-  { step: "done", label: "Review" },
-];
+function railIndexForStep(step: WizardStep): RailIndex | -1 {
+  if (step === "welcome") return -1;
+  if (step === "thread-presentation") return 0;
+  if (step === "codex-profile" || step === "name-codex-profiles") return 1;
+  if (
+    step === "messaging-safety" ||
+    step === "messaging-providers" ||
+    step === "provider-setup"
+  )
+    return 2;
+  if (step === "done") return 3;
+  return -1;
+}
 
 export type OnboardingWizardProps = {
   initialDensity: DesktopAppearanceDensity;
@@ -70,6 +85,12 @@ export type OnboardingWizardProps = {
   /** Deep-link target into Settings → Messaging when the operator
    *  picks providers and clicks Set up. */
   onOpenMessagingSettings?: () => void;
+  /** Live settings state — used by per-provider setup steps to write
+   *  secrets + config directly without leaving the wizard. */
+  settings: DesktopSettingsState;
+  /** Used for pairing-token + codex-auth-profile IPCs invoked inline
+   *  by Steps 3c (per-provider setup) and the Multiple-profile loop. */
+  desktopApi?: DesktopApi;
 };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
@@ -79,13 +100,26 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   );
   const [codexProfileModel, setCodexProfileModel] =
     useState<DesktopCodexProfileModel>(props.initialCodexProfileModel);
+  const [codexProfileNames, setCodexProfileNames] = useState<string[]>([
+    "personal",
+    "work",
+  ]);
   const [acknowledged, setAcknowledged] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<
     ReadonlySet<OnboardingProvider>
   >(new Set(["telegram"]));
+  const [providerSetupIndex, setProviderSetupIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
   const isReplay = props.isReplay;
+  const orderedProviders = useMemo(
+    () =>
+      PROVIDER_ORDER.filter((id) =>
+        selectedProviders.has(id as OnboardingProvider),
+      ) as OnboardingProvider[],
+    [selectedProviders],
+  );
+  const currentProvider = orderedProviders[providerSetupIndex];
 
   // ESC = dismiss (same as Skip — see onDismiss contract)
   useEffect(() => {
@@ -99,14 +133,94 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [isReplay, props, submitting]);
 
+  // Conditional step graph — codexProfileModel="multiple" inserts the
+  // name-codex-profiles step between codex-profile and messaging-safety;
+  // empty selectedProviders skips provider-setup; etc. Centralizing the
+  // transitions here so goNext/goPrev stay one-liners at the callsite.
+  const nextStep = useCallback(
+    (current: WizardStep): WizardStep | null => {
+      switch (current) {
+        case "welcome":
+          return "thread-presentation";
+        case "thread-presentation":
+          return "codex-profile";
+        case "codex-profile":
+          return codexProfileModel === "multiple"
+            ? "name-codex-profiles"
+            : "messaging-safety";
+        case "name-codex-profiles":
+          return "messaging-safety";
+        case "messaging-safety":
+          return "messaging-providers";
+        case "messaging-providers":
+          return orderedProviders.length > 0 ? "provider-setup" : "done";
+        case "provider-setup":
+          return providerSetupIndex + 1 < orderedProviders.length
+            ? "provider-setup"
+            : "done";
+        case "done":
+          return null;
+      }
+    },
+    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+  );
+  const prevStep = useCallback(
+    (current: WizardStep): WizardStep | null => {
+      switch (current) {
+        case "welcome":
+          return null;
+        case "thread-presentation":
+          return "welcome";
+        case "codex-profile":
+          return "thread-presentation";
+        case "name-codex-profiles":
+          return "codex-profile";
+        case "messaging-safety":
+          return codexProfileModel === "multiple"
+            ? "name-codex-profiles"
+            : "codex-profile";
+        case "messaging-providers":
+          return "messaging-safety";
+        case "provider-setup":
+          return providerSetupIndex > 0
+            ? "provider-setup"
+            : "messaging-providers";
+        case "done":
+          return orderedProviders.length > 0
+            ? "provider-setup"
+            : "messaging-providers";
+      }
+    },
+    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+  );
+
   const goPrev = useCallback(() => {
-    const i = STEP_ORDER.indexOf(step);
-    if (i > 0) setStep(STEP_ORDER[i - 1]);
-  }, [step]);
+    if (step === "provider-setup" && providerSetupIndex > 0) {
+      setProviderSetupIndex((i) => i - 1);
+      return;
+    }
+    if (step === "done" && orderedProviders.length > 0) {
+      setProviderSetupIndex(orderedProviders.length - 1);
+      setStep("provider-setup");
+      return;
+    }
+    const next = prevStep(step);
+    if (next !== null) setStep(next);
+  }, [orderedProviders.length, prevStep, providerSetupIndex, step]);
   const goNext = useCallback(() => {
-    const i = STEP_ORDER.indexOf(step);
-    if (i >= 0 && i < STEP_ORDER.length - 1) setStep(STEP_ORDER[i + 1]);
-  }, [step]);
+    if (
+      step === "provider-setup" &&
+      providerSetupIndex + 1 < orderedProviders.length
+    ) {
+      setProviderSetupIndex((i) => i + 1);
+      return;
+    }
+    if (step === "messaging-providers" && orderedProviders.length > 0) {
+      setProviderSetupIndex(0);
+    }
+    const next = nextStep(step);
+    if (next !== null) setStep(next);
+  }, [nextStep, orderedProviders.length, providerSetupIndex, step]);
 
   const persistAndComplete = useCallback(
     async (extra?: DesktopSettingsConfigPatch): Promise<void> => {
@@ -131,6 +245,33 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           ...(extra ?? {}),
         };
         await props.onComplete(patch);
+
+        // Multi-profile path: actually create the named Codex auth
+        // profiles on disk so the operator can pick them up in Settings →
+        // Profiles. Login is left for the user to trigger from Settings —
+        // we don't want to fire N SSO browser windows here.
+        if (
+          codexProfileModel === "multiple" &&
+          props.desktopApi?.createCodexAuthProfile
+        ) {
+          const validNames = codexProfileNames
+            .map((n) => n.trim())
+            .filter((n) => isValidProfileName(n));
+          for (const name of validNames) {
+            try {
+              await props.desktopApi.createCodexAuthProfile({ profile: name });
+            } catch (caught) {
+              // Best-effort: a single failed profile shouldn't sink the
+              // whole flow. The user can retry from Settings → Profiles
+              // (the existing #256 surface owns the actual provisioning).
+              // eslint-disable-next-line no-console
+              console.warn(
+                `Onboarding: failed to create Codex profile "${name}"`,
+                caught,
+              );
+            }
+          }
+        }
       } finally {
         setSubmitting(false);
       }
@@ -138,6 +279,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     [
       acknowledged,
       codexProfileModel,
+      codexProfileNames,
       density,
       isReplay,
       props,
@@ -153,21 +295,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     props.onDismiss(!isReplay);
   }, [isReplay, props]);
 
-  const handleFinishMessaging = useCallback(async (): Promise<void> => {
-    await persistAndComplete();
-    if (selectedProviders.size > 0 && props.onOpenMessagingSettings) {
-      props.onOpenMessagingSettings();
-    }
-  }, [persistAndComplete, props, selectedProviders]);
-
-  const currentRailIndex = (() => {
-    if (step === "welcome") return -1;
-    if (step === "thread-presentation") return 0;
-    if (step === "codex-profile") return 1;
-    if (step === "messaging-safety" || step === "messaging-providers") return 2;
-    if (step === "done") return 3;
-    return -1;
-  })();
+  const currentRailIndex = railIndexForStep(step);
 
   return (
     <div
@@ -183,6 +311,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         <WizardTitlebar
           step={step}
           isReplay={isReplay}
+          providerName={
+            step === "provider-setup" && currentProvider
+              ? providerName(currentProvider)
+              : undefined
+          }
+          providerPosition={
+            step === "provider-setup"
+              ? `${providerSetupIndex + 1} of ${orderedProviders.length}`
+              : undefined
+          }
           onClose={() => props.onDismiss(!isReplay)}
         />
         {step !== "welcome" ? (
@@ -190,7 +328,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             currentIndex={currentRailIndex}
             chosenDensity={density}
             chosenCodexProfileModel={codexProfileModel}
-            messagingDone={step === "done"}
           />
         ) : null}
         <div className="onboarding-wizard__body">
@@ -202,6 +339,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             <CodexProfileStep
               value={codexProfileModel}
               onChange={setCodexProfileModel}
+            />
+          ) : null}
+          {step === "name-codex-profiles" ? (
+            <NameCodexProfilesStep
+              names={codexProfileNames}
+              onChange={setCodexProfileNames}
             />
           ) : null}
           {step === "messaging-safety" ? (
@@ -216,11 +359,22 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               onChange={setSelectedProviders}
             />
           ) : null}
+          {step === "provider-setup" && currentProvider ? (
+            <ProviderSetupStep
+              key={currentProvider}
+              provider={currentProvider}
+              settings={props.settings}
+              desktopApi={props.desktopApi}
+            />
+          ) : null}
           {step === "done" ? (
             <DoneStep
               density={density}
               codexProfileModel={codexProfileModel}
-              messagingProviders={[...selectedProviders]}
+              codexProfileNames={
+                codexProfileModel === "multiple" ? codexProfileNames : undefined
+              }
+              messagingProviders={orderedProviders}
               acknowledged={acknowledged}
             />
           ) : null}
@@ -230,18 +384,33 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           submitting={submitting}
           acknowledged={acknowledged}
           providerCount={selectedProviders.size}
+          providerSetupIndex={providerSetupIndex}
+          providerSetupTotal={orderedProviders.length}
+          currentProviderName={
+            currentProvider ? providerName(currentProvider) : undefined
+          }
+          codexProfileNamesValid={validateProfileNames(codexProfileNames)}
           density={density}
           codexProfileModel={codexProfileModel}
           onBack={goPrev}
           onSkip={handleSkip}
           onNext={goNext}
-          onAdvanceToProviders={goNext}
-          onFinishMessaging={() => void handleFinishMessaging()}
           onFinish={() => void persistAndComplete()}
         />
       </div>
     </div>
   );
+}
+
+function validateProfileNames(names: readonly string[]): boolean {
+  const trimmed = names.map((n) => n.trim()).filter((n) => n.length > 0);
+  if (trimmed.length < 1 || trimmed.length > 5) return false;
+  const set = new Set(trimmed);
+  return set.size === trimmed.length && trimmed.every(isValidProfileName);
+}
+
+function isValidProfileName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9_-]{0,30}$/.test(name);
 }
 
 /* ----------------------------------------------------------------
@@ -251,6 +420,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
 function WizardTitlebar(props: {
   step: WizardStep;
   isReplay: boolean;
+  providerName?: string;
+  providerPosition?: string;
   onClose: () => void;
 }) {
   const eyebrow = props.isReplay ? "Replay" : "Welcome";
@@ -262,10 +433,16 @@ function WizardTitlebar(props: {
         return "Step 1 — Thread presentation";
       case "codex-profile":
         return "Step 2 — Codex profile";
+      case "name-codex-profiles":
+        return "Step 2 — Name your profiles";
       case "messaging-safety":
         return "Step 3 — Messaging — Before you connect";
       case "messaging-providers":
         return "Step 3 — Messaging — Pick providers";
+      case "provider-setup":
+        return props.providerName
+          ? `Step 3 — ${props.providerName}${props.providerPosition ? ` (${props.providerPosition})` : ""}`
+          : "Step 3 — Provider setup";
       case "done":
         return "Done";
     }
@@ -292,7 +469,6 @@ function WizardRail(props: {
   currentIndex: number;
   chosenDensity: DesktopAppearanceDensity;
   chosenCodexProfileModel: DesktopCodexProfileModel;
-  messagingDone: boolean;
 }) {
   const labelOverrides: Record<number, string> = {
     0: props.currentIndex > 0 ? densityLabel(props.chosenDensity) : "Thread presentation",
@@ -300,11 +476,11 @@ function WizardRail(props: {
       props.currentIndex > 1
         ? codexProfileLabel(props.chosenCodexProfileModel)
         : "Codex profile",
-    2: props.messagingDone ? "Messaging" : "Messaging",
+    2: "Messaging",
   };
   return (
     <nav className="onboarding-wizard__rail" aria-label="Setup progress">
-      {RAIL_STEPS.map(({ step, label }, idx) => {
+      {RAIL_STEPS.map(({ label }, idx) => {
         const state =
           idx < props.currentIndex
             ? "done"
@@ -315,7 +491,7 @@ function WizardRail(props: {
           state === "done" ? `Step ${idx + 1} ✓` : idx === 3 ? "Done" : `Step ${idx + 1}`;
         return (
           <div
-            key={step}
+            key={idx}
             className={`onboarding-wizard__rail-step is-${state}`}
             aria-current={state === "current" ? "step" : undefined}
           >
@@ -335,28 +511,39 @@ function WizardFooter(props: {
   submitting: boolean;
   acknowledged: boolean;
   providerCount: number;
+  providerSetupIndex: number;
+  providerSetupTotal: number;
+  currentProviderName?: string;
+  codexProfileNamesValid: boolean;
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
   onBack: () => void;
   onSkip: () => void;
   onNext: () => void;
-  onAdvanceToProviders: () => void;
-  onFinishMessaging: () => void;
   onFinish: () => void;
 }) {
   const showBack =
     props.step !== "welcome" && props.step !== "done" && !props.submitting;
   const showSkip = props.step !== "done";
-  const skipLabel =
-    props.step === "messaging-safety" || props.step === "messaging-providers"
-      ? "Skip messaging setup"
-      : "Skip setup";
+  const skipLabel = (() => {
+    if (
+      props.step === "messaging-safety" ||
+      props.step === "messaging-providers"
+    )
+      return "Skip messaging setup";
+    if (props.step === "provider-setup") return `Skip ${props.currentProviderName}`;
+    return "Skip setup";
+  })();
 
   let hint: string | undefined;
   if (props.step === "thread-presentation") {
     hint = `${densityLabel(props.density)} selected · 1 of 3`;
   } else if (props.step === "codex-profile") {
     hint = `${codexProfileLabel(props.codexProfileModel)} selected · 2 of 3`;
+  } else if (props.step === "name-codex-profiles") {
+    hint = props.codexProfileNamesValid
+      ? "Names look good"
+      : "1–5 unique lowercase names (letters, digits, _ , -)";
   } else if (props.step === "messaging-safety") {
     hint = props.acknowledged ? "Acknowledgement recorded" : undefined;
   } else if (props.step === "messaging-providers") {
@@ -364,6 +551,8 @@ function WizardFooter(props: {
       props.providerCount > 0
         ? `${props.providerCount} provider${props.providerCount === 1 ? "" : "s"} selected`
         : "No providers selected";
+  } else if (props.step === "provider-setup") {
+    hint = `Provider ${props.providerSetupIndex + 1} of ${props.providerSetupTotal}`;
   }
 
   let primary: ReactNode = null;
@@ -377,11 +566,25 @@ function WizardFooter(props: {
         Get started →
       </button>
     );
-  } else if (props.step === "thread-presentation" || props.step === "codex-profile") {
+  } else if (
+    props.step === "thread-presentation" ||
+    props.step === "codex-profile"
+  ) {
     primary = (
       <button
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        onClick={props.onNext}
+      >
+        Continue →
+      </button>
+    );
+  } else if (props.step === "name-codex-profiles") {
+    primary = (
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        disabled={!props.codexProfileNamesValid || props.submitting}
         onClick={props.onNext}
       >
         Continue →
@@ -393,7 +596,7 @@ function WizardFooter(props: {
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
         disabled={!props.acknowledged || props.submitting}
-        onClick={props.onAdvanceToProviders}
+        onClick={props.onNext}
       >
         Continue →
       </button>
@@ -404,9 +607,22 @@ function WizardFooter(props: {
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
         disabled={props.submitting}
-        onClick={props.onFinishMessaging}
+        onClick={props.onNext}
       >
-        {props.providerCount > 0 ? "Save & set up →" : "Save & finish →"}
+        {props.providerCount > 0 ? "Set up →" : "Finish →"}
+      </button>
+    );
+  } else if (props.step === "provider-setup") {
+    const isLast =
+      props.providerSetupIndex + 1 >= props.providerSetupTotal;
+    primary = (
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        disabled={props.submitting}
+        onClick={props.onNext}
+      >
+        {isLast ? "Finish →" : "Next provider →"}
       </button>
     );
   } else if (props.step === "done") {
@@ -814,6 +1030,7 @@ function MessagingProvidersStep(props: {
 function DoneStep(props: {
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
+  codexProfileNames?: string[];
   messagingProviders: readonly OnboardingProvider[];
   acknowledged: boolean;
 }) {
@@ -824,8 +1041,20 @@ function DoneStep(props: {
     if (props.messagingProviders.length === 0) {
       return "Acknowledged, no providers selected.";
     }
-    return props.messagingProviders.map(providerLabel).join(", ");
+    return props.messagingProviders.map(providerName).join(", ");
   }, [props.acknowledged, props.messagingProviders]);
+  const codexSummary = useMemo(() => {
+    if (
+      props.codexProfileModel === "multiple" &&
+      props.codexProfileNames?.length
+    ) {
+      return `Multiple — ${props.codexProfileNames
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0)
+        .join(", ")}`;
+    }
+    return codexProfileLabel(props.codexProfileModel);
+  }, [props.codexProfileModel, props.codexProfileNames]);
   return (
     <div className="onboarding-wizard__done">
       <div className="onboarding-wizard__done-check">
@@ -845,7 +1074,7 @@ function DoneStep(props: {
         </div>
         <div>
           <dt>Codex profile</dt>
-          <dd>{codexProfileLabel(props.codexProfileModel)}</dd>
+          <dd>{codexSummary}</dd>
         </div>
         <div>
           <dt>Messaging</dt>
@@ -1049,6 +1278,809 @@ function CodexNode(props: {
 }
 
 /* ----------------------------------------------------------------
+   Step: Name your Codex profiles (Step 2b — only when "Multiple")
+   ---------------------------------------------------------------- */
+
+function NameCodexProfilesStep(props: {
+  names: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const setAt = (idx: number, value: string): void => {
+    const next = [...props.names];
+    next[idx] = value;
+    props.onChange(next);
+  };
+  const removeAt = (idx: number): void => {
+    const next = [...props.names];
+    next.splice(idx, 1);
+    props.onChange(next);
+  };
+  const addOne = (): void => {
+    if (props.names.length >= 5) return;
+    props.onChange([...props.names, ""]);
+  };
+  return (
+    <div>
+      <header className="onboarding-wizard__head">
+        <h1 className="onboarding-wizard__title">
+          Name your Codex profiles
+        </h1>
+        <p className="onboarding-wizard__sub">
+          Up to 5. Names become both the Codex profile name and the paired
+          PwrAgent profile name. Lowercase letters, digits, underscores, and
+          hyphens — 1 to 31 characters. Codex login for each happens after the
+          wizard from Settings → Profiles.
+        </p>
+      </header>
+      <div className="onboarding-wizard__profile-list">
+        {props.names.map((name, idx) => {
+          const trimmed = name.trim();
+          const valid = trimmed === "" || isValidProfileName(trimmed);
+          return (
+            <div key={idx} className="onboarding-wizard__profile-row">
+              <span className="onboarding-wizard__profile-num">{idx + 1}</span>
+              <input
+                type="text"
+                className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
+                placeholder="profile-name"
+                value={name}
+                onChange={(e) => setAt(idx, e.target.value)}
+                aria-invalid={!valid}
+              />
+              {props.names.length > 1 ? (
+                <button
+                  type="button"
+                  className="onboarding-wizard__btn onboarding-wizard__btn--link"
+                  onClick={() => removeAt(idx)}
+                  aria-label={`Remove profile ${idx + 1}`}
+                >
+                  Remove
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+        {props.names.length < 5 ? (
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost onboarding-wizard__profile-add"
+            onClick={addOne}
+          >
+            + Add another profile
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Step: Per-provider inline setup (Step 3c — one per selected provider)
+   ---------------------------------------------------------------- */
+
+type ProviderField =
+  | {
+      kind: "secret";
+      name: DesktopSettingsSecretName;
+      label: string;
+      sub?: string;
+      placeholder?: string;
+    }
+  | {
+      kind: "text";
+      key: string;
+      label: string;
+      sub?: string;
+      placeholder?: string;
+    }
+  | {
+      kind: "segmented";
+      key: string;
+      label: string;
+      sub?: string;
+      options: ReadonlyArray<{ label: string; value: string }>;
+    };
+
+type ProviderSetupConfig = {
+  id: OnboardingProvider;
+  intro: ReactNode;
+  fields: readonly ProviderField[];
+  /** Optional scope for the pairing-token generator. Omit to skip pairing. */
+  pairingScope?: MessagingPairingScope;
+  pairingHelp?: ReactNode;
+};
+
+const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = {
+  telegram: {
+    id: "telegram",
+    intro: (
+      <>
+        Message <strong>@BotFather</strong> on Telegram, send <code>/newbot</code>,
+        pick a name. BotFather replies with a bot token — paste it below.
+      </>
+    ),
+    fields: [
+      {
+        kind: "secret",
+        name: "telegramBotToken",
+        label: "Bot token",
+        sub: "Stored in your system keychain.",
+        placeholder: "0000000000:AAEx………",
+      },
+    ],
+    pairingScope: "user_dm",
+    pairingHelp: (
+      <>
+        Open the chat with your new bot on Telegram and send the pairing
+        message above. PwrAgent will see the message land and finish pairing
+        automatically.
+      </>
+    ),
+  },
+  discord: {
+    id: "discord",
+    intro: (
+      <>
+        Discord Developer Portal → create an Application → Bot tab → reset
+        token. Paste it below along with the Application ID (General
+        Information tab).
+      </>
+    ),
+    fields: [
+      {
+        kind: "secret",
+        name: "discordBotToken",
+        label: "Bot token",
+        placeholder: "Paste from Bot → Reset Token",
+      },
+      {
+        kind: "text",
+        key: "applicationId",
+        label: "Application ID",
+        sub: "Found under General Information → Application ID.",
+        placeholder: "1480556454498009352",
+      },
+    ],
+    pairingScope: "user_dm",
+    pairingHelp: (
+      <>
+        Invite the bot to a guild (Developer Portal → OAuth2 URL Generator,
+        scopes <code>bot</code> + <code>applications.commands</code>), then DM
+        the bot the pairing message above.
+      </>
+    ),
+  },
+  mattermost: {
+    id: "mattermost",
+    intro: (
+      <>
+        In your Mattermost server: System Console → Integrations → Bot
+        Accounts → create a bot, copy the token. Also set the server URL and
+        a callback base URL reachable from the Mattermost host.
+      </>
+    ),
+    fields: [
+      {
+        kind: "text",
+        key: "serverUrl",
+        label: "Server URL",
+        placeholder: "https://chat.example.com",
+      },
+      {
+        kind: "secret",
+        name: "mattermostBotToken",
+        label: "Bot token",
+      },
+      {
+        kind: "secret",
+        name: "mattermostHmacSecret",
+        label: "HMAC signing secret",
+        sub: "Verifies incoming webhook callbacks. Generate any high-entropy string.",
+      },
+      {
+        kind: "text",
+        key: "callbackBaseUrl",
+        label: "Callback base URL",
+        sub: "Public URL Mattermost will POST events to (tunnel or LAN).",
+        placeholder: "https://pwragent.tail.example.ts.net",
+      },
+    ],
+    pairingScope: "user_dm",
+  },
+  feishu: {
+    id: "feishu",
+    intro: (
+      <>
+        Feishu / Lark Open Platform → create a custom app → copy App ID,
+        App Secret, Encrypt Key, and Verification Token. Pick which tenant
+        region to use and the inbound mode.
+      </>
+    ),
+    fields: [
+      {
+        kind: "segmented",
+        key: "tenantRegion",
+        label: "Tenant region",
+        options: [
+          { label: "Lark (international)", value: "lark" },
+          { label: "Feishu (China)", value: "feishu" },
+        ],
+      },
+      {
+        kind: "segmented",
+        key: "inboundMode",
+        label: "Inbound mode",
+        sub: "Persistent uses long-polling; Webhook needs a public callback URL.",
+        options: [
+          { label: "Persistent", value: "persistent" },
+          { label: "Webhook", value: "webhook" },
+        ],
+      },
+      { kind: "secret", name: "feishuAppId", label: "App ID" },
+      { kind: "secret", name: "feishuAppSecret", label: "App secret" },
+      { kind: "secret", name: "feishuEncryptKey", label: "Encrypt key" },
+      {
+        kind: "secret",
+        name: "feishuVerificationToken",
+        label: "Verification token",
+      },
+    ],
+    pairingScope: "user_dm",
+  },
+  slack: {
+    id: "slack",
+    intro: (
+      <>
+        Slack app config → Install App → grab the Bot User OAuth Token. Pick
+        Socket Mode (easiest, requires App-Level Token) or Events API
+        (requires a public signing secret + callback URL).
+      </>
+    ),
+    fields: [
+      {
+        kind: "segmented",
+        key: "inboundMode",
+        label: "Inbound mode",
+        sub: "Socket Mode is recommended — no public URL needed.",
+        options: [
+          { label: "Socket Mode", value: "socket" },
+          { label: "Events API", value: "events" },
+        ],
+      },
+      { kind: "secret", name: "slackBotToken", label: "Bot token (xoxb-…)" },
+      {
+        kind: "secret",
+        name: "slackAppToken",
+        label: "App-level token (xapp-…)",
+        sub: "Required for Socket Mode. Generate under Basic Information → App-Level Tokens.",
+      },
+      {
+        kind: "secret",
+        name: "slackSigningSecret",
+        label: "Signing secret",
+        sub: "Required for Events API. Found under Basic Information → App Credentials.",
+      },
+      {
+        kind: "text",
+        key: "workspaceUrl",
+        label: "Workspace URL",
+        placeholder: "https://your-team.slack.com",
+      },
+    ],
+    pairingScope: "user_dm",
+  },
+  line: {
+    id: "line",
+    intro: (
+      <>
+        LINE Developers → Messaging API channel → copy the Channel Access
+        Token and Channel Secret. LINE is webhook-only inbound, so you need a
+        public HTTPS URL pointing at this machine (Cloudflare Tunnel, Tailscale
+        Funnel, ngrok, etc.).
+      </>
+    ),
+    fields: [
+      {
+        kind: "secret",
+        name: "lineChannelAccessToken",
+        label: "Channel access token",
+      },
+      { kind: "secret", name: "lineChannelSecret", label: "Channel secret" },
+      {
+        kind: "text",
+        key: "botUserId",
+        label: "Bot user ID",
+        sub: "Found under Messaging API tab — starts with U.",
+        placeholder: "U1234567890abcdef…",
+      },
+      {
+        kind: "text",
+        key: "callbackBaseUrl",
+        label: "Public callback URL",
+        sub: "Must be reachable over HTTPS from LINE's servers.",
+        placeholder: "https://pwragent.tail.example.ts.net",
+      },
+    ],
+    pairingScope: "user_dm",
+  },
+};
+
+function ProviderSetupStep(props: {
+  provider: OnboardingProvider;
+  settings: DesktopSettingsState;
+  desktopApi?: DesktopApi;
+}) {
+  const config = PROVIDER_SETUP_CONFIGS[props.provider];
+  const snapshot = props.settings.snapshot;
+  const platformSnapshot = snapshot?.messaging?.[props.provider];
+
+  // Auto-enable the platform when the step opens so pairing / probe work.
+  useEffect(() => {
+    if (!platformSnapshot) return;
+    if (platformSnapshot.enabled.value) return;
+    void props.settings.writeConfig({
+      messaging: { [props.provider]: { enabled: true } } as never,
+    });
+    // intentionally only run when provider changes — repeated writes would
+    // race with the snapshot refresh fired by writeConfig itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.provider]);
+
+  return (
+    <div className="onboarding-wizard__provider-setup">
+      <header className="onboarding-wizard__head">
+        <h1 className="onboarding-wizard__title">
+          <span className="onboarding-wizard__provider-setup-icon">
+            {providerIcon(props.provider, 22)}
+          </span>
+          Connect {providerName(props.provider)}
+        </h1>
+        <p className="onboarding-wizard__sub">{config.intro}</p>
+      </header>
+      <div className="onboarding-wizard__provider-fields">
+        {config.fields.map((field) => (
+          <ProviderFieldRow
+            key={field.kind === "secret" ? `secret:${field.name}` : `text:${field.key}`}
+            field={field}
+            provider={props.provider}
+            snapshot={snapshot}
+            saving={props.settings.saving}
+            replaceSecret={props.settings.replaceSecret}
+            writeConfig={props.settings.writeConfig}
+          />
+        ))}
+      </div>
+      {config.pairingScope ? (
+        <PairingBlock
+          platform={props.provider}
+          scope={config.pairingScope}
+          help={config.pairingHelp}
+          desktopApi={props.desktopApi}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProviderFieldRow(props: {
+  field: ProviderField;
+  provider: OnboardingProvider;
+  snapshot?: DesktopSettingsSnapshot;
+  saving: boolean;
+  replaceSecret: (
+    name: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
+  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+}) {
+  if (props.field.kind === "secret") {
+    return (
+      <SecretFieldRow
+        field={props.field}
+        snapshot={props.snapshot}
+        saving={props.saving}
+        replaceSecret={props.replaceSecret}
+      />
+    );
+  }
+  if (props.field.kind === "text") {
+    return (
+      <TextFieldRow
+        field={props.field}
+        provider={props.provider}
+        snapshot={props.snapshot}
+        saving={props.saving}
+        writeConfig={props.writeConfig}
+      />
+    );
+  }
+  return (
+    <SegmentedFieldRow
+      field={props.field}
+      provider={props.provider}
+      snapshot={props.snapshot}
+      saving={props.saving}
+      writeConfig={props.writeConfig}
+    />
+  );
+}
+
+function SecretFieldRow(props: {
+  field: Extract<ProviderField, { kind: "secret" }>;
+  snapshot?: DesktopSettingsSnapshot;
+  saving: boolean;
+  replaceSecret: (
+    name: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const state = readSecretState(props.snapshot, props.field.name);
+  const configured = state?.configured ?? false;
+
+  const save = async (): Promise<void> => {
+    if (!value || busy) return;
+    setBusy(true);
+    setError(undefined);
+    const ok = await props.replaceSecret(props.field.name, value);
+    if (ok) {
+      setValue("");
+    } else {
+      setError("Could not save the secret.");
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="onboarding-wizard__field">
+      <div className="onboarding-wizard__field-head">
+        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+        <span className="onboarding-wizard__field-status">
+          {configured ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
+          ) : (
+            <span className="onboarding-wizard__field-pill">not set</span>
+          )}
+        </span>
+      </div>
+      {props.field.sub ? (
+        <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
+      ) : null}
+      <div className="onboarding-wizard__field-row">
+        <input
+          type="password"
+          className="onboarding-wizard__input"
+          placeholder={configured ? "Replace stored value" : props.field.placeholder}
+          value={value}
+          disabled={props.saving || busy}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void save();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={!value || busy || props.saving}
+          onClick={() => void save()}
+        >
+          {busy ? "Saving…" : configured ? "Replace" : "Save"}
+        </button>
+      </div>
+      {error ? (
+        <span className="onboarding-wizard__field-error">{error}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function TextFieldRow(props: {
+  field: Extract<ProviderField, { kind: "text" }>;
+  provider: OnboardingProvider;
+  snapshot?: DesktopSettingsSnapshot;
+  saving: boolean;
+  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+}) {
+  const stored =
+    (readPlatformValue(props.snapshot, props.provider, props.field.key) as
+      | string
+      | undefined) ?? "";
+  const [value, setValue] = useState(stored);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const dirty = value !== stored;
+  // Resync when stored value changes (e.g. snapshot refresh).
+  useEffect(() => {
+    setValue(stored);
+  }, [stored]);
+  const save = async (): Promise<void> => {
+    if (!dirty || busy) return;
+    setBusy(true);
+    setError(undefined);
+    const patch = buildPlatformPatch(props.provider, props.field.key, value);
+    const ok = await props.writeConfig(patch);
+    if (!ok) setError("Could not save.");
+    setBusy(false);
+  };
+  return (
+    <div className="onboarding-wizard__field">
+      <div className="onboarding-wizard__field-head">
+        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+        <span className="onboarding-wizard__field-status">
+          {stored ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
+          ) : (
+            <span className="onboarding-wizard__field-pill">not set</span>
+          )}
+        </span>
+      </div>
+      {props.field.sub ? (
+        <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
+      ) : null}
+      <div className="onboarding-wizard__field-row">
+        <input
+          type="text"
+          className="onboarding-wizard__input"
+          placeholder={props.field.placeholder}
+          value={value}
+          disabled={props.saving || busy}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+          onBlur={() => void save()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void save();
+            }
+          }}
+        />
+        {dirty ? (
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            disabled={busy || props.saving}
+            onClick={() => void save()}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        ) : null}
+      </div>
+      {error ? (
+        <span className="onboarding-wizard__field-error">{error}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function SegmentedFieldRow(props: {
+  field: Extract<ProviderField, { kind: "segmented" }>;
+  provider: OnboardingProvider;
+  snapshot?: DesktopSettingsSnapshot;
+  saving: boolean;
+  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+}) {
+  const stored =
+    (readPlatformValue(props.snapshot, props.provider, props.field.key) as
+      | string
+      | undefined) ?? props.field.options[0]?.value;
+  const select = async (value: string): Promise<void> => {
+    if (value === stored) return;
+    const patch = buildPlatformPatch(props.provider, props.field.key, value);
+    await props.writeConfig(patch);
+  };
+  return (
+    <div className="onboarding-wizard__field">
+      <div className="onboarding-wizard__field-head">
+        <span className="onboarding-wizard__field-label">{props.field.label}</span>
+      </div>
+      {props.field.sub ? (
+        <span className="onboarding-wizard__field-sub">{props.field.sub}</span>
+      ) : null}
+      <div className="onboarding-wizard__segmented">
+        {props.field.options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`onboarding-wizard__segmented-btn${stored === option.value ? " is-active" : ""}`}
+            disabled={props.saving}
+            onClick={() => void select(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Pairing-token block — reuses generateMessagingPairingToken IPC
+   and watches onMessagingPairingChanged for live status updates
+   ---------------------------------------------------------------- */
+
+function PairingBlock(props: {
+  platform: MessagingChannelKind;
+  scope: MessagingPairingScope;
+  help?: ReactNode;
+  desktopApi?: DesktopApi;
+}) {
+  const [message, setMessage] = useState<string | undefined>(undefined);
+  const [entryId, setEntryId] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [resolution, setResolution] = useState<"observed" | "approved" | undefined>(
+    undefined,
+  );
+  const entryIdRef = useRef<string | undefined>(undefined);
+  entryIdRef.current = entryId;
+
+  useEffect(() => {
+    if (!props.desktopApi?.onMessagingPairingChanged) return;
+    return props.desktopApi.onMessagingPairingChanged((event) => {
+      if (event.entry.platform !== props.platform) return;
+      if (event.entry.id !== entryIdRef.current) return;
+      if (event.entry.status === "observed" || event.entry.status === "approved") {
+        setResolution(event.entry.status);
+      }
+    });
+  }, [props.desktopApi, props.platform]);
+
+  const generate = async (): Promise<void> => {
+    if (!props.desktopApi?.generateMessagingPairingToken || busy) return;
+    setBusy(true);
+    setError(undefined);
+    setResolution(undefined);
+    try {
+      const result = await props.desktopApi.generateMessagingPairingToken({
+        platform: props.platform,
+        scope: props.scope,
+      });
+      setMessage(result.message);
+      setEntryId(result.entry.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async (): Promise<void> => {
+    if (!message) return;
+    try {
+      await navigator.clipboard.writeText(message);
+    } catch {
+      // best effort — user can still select the text in the input
+    }
+  };
+
+  return (
+    <div className="onboarding-wizard__pairing">
+      <div className="onboarding-wizard__pairing-head">
+        <span className="onboarding-wizard__field-label">Pair this device</span>
+        <span className="onboarding-wizard__field-status">
+          {resolution === "approved" ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ paired</span>
+          ) : resolution === "observed" ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ message seen</span>
+          ) : entryId ? (
+            <span className="onboarding-wizard__field-pill is-warn">
+              waiting for message…
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {props.help ? (
+        <p className="onboarding-wizard__field-sub">{props.help}</p>
+      ) : null}
+      {message ? (
+        <div className="onboarding-wizard__pairing-token">
+          <code>{message}</code>
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            onClick={() => void copy()}
+          >
+            Copy
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={busy || !props.desktopApi?.generateMessagingPairingToken}
+          onClick={() => void generate()}
+        >
+          {busy ? "Generating…" : "Generate pairing code"}
+        </button>
+      )}
+      {error ? (
+        <span className="onboarding-wizard__field-error">{error}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Snapshot lookup helpers — read current platform values + secret state
+   ---------------------------------------------------------------- */
+
+function readSecretState(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  name: DesktopSettingsSecretName,
+): DesktopSettingsSecretState | undefined {
+  if (!snapshot) return undefined;
+  // Walk the messaging snapshot and find the matching secret by name. The
+  // type-level mapping from secret-name to snapshot path is awkward to
+  // express, so we lean on a small lookup table maintained inline.
+  const map: Partial<Record<DesktopSettingsSecretName, DesktopSettingsSecretState>> = {
+    telegramBotToken: snapshot.messaging.telegram.botToken,
+    discordBotToken: snapshot.messaging.discord.botToken,
+    mattermostBotToken: snapshot.messaging.mattermost.botToken,
+    mattermostHmacSecret: snapshot.messaging.mattermost.hmacSecret,
+    slackBotToken: snapshot.messaging.slack.botToken,
+    slackAppToken: snapshot.messaging.slack.appToken,
+    slackSigningSecret: snapshot.messaging.slack.signingSecret,
+    feishuAppId: snapshot.messaging.feishu.appId,
+    feishuAppSecret: snapshot.messaging.feishu.appSecret,
+    feishuEncryptKey: snapshot.messaging.feishu.encryptKey,
+    feishuVerificationToken: snapshot.messaging.feishu.verificationToken,
+    lineChannelAccessToken: snapshot.messaging.line.channelAccessToken,
+    lineChannelSecret: snapshot.messaging.line.channelSecret,
+  };
+  return map[name];
+}
+
+function readPlatformValue(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  provider: OnboardingProvider,
+  key: string,
+): unknown {
+  if (!snapshot) return undefined;
+  // The per-platform snapshot mixes `{ value }` fields with raw secret-state
+  // objects; the secret entries get filtered out by the caller (text/segmented
+  // rows never reference secret keys). Cast through `unknown` so TS lets us
+  // do the lookup without enumerating every field type per platform.
+  const platform = snapshot.messaging[provider] as unknown as Record<
+    string,
+    { value: unknown } | undefined
+  >;
+  const field = platform?.[key];
+  return field?.value;
+}
+
+function buildPlatformPatch(
+  provider: OnboardingProvider,
+  key: string,
+  value: unknown,
+): DesktopSettingsConfigPatch {
+  return {
+    messaging: {
+      [provider]: { [key]: value },
+    } as never,
+  };
+}
+
+function providerIcon(id: OnboardingProvider, size: number) {
+  switch (id) {
+    case "telegram":
+      return <TelegramIcon size={size} aria-hidden />;
+    case "discord":
+      return <DiscordIcon size={size} aria-hidden />;
+    case "mattermost":
+      return <MattermostIcon size={size} aria-hidden />;
+    case "feishu":
+      return <FeishuIcon size={size} aria-hidden />;
+    case "slack":
+      return <SlackIcon size={size} aria-hidden />;
+    case "line":
+      return <LineIcon size={size} aria-hidden />;
+  }
+}
+
+/* ----------------------------------------------------------------
    Inline SVG icons (one-offs not in the shared icon library)
    ---------------------------------------------------------------- */
 
@@ -1095,7 +2127,16 @@ function codexProfileLabel(value: DesktopCodexProfileModel): string {
   }
 }
 
-function providerLabel(id: OnboardingProvider): string {
+function providerName(id: OnboardingProvider): string {
   const row = PROVIDER_ROWS.find((p) => p.id === id);
   return row?.name ?? id;
 }
+
+const PROVIDER_ORDER: readonly OnboardingProvider[] = [
+  "telegram",
+  "discord",
+  "mattermost",
+  "feishu",
+  "slack",
+  "line",
+];
