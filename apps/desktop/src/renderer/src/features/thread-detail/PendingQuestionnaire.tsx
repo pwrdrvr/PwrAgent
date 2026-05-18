@@ -30,7 +30,7 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
   return (
     <div className="transcript-questionnaire" role="group" aria-label="Pending input">
       <div className="transcript-questionnaire__header">
-        <span className="thread-row__chip thread-row__chip--mode">
+        <span className="chip chip--mode">
           Input needed
         </span>
         <span className="transcript-message__time">

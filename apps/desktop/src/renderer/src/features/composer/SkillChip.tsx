@@ -12,7 +12,7 @@ export function SkillChip(props: SkillChipProps) {
 
   return (
     <span
-      className={`thread-row__chip skill-chip tooltip-target${props.onRemove ? " skill-chip--removable" : ""}`}
+      className={`chip skill-chip tooltip-target${props.onRemove ? " skill-chip--removable" : ""}`}
       data-tooltip={tooltip || undefined}
       tabIndex={tooltip && !props.onRemove ? 0 : -1}
     >

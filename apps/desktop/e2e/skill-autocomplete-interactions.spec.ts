@@ -295,3 +295,51 @@ test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste pr
     await app.close();
   }
 });
+
+test("thread reply Tiptap skill chip stays visible in compact density", async () => {
+  // Regression: the SkillMention chip in the composer carries the
+  // `thread-row__chip` class to inherit the pill shape from the thread-list
+  // primitive. The compact-density suppression rule that hides metadata
+  // chips inside the thread list was originally written without a scoping
+  // ancestor, so it also collapsed the skill chip inside the composer to
+  // `display: none` — the chip ended up in the DOM but invisible, which
+  // looked exactly like Tab/Enter not inserting anything.
+  const app = await launchElectronApp({
+    fixturePath,
+    appearance: { density: "compact" },
+    windowSize: {
+      width: 1180,
+      height: 760,
+    },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("$ce:plan");
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeVisible();
+    await app.window.keyboard.press("Tab");
+
+    const chip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:plan",
+    });
+    await expect(chip).toBeVisible();
+    // `toBeVisible` alone wouldn't catch the regression: a `display: none`
+    // chip is what produced the original "Tab inserts nothing" bug, but
+    // the same compact-density rule could just as easily collapse the
+    // chip with `width: 0` and still keep `visibility: visible`. Assert
+    // the actual rendered geometry so this test fails the same way
+    // (silently disappeared chip) as the user-visible symptom.
+    const box = await chip.boundingBox();
+    if (!box) {
+      throw new Error("skill chip is in the DOM but has no rendered layout");
+    }
+    expect(box.width).toBeGreaterThan(0);
+    expect(box.height).toBeGreaterThan(0);
+  } finally {
+    await app.close();
+  }
+});

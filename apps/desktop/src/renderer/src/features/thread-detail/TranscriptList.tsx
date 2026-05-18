@@ -785,7 +785,7 @@ export function TranscriptList(props: TranscriptListProps) {
           {props.pendingRequest ? (
             <div className="transcript-request" role="group" aria-label="Pending approval">
               <div className="transcript-request__header">
-                <span className="thread-row__chip thread-row__chip--mode">
+                <span className="chip chip--mode">
                   Approval needed
                 </span>
                 <span className="transcript-message__time">

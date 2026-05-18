@@ -237,8 +237,14 @@
    =========================================================================== */
 /* Suppress directory / PR / agent / binding chips in the list. Reaction
    and pin markers stay visible — reactions because they're user-curated
-   signals, pin because the pin marker on its own is information-dense. */
-:root[data-density="compact"] .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
+   signals, pin because the pin marker on its own is information-dense.
+
+   Scope the rule to `.thread-row__chips` so non-list surfaces that
+   carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
+   chip in the transcript) don't get collapsed when compact density is
+   on. The skill chip in the composer and the standalone SkillChip use
+   `.chip` directly and aren't affected by this rule. */
+:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin) {
   display: none;
 }
 
@@ -2153,6 +2159,12 @@ textarea,
   outline-offset: 2px;
 }
 
+/* `.chip` is the shared pill primitive. `.thread-row__chip` is the
+   thread-list specialization that the compact-density rule above
+   suppresses; surfaces outside the thread list (composer skill chips,
+   transcript chips) should use `.chip` instead so density rules don't
+   reach across surfaces. */
+.chip,
 .thread-row__chip {
   display: inline-flex;
   min-width: 0;
@@ -2193,6 +2205,11 @@ textarea,
   background: var(--bg-row-active);
 }
 
+/* `.chip--backend` is the non-list alias of `.thread-row__chip--backend`,
+   pairing with the `.chip` primitive. Used by the open-thread header and
+   the transcript so they keep their elevated-panel backend pill without
+   the thread-list class chain. */
+.chip--backend,
 .thread-row__chip--backend {
   border: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
@@ -2200,6 +2217,12 @@ textarea,
   font-weight: 600;
 }
 
+/* `.chip--mode` is the non-list alias of `.thread-row__chip--mode`,
+   pairing with the `.chip` primitive. Transcript surfaces use it so
+   they can keep the accent-mode styling without inheriting the
+   thread-list class name (and the density-suppression rule that
+   targets it). */
+.chip--mode,
 .thread-row__chip--mode {
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);

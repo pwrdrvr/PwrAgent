@@ -108,7 +108,7 @@ const SkillMention = Mention.extend({
 }).configure({
   deleteTriggerWithBackspace: true,
   HTMLAttributes: {
-    class: "thread-row__chip skill-chip composer-tiptap-input__mention",
+    class: "chip skill-chip composer-tiptap-input__mention",
   },
   renderHTML: ({ node }) => {
     const skill = getSkillSummary(node.attrs);
@@ -116,7 +116,7 @@ const SkillMention = Mention.extend({
     return [
       "span",
       {
-        class: "thread-row__chip skill-chip composer-tiptap-input__mention",
+        class: "chip skill-chip composer-tiptap-input__mention",
         "data-type": "mention",
         "data-composer-skill-token-id": String(node.attrs.id ?? ""),
         "data-id": String(node.attrs.id ?? ""),

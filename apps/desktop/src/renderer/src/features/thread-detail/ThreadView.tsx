@@ -1789,10 +1789,10 @@ export function ThreadView(props: ThreadViewProps) {
           <div className="thread-header__main thread-header__main--launchpad">
             <div className="thread-header__eyebrow-row">
               <p className="eyebrow">New thread</p>
-              <span className="thread-row__chip thread-row__chip--backend">
+              <span className="chip chip--backend">
                 {formatBackendLabel(selectedLaunchpad.backend)}
               </span>
-              <span className="thread-row__chip thread-row__chip--mode">
+              <span className="chip chip--mode">
                 {formatExecutionModeLabel(selectedLaunchpad.executionMode)}
               </span>
             </div>
