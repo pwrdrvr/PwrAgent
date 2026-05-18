@@ -4330,10 +4330,6 @@ textarea,
   padding: 14px 18px;
 }
 
-.settings-archive-project__threads {
-  border-top: 1px solid var(--border-subtle);
-}
-
 .settings-archive-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
