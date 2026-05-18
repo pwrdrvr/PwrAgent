@@ -1,7 +1,11 @@
 :root {
   color-scheme: dark;
-  font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
+  /* Geist + Geist Mono are self-hosted via @fontsource-variable/* (imported
+     in renderer entry main.tsx). System fonts remain as fallbacks during the
+     ~1-frame load window and for any future surface that bypasses the
+     bundled CSS. Geist is the suite-wide PwrDrvr typeface — matches PwrSnap. */
+  font-family: "Geist Variable", "Geist", "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", "IBM Plex Mono", "SFMono-Regular", "SF Mono", Consolas, monospace;
   --bg-app: #000000;
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;

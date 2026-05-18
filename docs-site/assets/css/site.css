@@ -36,17 +36,11 @@
   --status-suspended: #6b6660;
   --status-error: #c45a3a;
 
-  --font-sans: "Inter", "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", SFMono-Regular, "SF Mono", Consolas, monospace;
+  --font-sans: "Geist", "SF Pro Text", "Inter", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "IBM Plex Mono", SFMono-Regular, "SF Mono", Consolas, monospace;
 
   --content-max: 70ch;
   --shell-max: 104ch;
-}
-
-@supports (font-variation-settings: normal) {
-  :root {
-    --font-sans: "InterVariable", "Inter", "Geist", "IBM Plex Sans", "SF Pro Text", system-ui, sans-serif;
-  }
 }
 
 * {

@@ -3,6 +3,11 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
+// Self-hosted Geist + Geist Mono — bundled into the renderer's dist so the
+// app never falls back to SF Pro Text on machines without Geist installed.
+// Variable-font builds: one .woff2 each, all weights / axes available.
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();
