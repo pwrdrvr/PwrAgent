@@ -7,6 +7,7 @@ import {
   type PointerEvent,
 } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { OnboardingWizard } from "./features/onboarding/OnboardingWizard";
 import {
   SettingsScreen,
   type SettingsSection,
@@ -116,6 +117,17 @@ function DesktopAppShell(props: {
     SettingsSection | undefined
   >(undefined);
   const [threadViewReady, setThreadViewReady] = useState(false);
+  // Onboarding wizard overlay state. Two paths into it:
+  //  (1) auto-launch on first snapshot if `onboarding.completed` is
+  //      false for the active profile;
+  //  (2) explicit replay via Help → Replay Onboarding (main process
+  //      menu push → renderer subscribes below).
+  // The auto-launch leans on `autoOpenSeen` so we don't re-open after
+  // the user dismisses without persisting (snapshot refresh case).
+  const [onboardingOpen, setOnboardingOpen] = useState<
+    "auto" | "replay" | null
+  >(null);
+  const [autoOpenSeen, setAutoOpenSeen] = useState(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -207,6 +219,37 @@ function DesktopAppShell(props: {
       setMainView("settings");
     });
   }, [desktopApi]);
+  useEffect(() => {
+    // Subscribe to Help → Replay Onboarding push from the menu. Forces
+    // the wizard overlay open in "replay" mode — dismissal does NOT
+    // touch `onboarding.completed`.
+    if (!desktopApi?.onReplayOnboardingRequested) {
+      return;
+    }
+    return desktopApi.onReplayOnboardingRequested(() => {
+      setOnboardingOpen("replay");
+    });
+  }, [desktopApi]);
+  useEffect(() => {
+    // Auto-launch on the first snapshot where `completed === false`.
+    // `autoOpenSeen` blocks re-opens after the user dismissed without
+    // persisting (which can happen if they hit ESC). Once shown, the
+    // wizard's Skip/Finish path writes `completed = true` and the
+    // snapshot path stops triggering us on subsequent refreshes.
+    const completed = settings.snapshot?.onboarding?.completed.value;
+    if (
+      completed === false &&
+      onboardingOpen === null &&
+      !autoOpenSeen
+    ) {
+      setOnboardingOpen("auto");
+      setAutoOpenSeen(true);
+    }
+  }, [
+    autoOpenSeen,
+    onboardingOpen,
+    settings.snapshot?.onboarding?.completed.value,
+  ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
@@ -424,6 +467,37 @@ function DesktopAppShell(props: {
             onOpenMessagingActivity={openMessagingActivityWindow}
           />
         </div>
+      ) : null}
+
+      {onboardingOpen !== null && settings.snapshot ? (
+        <OnboardingWizard
+          isReplay={onboardingOpen === "replay"}
+          initialDensity={settings.snapshot.general.appearance.density.value}
+          initialCodexProfileModel={
+            settings.snapshot.general.codexProfileModel.value
+          }
+          onComplete={async (patch) => {
+            await settings.writeConfig(patch);
+            // Adopt the new density immediately — saves a paint cycle
+            // vs. waiting for the snapshot refresh.
+            if (patch.general?.appearance?.density) {
+              props.appearanceController.setDensity(
+                patch.general.appearance.density,
+              );
+            }
+            setOnboardingOpen(null);
+          }}
+          onDismiss={(persistCompleted) => {
+            if (persistCompleted) {
+              void settings.writeConfig({ onboarding: { completed: true } });
+            }
+            setOnboardingOpen(null);
+          }}
+          onOpenMessagingSettings={() => {
+            setSettingsInitialSection("messaging");
+            setMainView("settings");
+          }}
+        />
       ) : null}
 
       <AppUpdateBanner desktopApi={desktopApi} />

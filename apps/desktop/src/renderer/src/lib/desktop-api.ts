@@ -474,6 +474,12 @@ export type DesktopApi = {
   onOpenSettingsRequested?: (
     callback: (section?: string) => void,
   ) => () => void;
+  /**
+   * Main → renderer push: fires when the user invokes Help →
+   * Replay Onboarding…. Re-opens the first-run wizard overlay
+   * without flipping the persisted `onboarding.completed` flag.
+   */
+  onReplayOnboardingRequested?: (callback: () => void) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   platform?: string;
   versions?: {

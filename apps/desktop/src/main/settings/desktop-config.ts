@@ -6,6 +6,8 @@ import type {
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopCodexProfileModel,
+  DesktopMessagingAcknowledgment,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingFullAccessWarningUserPolicy,
   DesktopMessagingImageProfile,
@@ -18,9 +20,11 @@ import type {
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
+  isDesktopCodexProfileModel,
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
@@ -60,6 +64,8 @@ export type DesktopSettingsConfig = {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
     };
+    codexProfileModel?: DesktopCodexProfileModel;
+    messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
   };
   onboarding?: {
     completed?: boolean;
@@ -371,6 +377,49 @@ export function desktopSettingsPatchToEdits(
         ["general", "appearance", "density"],
         patch.general.appearance.density,
       );
+    }
+  }
+
+  if (patch.general?.codexProfileModel !== undefined) {
+    if (
+      patch.general.codexProfileModel === DESKTOP_CODEX_PROFILE_MODEL_DEFAULT
+    ) {
+      edits.push({ op: "delete", path: ["general", "codex_profile_model"] });
+    } else {
+      set(["general", "codex_profile_model"], patch.general.codexProfileModel);
+    }
+  }
+
+  if (patch.general?.messagingAcknowledgment !== undefined) {
+    const ack = patch.general.messagingAcknowledgment;
+    if (ack === null) {
+      edits.push({
+        op: "delete",
+        path: ["general", "messaging_acknowledgment", "acknowledged_at"],
+      });
+      edits.push({
+        op: "delete",
+        path: ["general", "messaging_acknowledgment", "providers"],
+      });
+    } else {
+      set(
+        ["general", "messaging_acknowledgment", "acknowledged_at"],
+        ack.acknowledgedAt,
+      );
+      set(
+        ["general", "messaging_acknowledgment", "providers"],
+        ack.providers,
+      );
+    }
+  }
+
+  if (patch.onboarding?.completed !== undefined) {
+    // `false` is the default for fresh profiles; only persist when the
+    // operator has actively cleared the first-run prompt.
+    if (patch.onboarding.completed === false) {
+      edits.push({ op: "delete", path: ["onboarding", "completed"] });
+    } else {
+      set(["onboarding", "completed"], patch.onboarding.completed);
     }
   }
 
@@ -727,6 +776,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
+  const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
   const diffCondensation = tables["experimental.diff_condensation"];
@@ -753,6 +803,10 @@ function normalizeDesktopConfig(
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
       },
+      codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
+      messagingAcknowledgment: readMessagingAcknowledgment(
+        generalMessagingAck,
+      ),
     },
     onboarding: {
       completed: readBoolean(onboarding?.completed),
@@ -938,7 +992,14 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const developerMode = config.general?.developerMode;
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
-  if (developerMode !== undefined || appearanceDefined) {
+  const codexProfileModel = config.general?.codexProfileModel;
+  const messagingAcknowledgment = config.general?.messagingAcknowledgment;
+  if (
+    developerMode !== undefined ||
+    appearanceDefined ||
+    codexProfileModel !== undefined ||
+    messagingAcknowledgment !== undefined
+  ) {
     pruned.general = {};
     if (developerMode !== undefined) {
       pruned.general.developerMode = developerMode;
@@ -946,6 +1007,16 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (appearanceDefined) {
       pruned.general.appearance = appearance;
     }
+    if (codexProfileModel !== undefined) {
+      pruned.general.codexProfileModel = codexProfileModel;
+    }
+    if (messagingAcknowledgment !== undefined) {
+      pruned.general.messagingAcknowledgment = messagingAcknowledgment;
+    }
+  }
+
+  if (config.onboarding?.completed !== undefined) {
+    pruned.onboarding = { completed: config.onboarding.completed };
   }
 
   const onboarding = config.onboarding;
@@ -1134,6 +1205,25 @@ function readOnboardingCompletedSource(
     ? value
     : undefined;
 }
+
+function readCodexProfileModel(
+  value: TomlScalar | undefined,
+): DesktopCodexProfileModel | undefined {
+  return typeof value === "string" && isDesktopCodexProfileModel(value)
+    ? value
+    : undefined;
+}
+
+function readMessagingAcknowledgment(
+  table: Record<string, TomlScalar> | undefined,
+): DesktopMessagingAcknowledgment | undefined {
+  if (!table) return undefined;
+  const acknowledgedAt = readString(table.acknowledged_at);
+  if (!acknowledgedAt) return undefined;
+  const providers = readStringArray(table.providers) ?? [];
+  return { acknowledgedAt, providers };
+}
+
 
 function isMessagingToolUpdateMode(
   value: string,

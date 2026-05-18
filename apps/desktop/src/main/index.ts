@@ -84,6 +84,7 @@ import {
 import { createMainWindow } from "./window";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenSettings } from "./window-open-settings";
+import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import {
   resolveActiveProfileName,
@@ -260,6 +261,9 @@ function installApplicationMenu(): void {
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
+      },
+      replayOnboarding: () => {
+        requestReplayOnboarding();
       },
       showAboutPanel: () => {
         app.showAboutPanel();

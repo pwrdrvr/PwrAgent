@@ -40,6 +40,27 @@ export type DesktopAppearanceDensity =
 export const DESKTOP_APPEARANCE_DENSITY_DEFAULT: DesktopAppearanceDensity =
   "mission-control";
 
+export const DESKTOP_CODEX_PROFILE_MODELS = [
+  "shared",
+  "isolated",
+  "multiple",
+] as const;
+export type DesktopCodexProfileModel =
+  (typeof DESKTOP_CODEX_PROFILE_MODELS)[number];
+export const DESKTOP_CODEX_PROFILE_MODEL_DEFAULT: DesktopCodexProfileModel =
+  "shared";
+
+/**
+ * Persisted record that the operator acknowledged the messaging-safety
+ * preamble in the first-run wizard. Audit-trail oriented: timestamp + the
+ * provider keys the operator chose to set up. `null` means the preamble
+ * was never accepted (Skip path or wizard not yet run).
+ */
+export type DesktopMessagingAcknowledgment = {
+  acknowledgedAt: string;
+  providers: readonly string[];
+};
+
 export type DesktopSettingsNonSecretSource = "default" | "config" | "env";
 export type DesktopSettingsSecretSource = "unset" | "keychain" | "env";
 export type DesktopSettingsSource =
@@ -167,6 +188,8 @@ export type DesktopAppearanceSnapshot = {
 export type DesktopGeneralSettingsSnapshot = {
   developerMode: DesktopSettingsValue<boolean>;
   appearance: DesktopAppearanceSnapshot;
+  codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
+  messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
 };
 
 export const DESKTOP_ONBOARDING_COMPLETED_SOURCES = [
@@ -474,6 +497,9 @@ export type DesktopSettingsConfigPatch = {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
     };
+    codexProfileModel?: DesktopCodexProfileModel;
+    /** `null` clears the persisted acknowledgement. */
+    messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
   };
   onboarding?: {
     completed?: boolean;
@@ -784,6 +810,14 @@ export function isDesktopAppearanceDensity(
 ): value is DesktopAppearanceDensity {
   return DESKTOP_APPEARANCE_DENSITIES.includes(
     value as DesktopAppearanceDensity,
+  );
+}
+
+export function isDesktopCodexProfileModel(
+  value: string,
+): value is DesktopCodexProfileModel {
+  return DESKTOP_CODEX_PROFILE_MODELS.includes(
+    value as DesktopCodexProfileModel,
   );
 }
 

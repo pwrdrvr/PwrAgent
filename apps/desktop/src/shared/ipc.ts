@@ -162,6 +162,12 @@ export const WINDOW_POINTER_SNAPSHOT_CHANNEL = "window:pointer-snapshot";
  * directly from the main process.
  */
 export const WINDOW_OPEN_SETTINGS_CHANNEL = "window:open-settings";
+/**
+ * Main → renderer push: re-open the first-run onboarding wizard from
+ * the Help menu. Does NOT touch the per-profile `onboarding.completed`
+ * flag — re-entry is transient.
+ */
+export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";

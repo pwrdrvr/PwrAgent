@@ -259,6 +259,7 @@ import {
   WINDOW_FOCUS_SYNC_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
+  WINDOW_REPLAY_ONBOARDING_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../shared/window-pointer";
@@ -678,6 +679,14 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    };
+  },
+  onReplayOnboardingRequested: (callback: () => void): (() => void) => {
+    // Main → renderer push from Help → Replay Onboarding…
+    const listener = () => callback();
+    ipcRenderer.on(WINDOW_REPLAY_ONBOARDING_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_REPLAY_ONBOARDING_CHANNEL, listener);
     };
   },
   getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>
