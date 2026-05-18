@@ -1172,9 +1172,23 @@ export const ComposerTiptapInput = forwardRef<
     content: initialContent,
     editorProps: {
       attributes: {
-        "aria-activedescendant": props.ariaActiveDescendant ?? "",
-        "aria-controls": props.ariaControls ?? "",
-        "aria-expanded": String(Boolean(props.ariaExpanded)),
+        // ARIA 1.2 textbox + listbox autocomplete pattern. We
+        // deliberately do NOT set aria-expanded here — that attribute
+        // is invalid on role="textbox" (per the spec, it belongs on
+        // role="combobox"), and axe-core flags it under
+        // aria-allowed-attr. The popup's open/closed state is still
+        // conveyed via aria-controls being present (and pointing at
+        // the visible listbox) when autocomplete is open, and absent
+        // otherwise; the layout effect below mirrors that.
+        // aria-controls / aria-activedescendant are only set when
+        // truthy — an empty IDREF is itself an axe violation.
+        ...(props.ariaActiveDescendant
+          ? { "aria-activedescendant": props.ariaActiveDescendant }
+          : {}),
+        ...(props.ariaControls
+          ? { "aria-controls": props.ariaControls }
+          : {}),
+        "aria-autocomplete": "list",
         "aria-label": props.label,
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
         "data-placeholder": props.placeholder,
@@ -1405,7 +1419,12 @@ export const ComposerTiptapInput = forwardRef<
     editor.setEditable(!props.disabled);
     editor.view.dom.setAttribute("id", props.id);
     editor.view.dom.setAttribute("aria-label", props.label);
-    editor.view.dom.setAttribute("aria-expanded", String(Boolean(props.ariaExpanded)));
+    // aria-expanded is deliberately NOT set on the textbox role — see
+    // the editorProps.attributes block above for the rationale. The
+    // ariaExpanded prop is still consumed via the aria-controls /
+    // aria-activedescendant mirroring below, which is what conveys
+    // popup state to screen readers under the ARIA 1.2 textbox +
+    // autocomplete pattern.
     if (props.ariaActiveDescendant) {
       editor.view.dom.setAttribute("aria-activedescendant", props.ariaActiveDescendant);
     } else {

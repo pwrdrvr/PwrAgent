@@ -106,6 +106,11 @@ function DesktopAppShell(props: {
   settings: DesktopSettingsState;
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
+  // Hardcoded sidebar resize bounds — mirrored in resizeSidebar() below.
+  // Exposed as constants so both the setter and the aria-valuemin/max
+  // attributes on the resize handle stay in sync.
+  const sidebarMinWidth = 280;
+  const sidebarMaxWidth = 560;
   const [mainView, setMainView] = useState<"thread" | "settings">("thread");
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
@@ -328,7 +333,7 @@ function DesktopAppShell(props: {
   } satisfies ThreadViewProps;
 
   const resizeSidebar = (nextWidth: number): void => {
-    setSidebarWidth(Math.min(560, Math.max(280, nextWidth)));
+    setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth)));
   };
 
   const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
@@ -406,6 +411,9 @@ function DesktopAppShell(props: {
         }}
         onResizeStart={startSidebarResize}
         onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
+        sidebarWidth={sidebarWidth}
+        sidebarMinWidth={sidebarMinWidth}
+        sidebarMaxWidth={sidebarMaxWidth}
       />
 
       <main className="app-main">

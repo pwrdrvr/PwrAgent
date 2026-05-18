@@ -121,6 +121,17 @@ type SidebarProps = {
   ) => Promise<void>;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
+  /**
+   * Current sidebar width and clamp range, plumbed in so the resize
+   * handle can expose aria-valuenow / aria-valuemin / aria-valuemax —
+   * required by axe-core for focusable role="separator". All three are
+   * optional so older callers (and unit tests that mount Sidebar in
+   * isolation) keep compiling; the handle silently omits the aria-value*
+   * attributes when they're absent.
+   */
+  sidebarWidth?: number;
+  sidebarMinWidth?: number;
+  sidebarMaxWidth?: number;
 };
 
 const browseModeLabels = {
@@ -587,6 +598,9 @@ export function Sidebar(props: SidebarProps) {
       <div
         aria-label="Resize thread sidebar"
         aria-orientation="vertical"
+        aria-valuenow={props.sidebarWidth}
+        aria-valuemin={props.sidebarMinWidth}
+        aria-valuemax={props.sidebarMaxWidth}
         className="sidebar__resize-handle"
         role="separator"
         tabIndex={0}
@@ -714,7 +728,13 @@ export function Sidebar(props: SidebarProps) {
           {(["inbox", "recents", "directories"] as const).map((mode) => (
             <button
               key={mode}
-              aria-pressed={props.browseMode === mode}
+              // role="tab" + aria-selected is what makes the tablist a
+              // valid ARIA composite. Keyboard nav is unchanged (Tab still
+              // cycles through every button) since browsers don't auto-wire
+              // arrow-key navigation from role alone — adding role here only
+              // changes how screen readers announce the widget.
+              role="tab"
+              aria-selected={props.browseMode === mode}
               className={`lens-switch__button${
                 props.browseMode === mode ? " is-active" : ""
               }`}

@@ -185,16 +185,16 @@ describe("Sidebar", () => {
     expect(onOpenSettings).toHaveBeenCalledOnce();
     expect(screen.queryByRole("heading", { level: 2, name: "Browse" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Thread browser" })).toBeInTheDocument();
-    const lensButtons = within(
+    const lensTabs = within(
       screen.getByRole("tablist", { name: "Thread lenses" })
-    ).getAllByRole("button");
-    expect(lensButtons.map((button) => button.textContent)).toEqual([
+    ).getAllByRole("tab");
+    expect(lensTabs.map((tab) => tab.textContent)).toEqual([
       "Updated",
       "Created",
       "Directories",
     ]);
-    expect(screen.getByRole("button", { name: "Directories" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("tab", { name: "Directories" })).toHaveAttribute(
+      "aria-selected",
       "true"
     );
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
@@ -730,17 +730,17 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Updated" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("tab", { name: "Updated" })).toHaveAttribute(
+      "aria-selected",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Created" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("tab", { name: "Created" })).toHaveAttribute(
+      "aria-selected",
       "false",
     );
     expect(screen.getByRole("button", { name: /Updated thread/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Created" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Created" }));
 
     expect(onBrowseModeChange).toHaveBeenCalledWith("recents");
   });

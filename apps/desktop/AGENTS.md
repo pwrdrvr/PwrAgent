@@ -169,6 +169,45 @@ pnpm --filter @pwragent/desktop exec tsx \
 Works for 2+ frames; the indicator scales horizontally with frame
 count.
 
+## Accessibility
+
+The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via
+`apps/desktop/e2e/a11y.spec.ts`, which launches Electron under the
+existing replay-fixture harness and runs `@axe-core/playwright`'s
+`AxeBuilder` against each surface. CI picks it up automatically through
+`pnpm run test:desktop-e2e` — no separate workflow.
+
+Things to know when extending the audit:
+
+- **Surface coverage.** Each `test(...)` block drives the renderer to a
+  state (open thread, settings overlay, settings → messaging) and then
+  calls `runAxe(window)`. Add a new block per surface you want gated;
+  reuse `launchElectronApp` with whatever fixture seeds that state.
+- **`setLegacyMode(true)` is required under Electron.** The default
+  `AxeBuilder.analyze()` opens a worker page via
+  `browserContext.newPage()` to scan cross-origin iframes; Electron's
+  CDP target returns "Not supported" for that. The renderer is
+  single-origin with no cross-origin iframes, so the legacy
+  single-context path covers everything we ship.
+- **`KNOWN_VIOLATIONS` is a baseline, not a permission slip.** Each
+  entry waives one selector for one rule with a written reason. Fix
+  the underlying issue, then delete the entry — axe will hold the
+  line on it going forward.
+- **No raw color literals outside the token blocks** (see Implementation
+  Notes below) — this is also what keeps the contrast pair audited by
+  axe stable across theme + density variants.
+
+To run the gate locally:
+
+```bash
+pnpm --filter @pwragent/desktop exec playwright test \
+  -c playwright.config.ts e2e/a11y.spec.ts
+```
+
+(The package's `test:e2e` script does a full Electron rebuild + Vite
+build first; the `playwright test` form above skips that when you've
+already built once.)
+
 ## Config File Evolution
 
 Before changing `config.toml` keys in a backwards-incompatible way, read
