@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.10 - 2026-05-18
+
+- Added a live work rail above the composer that keeps active and last-turn plan, edited-files, and changed-files context visible without duplicating transcript rows.
+- Added inline expansion for edited-file diffs in the live work rail, plus collapse and sidebar docking controls for the rail.
+- Added a macOS Profiles menu and profile switching flow so profiles can be opened and managed from the app menu.
+- Fixed git worktree and handoff operations so git commands run with the prepared desktop environment instead of a stale or incomplete process environment.
+- Improved transcript ordering and file-change rendering coverage around live work, changed files, and wall-clock timestamp ties.
+
 ## v1.0.0-beta.9 - 2026-05-18
 
 - Fixed Settings -> Updates so the prerelease channel displays the highest available semver version instead of whichever GitHub prerelease appeared first by publish order.
