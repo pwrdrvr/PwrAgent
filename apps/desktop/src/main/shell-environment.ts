@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { getMainLogger } from "./log";
+
+const shellEnvLog = getMainLogger("pwragent:shell-environment");
 
 type ExecFileSyncLike = (
   file: string,
@@ -42,8 +45,25 @@ export function mergeLoginShellEnvIntoEnv(
         platform,
       });
   if (!shellEnv || Object.keys(shellEnv).length === 0) {
+    // Silent hydration failure is a likely root cause when env-setup
+    // commands work from a terminal-launched dev build but fail from a
+    // Finder-launched bundle. Log enough to diagnose without leaking
+    // sensitive env values.
+    shellEnvLog.warn("login-shell-env-merge-empty", {
+      platform,
+      shellCandidates: defaultShellCandidates(env),
+      parentShell: env.SHELL,
+      parentPathLength: env.PATH?.length ?? 0,
+    });
     return env;
   }
+  shellEnvLog.info("login-shell-env-merged", {
+    keys: Object.keys(shellEnv).length,
+    parentPathLength: env.PATH?.length ?? 0,
+    hydratedPathLength: shellEnv.PATH?.length ?? 0,
+    hadNvmDir: Boolean(shellEnv.NVM_DIR),
+    hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
+  });
   return {
     ...env,
     ...shellEnv,
@@ -70,6 +90,7 @@ export function resolveInteractiveLoginShellEnv(
     `command printf '${ENV_MARKER_END}\\n'`,
   ].join("; ");
 
+  const failures: Array<{ shell: string; message: string }> = [];
   for (const shell of options.shellCandidates ?? defaultShellCandidates(env)) {
     try {
       const output = exec(shell, ["-ilc", command], {
@@ -82,11 +103,22 @@ export function resolveInteractiveLoginShellEnv(
       if (shellEnv) {
         return shellEnv;
       }
-    } catch {
-      continue;
+      failures.push({ shell, message: "empty-env-output" });
+    } catch (error) {
+      failures.push({
+        shell,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
+  if (failures.length > 0) {
+    shellEnvLog.warn("login-shell-env-resolve-failed", {
+      attempts: failures.length,
+      failures: failures.map((entry) => `${entry.shell}:${entry.message}`).join("; "),
+      timeoutMs: timeout,
+    });
+  }
   return undefined;
 }
 

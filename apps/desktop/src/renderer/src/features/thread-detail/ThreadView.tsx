@@ -207,9 +207,13 @@ function LaunchpadEnvironmentSetupPending(props: {
 function EnvironmentSetupFailureChoice(props: {
   archiving: boolean;
   continuing: boolean;
+  command?: string;
+  cwd?: string;
   error?: string;
   environmentName: string;
+  exitCode?: number;
   hasWorktree: boolean;
+  output?: string;
   phase: "setup" | "action";
   onCleanup: () => void;
   onContinue: () => void | Promise<void>;
@@ -217,18 +221,53 @@ function EnvironmentSetupFailureChoice(props: {
   const label =
     props.phase === "action" ? "Environment action failed" : "Environment setup failed";
   const commandLabel = props.phase === "action" ? "action command" : "setup command";
+  const trimmedOutput = props.output?.trim();
+  const hasDetails =
+    Boolean(props.command?.trim()) ||
+    Boolean(trimmedOutput) ||
+    typeof props.exitCode === "number";
   return (
     <section className="environment-setup-choice" aria-label={label}>
-      <div>
-        <p className="eyebrow">{label}</p>
-        <h3>{props.environmentName}</h3>
-        <p>
-          {props.hasWorktree
-            ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
-            : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
-        </p>
-        {props.error ? (
-          <p className="environment-setup-choice__error">{props.error}</p>
+      <div className="environment-setup-choice__body">
+        <div className="environment-setup-choice__heading">
+          <p className="eyebrow">{label}</p>
+          <h3>{props.environmentName}</h3>
+          <p>
+            {props.hasWorktree
+              ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
+              : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
+          </p>
+          {props.error ? (
+            <p className="environment-setup-choice__error">{props.error}</p>
+          ) : null}
+        </div>
+        {hasDetails ? (
+          <details className="environment-setup-choice__details" open>
+            <summary>
+              Show command output
+              {typeof props.exitCode === "number" ? ` (exit ${props.exitCode})` : ""}
+            </summary>
+            {props.command?.trim() ? (
+              <div className="environment-setup-choice__field">
+                <div className="environment-setup-choice__field-label">Command</div>
+                <pre className="environment-setup-choice__pre">
+                  <code>{`$ ${props.command.trim()}`}</code>
+                </pre>
+              </div>
+            ) : null}
+            {props.cwd?.trim() ? (
+              <div className="environment-setup-choice__field">
+                <div className="environment-setup-choice__field-label">Path</div>
+                <code className="environment-setup-choice__path">{props.cwd}</code>
+              </div>
+            ) : null}
+            <div className="environment-setup-choice__field">
+              <div className="environment-setup-choice__field-label">Output</div>
+              <pre className="environment-setup-choice__pre environment-setup-choice__pre--output">
+                <code>{trimmedOutput || "(no output captured)"}</code>
+              </pre>
+            </div>
+          </details>
         ) : null}
       </div>
       <div className="environment-setup-choice__actions">
@@ -1949,12 +1988,34 @@ export function ThreadView(props: ThreadViewProps) {
         <EnvironmentSetupFailureChoice
           archiving={setupFailureArchiving}
           continuing={setupFailureContinuing}
+          command={
+            selectedThreadEnvironmentFailurePhase === "action"
+              ? selectedThread.codexEnvironmentRuntime?.actionCommand
+              : selectedThread.codexEnvironmentRuntime?.setupCommand ??
+                launchpadSetupProgress?.command
+          }
+          cwd={
+            selectedThread.codexEnvironmentRuntime?.cwd ??
+            launchpadSetupProgress?.cwd
+          }
           environmentName={
             selectedThread.codexEnvironmentRuntime?.environmentName ??
             "Codex environment"
           }
           error={props.archiveThreadError ?? setupFailureContinueError}
+          exitCode={
+            selectedThreadEnvironmentFailurePhase === "setup"
+              ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
+                launchpadSetupProgress?.exitCode
+              : undefined
+          }
           hasWorktree={Boolean(selectedThreadWorktree)}
+          output={
+            selectedThreadEnvironmentFailurePhase === "setup"
+              ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
+                launchpadSetupProgress?.output
+              : undefined
+          }
           phase={selectedThreadEnvironmentFailurePhase}
           onCleanup={() => {
             if (!props.onArchiveThread) {

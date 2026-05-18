@@ -464,6 +464,141 @@ function QueuedImageAttachments(props: {
   );
 }
 
+const ENV_ACTION_OUTPUT_MAX_LINES = 500;
+
+function tailLines(text: string, maxLines: number): string {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  const dropped = lines.length - maxLines;
+  return [
+    `[…${dropped} earlier lines truncated]`,
+    ...lines.slice(-maxLines),
+  ].join("\n");
+}
+
+function formatDurationMs(ms?: number): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  if (ms < 1_000) return `${ms}ms`;
+  const seconds = ms / 1_000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+type EnvActionAnchorRuntime = {
+  actionName?: string;
+  actionCommand?: string;
+  actionStatus?: "started" | "exited" | "failed";
+  actionPid?: number;
+  actionStartedAt?: number;
+  actionExitedAt?: number;
+  actionExitCode?: number;
+  actionExitSignal?: string;
+  actionDurationMs?: number;
+  actionOutput?: string;
+  environmentName?: string;
+};
+
+function EnvActionAnchor(props: {
+  runtime?: EnvActionAnchorRuntime;
+}): ReactNode {
+  const runtime = props.runtime;
+  const [dismissedKey, setDismissedKey] = useState<string | undefined>();
+
+  const status = runtime?.actionStatus;
+  // Only surface when there's something meaningful to show.
+  if (!runtime || (status !== "started" && status !== "exited" && status !== "failed")) {
+    return null;
+  }
+  const dismissKey = `${runtime.actionPid ?? "?"}:${runtime.actionStartedAt ?? 0}:${
+    runtime.actionExitedAt ?? 0
+  }`;
+  if (dismissedKey === dismissKey) {
+    return null;
+  }
+
+  const label =
+    status === "started"
+      ? "Env action running"
+      : status === "exited"
+        ? "Env action exited"
+        : "Env action failed";
+
+  const meta: string[] = [];
+  if (runtime.actionPid) meta.push(`pid ${runtime.actionPid}`);
+  if (status === "started" && runtime.actionStartedAt) {
+    const elapsed = Date.now() - runtime.actionStartedAt;
+    meta.push(`running for ${formatDurationMs(elapsed)}`);
+  }
+  if (status !== "started") {
+    if (typeof runtime.actionExitCode === "number") {
+      meta.push(`exit ${runtime.actionExitCode}`);
+    } else if (runtime.actionExitSignal) {
+      meta.push(`signal ${runtime.actionExitSignal}`);
+    }
+    if (runtime.actionDurationMs) {
+      meta.push(`ran ${formatDurationMs(runtime.actionDurationMs)}`);
+    }
+  }
+
+  const truncatedOutput = tailLines(
+    (runtime.actionOutput ?? "").trim(),
+    ENV_ACTION_OUTPUT_MAX_LINES,
+  );
+
+  const modifier =
+    status === "failed"
+      ? "composer__queued--env-action-failed"
+      : status === "exited"
+        ? "composer__queued--env-action-exited"
+        : "composer__queued--env-action-running";
+
+  return (
+    <div
+      className={`composer__queued composer__queued--env-action ${modifier}`}
+      aria-label={label}
+    >
+      <div className="composer__queued-copy">
+        <span className="composer__queued-label">{label}</span>
+        <span className="composer__queued-text">
+          {runtime.actionName ?? "Action"}
+          {runtime.environmentName ? ` · ${runtime.environmentName}` : ""}
+          {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
+        </span>
+        {runtime.actionCommand ? (
+          <code className="composer__queued-env-action-command">
+            $ {runtime.actionCommand}
+          </code>
+        ) : null}
+        <details className="composer__queued-env-action-details">
+          <summary>
+            {truncatedOutput
+              ? `Show output (${truncatedOutput.split("\n").length} line${
+                  truncatedOutput.split("\n").length === 1 ? "" : "s"
+                })`
+              : "Show output"}
+          </summary>
+          <pre className="composer__queued-env-action-output">
+            <code>{truncatedOutput || "(no output captured)"}</code>
+          </pre>
+        </details>
+      </div>
+      {status !== "started" ? (
+        <div className="composer__queued-actions">
+          <button
+            className="composer__secondary-action"
+            type="button"
+            onClick={() => setDismissedKey(dismissKey)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function collectTextFragments(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -3712,6 +3847,8 @@ export function Composer(props: ComposerProps) {
           conveys the action prompt visually. Stacking another header
           above an input that already names itself was redundant
           chrome. */}
+
+      <EnvActionAnchor runtime={props.thread?.codexEnvironmentRuntime} />
 
       {pendingSteer ? (
         <div

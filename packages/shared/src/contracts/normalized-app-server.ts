@@ -146,8 +146,14 @@ export type CodexThreadEnvironmentRuntime = {
   actionId?: string;
   actionName?: string;
   actionCommand?: string;
-  actionStatus?: "started" | "failed";
+  actionStatus?: "started" | "exited" | "failed";
   actionPid?: number;
+  actionStartedAt?: number;
+  actionExitedAt?: number;
+  actionExitCode?: number;
+  actionExitSignal?: string;
+  actionDurationMs?: number;
+  actionOutput?: string;
   sourcePath?: string;
 };
 

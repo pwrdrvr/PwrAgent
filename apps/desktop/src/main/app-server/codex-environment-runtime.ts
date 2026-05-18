@@ -7,6 +7,15 @@ import { getMainLogger } from "../log";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
 
+const MAX_OUTPUT_PREVIEW_CHARS = 4_000;
+
+function truncateForLog(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const trimmed = value.trim();
+  if (trimmed.length <= MAX_OUTPUT_PREVIEW_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_OUTPUT_PREVIEW_CHARS)}…[truncated ${trimmed.length - MAX_OUTPUT_PREVIEW_CHARS} chars]`;
+}
+
 export const DEFAULT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS = 10 * 60 * 1_000;
 export const CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV =
   "PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS";
@@ -61,6 +70,20 @@ export type CodexEnvironmentCommandParams = {
   onProgress?: (
     event: Pick<CodexEnvironmentSetupProgressEvent, "phase" | "chunk" | "at">,
   ) => void;
+  /**
+   * For detach mode only: fired when the detached child eventually exits.
+   * Lets callers update overlay state with the final exit code / output
+   * for the anchored env-action output UI without blocking the initial
+   * resolve(). Not invoked for wait mode (use the resolved value instead).
+   */
+  onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
+};
+
+export type CodexEnvironmentDetachedExit = {
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | null;
+  durationMs: number;
+  output: string;
 };
 
 export type CodexEnvironmentCommandResult = {
@@ -81,6 +104,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   onSetupProgress?: (
     event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
   ) => void;
+  onActionDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
@@ -172,6 +196,16 @@ export async function applyLocalCodexEnvironmentSelection(params: {
       } else {
         runtime.setupOutput = String(error);
       }
+      environmentRuntimeLog.error("codex-environment-setup-failed", {
+        environmentId: selection.environment.id,
+        environmentName: selection.environment.name,
+        cwd,
+        command: selection.environment.setupScript,
+        exitCode: runtime.setupExitCode,
+        durationMs: runtime.setupDurationMs,
+        message: error instanceof Error ? error.message : String(error),
+        output: truncateForLog(runtime.setupOutput),
+      });
       emitSetupProgress({
         phase: "failed",
         error: error instanceof Error ? error.message : String(error),
@@ -200,11 +234,23 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         command: selection.action.command,
         env: params.env,
         mode: "detach",
+        onDetachedExit: params.onActionDetachedExit,
       });
       runtime.actionPid = result.pid;
       runtime.actionStatus = "started";
+      runtime.actionStartedAt = Date.now();
     } catch (error) {
       runtime.actionStatus = "failed";
+      environmentRuntimeLog.error("codex-environment-action-failed", {
+        environmentId: selection.environment.id,
+        environmentName: selection.environment.name,
+        actionId: selection.action.id,
+        actionName: selection.action.name,
+        cwd,
+        command: selection.action.command,
+        phase: "during-setup",
+        message: error instanceof Error ? error.message : String(error),
+      });
       throw new CodexEnvironmentStartupError(
         error instanceof Error ? error.message : String(error),
         "action",
@@ -220,6 +266,7 @@ export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
+  onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
   runtime: CodexThreadEnvironmentRuntime;
 }): Promise<CodexThreadEnvironmentRuntime> {
   if (params.runtime.executionTarget !== "local") {
@@ -238,6 +285,13 @@ export async function startLocalCodexEnvironmentAction(params: {
     actionId: action.id,
     actionName: action.name,
     actionCommand: action.command,
+    // Clear stale exit fields from a prior run of this (or another) action
+    // so the renderer doesn't display old output while the new run starts.
+    actionExitedAt: undefined,
+    actionExitCode: undefined,
+    actionExitSignal: undefined,
+    actionDurationMs: undefined,
+    actionOutput: undefined,
   };
 
   try {
@@ -246,11 +300,23 @@ export async function startLocalCodexEnvironmentAction(params: {
       command: action.command,
       env: params.env,
       mode: "detach",
+      onDetachedExit: params.onDetachedExit,
     });
     nextRuntime.actionPid = result.pid;
     nextRuntime.actionStatus = "started";
+    nextRuntime.actionStartedAt = Date.now();
   } catch (error) {
     nextRuntime.actionStatus = "failed";
+    environmentRuntimeLog.error("codex-environment-action-failed", {
+      environmentId: params.runtime.environmentId,
+      environmentName: params.runtime.environmentName,
+      actionId: action.id,
+      actionName: action.name,
+      cwd: params.runtime.cwd,
+      command: action.command,
+      phase: "run-button",
+      message: error instanceof Error ? error.message : String(error),
+    });
     throw new CodexEnvironmentStartupError(
       error instanceof Error ? error.message : String(error),
       "action",
@@ -273,6 +339,8 @@ function runShellCommand(
     cwd: params.cwd,
     mode: params.mode,
     command: params.command,
+    shell,
+    pathPreview: truncateForLog(commandEnv.PATH),
   });
 
   return new Promise((resolve, reject) => {
@@ -280,7 +348,11 @@ function runShellCommand(
       cwd: params.cwd,
       detached: params.mode === "detach" || Boolean(params.timeoutMs),
       env: commandEnv,
-      stdio: params.mode === "detach" ? "ignore" : "pipe",
+      // Pipe output even in detach mode so we can drain to a ring buffer,
+      // stream to the renderer's anchored output UI, and log non-zero exits.
+      // Caller still resolves on spawn for detach mode; we keep listening so
+      // long-running children (e.g., `pnpm dev`) report failures.
+      stdio: "pipe",
     });
 
     let stdout = "";
@@ -329,8 +401,10 @@ function runShellCommand(
     if (params.mode === "wait" && params.timeoutMs && params.timeoutMs > 0) {
       timeoutHandle = setTimeout(() => {
         const durationMs = Date.now() - startedAt;
-        environmentRuntimeLog.warn("codex-environment-command-timeout", {
+        environmentRuntimeLog.error("codex-environment-command-timeout", {
           processId,
+          cwd: params.cwd,
+          command: params.command,
           timeoutMs: params.timeoutMs,
           durationMs,
         });
@@ -376,10 +450,62 @@ function runShellCommand(
 
     if (params.mode === "detach") {
       child.once("spawn", () => {
+        // child.unref() lets the parent exit independently of the child.
+        // Pipes stay attached so we keep getting stdout/stderr until child
+        // exits (or until we close them when shutting down).
         child.unref();
         settle(() => {
           resolve({ pid: child.pid });
         });
+      });
+      // Even in detach mode, log non-zero exits so failed `pnpm dev` /
+      // PwrSnap-style launches don't disappear silently, and fire
+      // onDetachedExit so callers can persist the exit details to
+      // overlay state for the anchored env-action output UI.
+      child.once("close", (code, signal) => {
+        const durationMs = Date.now() - startedAt;
+        const combinedOutput = [stdout.trimEnd(), stderr.trimEnd()]
+          .filter(Boolean)
+          .join("\n");
+        if (code === 0) {
+          environmentRuntimeLog.info("codex-environment-detached-exit", {
+            processId,
+            code,
+            signal,
+            durationMs,
+            command: params.command,
+            cwd: params.cwd,
+          });
+        } else {
+          environmentRuntimeLog.error("codex-environment-detached-failed", {
+            processId,
+            code,
+            signal,
+            durationMs,
+            command: params.command,
+            cwd: params.cwd,
+            output: truncateForLog(combinedOutput),
+          });
+        }
+        try {
+          params.onDetachedExit?.({
+            exitCode: typeof code === "number" ? code : null,
+            exitSignal: signal ?? null,
+            durationMs,
+            output: combinedOutput,
+          });
+        } catch (callbackError) {
+          environmentRuntimeLog.warn(
+            "codex-environment-detached-exit-callback-failed",
+            {
+              processId,
+              message:
+                callbackError instanceof Error
+                  ? callbackError.message
+                  : String(callbackError),
+            },
+          );
+        }
       });
       return;
     }
@@ -390,21 +516,28 @@ function runShellCommand(
         clearTimeout(killHandle);
         killHandle = undefined;
       }
-      environmentRuntimeLog.info("codex-environment-command-exit", {
-        processId,
-        code,
-        signal,
-      });
+      const durationMs = Date.now() - startedAt;
+      const combinedOutput = [stdout.trimEnd(), stderr.trimEnd()]
+        .filter(Boolean)
+        .join("\n");
       if (timedOut) {
+        environmentRuntimeLog.error("codex-environment-command-exit", {
+          processId,
+          code,
+          signal,
+          durationMs,
+          timedOut: true,
+          command: params.command,
+          cwd: params.cwd,
+          output: truncateForLog(combinedOutput),
+        });
         settle(() => {
           reject(
             new CodexEnvironmentCommandError(
               `Codex environment command timed out after ${params.timeoutMs}ms`,
               {
-                durationMs: Date.now() - startedAt,
-                output: [stdout.trimEnd(), stderr.trimEnd()]
-                  .filter(Boolean)
-                  .join("\n"),
+                durationMs,
+                output: combinedOutput,
               },
             ),
           );
@@ -412,25 +545,40 @@ function runShellCommand(
         return;
       }
       if (code === 0) {
+        environmentRuntimeLog.info("codex-environment-command-exit", {
+          processId,
+          code,
+          signal,
+          durationMs,
+        });
         settle(() => {
           resolve({
-            durationMs: Date.now() - startedAt,
+            durationMs,
             exitCode: code,
-            output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+            output: combinedOutput,
             pid: child.pid,
           });
         });
         return;
       }
+      environmentRuntimeLog.error("codex-environment-command-exit", {
+        processId,
+        code,
+        signal,
+        durationMs,
+        command: params.command,
+        cwd: params.cwd,
+        output: truncateForLog(combinedOutput),
+      });
       const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
       settle(() => {
         reject(
           new CodexEnvironmentCommandError(
             `Codex environment command exited with ${code ?? signal ?? "unknown"}${suffix}`,
             {
-              durationMs: Date.now() - startedAt,
+              durationMs,
               exitCode: typeof code === "number" ? code : undefined,
-              output: [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n"),
+              output: combinedOutput,
             },
           ),
         );
