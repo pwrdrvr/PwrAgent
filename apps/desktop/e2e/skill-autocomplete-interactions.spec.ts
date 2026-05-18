@@ -327,10 +327,18 @@ test("thread reply Tiptap skill chip stays visible in compact density", async ()
       hasText: "$ce:plan",
     });
     await expect(chip).toBeVisible();
+    // `toBeVisible` alone wouldn't catch the regression: a `display: none`
+    // chip is what produced the original "Tab inserts nothing" bug, but
+    // the same compact-density rule could just as easily collapse the
+    // chip with `width: 0` and still keep `visibility: visible`. Assert
+    // the actual rendered geometry so this test fails the same way
+    // (silently disappeared chip) as the user-visible symptom.
     const box = await chip.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.width).toBeGreaterThan(0);
-    expect(box!.height).toBeGreaterThan(0);
+    if (!box) {
+      throw new Error("skill chip is in the DOM but has no rendered layout");
+    }
+    expect(box.width).toBeGreaterThan(0);
+    expect(box.height).toBeGreaterThan(0);
   } finally {
     await app.close();
   }

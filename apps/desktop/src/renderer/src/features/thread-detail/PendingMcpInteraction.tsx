@@ -24,7 +24,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   return (
     <div className="transcript-mcp" role="group" aria-label="Pending MCP interaction">
       <div className="transcript-mcp__header">
-        <span className="thread-row__chip thread-row__chip--mode">
+        <span className="chip chip--mode">
           {props.state.mode === "url" ? "MCP login" : "MCP approval"}
         </span>
         <span className="transcript-message__time">

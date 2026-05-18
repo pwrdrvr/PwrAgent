@@ -38,10 +38,10 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           <h2 className="thread-header__compact-title" title={props.thread.title}>
             {props.thread.title}
           </h2>
-          <span className="thread-row__chip thread-row__chip--backend">
+          <span className="chip chip--backend">
             {formatBackendLabel(props.thread.source)}
           </span>
-          <span className="thread-row__chip thread-row__chip--mode">
+          <span className="chip chip--mode">
             {formatExecutionModeLabel(props.thread.executionMode)}
           </span>
         </div>

@@ -2205,6 +2205,11 @@ textarea,
   background: var(--bg-row-active);
 }
 
+/* `.chip--backend` is the non-list alias of `.thread-row__chip--backend`,
+   pairing with the `.chip` primitive. Used by the open-thread header and
+   the transcript so they keep their elevated-panel backend pill without
+   the thread-list class chain. */
+.chip--backend,
 .thread-row__chip--backend {
   border: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
@@ -2212,6 +2217,12 @@ textarea,
   font-weight: 600;
 }
 
+/* `.chip--mode` is the non-list alias of `.thread-row__chip--mode`,
+   pairing with the `.chip` primitive. Transcript surfaces use it so
+   they can keep the accent-mode styling without inheriting the
+   thread-list class name (and the density-suppression rule that
+   targets it). */
+.chip--mode,
 .thread-row__chip--mode {
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
