@@ -40,10 +40,10 @@ test("LiveWorkRail chevron actually collapses the body in a real CSS engine", as
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "turn-diff-updated-1" });
 
-    // The rail mounts as the only `complementary` landmark on this
-    // screen; the protocol summarizes the diff as "Edited 2 files,
-    // +4, -1" (5 additions on AGENTS.md minus the second-existing-line
-    // tweak isn't counted — see `extractDiffDetails`/`summarizeDiff`).
+    // The rail and the thread context panel are both `complementary`
+    // landmarks, so we scope by name. The fixture's cumulative diff
+    // adds 3 lines on AGENTS.md and adds 1 / removes 1 on README.md
+    // → protocol summary "Edited 2 files, +4, -1".
     const rail = app.window.getByRole("complementary", { name: /Edited 2 files/i });
     await expect(rail).toBeVisible();
 
@@ -58,9 +58,11 @@ test("LiveWorkRail chevron actually collapses the body in a real CSS engine", as
     // click flipped the React state and the [hidden] attribute, but
     // `.live-work-rail__body { display: flex }` silently overrode the
     // UA `[hidden] { display: none }` so the body kept rendering.
-    const chevron = rail
-      .locator("css=.live-work-rail__collapse")
-      .first();
+    // The collapse button's accessible name is the rail title
+    // ("Edited 2 files, ..."); the file-row toggles are named after
+    // their files ("Update AGENTS.md", "Update README.md") so this
+    // role+name match is unambiguous.
+    const chevron = rail.getByRole("button", { name: /^Edited 2 files/ });
     await chevron.click();
 
     // Body actually disappears now — in real CSS, [hidden] resolves
@@ -111,6 +113,10 @@ test("LiveWorkRail per-file expand toggle hides its diff body in a real CSS engi
     // Expand: the diff content becomes visible.
     await agentsToggle.click();
     await expect(agentsToggle).toHaveAttribute("aria-expanded", "true");
+    // The diff container is intentionally not a landmark and has no
+    // accessible name — it's a wrapper that exists only to host the
+    // diff content and back the row's `aria-controls`. Class
+    // selector is the right tool here.
     const diffBody = rail.locator("css=.live-work-rail__file-diff").first();
     await expect(diffBody).toBeVisible();
 
@@ -149,6 +155,9 @@ test("LiveWorkRail title contains the cumulative summary (merged section heading
     await app.advance({ stepId: "turn-diff-updated-1" });
 
     const rail = app.window.getByRole("complementary", { name: /Edited 2 files/i });
+    // `.live-work-rail__title` is the inner <span> that carries the
+    // visible title text. It's a presentational element, not a
+    // landmark — class selector is intentional.
     const title = rail.locator("css=.live-work-rail__title");
     await expect(title).toContainText("Edited 2 files");
 

@@ -82,6 +82,39 @@ describe("LiveWorkRail", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("treats an editedFilesEntry as absent when none of its details carry a fileDiff", () => {
+    // Defensive: a malformed entry with summary "Edited 1 file" but
+    // empty/non-diff details would otherwise produce a rail title
+    // claiming work-was-done while the body had nothing to render
+    // below it. The rail title and the section body share the same
+    // gating so they can't disagree (#510 follow-up).
+    const editedFilesEntryWithoutDiffs: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-diff-empty",
+      summary: "Edited 1 file",
+      createdAt: 1_000,
+      details: [
+        {
+          id: "detail-non-diff",
+          kind: "write",
+          label: "Update mystery.ts",
+          path: "/repo/mystery.ts",
+        },
+      ],
+    };
+    const { container } = render(
+      <LiveWorkRail
+        dock="above"
+        pinned={false}
+        editedFilesEntry={editedFilesEntryWithoutDiffs}
+        onDockChange={() => undefined}
+      />,
+    );
+    // No content → rail returns null entirely (just like the "no
+    // entries" empty-state case).
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("uses the section summary as the rail title when not pinned", () => {
     render(
       <LiveWorkRail

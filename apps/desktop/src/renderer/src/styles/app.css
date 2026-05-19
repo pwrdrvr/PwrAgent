@@ -5998,16 +5998,19 @@ textarea,
   padding: 4px 6px;
   border: 0;
   border-radius: 4px;
-  background: var(--bg-panel-elevated);
+  /* `--bg-panel` (not `--bg-panel-elevated`) so the row sits visually
+     INSIDE the rail card (which uses `--bg-panel-elevated`) instead
+     of blending flush with it. Required to be opaque for the sticky
+     overlay below — transparent would let diff text bleed through. */
+  background: var(--bg-panel);
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
   text-align: left;
   /* Stay reachable while scrolling through an expanded file's diff
-     (#495 follow-up). Sticky stacking is handled by the browser:
-     when the next file-toggle reaches top, it pushes the previous
-     one out. Background must be opaque so diff text doesn't bleed
-     through, and z-index sits above the diff body. */
+     (#510). Sticky stacking is handled by the browser: when the next
+     file-toggle reaches top, it pushes the previous one out.
+     z-index sits above the diff body. */
   position: sticky;
   top: 0;
   z-index: 1;
