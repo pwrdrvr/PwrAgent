@@ -9,6 +9,10 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
 const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
+const listThreadsMock = vi.fn(async () => [] as unknown[]);
+const getDesktopBackendRegistryMock = vi.fn(() => ({
+  listThreads: listThreadsMock,
+}));
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   spawn: vi.fn(),
@@ -111,6 +115,7 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
+  getDesktopBackendRegistry: getDesktopBackendRegistryMock,
 }));
 
 vi.mock("../messaging/messaging-runtime", () => ({
@@ -161,6 +166,9 @@ describe("settings ipc", () => {
   beforeEach(() => {
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
+    listThreadsMock.mockClear();
+    listThreadsMock.mockResolvedValue([]);
+    getDesktopBackendRegistryMock.mockClear();
     providerMocks.resolveTelegramContact.mockReset();
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.resolveMattermostContact.mockReset();
@@ -710,5 +718,105 @@ describe("settings ipc", () => {
       { botToken: "slack-token" },
       { id: "U079K80HTGS", kind: "user" },
     );
+  });
+
+  // The wizard PR (#491) calls this IPC the moment the operator picks
+  // a Codex profile model. The handler must (1) persist the wizard
+  // signal idempotently, (2) fire the same thread-list prefetch the
+  // startup path would have done, and (3) honor `connect: false` for
+  // the skip path.
+  describe("completeOnboardingCodexBootstrap", () => {
+    async function setupOnboardingHandler(initialConfig?: string): Promise<{
+      configPath: string;
+      onConfigPatchWritten: ReturnType<typeof vi.fn>;
+    }> {
+      const tempRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "pwragent-onboarding-ipc-"),
+      );
+      tempRoots.push(tempRoot);
+      const configPath = path.join(tempRoot, "config.toml");
+      if (initialConfig !== undefined) {
+        fs.writeFileSync(configPath, initialConfig, "utf8");
+      }
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const onConfigPatchWritten = vi.fn(async () => undefined);
+      const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+      registerSettingsIpcHandlers(service, { onConfigPatchWritten });
+      return { configPath, onConfigPatchWritten };
+    }
+
+    it("persists the wizard signal and fires the thread-list prefetch", async () => {
+      const { configPath, onConfigPatchWritten } =
+        await setupOnboardingHandler(
+          ["[onboarding]", "completed = false", ""].join("\n"),
+        );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
+        "../../shared/ipc"
+      );
+
+      const response = (await handlers.get(
+        ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
+      )?.({})) as { connectInitiated: boolean };
+
+      const onDisk = fs.readFileSync(configPath, "utf8");
+      expect(onDisk).toContain("completed = true");
+      expect(onDisk).toContain('completed_source = "wizard"');
+      // Fire-and-forget prefetch; flush the microtask queue so the
+      // promise chain inside the handler has a chance to schedule it.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(listThreadsMock).toHaveBeenCalledExactlyOnceWith({
+        callerReason: "onboarding-bootstrap",
+      });
+      expect(response.connectInitiated).toBe(true);
+      expect(onConfigPatchWritten).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips the prefetch when connect = false (skip path)", async () => {
+      const { configPath } = await setupOnboardingHandler(
+        ["[onboarding]", "completed = false", ""].join("\n"),
+      );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
+        "../../shared/ipc"
+      );
+
+      const response = (await handlers.get(
+        ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
+      )?.({}, { connect: false })) as { connectInitiated: boolean };
+
+      expect(fs.readFileSync(configPath, "utf8")).toContain("completed = true");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(listThreadsMock).not.toHaveBeenCalled();
+      expect(response.connectInitiated).toBe(false);
+    });
+
+    it("is idempotent — calling twice does not double-write or double-prefetch on a no-op", async () => {
+      // Already-completed config: the patch writer detects the no-op
+      // and skips disk I/O entirely, but the handler still fires the
+      // prefetch (the wizard might be re-triggering bootstrap because
+      // the renderer lost its prior state).
+      const { configPath } = await setupOnboardingHandler(
+        [
+          "[onboarding]",
+          "completed = true",
+          'completed_source = "wizard"',
+          "",
+        ].join("\n"),
+      );
+      const { ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL } = await import(
+        "../../shared/ipc"
+      );
+      const originalBytes = fs.readFileSync(configPath, "utf8");
+
+      await handlers.get(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL)?.({});
+      await handlers.get(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL)?.({});
+
+      expect(fs.readFileSync(configPath, "utf8")).toBe(originalBytes);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(listThreadsMock).toHaveBeenCalledTimes(2);
+    });
   });
 });

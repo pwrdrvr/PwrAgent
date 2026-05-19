@@ -177,6 +177,8 @@ export const SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL =
   "settings:check-codex-auth-profile-status";
 export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
+export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
+  "onboarding:complete-codex-bootstrap";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const APP_METADATA_READ_CHANNEL = "app:read-metadata";
 export const APP_LICENSE_DOCUMENT_READ_CHANNEL = "app:read-license-document";

@@ -1512,6 +1512,16 @@ export class DesktopBackendRegistry {
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
+  /**
+   * Gate for the Codex `listThreads` probe. Returns `true` while the
+   * first-run wizard is still asking the operator which Codex profile
+   * model to use; in that window we must not slurp Codex threads under
+   * an arbitrary identity. Tests inject a fixed value; production wires
+   * it to `DesktopSettingsService.isCodexBootstrapDeferred`, which is
+   * itself dormant (always returns `false`) until the wizard PR flips
+   * `ONBOARDING_CODEX_GATE_ENABLED`.
+   */
+  private readonly isCodexBootstrapDeferredFn: () => boolean;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -1525,6 +1535,7 @@ export class DesktopBackendRegistry {
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
+    isCodexBootstrapDeferred?: () => boolean;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -1646,6 +1657,30 @@ export class DesktopBackendRegistry {
       grok: this.grokClient,
     });
 
+    this.isCodexBootstrapDeferredFn =
+      options?.isCodexBootstrapDeferred ??
+      (() => {
+        try {
+          return getDesktopSettingsService().isCodexBootstrapDeferred();
+        } catch (error) {
+          // The settings singleton can only throw if app-state init
+          // never ran. That should not be reachable in production —
+          // `initializeAppState()` runs before any IPC handler that
+          // reaches the registry. If it does happen, default to "gate
+          // off" so we fall back to the historical behavior (Codex
+          // prewarm runs) rather than presenting an empty sidebar that
+          // the operator has no way to unstick. Surface the failure
+          // loudly so the underlying init bug is fixable.
+          backendRegistryLog.warn(
+            "isCodexBootstrapDeferred fell back to false; settings service unavailable",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
+        }
+      });
+
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
   }
@@ -1690,6 +1725,23 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
+    // Gate the deferred Codex probe. When the first-run wizard hasn't
+    // picked a Codex profile model yet, an explicit codex query returns
+    // empty; an unfiltered query falls through to the grok-only path so
+    // grok threads still load and the renderer can render a clean
+    // "Finish setup to see your threads" empty state for Codex without
+    // contaminating it with arbitrary-identity Codex data.
+    if (
+      (params.backend === "codex" || params.backend === undefined) &&
+      this.isCodexBootstrapDeferredFn()
+    ) {
+      if (params.backend === "codex") {
+        return [];
+      }
+      return await this.listThreads({ ...params, backend: "grok" }).catch(
+        () => [],
+      );
+    }
     const normalizedParams = {
       ...params,
       enrichDirectories:

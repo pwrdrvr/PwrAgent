@@ -103,6 +103,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CompleteOnboardingCodexBootstrapRequest,
+  CompleteOnboardingCodexBootstrapResponse,
   ClearComposerDraftRequest,
   ClearComposerDraftResponse,
   ListComposerDraftLatestResponse,
@@ -229,6 +231,7 @@ import {
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   PRELOAD_LOG_CHANNEL,
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
@@ -417,6 +420,13 @@ const desktopApi = Object.freeze({
   ): Promise<CheckDesktopCodexAuthProfileStatusResponse> =>
     await ipcRenderer.invoke(
       SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
+      request,
+    ),
+  completeOnboardingCodexBootstrap: async (
+    request?: CompleteOnboardingCodexBootstrapRequest,
+  ): Promise<CompleteOnboardingCodexBootstrapResponse> =>
+    await ipcRenderer.invoke(
+      ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
       request,
     ),
   pickGhCommand: async (): Promise<PickGhCommandResponse> =>

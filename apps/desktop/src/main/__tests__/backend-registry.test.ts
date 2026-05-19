@@ -6820,4 +6820,115 @@ command = "pnpm dev"
       await registry.close();
     });
   });
+
+  // Deferred Codex `listThreads` probe for brand-new PwrAgent profiles.
+  // The wizard flips `resolveOnboardingCompleted` to `true` after the
+  // operator picks a Codex profile model; until then we must not hit the
+  // Codex backend for thread-list reads.
+  describe("onboarding gate for Codex listThreads", () => {
+    it("returns empty for explicit codex queries when onboarding is incomplete", async () => {
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-codex",
+            title: "Codex thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isCodexBootstrapDeferred: () => true,
+      });
+
+      const result = await registry.listThreads({
+        backend: "codex",
+        callerReason: "startup-prewarm",
+      });
+
+      expect(result).toEqual([]);
+      expect(codexClient.listThreadsCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("returns grok-only results for unfiltered queries when onboarding is incomplete", async () => {
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-codex",
+            title: "Codex thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const grokClient = new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Grok App Server", version: "1.0.0" },
+          methods: ["thread/list"],
+        },
+        threads: [
+          {
+            id: "thread-grok",
+            title: "Grok thread",
+            titleSource: "explicit",
+            source: "grok",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient,
+        overlayStore: createOverlayStoreMock(),
+        isCodexBootstrapDeferred: () => true,
+      });
+
+      const result = await registry.listThreads({
+        callerReason: "startup-prewarm",
+      });
+
+      expect(result.map((thread) => thread.id)).toEqual(["thread-grok"]);
+      expect(codexClient.listThreadsCallCount).toBe(0);
+      expect(grokClient.listThreadsCallCount).toBe(1);
+
+      await registry.close();
+    });
+
+    it("hits Codex once onboarding is complete", async () => {
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-codex",
+            title: "Codex thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      const result = await registry.listThreads({
+        backend: "codex",
+        callerReason: "startup-prewarm",
+      });
+
+      expect(result.map((thread) => thread.id)).toEqual(["thread-codex"]);
+      expect(codexClient.listThreadsCallCount).toBe(1);
+
+      await registry.close();
+    });
+  });
 });

@@ -28,6 +28,10 @@ describe("desktop settings contracts", () => {
           density: { value: "mission-control", source: "default" },
         },
       },
+      onboarding: {
+        completed: { value: true, source: "default" },
+        completedSource: { value: "migrated", source: "default" },
+      },
       experimental: {
         chatReplyComposer: {
           value: "tiptap-wysiwyg-markdown-chips",

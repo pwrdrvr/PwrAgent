@@ -223,6 +223,7 @@ export function ensureNamedProfileExists(
 
   if (created) {
     fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
+    writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
   }
 
   const registry = readProfilesRegistry(options);
@@ -233,6 +234,20 @@ export function ensureNamedProfileExists(
   }
 
   return { profileDir, profileName, created };
+}
+
+/**
+ * Seed a freshly-created profile's `config.toml` with the
+ * `[onboarding]` table. The settings service reads this as the signal
+ * that the first-run wizard has not yet run, which gates the initial
+ * Codex `listThreads` probe. Profiles that pre-date this gate have no
+ * `[onboarding]` table and are treated as `"migrated"` (gate off).
+ */
+function writeInitialOnboardingMarker(configPath: string): void {
+  if (fs.existsSync(configPath)) {
+    return;
+  }
+  fs.writeFileSync(configPath, "[onboarding]\ncompleted = false\n", "utf8");
 }
 
 export function setDefaultProfileName(

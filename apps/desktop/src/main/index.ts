@@ -105,6 +105,10 @@ let startupCpuProfilerForNewWindows:
   | undefined;
 
 function prewarmInitialThreadList(): void {
+  if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
+    mainLog.info("startup thread list prewarm deferred until onboarding completes");
+    return;
+  }
   const startedAt = Date.now();
   void getDesktopBackendRegistry()
     .listThreads({

@@ -1378,6 +1378,148 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.telegram.enabled.value).toBe(true);
   });
 
+  // Gate for the deferred Codex `listThreads` probe. The reader rule is
+  // "missing [onboarding] table = migrated", so pre-existing v1.x users
+  // upgrade with no regression while brand-new profiles carry an explicit
+  // `completed = false` marker that the wizard later flips to true.
+  describe("onboarding gate", () => {
+    it("treats a missing [onboarding] section as a migrated profile", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        ["[general]", "developer_mode = true", ""].join("\n"),
+        "utf8",
+      );
+
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+
+      const snapshot = await service.readSettings();
+      expect(snapshot.onboarding.completed).toEqual({
+        value: true,
+        source: "default",
+      });
+      expect(snapshot.onboarding.completedSource).toEqual({
+        value: "migrated",
+        source: "default",
+      });
+      expect(service.resolveOnboardingCompleted()).toBe(true);
+    });
+
+    it("treats an empty config as a brand-new profile awaiting the wizard", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      // A real fresh profile gets `[onboarding] completed = false`
+      // written by `ensureNamedProfileExists`; an absent file follows the
+      // same migrated-default path because there is nothing to read.
+      // Profile-create-side coverage lives in profile.test.ts.
+
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+
+      const snapshot = await service.readSettings();
+      expect(snapshot.onboarding.completed.value).toBe(true);
+      expect(snapshot.onboarding.completedSource.value).toBe("migrated");
+    });
+
+    it("honors an explicit completed = false marker as gate-on", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        ["[onboarding]", "completed = false", ""].join("\n"),
+        "utf8",
+      );
+
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+
+      const snapshot = await service.readSettings();
+      expect(snapshot.onboarding.completed).toEqual({
+        value: false,
+        source: "config",
+      });
+      expect(snapshot.onboarding.completedSource).toEqual({
+        value: "",
+        source: "default",
+      });
+      expect(service.resolveOnboardingCompleted()).toBe(false);
+    });
+
+    // The gate's read-side effect is dormant until the first-run
+    // wizard PR (#491) flips `ONBOARDING_CODEX_GATE_ENABLED` to true.
+    // This test pins the dormant behavior so we don't accidentally
+    // activate the gate before the wizard UI exists to drive past it.
+    it("isCodexBootstrapDeferred is dormant by default even when completed = false", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        ["[onboarding]", "completed = false", ""].join("\n"),
+        "utf8",
+      );
+
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+
+      expect(service.resolveOnboardingCompleted()).toBe(false);
+      // Persistence reads `false`, but the gate consults the feature
+      // flag first so the read-side effect stays off.
+      expect(service.isCodexBootstrapDeferred()).toBe(false);
+    });
+
+    it("round-trips a wizard completion through writeConfigPatch", async () => {
+      const root = createTempRoot();
+      const configPath = path.join(root, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        ["[onboarding]", "completed = false", ""].join("\n"),
+        "utf8",
+      );
+
+      const service = new DesktopSettingsService({
+        configPath,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+
+      expect(service.resolveOnboardingCompleted()).toBe(false);
+
+      await service.writeConfigPatch({
+        onboarding: { completed: true, completedSource: "wizard" },
+      });
+
+      const onDisk = fs.readFileSync(configPath, "utf8");
+      expect(onDisk).toContain("[onboarding]");
+      expect(onDisk).toContain("completed = true");
+      expect(onDisk).toContain('completed_source = "wizard"');
+
+      const snapshot = await service.readSettings();
+      expect(snapshot.onboarding.completed).toEqual({
+        value: true,
+        source: "config",
+      });
+      expect(snapshot.onboarding.completedSource).toEqual({
+        value: "wizard",
+        source: "config",
+      });
+      expect(service.resolveOnboardingCompleted()).toBe(true);
+    });
+  });
+
   it("leaves the file byte-identical when a patch sets values that already match", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

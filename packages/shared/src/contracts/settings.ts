@@ -169,6 +169,35 @@ export type DesktopGeneralSettingsSnapshot = {
   appearance: DesktopAppearanceSnapshot;
 };
 
+export const DESKTOP_ONBOARDING_COMPLETED_SOURCES = [
+  "wizard",
+  "migrated",
+] as const;
+export type DesktopOnboardingCompletedSource =
+  (typeof DESKTOP_ONBOARDING_COMPLETED_SOURCES)[number];
+
+/**
+ * Per-profile onboarding state. `completed` gates the initial Codex
+ * `listThreads` probe at app startup so a brand-new PwrAgent profile shows
+ * an empty sidebar until the first-run wizard picks a Codex profile model
+ * (Shared / Isolated / Multiple). `completedSource` distinguishes a profile
+ * that ran the wizard from one that existed before this gate landed —
+ * pre-existing profiles are treated as `"migrated"` so they keep loading
+ * Codex threads on launch with no regression.
+ */
+export type DesktopOnboardingSnapshot = {
+  completed: DesktopSettingsValue<boolean>;
+  completedSource: DesktopSettingsValue<DesktopOnboardingCompletedSource | "">;
+};
+
+export function isDesktopOnboardingCompletedSource(
+  value: string,
+): value is DesktopOnboardingCompletedSource {
+  return DESKTOP_ONBOARDING_COMPLETED_SOURCES.includes(
+    value as DesktopOnboardingCompletedSource,
+  );
+}
+
 export type DesktopCodexCandidateSource =
   | "env"
   | "config"
@@ -319,6 +348,7 @@ export type DesktopSettingsSnapshot = {
   };
   secretStorage: DesktopSettingsSecretStorageState;
   general: DesktopGeneralSettingsSnapshot;
+  onboarding: DesktopOnboardingSnapshot;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
     fullAccessRiskWarningDismissed: DesktopSettingsValue<boolean>;
@@ -445,6 +475,10 @@ export type DesktopSettingsConfigPatch = {
       density?: DesktopAppearanceDensity;
     };
   };
+  onboarding?: {
+    completed?: boolean;
+    completedSource?: DesktopOnboardingCompletedSource;
+  };
   experimental?: {
     fullAccessRiskWarningDismissed?: boolean;
     diffCondensation?: {
@@ -549,6 +583,27 @@ export type DesktopSettingsConfigPatch = {
   worktrees?: {
     storage?: DesktopWorktreeStorageLocation;
   };
+};
+
+/**
+ * Wizard-issued signal that the operator picked a Codex profile model
+ * and the deferred Codex `listThreads` probe may now run. The IPC handler
+ * persists `onboarding.completed = true` and `onboarding.completed_source =
+ * "wizard"` (idempotently) and kicks off the same thread-list prefetch the
+ * app startup path would have done.
+ *
+ * `connect` defaults to `true`; setting `false` is reserved for skip/exit
+ * paths that mark onboarding done without triggering an immediate Codex
+ * connect (e.g. the operator chose to skip the wizard and we want to
+ * defer the connect to the renderer's next explicit request).
+ */
+export type CompleteOnboardingCodexBootstrapRequest = {
+  connect?: boolean;
+};
+
+export type CompleteOnboardingCodexBootstrapResponse = {
+  snapshot: DesktopSettingsSnapshot;
+  connectInitiated: boolean;
 };
 
 export type ReadDesktopSettingsRequest = Record<string, never>;

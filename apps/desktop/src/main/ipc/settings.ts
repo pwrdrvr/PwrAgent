@@ -4,6 +4,8 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
+  CompleteOnboardingCodexBootstrapRequest,
+  CompleteOnboardingCodexBootstrapResponse,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
   DesktopMessagingContactLookupRequest,
@@ -29,6 +31,7 @@ import {
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
 import {
+  ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -44,7 +47,10 @@ import {
 } from "../../shared/ipc";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { disposeDesktopBackendRegistry } from "../app-server/backend-registry";
+import {
+  disposeDesktopBackendRegistry,
+  getDesktopBackendRegistry,
+} from "../app-server/backend-registry";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
@@ -751,6 +757,53 @@ export function registerSettingsIpcHandlers(
     ): Promise<DesktopMessagingContactLookupResponse> =>
       await resolveMessagingContact(getService(service), request),
   );
+
+  ipcMain.removeHandler(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL);
+  ipcMain.handle(
+    ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
+    async (
+      _event,
+      request?: CompleteOnboardingCodexBootstrapRequest,
+    ): Promise<CompleteOnboardingCodexBootstrapResponse> => {
+      const activeService = getService(service);
+      // Persist the wizard signal idempotently. The patch writer
+      // skips the file write entirely when both values already match
+      // what's on disk.
+      const snapshot = await activeService.writeConfigPatch({
+        onboarding: {
+          completed: true,
+          completedSource: "wizard",
+        },
+      });
+      await options?.onConfigPatchWritten?.(
+        {
+          onboarding: { completed: true, completedSource: "wizard" },
+        },
+        snapshot,
+      );
+
+      const shouldConnect = request?.connect !== false;
+      if (shouldConnect) {
+        // Same prefetch the startup path would have done. Fire-and-forget;
+        // errors are logged by the registry's own diagnostic plumbing.
+        void getDesktopBackendRegistry()
+          .listThreads({ callerReason: "onboarding-bootstrap" })
+          .catch((error) => {
+            settingsIpcLog.warn(
+              "onboarding bootstrap thread-list prefetch failed",
+              {
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          });
+      }
+
+      return {
+        snapshot: applyRuntimeMessagingSnapshot(snapshot),
+        connectInitiated: shouldConnect,
+      };
+    },
+  );
 }
 
 export function disposeSettingsIpcHandlers(): void {
@@ -770,5 +823,6 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
+  ipcMain.removeHandler(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL);
   disposeCredentialTester();
 }

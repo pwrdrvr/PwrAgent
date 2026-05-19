@@ -83,8 +83,10 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
   return startupProfilerInstance;
 });
 const resolveDeveloperModeMock = vi.fn(() => true);
+const isCodexBootstrapDeferredMock = vi.fn(() => false);
 const getDesktopSettingsServiceMock = vi.fn(() => ({
   resolveDeveloperMode: resolveDeveloperModeMock,
+  isCodexBootstrapDeferred: isCodexBootstrapDeferredMock,
 }));
 const profileFocusRequestWatcherStopMock = vi.fn();
 const resolveActiveProfileNameMock = vi.fn(() => "default");
@@ -391,6 +393,8 @@ describe("bootstrapApp", () => {
     getVersionMock.mockClear();
     resolveDeveloperModeMock.mockReset();
     resolveDeveloperModeMock.mockReturnValue(true);
+    isCodexBootstrapDeferredMock.mockReset();
+    isCodexBootstrapDeferredMock.mockReturnValue(false);
     getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
@@ -539,6 +543,20 @@ describe("bootstrapApp", () => {
     expect(listThreadsMock).toHaveBeenCalledWith({
       callerReason: "startup-prewarm",
     });
+  });
+
+  it("skips the prewarm when the Codex bootstrap is deferred for onboarding", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    isCodexBootstrapDeferredMock.mockReturnValue(true);
+    listThreadsMock.mockReturnValue(new Promise(() => {}));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
+    expect(listThreadsMock).not.toHaveBeenCalled();
   });
 
   it("wires release help links to PwrAgent destinations and bundled notices", async () => {
