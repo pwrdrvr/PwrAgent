@@ -3774,12 +3774,16 @@ export class DesktopBackendRegistry {
 
   private async refreshCodexEnvironmentRuntimeActions(
     runtime: CodexThreadEnvironmentRuntime,
-    actionId: string,
+    _actionId: string,
   ): Promise<CodexThreadEnvironmentRuntime> {
-    if (runtime.actions?.some((action) => action.id === actionId)) {
-      return runtime;
-    }
-
+    // Always reload action data from disk before running. The cached
+    // runtime.actions was populated when the env was first selected
+    // (materializeDirectoryLaunchpad or setCodexThreadEnvironment);
+    // env.toml edits made afterwards — adding `nvm use --silent`,
+    // `corepack enable`, or otherwise expanding a single-line command
+    // into a multi-line script — wouldn't propagate to subsequent
+    // runs without this reload. Disk read + TOML parse is fast (single
+    // file per environment); correctness wins over a micro-cache.
     const cwd = runtime.cwd?.trim();
     if (!cwd) {
       return runtime;

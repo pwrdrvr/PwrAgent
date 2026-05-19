@@ -610,28 +610,56 @@ export function EnvActionAnchorEntry(props: {
         : "composer__queued--env-action-running";
 
   return (
-    <div
+    <details
       className={`composer__queued composer__queued--env-action ${modifier}`}
       aria-label={label}
     >
-      <div className="composer__queued-copy">
-        <span className="composer__queued-label">{label}</span>
-        <span className="composer__queued-text">
-          {run.actionName}
-          {props.environmentName ? ` · ${props.environmentName}` : ""}
-          {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
+      <summary className="composer__queued-env-action-summary">
+        <span
+          className="composer__queued-env-action-chevron"
+          aria-hidden="true"
+        />
+        <span className="composer__queued-env-action-summary-text">
+          <span className="composer__queued-label">{label}</span>
+          <span className="composer__queued-text">
+            {run.actionName}
+            {props.environmentName ? ` · ${props.environmentName}` : ""}
+            {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
+          </span>
         </span>
+        <button
+          className="composer__secondary-action composer__queued-env-action-dismiss"
+          type="button"
+          onClick={(event) => {
+            // Prevent the click from toggling the surrounding <details>.
+            event.preventDefault();
+            event.stopPropagation();
+            props.onDismiss();
+          }}
+        >
+          Dismiss
+        </button>
+      </summary>
+      <div className="composer__queued-env-action-body">
         {run.command ? (
-          <code className="composer__queued-env-action-command">$ {run.command}</code>
+          <div className="composer__queued-env-action-section">
+            <div className="composer__queued-env-action-section-label">
+              Command
+            </div>
+            <pre className="composer__queued-env-action-command-block">
+              <code>$ {run.command}</code>
+            </pre>
+          </div>
         ) : null}
-        <details className="composer__queued-env-action-details">
-          <summary>
+        <div className="composer__queued-env-action-section">
+          <div className="composer__queued-env-action-section-label">
+            Output
             {truncatedOutput
-              ? `Show output (${truncatedOutput.split("\n").length} line${
+              ? ` · ${truncatedOutput.split("\n").length} line${
                   truncatedOutput.split("\n").length === 1 ? "" : "s"
-                })`
-              : "Show output"}
-          </summary>
+                }`
+              : ""}
+          </div>
           <pre className="composer__queued-env-action-output">
             <code>
               {truncatedOutput ||
@@ -640,20 +668,9 @@ export function EnvActionAnchorEntry(props: {
                   : "(no output captured)")}
             </code>
           </pre>
-        </details>
-      </div>
-      {status !== "started" ? (
-        <div className="composer__queued-actions">
-          <button
-            className="composer__secondary-action"
-            type="button"
-            onClick={props.onDismiss}
-          >
-            Dismiss
-          </button>
         </div>
-      ) : null}
-    </div>
+      </div>
+    </details>
   );
 }
 

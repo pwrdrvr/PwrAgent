@@ -29,7 +29,7 @@ function buildRun(
 
 describe("EnvActionAnchorEntry", () => {
   describe("status branches", () => {
-    it("renders the running label and hides Dismiss while started", () => {
+    it("renders the running label with always-visible Dismiss while started", () => {
       render(
         <EnvActionAnchorEntry
           run={buildRun({ status: "started", pid: 12345 })}
@@ -40,7 +40,12 @@ describe("EnvActionAnchorEntry", () => {
       expect(
         screen.getByLabelText("Env action running"),
       ).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      // Dismiss is always available now, regardless of status — a
+      // long-running action that the user no longer cares about
+      // should be clearable without having to wait for it to exit.
+      expect(
+        screen.getByRole("button", { name: "Dismiss" }),
+      ).toBeInTheDocument();
       // The pid meta and the command echo land in the same anchor.
       expect(screen.getByText(/pid 12345/)).toBeInTheDocument();
       expect(screen.getByText(/\$ pnpm test/)).toBeInTheDocument();
@@ -186,6 +191,32 @@ describe("EnvActionAnchorEntry", () => {
       // anchor; meta (pid, running-for, exit) still uses the · separator,
       // but the env-name slot specifically is empty.
       expect(screen.queryByText(/PwrAgnt/)).toBeNull();
+    });
+  });
+
+  describe("multi-line command rendering", () => {
+    // Regression: previously rendered with white-space: nowrap, which
+    // flattened a multi-line script (`nvm use --silent\ncorepack
+    // enable\npnpm dev`) onto a single horizontally-scrolling line,
+    // making it look as though only the last line was running.
+    it("preserves newlines in commands so each line is visible", () => {
+      const multiLineCommand = "nvm use --silent\ncorepack enable\npnpm dev";
+      render(
+        <EnvActionAnchorEntry
+          run={buildRun({
+            status: "started",
+            command: multiLineCommand,
+          })}
+          environmentName="PwrSnap"
+          onDismiss={() => {}}
+        />,
+      );
+      // The command body lives inside a <pre><code> with white-space:
+      // pre, so the textContent retains the newlines verbatim.
+      const codeBlock = screen.getByText(/nvm use --silent/);
+      expect(codeBlock.textContent).toContain("nvm use --silent");
+      expect(codeBlock.textContent).toContain("corepack enable");
+      expect(codeBlock.textContent).toContain("pnpm dev");
     });
   });
 
