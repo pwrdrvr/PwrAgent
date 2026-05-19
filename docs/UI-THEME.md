@@ -41,9 +41,9 @@ The desktop renderer centralizes theme values in [apps/desktop/src/renderer/src/
 --accent: #ff8a1f;
 --accent-strong: #ffa33d;
 --accent-bright: #ffb35c;
---accent-soft: rgba(255, 138, 31, 0.12);
---accent-border: rgba(255, 138, 31, 0.42);
---accent-shadow: rgba(255, 138, 31, 0.34);
+--accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+--accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
+--accent-shadow: color-mix(in srgb, var(--accent) 34%, transparent);
 --focus-ring: var(--accent);
 ```
 
@@ -54,6 +54,128 @@ Status colors may exist, but they should remain low-volume and functional:
 - info: desaturated blue for non-primary informational state
 
 Status colors should not compete with tangerine as the main action and focus signal.
+
+### Theme Variants
+
+The renderer ships two themes (dark + light) plus a system mode that
+follows `prefers-color-scheme`. Theme selection lives in per-profile
+`config.toml` under `[general.appearance]` and is applied via a
+`data-theme` attribute on `<html>`. The dark palette is the unscoped
+`:root` block; the light palette is opt-in under
+`:root[data-theme="light"]`.
+
+The contract: every token below is part of the **public theme
+surface** — a future custom theme (high-contrast, OLED, brand
+re-skin) is allowed to override any of these and only these. New
+tokens added to `:root` are not part of the contract until they're
+listed here. Tokens declared via `color-mix(in srgb, var(--token) X%,
+transparent)` derive their final value from their base; overriding
+the base is enough to flip every derived alpha.
+
+#### Surfaces
+
+| Token | Dark | Light |
+|---|---|---|
+| `--bg-app` | `#000000` | `#ffffff` |
+| `--bg-sidebar` | `#050505` | `#f7f4ef` |
+| `--bg-panel` | `#0a0a0a` | `#fdfcfa` |
+| `--bg-panel-elevated` | `#101010` | `#ffffff` |
+| `--bg-panel-hover` | `#14110d` | `#f4f0e8` |
+| `--bg-row-active` | `#120800` | `#fff5e9` |
+| `--bg-input` | `#080808` | `#ffffff` |
+
+#### Borders
+
+| Token | Dark | Light |
+|---|---|---|
+| `--border-subtle` | `rgba(247, 243, 235, 0.1)` | `rgba(0, 0, 0, 0.08)` |
+| `--border-strong` | `rgba(247, 243, 235, 0.2)` | `rgba(0, 0, 0, 0.18)` |
+
+#### Text
+
+| Token | Dark | Light |
+|---|---|---|
+| `--text-primary` | `#f7f3eb` | `#1a1612` |
+| `--text-secondary` | `#b8b0a5` | `#524a40` |
+| `--text-muted` | `#8c857a` | `#807870` |
+| `--text-subtle` | `rgba(247, 243, 235, 0.42)` | `rgba(26, 22, 18, 0.42)` |
+
+#### Accent (Tangerine Terminal)
+
+| Token | Dark | Light |
+|---|---|---|
+| `--accent` | `#ff8a1f` | `#c45200` |
+| `--accent-strong` | `#ffa33d` | `#b34a00` |
+| `--accent-bright` | `#ffb35c` | `#d96d00` |
+| `--accent-soft` | derived (12% of `--accent`) | derived |
+| `--accent-border` | derived (42% of `--accent`) | derived |
+| `--accent-shadow` | derived (34% of `--accent`) | derived |
+| `--focus-ring` | `var(--accent)` | `var(--accent)` |
+| `--button-text` | `#120800` | `#ffffff` |
+
+The light-theme accent is darker (`#c45200`) for WCAG-readable contrast on white surfaces. Button text on accent flips white in light theme.
+
+#### Semantic — danger / success / info
+
+| Token | Dark | Light |
+|---|---|---|
+| `--danger-base` | `#b94232` | `#8a1f12` |
+| `--danger-soft` | `rgba(185, 66, 50, 0.24)` | `rgba(138, 31, 18, 0.12)` |
+| `--danger-border` | derived | `rgba(138, 31, 18, 0.28)` |
+| `--danger-text` | `#ffb0a1` | `#8a1f12` |
+| `--success-soft` | `rgba(74, 148, 92, 0.18)` | `rgba(46, 110, 64, 0.14)` |
+| `--success-border` | `rgba(74, 148, 92, 0.32)` | `rgba(46, 110, 64, 0.28)` |
+| `--success-text` | `#9ce5b3` | `#1a5c2e` |
+| `--info-soft` | `rgba(86, 137, 196, 0.16)` | `rgba(54, 102, 165, 0.12)` |
+| `--info-border` | `rgba(86, 137, 196, 0.28)` | `rgba(54, 102, 165, 0.24)` |
+| `--info-text` | `#9fc8ff` | `#1a4f8a` |
+
+#### Status indicators
+
+| Token | Dark | Light |
+|---|---|---|
+| `--status-ok` | `#5fa969` | `#2e7d3c` |
+| `--status-warning` | `#d99a3d` | `#a86b00` |
+| `--status-suspended` | `#6b6660` | `#6b6660` |
+| `--status-error` | `#c45a3a` | `#a8472a` |
+
+#### One-off accents
+
+| Token | Dark | Light |
+|---|---|---|
+| `--info-teal` | `#2dd6d0` | `#0e9b95` |
+| `--brand-purple` | `#8a6dc4` | `#6a4ba8` |
+| `--danger-text-light` | `#ffba8a` | `#b03517` |
+
+#### Tokens that do NOT theme-flip
+
+These are intentionally theme-neutral and should not be overridden by a
+custom theme:
+
+- `--shadow-base` (`#000000`) — drop shadows stay dark in both themes
+  (standard drop-shadow pattern); `--shadow-tint-*` and `--scrim-*`
+  derive from it.
+- `--shadow-popover` — light theme reduces alpha (0.42 → 0.18) because
+  heavy shadows over white read poorly; not a base color.
+- `--chat-column-max` (`940px`) — layout token, not a color.
+
+#### Derived tokens
+
+The full list of `color-mix(...)` derivatives in `:root` (e.g.
+`--surface-overlay-*`, `--accent-underline`, `--scrollbar-thumb`,
+`--row-active-tint-*`, `--shadow-tint-*`) follow whichever base they
+reference. A custom theme overriding `--accent` automatically updates
+every accent-derived alpha overlay. See
+[`apps/desktop/src/renderer/src/styles/app.css`](../apps/desktop/src/renderer/src/styles/app.css)
+for the live list.
+
+Raw color literals outside `:root` / `:root[data-theme="..."]` are
+blocked by `pnpm lint:colors` (in CI). Use `var(--token)` or
+`color-mix(in srgb, var(--token) X%, transparent)` for derived
+alphas. Illustration assets that intentionally don't theme-flip
+(currently only the lunar-phase context-window indicator) are
+substring-allowlisted in
+[`scripts/lint-renderer-colors.mjs`](../scripts/lint-renderer-colors.mjs).
 
 ### Status indicator dots
 

@@ -82,9 +82,9 @@ describe("Tangerine Terminal theme contract", () => {
   it("defines the semantic tokens used by the renderer theme", () => {
     expect(tokens).toMatchObject({
       "accent": "#ff8a1f",
-      "accent-border": "rgba(255, 138, 31, 0.42)",
+      "accent-border": "color-mix(in srgb, var(--accent) 42%, transparent)",
       "accent-bright": "#ffb35c",
-      "accent-soft": "rgba(255, 138, 31, 0.12)",
+      "accent-soft": "color-mix(in srgb, var(--accent) 12%, transparent)",
       "bg-app": "#000000",
       "bg-input": "#080808",
       "bg-panel": "#0a0a0a",
@@ -352,7 +352,9 @@ describe("Tangerine Terminal theme contract", () => {
 
     expect(autocompleteRule).toContain("border: 1px solid var(--border-strong);");
     expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
-    expect(autocompleteRule).toContain("inset 0 0 0 1px rgba(247, 243, 235, 0.06)");
+    expect(autocompleteRule).toContain(
+      "inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent)",
+    );
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
   });
 
