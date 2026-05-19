@@ -149,7 +149,15 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     await expect(activeLens).toHaveCSS("color", "rgb(255, 179, 92)");
     await expect(primaryButton).toHaveCSS("background-color", "rgb(18, 8, 0)");
     await expect(primaryButton).toHaveCSS("color", "rgb(255, 179, 92)");
-    await expect(selectedRow).toHaveCSS("border-left-color", "rgba(255, 138, 31, 0.42)");
+    // --accent-border now derives via color-mix(in srgb, var(--accent) 42%,
+    // transparent). Chromium serializes the computed value as either
+    // `rgba(...)` (older versions) or `color(srgb r g b / a)` (newer
+    // versions, including the CI runner) — both forms are
+    // mathematically the same color. Match either.
+    await expect(selectedRow).toHaveCSS(
+      "border-left-color",
+      /^(?:rgba\(255, 138, 31, 0\.42\)|color\(srgb 1 0\.541176 0\.121569 \/ 0\.42\))$/,
+    );
     expect(await computedPseudoStyle(selectedRow, "::before", "background-color")).toBe(
       "rgb(255, 138, 31)"
     );
