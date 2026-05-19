@@ -18,7 +18,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
-import { FolderIcon, WorktreeIcon } from "../../icons";
+import { CopyIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -835,7 +835,7 @@ function CopyValueButton(props: {
       }
       onMouseLeave={props.onBlur}
     >
-      <span aria-hidden="true">📋</span>
+      <CopyIcon size={12} aria-hidden="true" />
     </button>
   );
 }

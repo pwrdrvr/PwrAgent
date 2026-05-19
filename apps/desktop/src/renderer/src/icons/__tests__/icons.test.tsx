@@ -3,6 +3,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BranchIcon,
+  CopyIcon,
   DiscordIcon,
   FileCodeIcon,
   FolderIcon,
@@ -30,6 +31,7 @@ const ALL_ICONS = [
   ["SettingsIcon", SettingsIcon],
   ["SmileyIcon", SmileyIcon],
   ["NewThreadIcon", NewThreadIcon],
+  ["CopyIcon", CopyIcon],
 ] as const;
 
 describe("icon library", () => {
