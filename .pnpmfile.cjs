@@ -14,6 +14,15 @@ function isGitSpec(spec) {
 }
 
 function readPackage(pkg) {
+  // Protobufjs publishes an unused transitive devDependency as a GitHub spec.
+  // Strip it before enforcing the registry-only dependency policy.
+  if (
+    pkg.name === 'protobufjs' &&
+    pkg.devDependencies?.['jaguarjs-jsdoc'] === 'github:dcodeIO/jaguarjs-jsdoc'
+  ) {
+    delete pkg.devDependencies['jaguarjs-jsdoc']
+  }
+
   for (const field of dependencyFields) {
     const dependencies = pkg[field]
     if (!dependencies) continue
