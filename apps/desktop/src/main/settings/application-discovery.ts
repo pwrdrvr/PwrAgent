@@ -121,6 +121,25 @@ const EDITORS: KnownApplication[] = [
     binaryNames: ["nvim-qt"],
     binaryPaths: homebrewBinaryPaths("nvim-qt"),
   },
+  {
+    id: "intellijidea",
+    kind: "editor",
+    name: "IntelliJ IDEA",
+    appPaths: [
+      ...applicationPaths("IntelliJ IDEA.app"),
+      ...applicationPaths("IntelliJ IDEA CE.app"),
+    ],
+    binaryNames: ["idea"],
+    binaryPaths: [
+      ...applicationExecutablePaths("IntelliJ IDEA.app", "Contents", "MacOS", "idea"),
+      ...applicationExecutablePaths(
+        "IntelliJ IDEA CE.app",
+        "Contents",
+        "MacOS",
+        "idea",
+      ),
+    ],
+  },
 ];
 
 const TERMINALS: KnownApplication[] = [
@@ -180,6 +199,12 @@ const TERMINALS: KnownApplication[] = [
     binaryPaths: homebrewBinaryPaths("kitty"),
     terminalWorkingDirectoryArg: (targetPath) => ["--directory", targetPath],
   },
+  {
+    id: "warp",
+    kind: "terminal",
+    name: "Warp",
+    appPaths: applicationPaths("Warp.app"),
+  },
 ];
 
 function applicationPaths(appName: string): string[] {
@@ -194,6 +219,10 @@ function homebrewBinaryPaths(binaryName: string): string[] {
     path.join("/opt/homebrew/bin", binaryName),
     path.join("/usr/local/bin", binaryName),
   ];
+}
+
+function applicationExecutablePaths(appName: string, ...segments: string[]): string[] {
+  return applicationPaths(appName).map((appPath) => path.join(appPath, ...segments));
 }
 
 async function pathExists(candidatePath: string): Promise<boolean> {
@@ -390,6 +419,15 @@ function editorCliArgs(
   targetPath: string,
   request: OpenDesktopApplicationRequest,
 ): string[] {
+  if (supportsJetBrainsLineArgs(applicationId) && isPositiveInteger(request.targetLine)) {
+    const args = ["--line", String(request.targetLine)];
+    if (isPositiveInteger(request.targetColumn)) {
+      args.push("--column", String(request.targetColumn));
+    }
+    args.push(targetPath);
+    return args;
+  }
+
   if (!supportsVsCodeGoto(applicationId) || !isPositiveInteger(request.targetLine)) {
     return [targetPath];
   }
@@ -398,6 +436,10 @@ function editorCliArgs(
     ? `${targetPath}:${request.targetLine}:${request.targetColumn}`
     : `${targetPath}:${request.targetLine}`;
   return ["--goto", location];
+}
+
+function supportsJetBrainsLineArgs(applicationId: string): boolean {
+  return applicationId === "intellijidea";
 }
 
 function supportsVsCodeGoto(applicationId: string): boolean {
