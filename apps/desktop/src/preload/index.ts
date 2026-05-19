@@ -5,6 +5,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -680,15 +682,15 @@ const desktopApi = Object.freeze({
   },
   onAppearanceChanged: (
     callback: (appearance: {
-      theme: "system" | "dark" | "light";
-      density: "mission-control" | "compact";
+      theme: DesktopAppearanceTheme;
+      density: DesktopAppearanceDensity;
     }) => void,
   ): (() => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
       payload: {
-        theme: "system" | "dark" | "light";
-        density: "mission-control" | "compact";
+        theme: DesktopAppearanceTheme;
+        density: DesktopAppearanceDensity;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);

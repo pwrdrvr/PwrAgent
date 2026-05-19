@@ -119,6 +119,8 @@ import type {
   CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -403,8 +405,8 @@ export type DesktopApi = {
    */
   onAppearanceChanged?: (
     callback: (appearance: {
-      theme: "system" | "dark" | "light";
-      density: "mission-control" | "compact";
+      theme: DesktopAppearanceTheme;
+      density: DesktopAppearanceDensity;
     }) => void,
   ) => () => void;
   onCodexEnvironmentSetupProgress?: (

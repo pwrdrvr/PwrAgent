@@ -110,6 +110,14 @@
   --brand-purple: #8a6dc4;
   --danger-text-light: #ffba8a;
 
+  /* Title-bar zone background. In dark theme the title-bar areas
+     (sidebar masthead, activity-titlebar) inherit their natural panel
+     tones and the gray macOS stoplights have enough contrast there;
+     this default keeps the existing visual. Light theme overrides it
+     with a warm tan (see the light-theme block) so unfocused
+     stoplights stay legible against the otherwise-near-white surface. */
+  --bg-titlebar-tint: var(--bg-panel-elevated);
+
   /* Shadow tints. Drop shadows stay dark in both light and dark themes
      (standard drop-shadow pattern), so they all derive from a pure-black
      base. The earlier definitions in this slot were self-referencing
@@ -253,6 +261,31 @@
   --info-teal: #0e9b95;
   --brand-purple: #6a4ba8;
   --danger-text-light: #b03517;
+
+  /* Title-bar zone contrast (light theme only).
+     macOS dims unfocused stoplights to a low-contrast gray and gives no
+     API to change them. On light theme, the title-bar zone in our
+     windows is near-white (sidebar masthead reads `--bg-sidebar` at
+     `#f7f4ef`; activity-titlebar reads `--bg-panel-elevated` at
+     `#ffffff`), so the gray stoplights become nearly invisible when
+     the window is unfocused. We earlier tried `vibrancy: "titlebar"`
+     on the BrowserWindow but it doesn't work for us — vibrancy needs
+     a transparent renderer at the zone, and `visualEffectState`
+     defaults to "followWindow" which disables vibrancy on unfocus
+     (the exact moment we care about).
+     Instead, paint the title-bar zone a slightly darker warm tan via
+     the rule below. Tone is calibrated to give gray stoplights enough
+     contrast at typical macOS unfocused alpha while staying within
+     the Tangerine Terminal warm-cream palette so the strip reads as
+     intentional rather than a weird patch of color. Dark theme uses
+     `--bg-sidebar` / `--bg-panel-elevated` directly — stoplights are
+     already legible there. */
+  --bg-titlebar-tint: #ede5d4;
+}
+
+:root[data-theme="light"] .sidebar__masthead,
+:root[data-theme="light"] .activity-titlebar {
+  background: var(--bg-titlebar-tint);
 }
 
 /* ===========================================================================

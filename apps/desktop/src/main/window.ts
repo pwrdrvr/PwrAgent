@@ -186,15 +186,18 @@ export function createMainWindow(options?: {
     title: "PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
-    // macOS-only: frosted-glass effect under the stoplight area. Without
-    // it, unfocused stoplights on light theme nearly vanish because
-    // macOS dims them to ~35% gray with no contrast remediation —
-    // gray-on-cream becomes invisible. Vibrancy gives the title-bar
-    // strip the native desaturated backdrop that pushes stoplights up
-    // into legibility. Silently ignored on Windows / Linux.
-    vibrancy: "titlebar",
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
+    //
+    // Note on stoplight contrast: an earlier iteration set
+    // `vibrancy: "titlebar"` here hoping macOS would push the title-bar
+    // backdrop toward something darker than pure white when unfocused.
+    // That doesn't work for us — vibrancy requires the renderer to be
+    // transparent at the zone, and `visualEffectState` defaults to
+    // "followWindow" which DISABLES vibrancy on unfocus (the exact
+    // case we care about). The stoplight-contrast fix lives in
+    // app.css instead: light theme darkens `.activity-titlebar` and
+    // `.sidebar__masthead` to a warm tan so gray stoplights stand out.
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: preloadPath,
