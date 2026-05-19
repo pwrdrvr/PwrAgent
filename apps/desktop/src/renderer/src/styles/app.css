@@ -4815,9 +4815,9 @@ textarea,
   margin: 0;
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--surface-border);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--surface-raised);
+  background: var(--bg-panel-elevated);
   padding: 0;
 }
 
@@ -4835,7 +4835,7 @@ textarea,
 }
 
 .environment-setup-choice__details[open] > summary {
-  border-bottom: 1px solid var(--surface-border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .environment-setup-choice__field {
@@ -4846,7 +4846,7 @@ textarea,
 }
 
 .environment-setup-choice__field + .environment-setup-choice__field {
-  border-top: 1px solid var(--surface-border);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .environment-setup-choice__field-label {
@@ -4859,7 +4859,7 @@ textarea,
 .environment-setup-choice__pre {
   margin: 0;
   padding: 6px 8px;
-  background: var(--surface);
+  background: var(--bg-input);
   border-radius: 4px;
   font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
@@ -7959,7 +7959,7 @@ textarea,
   display: block;
   margin-top: 4px;
   padding: 4px 6px;
-  background: var(--surface);
+  background: var(--bg-input);
   border-radius: 4px;
   font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
@@ -7995,8 +7995,8 @@ textarea,
   padding: 6px 8px;
   max-height: 320px;
   overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--surface-border);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   font-family: var(--font-monospace, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
