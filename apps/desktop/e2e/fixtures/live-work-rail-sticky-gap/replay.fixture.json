@@ -1,0 +1,123 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "live-work-rail-sticky-gap",
+    "threadId": "thread-live-work-rail-sticky-gap"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-work-rail-sticky-gap",
+          "title": "LiveWorkRail sticky-gap replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded with a long single-file diff to force rail-body overflow + sticky scrolling",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next rail check."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next rail check."
+          }
+        ],
+        "lastAssistantMessage": "Ready for the next rail check.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-live-work-rail-sticky-gap",
+        "turnId": "turn-sticky-1"
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-live-work-rail-sticky-gap",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-live-work-rail-sticky-gap",
+          "turn": {
+            "id": "turn-sticky-1",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-diff-updated-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/diff/updated",
+        "params": {
+          "threadId": "thread-live-work-rail-sticky-gap",
+          "turnId": "turn-sticky-1",
+          "diff": "diff --git a/CHANGELOG.md b/CHANGELOG.md\n--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,3 +1,53 @@\n # Changelog\n \n+## v1.0.0-beta.3 - 2026-05-18\n+\n+- Added the LiveWorkRail above the composer for live edited-files\n+  tracking, with per-file inline diff expansion and a sticky file\n+  header so scrolling through long diffs keeps the collapse control\n+  reachable.\n+- Cleaned up desktop build noise by silencing Swift recorder warnings,\n+  removing redundant main-process dynamic imports, and allowing the\n+  ffmpeg installer postinstall script needed for release packaging.\n+- Updated the release workflow artifact actions to versions that run\n+  on the Node.js 24 action runtime.\n+- Aligned the rail-level chevron with the [hidden] attribute so\n+  collapsing the rail actually hides its body in real CSS engines\n+  (previously a flex display rule was silently overriding it).\n+- Merged the section-level heading text into the rail title so the\n+  summary count + line stats live on a single chevron-bearing line.\n+- Tightened the rail's width to match the composer's reading column\n+  via --chat-column-max so the edges line up visually across the\n+  primary chat surface.\n+- Dropped redundant aria-labels on inner section elements that\n+  duplicated the rail-level complementary landmark name.\n+- Switched idle file-toggle background to --bg-panel so rows sit\n+  visually inside the rail card instead of merging flush with its\n+  --bg-panel-elevated chrome.\n+- Gated the editedFilesEntry on having at least one diff-bearing\n+  detail so a malformed entry can't claim a title without\n+  rendering anything below it.\n+- Routed the persisted activity diff through deferLiveTranscriptEntry\n+  on turn/completed so the transcript receives a single canonical\n+  copy instead of double-rendering against the rail's pending\n+  snapshot.\n+- Locked in the merged-title shape with new vitest cases covering\n+  the comma-join logic, the empty-fileDiff guard, and the rail's\n+  pinned-to-last-turn snapshot lifecycle.\n+- Added new Playwright e2e cases that exercise the chevron toggle,\n+  per-file expansion, and title rendering inside Electron's real\n+  CSS engine so display:flex vs [hidden] regressions can't sneak in\n+  the way they did the first time.\n+- Replaced the in-transcript Edited N files rows with the rail's\n+  cumulative summary plus per-file expansion so the user no longer\n+  sees the same file in two competing surfaces during an active\n+  turn.\n+- Improved sticky positioning so the file-toggle header pins to\n+  the very top of the rail's scroll viewport with no leftover\n+  padding gap.\n+\n ## v1.0.0-beta.2 - 2026-05-18\n \n - Fixed universal macOS release packaging so the prebuilt window-list helper\n"
+        }
+      }
+    }
+  ]
+}
