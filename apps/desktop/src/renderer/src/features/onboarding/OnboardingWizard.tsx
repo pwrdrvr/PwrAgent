@@ -22,6 +22,10 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import {
+  isValidProfileName,
+  provisionPairedProfiles,
+} from "./provisionPairedProfiles";
+import {
   DiscordIcon,
   FeishuIcon,
   LineIcon,
@@ -107,10 +111,15 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const [theme, setTheme] = useState<DesktopAppearanceTheme>(props.initialTheme);
   const [codexProfileModel, setCodexProfileModel] =
     useState<DesktopCodexProfileModel>(props.initialCodexProfileModel);
-  const [codexProfileNames, setCodexProfileNames] = useState<string[]>([
-    "personal",
-    "work",
-  ]);
+  // Names for the per-profile naming step. Isolated mode shows one
+  // input (default "pwragent"); Multiple shows 1–5 inputs (defaults
+  // "personal" + "work"). When the user changes Step 2's selection,
+  // a useEffect resets these defaults — see below.
+  const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() =>
+    props.initialCodexProfileModel === "isolated"
+      ? ["pwragent"]
+      : ["personal", "work"],
+  );
   const [acknowledged, setAcknowledged] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<
     ReadonlySet<OnboardingProvider>
@@ -140,6 +149,33 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [isReplay, props, submitting]);
 
+  // Reset the naming step's defaults when the operator changes Step 2's
+  // selection. Isolated → single canonical default "pwragent" (unless
+  // they're already in the isolated single-name shape with real text,
+  // in which case keep their edits). Multiple → restore the two-name
+  // default, lifting any custom singular name they typed first so a
+  // "customname → switch to Multiple" round-trip doesn't lose it.
+  // Shared doesn't use the step.
+  useEffect(() => {
+    if (codexProfileModel === "isolated") {
+      setCodexProfileNames((prev) => {
+        // Already in the singular shape with real text? Keep it — the
+        // operator may have already typed a custom name.
+        if (prev.length === 1 && prev[0]?.trim()) return prev;
+        // Coming in from Multiple's defaults (`["personal", "work"]`)
+        // or some other shape — reset to the canonical default.
+        return ["pwragent"];
+      });
+    } else if (codexProfileModel === "multiple") {
+      setCodexProfileNames((prev) => {
+        if (prev.length >= 2) return prev;
+        const first = prev[0]?.trim();
+        if (first && first !== "pwragent") return [first, "work"];
+        return ["personal", "work"];
+      });
+    }
+  }, [codexProfileModel]);
+
   // Conditional step graph — codexProfileModel="multiple" inserts the
   // name-codex-profiles step between codex-profile and messaging-safety;
   // empty selectedProviders skips provider-setup; etc. Centralizing the
@@ -152,9 +188,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "thread-presentation":
           return "codex-profile";
         case "codex-profile":
-          return codexProfileModel === "multiple"
-            ? "name-codex-profiles"
-            : "messaging-safety";
+          // Both Isolated (single new profile) and Multiple (1–5)
+          // route through the naming step — they both need paired
+          // PwrAgent + Codex profile names to create after Finish.
+          return codexProfileModel === "shared"
+            ? "messaging-safety"
+            : "name-codex-profiles";
         case "name-codex-profiles":
           return "messaging-safety";
         case "messaging-safety":
@@ -183,9 +222,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "name-codex-profiles":
           return "codex-profile";
         case "messaging-safety":
-          return codexProfileModel === "multiple"
-            ? "name-codex-profiles"
-            : "codex-profile";
+          // Back-out symmetry with `nextStep`: Shared bypasses the
+          // naming step, anything else routes through it.
+          return codexProfileModel === "shared"
+            ? "codex-profile"
+            : "name-codex-profiles";
         case "messaging-providers":
           return "messaging-safety";
         case "provider-setup":
@@ -260,31 +301,15 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         };
         await props.onComplete(patch);
 
-        // Multi-profile path: actually create the named Codex auth
-        // profiles on disk so the operator can pick them up in Settings →
-        // Profiles. Login is left for the user to trigger from Settings —
-        // we don't want to fire N SSO browser windows here.
-        if (
-          codexProfileModel === "multiple" &&
-          props.desktopApi?.createCodexAuthProfile
-        ) {
-          const validNames = codexProfileNames
-            .map((n) => n.trim())
-            .filter((n) => isValidProfileName(n));
-          for (const name of validNames) {
-            try {
-              await props.desktopApi.createCodexAuthProfile({ profile: name });
-            } catch (caught) {
-              // Best-effort: a single failed profile shouldn't sink the
-              // whole flow. The user can retry from Settings → Profiles
-              // (the existing #256 surface owns the actual provisioning).
-              // eslint-disable-next-line no-console
-              console.warn(
-                `Onboarding: failed to create Codex profile "${name}"`,
-                caught,
-              );
-            }
-          }
+        // Isolated + Multiple paths: provision paired PwrAgent + Codex
+        // profiles with the same names on both sides. The user's
+        // existing `default` PwrAgent profile and `default` Codex
+        // profile both stay untouched. Codex login per pair is deferred
+        // to Settings → Profiles — we don't fire N SSO browser windows
+        // mid-wizard. See `provisionPairedProfiles` for the IPC sequence
+        // and best-effort error handling.
+        if (codexProfileModel !== "shared") {
+          await provisionPairedProfiles(props.desktopApi, codexProfileNames);
         }
       } finally {
         setSubmitting(false);
@@ -369,6 +394,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           ) : null}
           {step === "name-codex-profiles" ? (
             <NameCodexProfilesStep
+              mode={codexProfileModel === "isolated" ? "isolated" : "multiple"}
               names={codexProfileNames}
               onChange={setCodexProfileNames}
             />
@@ -435,9 +461,6 @@ function validateProfileNames(names: readonly string[]): boolean {
   return set.size === trimmed.length && trimmed.every(isValidProfileName);
 }
 
-function isValidProfileName(name: string): boolean {
-  return /^[a-z0-9][a-z0-9_-]{0,30}$/.test(name);
-}
 
 /* ----------------------------------------------------------------
    Chrome — titlebar, step rail, footer
@@ -567,9 +590,14 @@ function WizardFooter(props: {
   } else if (props.step === "codex-profile") {
     hint = `${codexProfileLabel(props.codexProfileModel)} selected · 2 of 3`;
   } else if (props.step === "name-codex-profiles") {
+    const isSingle = props.codexProfileModel === "isolated";
     hint = props.codexProfileNamesValid
-      ? "Names look good"
-      : "1–5 unique lowercase names (letters, digits, _ , -)";
+      ? isSingle
+        ? "Name looks good"
+        : "Names look good"
+      : isSingle
+        ? "Lowercase letters, digits, _ , -. 1–31 chars."
+        : "1–5 unique lowercase names (letters, digits, _ , -)";
   } else if (props.step === "messaging-safety") {
     hint = props.acknowledged ? "Acknowledgement recorded" : undefined;
   } else if (props.step === "messaging-providers") {
@@ -842,7 +870,7 @@ function CodexProfileStep(props: {
         <ChoiceCard
           eyebrow="Shared"
           title="Reuse your existing Codex login"
-          desc="Zero new logins. Threads created in PwrAgent show up in Codex Desktop and the codex CLI, and vice versa."
+          desc="It just works — you can move back to Codex Desktop from any thread started in PwrAgent and vice versa. Zero new logins."
           hint="Best for: trying PwrAgent without disturbing anything."
           badge={props.value === "shared" ? "Default" : undefined}
           selected={props.value === "shared"}
@@ -852,7 +880,7 @@ function CodexProfileStep(props: {
         <ChoiceCard
           eyebrow="Isolated"
           title="Create a fresh Codex profile for PwrAgent"
-          desc="One login click. PwrAgent threads stay separate from your other Codex account(s). Still reachable via CODEX_HOME."
+          desc="If you want to keep PwrAgent threads isolated from Codex Desktop threads, or optionally use a different Codex account."
           hint="Best for: kicking the tires without touching work's Codex session."
           badge={props.value === "isolated" ? "Selected" : undefined}
           selected={props.value === "isolated"}
@@ -1340,15 +1368,46 @@ function CodexDiagramShared() {
 }
 
 function CodexDiagramIsolated() {
+  // Same layout grammar as Multiple, but with a single paired row:
+  // a new PwrAgent profile (named "pwragent" by default — user-editable
+  // in the Step 2b naming step) connects to a brand-new Codex profile
+  // of the same name. The footer reuses the Multiple diagram's
+  // "UNTOUCHED" pattern so the operator sees that their existing Codex
+  // default stays exactly where it is. This is what makes the data-leak
+  // guarantee land visually for the single-profile-isolated case.
   return (
-    <div className="onboarding-wizard__codex">
-      <CodexNode label="PwrAgent" meta="personal" avatar="PA" accent />
-      <span className="onboarding-wizard__codex-link">||</span>
-      <CodexNode
-        label="Codex Desktop"
-        meta="work — untouched"
-        avatar="CX"
-      />
+    <div className="onboarding-wizard__codex onboarding-wizard__codex--multiple">
+      <div className="onboarding-wizard__codex-multi-pairs">
+        <div className="onboarding-wizard__codex-multi-pair">
+          <CodexNode label="pwragent" avatar="PA" accent compact tight />
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <CodexNode
+            label="pwragent"
+            avatar="CX"
+            meta="new — your login"
+            compact
+            tight
+          />
+        </div>
+      </div>
+      <div className="onboarding-wizard__codex-multi-default">
+        <span className="onboarding-wizard__codex-multi-default-label">
+          Untouched
+        </span>
+        <CodexNode label="(default)" avatar="PA" muted dashed compact tight />
+        <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--dashed">
+          ╌╌
+        </span>
+        <CodexNode
+          label="Codex default"
+          avatar="CX"
+          meta="your existing login"
+          muted
+          dashed
+          compact
+          tight
+        />
+      </div>
     </div>
   );
 }
@@ -1403,7 +1462,7 @@ function CodexDiagramMultiple() {
         <span className="onboarding-wizard__codex-multi-default-label">
           Untouched
         </span>
-        <CodexNode label="(default)" avatar="?" muted dashed compact tight />
+        <CodexNode label="(default)" avatar="PA" muted dashed compact tight />
         <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--dashed">
           ╌╌
         </span>
@@ -1458,9 +1517,13 @@ function CodexNode(props: {
    ---------------------------------------------------------------- */
 
 function NameCodexProfilesStep(props: {
+  /** Isolated = single profile (max 1). Multiple = 1–5 profiles. */
+  mode: "isolated" | "multiple";
   names: string[];
   onChange: (next: string[]) => void;
 }) {
+  const maxCount = props.mode === "isolated" ? 1 : 5;
+  const isSingle = props.mode === "isolated";
   const setAt = (idx: number, value: string): void => {
     const next = [...props.names];
     next[idx] = value;
@@ -1472,20 +1535,39 @@ function NameCodexProfilesStep(props: {
     props.onChange(next);
   };
   const addOne = (): void => {
-    if (props.names.length >= 5) return;
+    if (props.names.length >= maxCount) return;
     props.onChange([...props.names, ""]);
   };
   return (
     <div>
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
-          Name your Codex profiles
+          {isSingle
+            ? "Name your isolated PwrAgent profile"
+            : "Name your PwrAgent + Codex profiles"}
         </h1>
         <p className="onboarding-wizard__sub">
-          Up to 5. Names become both the Codex profile name and the paired
-          PwrAgent profile name. Lowercase letters, digits, underscores, and
-          hyphens — 1 to 31 characters. Codex login for each happens after the
-          wizard from Settings → Profiles.
+          {isSingle ? (
+            <>
+              The name applies to <strong>both sides</strong>: PwrAgent creates
+              a new profile under <code>~/.pwragent/profiles/</code> and a
+              matching Codex auth profile under{" "}
+              <code>~/.codex/auth-profiles/</code>. Your existing PwrAgent{" "}
+              <code>default</code> profile and your Codex default both stay
+              untouched. Lowercase letters, digits, underscores, and hyphens —
+              1 to 31 characters. Codex login happens after the wizard from
+              Settings → Profiles.
+            </>
+          ) : (
+            <>
+              Up to 5. Each name becomes <strong>both</strong> a new PwrAgent
+              profile and a matching Codex auth profile of the same name. Your
+              existing <code>default</code> profile on either side stays
+              untouched. Lowercase letters, digits, underscores, and hyphens —
+              1 to 31 characters. Codex login for each happens after the
+              wizard from Settings → Profiles.
+            </>
+          )}
         </p>
       </header>
       <div className="onboarding-wizard__profile-list">
@@ -1498,12 +1580,12 @@ function NameCodexProfilesStep(props: {
               <input
                 type="text"
                 className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
-                placeholder="profile-name"
+                placeholder={isSingle ? "pwragent" : "profile-name"}
                 value={name}
                 onChange={(e) => setAt(idx, e.target.value)}
                 aria-invalid={!valid}
               />
-              {props.names.length > 1 ? (
+              {!isSingle && props.names.length > 1 ? (
                 <button
                   type="button"
                   className="onboarding-wizard__btn onboarding-wizard__btn--link"
@@ -1516,7 +1598,7 @@ function NameCodexProfilesStep(props: {
             </div>
           );
         })}
-        {props.names.length < 5 ? (
+        {!isSingle && props.names.length < maxCount ? (
           <button
             type="button"
             className="onboarding-wizard__btn onboarding-wizard__btn--ghost onboarding-wizard__profile-add"
