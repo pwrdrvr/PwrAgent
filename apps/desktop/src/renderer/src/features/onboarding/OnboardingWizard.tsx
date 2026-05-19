@@ -248,7 +248,14 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                 }
               : {}),
           },
-          ...(isReplay ? {} : { onboarding: { completed: true } }),
+          // `onboarding.completed` is intentionally NOT in this patch
+          // anymore. App.tsx's onComplete handler invokes the dedicated
+          // `completeOnboardingCodexBootstrap` IPC instead, which both
+          // persists `completed = true` AND fires the Codex `listThreads`
+          // prefetch the read-side gate has been blocking while the
+          // wizard was open. Going through writeConfig would persist the
+          // flag but skip the prefetch, leaving the sidebar empty until
+          // a manual refresh.
           ...(extra ?? {}),
         };
         await props.onComplete(patch);

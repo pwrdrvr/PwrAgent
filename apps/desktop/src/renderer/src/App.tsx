@@ -497,11 +497,30 @@ function DesktopAppShell(props: {
                 patch.general.appearance.theme,
               );
             }
+            // Mark onboarding complete AND kick off the deferred Codex
+            // `listThreads` prefetch in one IPC call (#500). On replay,
+            // skip the call entirely — replays don't touch onboarding.
+            if (!onboardingOpen) return;
+            if (
+              onboardingOpen !== "replay" &&
+              desktopApi?.completeOnboardingCodexBootstrap
+            ) {
+              await desktopApi.completeOnboardingCodexBootstrap({
+                connect: true,
+              });
+            }
             setOnboardingOpen(null);
           }}
           onDismiss={(persistCompleted) => {
             if (persistCompleted) {
-              void settings.writeConfig({ onboarding: { completed: true } });
+              // Skip path: persist `completed = true` so the wizard
+              // doesn't auto-fire again, but pass `connect: false` so
+              // we don't auto-load Codex threads under an unverified
+              // identity. The renderer's next explicit refresh (or app
+              // restart) will surface them.
+              void desktopApi?.completeOnboardingCodexBootstrap?.({
+                connect: false,
+              });
             }
             setOnboardingOpen(null);
           }}
