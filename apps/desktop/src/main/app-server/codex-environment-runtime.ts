@@ -32,7 +32,7 @@ function truncateForLog(value: string | undefined): string | undefined {
  * output is still preserved on `CodexEnvironmentCommandError.output` for
  * the dialog's collapsible details — this is just the headline.
  */
-function buildExitErrorSuffix(stdout: string, stderr: string): string {
+export function buildExitErrorSuffix(stdout: string, stderr: string): string {
   const combined = [stdout.trimEnd(), stderr.trimEnd()]
     .filter(Boolean)
     .join("\n");
@@ -479,10 +479,31 @@ function runShellCommand(
 
     if (params.mode === "detach") {
       child.once("spawn", () => {
-        // child.unref() lets the parent exit independently of the child.
-        // Pipes stay attached so we keep getting stdout/stderr until child
-        // exits (or until we close them when shutting down).
+        // Let the parent exit independently of this child. child.unref()
+        // alone doesn't suffice when stdio is "pipe": the libuv pipe
+        // handles on child.stdout/stderr also keep the parent's event
+        // loop alive, so unref those too.
+        //
+        // KNOWN CAVEAT — SIGPIPE on parent exit. With pipes attached, if
+        // the parent process exits while a long-survival detached child
+        // (e.g. `pnpm dev`) is still writing to stdout/stderr, the child's
+        // next write hits a closed pipe and the kernel delivers SIGPIPE,
+        // which typically kills the child. Most users don't notice
+        // because env-action commands are short-lived, but a "restart
+        // PwrAgent while my dev server is running" scenario can lose the
+        // dev server.
+        //
+        // The proper fix is to write detached output to a temp file
+        // (so the child doesn't depend on the parent for stdio) and tail
+        // that file for the anchored UI. Deferred — see the env-action
+        // anchor follow-ups in the original review.
         child.unref();
+        // child.stdout / child.stderr are typed as `Readable` but at
+        // runtime they're socket-backed pipes that expose .unref(). The
+        // cast keeps the call safe-typed and defensive against future
+        // Node versions where the type might tighten.
+        (child.stdout as { unref?: () => void } | null)?.unref?.();
+        (child.stderr as { unref?: () => void } | null)?.unref?.();
         settle(() => {
           resolve({ pid: child.pid });
         });

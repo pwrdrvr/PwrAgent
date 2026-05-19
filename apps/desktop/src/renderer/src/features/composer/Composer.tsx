@@ -19,6 +19,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  CodexThreadEnvironmentRuntime,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
@@ -486,27 +487,50 @@ function formatDurationMs(ms?: number): string {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-type EnvActionAnchorRuntime = {
-  actionName?: string;
-  actionCommand?: string;
-  actionStatus?: "started" | "exited" | "failed";
-  actionPid?: number;
-  actionStartedAt?: number;
-  actionExitedAt?: number;
-  actionExitCode?: number;
-  actionExitSignal?: string;
-  actionDurationMs?: number;
-  actionOutput?: string;
-  environmentName?: string;
-};
+type EnvActionAnchorRuntime = Pick<
+  CodexThreadEnvironmentRuntime,
+  | "actionCommand"
+  | "actionDurationMs"
+  | "actionExitCode"
+  | "actionExitSignal"
+  | "actionExitedAt"
+  | "actionName"
+  | "actionOutput"
+  | "actionPid"
+  | "actionStartedAt"
+  | "actionStatus"
+  | "environmentName"
+>;
+
+/**
+ * Set of run identities the user has explicitly dismissed in this session.
+ * Module-level so it survives Composer remounts (thread switches), but
+ * cleared on page reload — fresh runs always show, since each run gets a
+ * new dismissKey from pid + startedAt + exitedAt.
+ */
+const dismissedEnvActionAnchorKeys = new Set<string>();
 
 function EnvActionAnchor(props: {
   runtime?: EnvActionAnchorRuntime;
 }): ReactNode {
   const runtime = props.runtime;
-  const [dismissedKey, setDismissedKey] = useState<string | undefined>();
-
+  // Re-render version bumped each second while an action is running so the
+  // "running for Xs" elapsed meta keeps ticking — useState(0) on a 1Hz
+  // interval, only when status === "started" so idle/exited anchors don't
+  // burn cycles.
+  const [, setElapsedTick] = useState(0);
   const status = runtime?.actionStatus;
+  useEffect(() => {
+    if (status !== "started") return undefined;
+    const handle = setInterval(() => {
+      setElapsedTick((tick) => tick + 1);
+    }, 1_000);
+    return () => clearInterval(handle);
+  }, [status]);
+  // Force a re-render after dismissal even though the dismissed-set lives
+  // outside React state; bumping any state value will do.
+  const [, setDismissTick] = useState(0);
+
   // Only surface when there's something meaningful to show.
   if (!runtime || (status !== "started" && status !== "exited" && status !== "failed")) {
     return null;
@@ -514,7 +538,7 @@ function EnvActionAnchor(props: {
   const dismissKey = `${runtime.actionPid ?? "?"}:${runtime.actionStartedAt ?? 0}:${
     runtime.actionExitedAt ?? 0
   }`;
-  if (dismissedKey === dismissKey) {
+  if (dismissedEnvActionAnchorKeys.has(dismissKey)) {
     return null;
   }
 
@@ -589,7 +613,10 @@ function EnvActionAnchor(props: {
           <button
             className="composer__secondary-action"
             type="button"
-            onClick={() => setDismissedKey(dismissKey)}
+            onClick={() => {
+              dismissedEnvActionAnchorKeys.add(dismissKey);
+              setDismissTick((tick) => tick + 1);
+            }}
           >
             Dismiss
           </button>

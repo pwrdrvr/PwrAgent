@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyLocalCodexEnvironmentSelection,
+  buildExitErrorSuffix,
   CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
   startLocalCodexEnvironmentAction,
 } from "../app-server/codex-environment-runtime";
@@ -453,6 +454,67 @@ describe("codex environment runtime", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 10_000);
+});
+
+describe("buildExitErrorSuffix", () => {
+  it("returns an empty suffix when both streams are blank", () => {
+    expect(buildExitErrorSuffix("", "")).toBe("");
+    expect(buildExitErrorSuffix("   \n  ", "\n\n")).toBe("");
+  });
+
+  it("returns the stderr line when only stderr has content", () => {
+    expect(buildExitErrorSuffix("", "v24.14.1 is already installed.")).toBe(
+      ": v24.14.1 is already installed.",
+    );
+  });
+
+  it("returns the stdout content when only stdout has content (modern-CLI case)", () => {
+    expect(buildExitErrorSuffix("ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1", "")).toBe(
+      ": ERR_PNPM_IGNORED_BUILDS the actual reason for exit 1",
+    );
+  });
+
+  it("includes both streams concatenated when both have content", () => {
+    expect(buildExitErrorSuffix("first stdout line", "first stderr line")).toBe(
+      ": first stdout line\nfirst stderr line",
+    );
+  });
+
+  it("trims to the last 8 lines of combined output", () => {
+    const stdout = [
+      "line 1",
+      "line 2",
+      "line 3",
+      "line 4",
+      "line 5",
+      "line 6",
+      "line 7",
+      "line 8",
+      "line 9",
+      "line 10",
+    ].join("\n");
+    const suffix = buildExitErrorSuffix(stdout, "");
+    // Last 8 of 10 lines, joined with newlines and prefixed by ": "
+    expect(suffix).toBe(
+      ": line 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10",
+    );
+  });
+
+  it("preserves nvm-on-stderr alongside pnpm-on-stdout (motivating regression)", () => {
+    // Reproduces the failure mode that motivated the helper: pnpm writes
+    // its real exit-1 diagnostic to stdout, while stderr only contains
+    // unrelated benign chatter from an earlier `nvm install`. Both must
+    // survive into the suffix so the dialog headline isn't misled.
+    const stdout = [
+      "Scope: all 5 workspace projects",
+      "Progress: resolved 463, reused 463, downloaded 0, added 463, done",
+      "ERR_PNPM_IGNORED_BUILDS Ignored build scripts: @ffmpeg-installer/darwin-arm64",
+    ].join("\n");
+    const stderr = "v24.14.1 is already installed.";
+    const suffix = buildExitErrorSuffix(stdout, stderr);
+    expect(suffix).toContain("ERR_PNPM_IGNORED_BUILDS");
+    expect(suffix).toContain("v24.14.1 is already installed.");
+  });
 });
 
 async function expectEventually<T>(
