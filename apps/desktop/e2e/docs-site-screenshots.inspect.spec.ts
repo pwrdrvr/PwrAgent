@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
 import {
   findLatestPairingEntryId,
@@ -37,6 +38,13 @@ const screenshotDir = path.join(repoRoot, "docs-site/assets/screenshots");
 const captureScript = path.resolve(specDir, "../scripts/capture-window.swift");
 
 const WINDOW_SIZE = { width: 1440, height: 900 } as const;
+
+// Resolved once per spec module from PWRAGENT_SCREENSHOT_THEME /
+// PWRAGENT_SCREENSHOT_DENSITY env vars (both optional). Defaults match
+// the production E2E defaults (theme=dark, density=mission-control) so
+// the committed PNGs stay pixel-stable when neither variable is set.
+// See `fixtures/screenshot-appearance.ts` for the env-var contract.
+const SCREENSHOT_APPEARANCE = resolveScreenshotAppearance();
 
 test.skip(
   process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE !== "1",
@@ -117,6 +125,7 @@ test("settings-applications — Settings → Applications panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -138,6 +147,7 @@ test("settings-worktrees — Settings → Worktrees panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -159,6 +169,7 @@ test("settings-models — Settings → Models panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -180,6 +191,7 @@ test("settings-profiles — Settings → Profiles panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -201,6 +213,7 @@ test("settings-general — Settings → General panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -222,6 +235,7 @@ test("settings-experimental — Settings → Experimental panel", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -255,6 +269,7 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
     const app = await launchElectronApp({
       fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
       windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
       preLaunchHook: seedAllMessagingProvidersEnabledConfig,
     });
 
@@ -319,6 +334,7 @@ test("messaging-pairing — frame 1: pairing token generated", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
     preLaunchHook: seedTelegramEnabledConfig,
   });
 
@@ -359,6 +375,7 @@ test("messaging-pairing — frame 2: observed, approval prompt visible", async (
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
     preLaunchHook: seedTelegramEnabledConfig,
   });
 
@@ -431,6 +448,7 @@ test("messaging-pairing — frame 3: approved, user in authorized list", async (
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
     preLaunchHook: seedTelegramEnabledConfig,
   });
 
@@ -522,6 +540,7 @@ test("messaging-activity-blocked — Messaging Activity showing rejected inbound
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
     preLaunchHook: seedTelegramEnabledConfig,
   });
 
@@ -675,6 +694,7 @@ test("desktop-recents — Recents lens populated", async () => {
       "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -718,6 +738,7 @@ test("desktop-skills-autocomplete — composer $ autocomplete showing skill list
       "fixtures/skill-autocomplete-interactions/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -840,7 +861,11 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     "utf8",
   );
 
-  const app = await launchElectronApp({ fixturePath, windowSize: WINDOW_SIZE });
+  const app = await launchElectronApp({
+    fixturePath,
+    windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
+  });
 
   try {
     await app.window

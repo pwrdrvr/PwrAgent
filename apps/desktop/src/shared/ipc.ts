@@ -192,6 +192,13 @@ export const APP_LOG_WINDOW_OPEN_CHANNEL = "app:open-log-window";
 export const APP_UPDATE_CHECK_CHANNEL = "app:check-for-updates";
 export const APP_UPDATE_STATUS_READ_CHANNEL = "app:read-update-status";
 export const APP_UPDATE_STATUS_EVENT_CHANNEL = "app:update-status-event";
+/** Main → renderer push: appearance (theme + density) was written to
+ *  the per-profile config.toml by a settings update. Every BrowserWindow
+ *  subscribes so secondary windows (changelog, app-log, license,
+ *  messaging activity) can re-apply `<html data-theme/data-density>`
+ *  live. Payload is `{ theme: DesktopAppearanceTheme; density:
+ *  DesktopAppearanceDensity }`. */
+export const APPEARANCE_CHANGED_EVENT_CHANNEL = "appearance:changed";
 export const APP_UPDATE_INSTALL_CHANNEL = "app:install-update";
 export const APP_UPDATE_RELEASES_READ_CHANNEL = "app:read-update-releases";
 export const PROFILES_LIST_CHANNEL = "profiles:list";

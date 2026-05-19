@@ -340,6 +340,83 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("fires onAppearanceChange only when writeConfigPatch touches general.appearance", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const onAppearanceChange = vi.fn();
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      onAppearanceChange,
+    });
+
+    // Patches that don't touch appearance must NOT fire the broadcast.
+    // The production wiring routes this to all-window IPC fan-out, so
+    // every unrelated settings save (update channel, image patches,
+    // messaging) would needlessly churn every aux window if we fired
+    // on every write.
+    await service.writeConfigPatch({ updates: { channel: "prerelease" } });
+    expect(onAppearanceChange).not.toHaveBeenCalled();
+
+    // Patch that explicitly sets non-default appearance values fires
+    // with the resolved post-write values.
+    await service.writeConfigPatch({
+      general: {
+        appearance: {
+          theme: "light",
+          density: "compact",
+        },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(1);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "light",
+      density: "compact",
+    });
+
+    // Patch that restores defaults still fires (the renderer needs to
+    // know to drop the data-* attributes back to bare-:root values).
+    // The byte-preserving patch path deletes the keys from disk; the
+    // broadcast payload resolves through the same fallback the read
+    // path uses, so subscribers see the defaults.
+    await service.writeConfigPatch({
+      general: {
+        appearance: {
+          theme: "system",
+          density: "mission-control",
+        },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(2);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "system",
+      density: "mission-control",
+    });
+
+    // Patch with `general` but only developerMode (not appearance) must
+    // NOT fire — the guard is "did this patch touch the appearance
+    // sub-block", not "did it touch the general block".
+    await service.writeConfigPatch({
+      general: { developerMode: true },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(2);
+
+    // Patch with `general.appearance` but only one field set still fires
+    // — the broadcast carries the FULL resolved appearance so subscribers
+    // get the complete post-write state.
+    await service.writeConfigPatch({
+      general: {
+        appearance: { theme: "dark" },
+      },
+    });
+    expect(onAppearanceChange).toHaveBeenCalledTimes(3);
+    expect(onAppearanceChange).toHaveBeenLastCalledWith({
+      theme: "dark",
+      density: "mission-control",
+    });
+  });
+
   it("defaults the image upload profile and only persists non-default values", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

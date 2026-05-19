@@ -17,9 +17,9 @@
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
-  --accent-soft: rgba(255, 138, 31, 0.12);
-  --accent-border: rgba(255, 138, 31, 0.42);
-  --accent-shadow: rgba(255, 138, 31, 0.34);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
+  --accent-shadow: color-mix(in srgb, var(--accent) 34%, transparent);
   --focus-ring: var(--accent);
   --danger-soft: rgba(185, 66, 50, 0.24);
   --danger-border: var(--danger-border);
@@ -54,16 +54,23 @@
   --popover-bg-soft: color-mix(in srgb, var(--bg-panel) 96%, transparent);
 
   /* Active-row tint for thread-row hover / pressed states inside scroll
-     containers. Slightly off-brown vs. --bg-row-active because the
-     legacy callsite needed a calmer tone — keep both. */
-  --surface-row-tint: var(--surface-row-tint);
+     containers. Derived from --bg-row-active at 42% so it follows the
+     theme; the original literal was rgba(18, 14, 10, 0.42) — close to
+     --bg-row-active (#120800 = rgb(18, 8, 0)) but slightly more muted.
+     The sub-pixel hue shift is below perception threshold on the
+     surfaces this token paints onto. Restored from a self-reference
+     `var(--surface-row-tint)` introduced in #476 that silently
+     resolved to `unset`. */
+  --surface-row-tint: color-mix(in srgb, var(--bg-row-active) 42%, transparent);
 
   /* Modal scrims stay dark across both light and dark themes — the
-     standard pattern for modal overlays in either mode. */
-  --scrim-subtle: var(--scrim-subtle);
+     standard pattern for modal overlays in either mode. Restored from
+     self-references introduced in #476 (see --shadow-tint-* block
+     for the same fix rationale). */
+  --scrim-subtle: color-mix(in srgb, var(--shadow-base) 22%, transparent);
   --scrim-medium: var(--shadow-tint-strong);
-  --scrim-strong: rgba(0, 0, 0, 0.62);
-  --scrim-opaque: var(--scrim-opaque);
+  --scrim-strong: color-mix(in srgb, var(--shadow-base) 62%, transparent);
+  --scrim-opaque: color-mix(in srgb, var(--shadow-base) 88%, transparent);
 
   /* Scrollbar tones. */
   --scrollbar-track: color-mix(in srgb, var(--text-primary) 5%, transparent);
@@ -104,11 +111,19 @@
   --danger-text-light: #ffba8a;
 
   /* Shadow tints. Drop shadows stay dark in both light and dark themes
-     (standard drop-shadow pattern). Theme-neutral. */
-  --shadow-tint-faint: var(--shadow-tint-faint);
-  --shadow-tint-soft: var(--shadow-tint-soft);
-  --shadow-tint-medium: var(--shadow-tint-medium);
-  --shadow-tint-strong: var(--shadow-tint-strong);
+     (standard drop-shadow pattern), so they all derive from a pure-black
+     base. The earlier definitions in this slot were self-referencing
+     (each shadow-tint var pointed at itself), which resolves to `unset`
+     and silently hid every drop shadow that read them — pre-existing
+     bug from the cleanup pass in #476 that lint:colors surfaced. Values
+     mirror the original literals these tokens were created to replace
+     (see the diff of #476 for the rgba alphas: soft 0.32, medium 0.4,
+     strong 0.58, faint 0.18). */
+  --shadow-base: #000000;
+  --shadow-tint-faint: color-mix(in srgb, var(--shadow-base) 18%, transparent);
+  --shadow-tint-soft: color-mix(in srgb, var(--shadow-base) 32%, transparent);
+  --shadow-tint-medium: color-mix(in srgb, var(--shadow-base) 40%, transparent);
+  --shadow-tint-strong: color-mix(in srgb, var(--shadow-base) 58%, transparent);
 
   /* Surface-border overlays for inset box-shadows that read as
      hairline borders. */
@@ -177,13 +192,13 @@
   --text-muted: #807870;
   --text-subtle: rgba(26, 22, 18, 0.42);
 
-  /* Accent — darker Tangerine variant for contrast on white. */
+  /* Accent — darker Tangerine variant for contrast on white. The
+     three derived accent-soft / -border / -shadow are color-mix() of
+     --accent in :root, so flipping the base above is sufficient — no
+     need to redefine the derivatives here. */
   --accent: #c45200;
   --accent-strong: #b34a00;
   --accent-bright: #d96d00;
-  --accent-soft: rgba(196, 82, 0, 0.12);
-  --accent-border: rgba(196, 82, 0, 0.42);
-  --accent-shadow: rgba(196, 82, 0, 0.34);
   --focus-ring: var(--accent);
 
   /* Semantic — darker bases for contrast. */
@@ -211,6 +226,26 @@
      heavy against white). */
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.18);
 
+  /* Light-surface drop shadows need much lower alpha than dark-surface
+     ones — at the dark-theme values (32 / 40 / 58%) on white, the soft
+     blur reads as a hard rectangular slab behind the card and visually
+     overrides the card's own rounded corners. Approximately matches
+     the shadow-popover ratio (dark 0.42 → light 0.18). The four
+     --shadow-tint-* tokens cascade through every popover, drag-image,
+     and modal scrim in the renderer, so getting these right per theme
+     is what makes elevation read correctly on both. */
+  --shadow-tint-faint: color-mix(in srgb, var(--shadow-base) 8%, transparent);
+  --shadow-tint-soft: color-mix(in srgb, var(--shadow-base) 14%, transparent);
+  --shadow-tint-medium: color-mix(in srgb, var(--shadow-base) 17%, transparent);
+  --shadow-tint-strong: color-mix(in srgb, var(--shadow-base) 22%, transparent);
+
+  /* Modal scrims also need to be lighter on white — at the dark-theme
+     alphas (22 / 62 / 88%) they obliterate the underlying surface
+     instead of dimming it. */
+  --scrim-subtle: color-mix(in srgb, var(--shadow-base) 10%, transparent);
+  --scrim-strong: color-mix(in srgb, var(--shadow-base) 32%, transparent);
+  --scrim-opaque: color-mix(in srgb, var(--shadow-base) 55%, transparent);
+
   /* Danger base override — darker for light theme. */
   --danger-base: #8a1f12;
 
@@ -218,6 +253,20 @@
   --info-teal: #0e9b95;
   --brand-purple: #6a4ba8;
   --danger-text-light: #b03517;
+}
+
+/* Match the aux-window title bars to the main window's sidebar tone in
+   light theme. By default `.activity-titlebar` uses `--bg-panel-elevated`
+   which lands at pure white (`#ffffff`) under light theme — gray macOS
+   stoplights become invisible there when the window is unfocused. The
+   main window's stoplights sit over the sidebar's `--bg-sidebar`
+   (`#f7f4ef` warm off-white) which has marginal but acceptable
+   stoplight contrast, so re-using that tone here makes every window
+   consistent without introducing a darker strip that reads as a patch.
+   Dark theme is unaffected — `--bg-panel-elevated` stays at `#101010`
+   and stoplights are legible there. */
+:root[data-theme="light"] .activity-titlebar {
+  background: var(--bg-sidebar);
 }
 
 /* ===========================================================================
@@ -776,7 +825,14 @@ textarea,
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
-  line-height: 1;
+  /* line-height 1 was clipping descenders (g, j, p, q, y) — the em-box
+     doesn't include the descender region, and the surrounding
+     overflow: hidden (needed for the text-overflow: ellipsis path)
+     chopped anything below the baseline. 1.3 gives descenders the
+     ~3 px of vertical room they need; the flex parent's
+     align-items: center keeps the visual baseline aligned with the
+     eyebrow + separator next to it. */
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2480,7 +2536,7 @@ textarea,
   border-radius: 999px;
   background: var(--accent);
   box-shadow:
-    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 0 1px color-mix(in srgb, var(--bg-row-active) 72%, transparent),
     0 0 14px var(--accent-shadow);
   pointer-events: none;
 }
@@ -2527,7 +2583,7 @@ textarea,
   height: 3px;
   background: var(--accent);
   box-shadow:
-    0 0 0 1px rgba(18, 8, 0, 0.72),
+    0 0 0 1px color-mix(in srgb, var(--bg-row-active) 72%, transparent),
     0 0 14px var(--accent-shadow);
 }
 
@@ -5283,7 +5339,7 @@ textarea,
   background: linear-gradient(
     to bottom,
     var(--bg-app) 0%,
-    rgba(0, 0, 0, 0) 100%
+    transparent 100%
   );
 }
 
@@ -5292,7 +5348,7 @@ textarea,
   background: linear-gradient(
     to top,
     var(--bg-app) 0%,
-    rgba(0, 0, 0, 0) 100%
+    transparent 100%
   );
 }
 
@@ -5330,7 +5386,7 @@ textarea,
   justify-content: center;
   padding: 0;
   border-radius: 50%;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   transform: translateX(-50%);
   border-color: var(--accent-border);
   background: var(--accent);
@@ -6098,7 +6154,7 @@ textarea,
   gap: 12px;
   border-color: var(--accent-border-soft);
   background:
-    linear-gradient(180deg, rgba(255, 138, 31, 0.08), rgba(255, 138, 31, 0.02)),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), color-mix(in srgb, var(--accent) 2%, transparent)),
     var(--bg-panel-elevated);
   -webkit-user-select: text;
   user-select: text;
@@ -6657,7 +6713,7 @@ textarea,
   overflow: hidden;
   border-radius: 999px;
   background: var(--accent-bg-medium);
-  box-shadow: inset 0 0 0 1px rgba(255, 138, 31, 0.18);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .thinking-scanner--mini {
@@ -6676,13 +6732,13 @@ textarea,
   border-radius: 999px;
   background: linear-gradient(
     90deg,
-    rgba(255, 138, 31, 0.18) 0%,
-    rgba(255, 179, 92, 0.95) 48%,
-    rgba(255, 138, 31, 0.18) 100%
+    color-mix(in srgb, var(--accent) 18%, transparent) 0%,
+    color-mix(in srgb, var(--accent-bright) 95%, transparent) 48%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 100%
   );
   box-shadow:
-    0 0 10px rgba(255, 138, 31, 0.42),
-    0 0 18px rgba(255, 138, 31, 0.22);
+    0 0 10px color-mix(in srgb, var(--accent) 42%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
   opacity: calc(0.76 + (var(--thinking-scanner-progress, 0) * 0.24));
   transform: translateX(var(--thinking-scanner-offset));
   will-change: opacity, transform;
@@ -6690,8 +6746,8 @@ textarea,
 
 .thinking-scanner--mini .thinking-scanner__beam {
   box-shadow:
-    0 0 8px rgba(255, 138, 31, 0.42),
-    0 0 14px rgba(255, 138, 31, 0.22);
+    0 0 8px color-mix(in srgb, var(--accent) 42%, transparent),
+    0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .transcript-activity__header {
@@ -8838,8 +8894,8 @@ textarea,
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow:
-    inset 0 0 0 1px rgba(247, 243, 235, 0.06),
-    0 18px 48px rgba(0, 0, 0, 0.52);
+    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent),
+    0 18px 48px color-mix(in srgb, var(--shadow-base) 52%, transparent);
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
 }
@@ -9098,7 +9154,7 @@ textarea,
   width: 22px;
   height: 22px;
   overflow: hidden;
-  border: 1px solid rgba(255, 179, 92, 0.44);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 44%, transparent);
   border-radius: 50%;
   background:
     radial-gradient(circle at 34% 28%, rgba(255, 241, 203, 0.72) 0 8%, transparent 17%),
@@ -9107,7 +9163,7 @@ textarea,
     radial-gradient(circle at 72% 30%, rgba(255, 205, 128, 0.36) 0 6%, transparent 14%),
     radial-gradient(circle at 38% 34%, var(--accent-bright) 0%, var(--accent-strong) 42%, var(--accent) 100%);
   box-shadow:
-    0 0 10px rgba(255, 138, 31, 0.3),
+    0 0 10px color-mix(in srgb, var(--accent) 30%, transparent),
     inset 0 0 4px rgba(255, 243, 220, 0.26);
 }
 
@@ -9139,9 +9195,9 @@ textarea,
 
 .context-window-moon__sprite--phase-0 .context-window-moon__disc {
   background:
-    radial-gradient(circle at 60% 36%, rgba(255, 138, 31, 0.08) 0 2px, transparent 3px),
-    rgba(255, 138, 31, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 138, 31, 0.14);
+    radial-gradient(circle at 60% 36%, color-mix(in srgb, var(--accent) 8%, transparent) 0 2px, transparent 3px),
+    color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .context-window-moon__sprite--phase-0 .context-window-moon__disc::after {
@@ -9204,7 +9260,7 @@ textarea,
 
 .context-window-moon__sprite--phase-8 .context-window-moon__disc {
   box-shadow:
-    0 0 12px rgba(255, 138, 31, 0.48),
+    0 0 12px color-mix(in srgb, var(--accent) 48%, transparent),
     inset 0 0 4px rgba(255, 243, 220, 0.34);
 }
 

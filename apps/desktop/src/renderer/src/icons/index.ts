@@ -1,4 +1,5 @@
 export { BranchIcon } from "./BranchIcon";
+export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
 export { FeishuIcon } from "./FeishuIcon";

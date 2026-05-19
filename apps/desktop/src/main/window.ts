@@ -12,6 +12,7 @@ import {
 } from "./window-channels";
 import {
   AGENT_EVENT_CHANNEL,
+  APPEARANCE_CHANGED_EVENT_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
@@ -187,6 +188,16 @@ export function createMainWindow(options?: {
     trafficLightPosition: { x: 20, y: 18 },
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
+    //
+    // Note on stoplight contrast: an earlier iteration set
+    // `vibrancy: "titlebar"` here hoping macOS would push the title-bar
+    // backdrop toward something darker than pure white when unfocused.
+    // That doesn't work for us — vibrancy requires the renderer to be
+    // transparent at the zone, and `visualEffectState` defaults to
+    // "followWindow" which DISABLES vibrancy on unfocus (the exact
+    // case we care about). The stoplight-contrast fix lives in
+    // app.css instead: light theme darkens `.activity-titlebar` and
+    // `.sidebar__masthead` to a warm tan so gray stoplights stand out.
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: preloadPath,
@@ -350,6 +361,7 @@ export function createMainWindow(options?: {
   // consume. See `apps/desktop/src/main/window-channels.ts`.
   registerWindowChannels(window, WINDOW_KIND_MAIN, [
     AGENT_EVENT_CHANNEL,
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
     MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
     MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
     MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,

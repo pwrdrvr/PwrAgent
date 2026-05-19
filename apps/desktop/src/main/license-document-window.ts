@@ -9,6 +9,7 @@ import {
   WINDOW_KIND_LICENSE_DOCUMENT,
   registerWindowChannels,
 } from "./window-channels";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -81,7 +82,9 @@ function showLicenseDocumentWindow(options: {
   });
 
   applyWindowSecurityHardening(window);
-  registerWindowChannels(window, WINDOW_KIND_LICENSE_DOCUMENT, []);
+  registerWindowChannels(window, WINDOW_KIND_LICENSE_DOCUMENT, [
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

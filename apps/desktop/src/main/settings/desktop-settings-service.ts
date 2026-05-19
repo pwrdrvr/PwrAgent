@@ -128,6 +128,18 @@ type DesktopSettingsServiceOptions = {
   resolveCodexShellEnv?: (
     env: NodeJS.ProcessEnv
   ) => NodeJS.ProcessEnv | undefined;
+  /**
+   * Side-effect hook invoked from `writeConfigPatch` whenever a write
+   * touched `[general.appearance]`. The production wiring routes this
+   * to `broadcastAppearanceChange` so secondary windows (changelog,
+   * app-log, license, messaging activity) can re-apply
+   * `<html data-theme/data-density>` live. Tests can omit it (or
+   * provide a spy) without coupling the service to the window layer.
+   */
+  onAppearanceChange?: (appearance: {
+    theme: DesktopAppearanceTheme;
+    density: DesktopAppearanceDensity;
+  }) => void;
 };
 
 type ConfigReadResult = {
@@ -694,6 +706,24 @@ export class DesktopSettingsService {
       );
     }
     applyDesktopSettingsPatch(this.configPath, patch);
+    // Fan out appearance updates to every open window so aux surfaces
+    // (changelog, app-log, license, messaging activity) re-apply their
+    // <html data-*> attributes live instead of staying stuck on
+    // whatever theme they bootstrapped with at window creation. We
+    // only fire when the patch *touches* appearance — most settings
+    // writes are unrelated and shouldn't churn other windows.
+    const appearancePatch = patch.general?.appearance;
+    if (
+      appearancePatch
+      && (appearancePatch.theme !== undefined
+        || appearancePatch.density !== undefined)
+    ) {
+      const next = this.readConfig().config.general?.appearance;
+      this.options.onAppearanceChange?.({
+        theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
+        density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+      });
+    }
     return this.readSettings();
   }
 

@@ -121,6 +121,8 @@ import type {
   CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
+  DesktopAppearanceDensity,
+  DesktopAppearanceTheme,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -402,6 +404,22 @@ export type DesktopApi = {
   logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
+  /**
+   * Subscription for main → renderer appearance broadcasts. Fired
+   * whenever the user changes theme or density in Settings → the
+   * write fans out to every open window so secondary surfaces
+   * (changelog, app-log, license, messaging activity) can re-apply
+   * `<html data-theme/data-density>` live instead of staying stuck on
+   * their bootstrap-time value. The renderer's `useAppearance` hook
+   * subscribes for React state; `main.tsx` also subscribes for a bare
+   * DOM update so aux windows without React-Appearance follow along.
+   */
+  onAppearanceChanged?: (
+    callback: (appearance: {
+      theme: DesktopAppearanceTheme;
+      density: DesktopAppearanceDensity;
+    }) => void,
+  ) => () => void;
   onCodexEnvironmentSetupProgress?: (
     callback: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => () => void;

@@ -9,6 +9,7 @@ import {
   WINDOW_KIND_CHANGELOG,
   registerWindowChannels,
 } from "./window-channels";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -51,7 +52,9 @@ export function showChangelogWindow(): void {
   });
 
   applyWindowSecurityHardening(window);
-  registerWindowChannels(window, WINDOW_KIND_CHANGELOG, []);
+  registerWindowChannels(window, WINDOW_KIND_CHANGELOG, [
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {
