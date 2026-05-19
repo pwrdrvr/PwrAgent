@@ -5314,6 +5314,11 @@ textarea,
   min-height: 0;
   padding: 0;
   text-align: left;
+  /* Defensive: the global .app-shell rule disables selection on chrome,
+     but env-setup output (command, path, stdout/stderr) must be copyable
+     while the run is still in progress. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .launchpad-pending__header {
