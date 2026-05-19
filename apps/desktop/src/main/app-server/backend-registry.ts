@@ -62,6 +62,7 @@ import {
   type RestoreWorktreeResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
+  type RestoreThreadWorktreeResult,
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
@@ -82,6 +83,7 @@ import {
   type SubmitServerRequestResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
+  type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
   type UpdateThreadExpectedBranchRequest,
@@ -641,6 +643,13 @@ type ThreadTitleGenerationLogStatus =
 
 type WorktreeArchiveCandidate = {
   repositoryPath: string;
+  worktreePath: string;
+};
+
+type WorktreeRestoreCandidate = {
+  branch?: string;
+  repositoryPath?: string;
+  snapshot?: WorktreeSnapshotSummary;
   worktreePath: string;
 };
 
@@ -1928,11 +1937,17 @@ export class DesktopBackendRegistry {
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "codex") {
-      const threads = await this.listCodexThreads({
+      const threads = await this.filterArchivedThreadsPresentInActiveList({
         archived: params.archived,
-        enrichDirectories: params.enrichDirectories,
+        backend: "codex",
+        diagnostics,
         filter: params.filter,
-      }, diagnostics);
+        threads: await this.listCodexThreads({
+          archived: params.archived,
+          enrichDirectories: params.enrichDirectories,
+          filter: params.filter,
+        }, diagnostics),
+      });
       this.scheduleThreadListArchiveStateCleanup({
         backend: "codex",
         filter: params.filter,
@@ -1943,14 +1958,20 @@ export class DesktopBackendRegistry {
     }
 
     if (params.backend === "grok") {
-      const threads = this.withPendingStartedThreads(
-        "grok",
-        await this.grokClient.listThreads({
-          archived: params.archived,
-          filter: params.filter,
-        }, diagnostics),
-        params,
-      );
+      const threads = await this.filterArchivedThreadsPresentInActiveList({
+        archived: params.archived,
+        backend: "grok",
+        diagnostics,
+        filter: params.filter,
+        threads: this.withPendingStartedThreads(
+          "grok",
+          await this.grokClient.listThreads({
+            archived: params.archived,
+            filter: params.filter,
+          }, diagnostics),
+          params,
+        ),
+      });
       this.scheduleThreadListArchiveStateCleanup({
         backend: "grok",
         filter: params.filter,
@@ -1980,6 +2001,67 @@ export class DesktopBackendRegistry {
     return threadLists
       .flat()
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  }
+
+  private async filterArchivedThreadsPresentInActiveList(params: {
+    archived?: boolean;
+    backend: AppServerBackendKind;
+    diagnostics: {
+      callerReason: ThreadListCallerReason;
+      ownerId: string;
+    };
+    filter?: string;
+    threads: AppServerThreadSummary[];
+  }): Promise<AppServerThreadSummary[]> {
+    if (params.archived !== true || params.threads.length === 0) {
+      return params.threads;
+    }
+
+    try {
+      const activeThreads =
+        params.backend === "codex"
+          ? await this.listCodexThreads({
+              archived: false,
+              enrichDirectories: false,
+              filter: params.filter,
+            }, {
+              ...params.diagnostics,
+              callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+            })
+          : this.withPendingStartedThreads(
+              "grok",
+              await this.grokClient.listThreads({
+                archived: false,
+                filter: params.filter,
+              }, {
+                ...params.diagnostics,
+                callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+              }),
+              { archived: false, filter: params.filter },
+            );
+      const activeThreadIds = new Set(activeThreads.map((thread) => thread.id));
+      const filteredThreads = params.threads.filter(
+        (thread) => !activeThreadIds.has(thread.id),
+      );
+      const filteredCount = params.threads.length - filteredThreads.length;
+      if (filteredCount > 0) {
+        backendRegistryLog.info("archived thread list filtered active duplicates", {
+          backend: params.backend,
+          filteredCount,
+          threadIds: params.threads
+            .filter((thread) => activeThreadIds.has(thread.id))
+            .slice(0, 10)
+            .map((thread) => thread.id),
+        });
+      }
+      return filteredThreads;
+    } catch (error) {
+      backendRegistryLog.warn("archived thread active-state filter failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return params.threads;
+    }
   }
 
   async listSkills(params: {
@@ -2078,6 +2160,10 @@ export class DesktopBackendRegistry {
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> {
     const backend = request.backend ?? "codex";
+    const archivedThread = await this.findThreadForRestoreWorktrees({
+      backend,
+      threadId: request.threadId,
+    });
     const result =
       backend === "codex"
         ? await this.withCodexThreadClient(request.threadId, async (client) =>
@@ -2089,11 +2175,17 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
     });
+    const worktrees = await this.restoreThreadWorktrees({
+      backend,
+      threadId: result.threadId,
+      thread: archivedThread,
+    });
 
     return {
       backend,
       threadId: result.threadId,
       restoredAt: Date.now(),
+      worktrees,
     };
   }
 
@@ -5474,6 +5566,26 @@ export class DesktopBackendRegistry {
     throw new Error("Thread metadata was not found.");
   }
 
+  private async findThreadForRestoreWorktrees(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    return await this.listThreads({
+      backend: params.backend,
+      archived: true,
+      callerReason: "thread-restore-worktrees",
+    })
+      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .catch((error) => {
+        backendRegistryLog.warn("restore thread worktree metadata lookup failed", {
+          backend: params.backend,
+          threadId: params.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      });
+  }
+
   private async findThreadForWorkspaceHandoff(params: {
     backend: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
@@ -5709,6 +5821,167 @@ export class DesktopBackendRegistry {
         }
       }),
     );
+  }
+
+  private async restoreThreadWorktrees(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    thread?: AppServerThreadSummary;
+  }): Promise<RestoreThreadWorktreeResult[]> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const candidates = this.buildRestoreThreadWorktreeCandidates({
+      overlay,
+      thread: params.thread,
+    });
+
+    return await Promise.all(
+      candidates.map(
+        async (candidate): Promise<RestoreThreadWorktreeResult> => {
+          try {
+            if (await pathExists(candidate.worktreePath)) {
+              return {
+                worktreePath: candidate.worktreePath,
+                repositoryPath: candidate.repositoryPath,
+                snapshotRef: candidate.snapshot?.snapshotRef,
+                restored: false,
+                skippedReason: "Worktree path already exists.",
+              };
+            }
+
+            if (!candidate.repositoryPath) {
+              return {
+                worktreePath: candidate.worktreePath,
+                snapshotRef: candidate.snapshot?.snapshotRef,
+                restored: false,
+                skippedReason:
+                  "Repository path is unavailable for this archived worktree.",
+              };
+            }
+
+            const restoredSnapshot = candidate.snapshot
+              ? await this.worktreeArchiveService.restore({
+                  backend: params.backend,
+                  threadId: params.threadId,
+                  worktreePath: candidate.worktreePath,
+                  repositoryPath: candidate.repositoryPath,
+                  snapshotRef: candidate.snapshot.snapshotRef,
+                  snapshotCommit: candidate.snapshot.snapshotCommit,
+                  snapshot: candidate.snapshot,
+                  allowDetachedFallback: true,
+                })
+              : await this.worktreeArchiveService.restoreDetached({
+                  backend: params.backend,
+                  threadId: params.threadId,
+                  worktreePath: candidate.worktreePath,
+                  repositoryPath: candidate.repositoryPath,
+                  restoreRef: candidate.branch,
+                });
+            await this.overlayStore.upsertWorktreeSnapshot({
+              backend: params.backend,
+              threadId: params.threadId,
+              snapshot: restoredSnapshot,
+            });
+
+            return {
+              worktreePath: restoredSnapshot.worktreePath,
+              repositoryPath: restoredSnapshot.repositoryPath,
+              snapshotRef: restoredSnapshot.snapshotRef,
+              restored: true,
+              snapshot: restoredSnapshot,
+            };
+          } catch (error) {
+            backendRegistryLog.warn("restore thread worktree restore failed", {
+              backend: params.backend,
+              threadId: params.threadId,
+              repositoryPath: candidate.repositoryPath,
+              worktreePath: candidate.worktreePath,
+              snapshotRef: candidate.snapshot?.snapshotRef,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return {
+              worktreePath: candidate.worktreePath,
+              repositoryPath: candidate.repositoryPath,
+              snapshotRef: candidate.snapshot?.snapshotRef,
+              restored: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      ),
+    );
+  }
+
+  private buildRestoreThreadWorktreeCandidates(params: {
+    overlay?: ThreadOverlayState;
+    thread?: AppServerThreadSummary;
+  }): WorktreeRestoreCandidate[] {
+    const snapshotCandidates: WorktreeRestoreCandidate[] = [
+      ...(params.overlay?.worktreeSnapshots ?? []),
+    ]
+      .filter((snapshot) => snapshot.state !== "present")
+      .sort(
+        (left, right) =>
+          (right.archivedAt ?? right.restoredAt ?? right.createdAt) -
+          (left.archivedAt ?? left.restoredAt ?? left.createdAt),
+      )
+      .map((snapshot) => ({
+        repositoryPath: snapshot.repositoryPath,
+        snapshot,
+        worktreePath: snapshot.worktreePath,
+      }));
+    const metadataCandidates = this.buildRestoreThreadMetadataCandidates(
+      params.thread,
+      snapshotCandidates,
+    );
+    const seenWorktreePaths = new Set<string>();
+    return [...snapshotCandidates, ...metadataCandidates].filter((candidate) => {
+      const resolvedPath = path.resolve(candidate.worktreePath);
+      if (seenWorktreePaths.has(resolvedPath)) {
+        return false;
+      }
+      seenWorktreePaths.add(resolvedPath);
+      return true;
+    });
+  }
+
+  private buildRestoreThreadMetadataCandidates(
+    thread: AppServerThreadSummary | undefined,
+    snapshotCandidates: WorktreeRestoreCandidate[],
+  ): WorktreeRestoreCandidate[] {
+    if (!thread) {
+      return [];
+    }
+
+    const fallbackRepositoryPath = snapshotCandidates.find(
+      (candidate) => candidate.repositoryPath?.trim(),
+    )?.repositoryPath;
+    const branch = thread.observedGitBranch ?? thread.gitBranch;
+
+    return thread.linkedDirectories.flatMap((directory): WorktreeRestoreCandidate[] => {
+      const worktreePath =
+        directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+      if (!worktreePath?.trim()) {
+        return [];
+      }
+
+      const repositoryPath =
+        directory.path.trim() &&
+        !isToolManagedWorktreePath(directory.path) &&
+        path.resolve(directory.path) !== path.resolve(worktreePath)
+          ? directory.path
+          : fallbackRepositoryPath;
+
+      return [
+        {
+          branch,
+          repositoryPath,
+          worktreePath,
+        },
+      ];
+    });
   }
 
   private async restoreWithClient(

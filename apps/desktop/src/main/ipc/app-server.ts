@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerBackendScope,
+  AppServerThreadSummary,
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
@@ -57,6 +58,7 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  ThreadOverlayState,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
@@ -144,6 +146,53 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   }
 
   appServerLog.info(event, payload);
+}
+
+async function hydrateRetainedThreadOverlayData(
+  overlayStore: OverlayStoreLike,
+  threads: AppServerThreadSummary[],
+): Promise<AppServerThreadSummary[]> {
+  if (threads.length === 0) {
+    return threads;
+  }
+
+  const threadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+  for (const thread of threads) {
+    const threadIds = threadIdsByBackend.get(thread.source) ?? new Set<string>();
+    threadIds.add(thread.id);
+    threadIdsByBackend.set(thread.source, threadIds);
+  }
+
+  const overlayEntries: Array<
+    readonly [AppServerBackendKind, Record<string, ThreadOverlayState | undefined>]
+  > = await Promise.all(
+    [...threadIdsByBackend.entries()].map(
+      async ([backend, threadIds]): Promise<
+        readonly [
+          AppServerBackendKind,
+          Record<string, ThreadOverlayState | undefined>,
+        ]
+      > => [
+        backend,
+        await overlayStore.getThreadOverlayStates({
+          backend,
+          threadIds: [...threadIds],
+        }),
+      ],
+    ),
+  );
+  const overlaysByBackend = new Map(overlayEntries);
+
+  return threads.map((thread) => {
+    const overlay = overlaysByBackend.get(thread.source)?.[thread.id];
+    if (!overlay?.worktreeSnapshots?.length) {
+      return thread;
+    }
+    return {
+      ...thread,
+      worktreeSnapshots: overlay.worktreeSnapshots,
+    };
+  });
 }
 
 function directoryStatusesEqual(
@@ -276,17 +325,22 @@ class DesktopAppServerService {
       callerReason: "ipc-list-threads",
       filter: request.filter,
     });
+    const hydratedThreads = await hydrateRetainedThreadOverlayData(
+      this.getOverlayStore(),
+      threads,
+    );
 
     logDebug("listThreads", {
       backend: backend ?? "all",
-      count: threads.length,
-      threadIds: threads.slice(0, 5).map((thread) => thread.id),
+      count: hydratedThreads.length,
+      threadIds: hydratedThreads.slice(0, 5).map((thread) => thread.id),
     });
 
     return {
       backend: backend ?? "all",
       fetchedAt: Date.now(),
-      threads,
+      threads: hydratedThreads,
+      workspaceRoots: resolveScratchProjectsRoots(),
     };
   }
 

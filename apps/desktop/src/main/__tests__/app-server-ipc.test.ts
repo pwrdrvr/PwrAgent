@@ -214,6 +214,7 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenUpdatedAt: request.seenUpdatedAt,
 }));
 const getThreadOverlayState = vi.fn();
+const getThreadOverlayStates = vi.fn(async () => ({}));
 const setThreadPullRequests = vi.fn(async (request: {
   backend: "codex" | "grok";
   threadId: string;
@@ -256,6 +257,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     reconcileNavigationSnapshot,
     markThreadSeen,
     getThreadOverlayState,
+    getThreadOverlayStates,
     setThreadPullRequests,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
@@ -316,6 +318,8 @@ describe("app server ipc", () => {
     markThreadSeen.mockClear();
     getThreadOverlayState.mockReset();
     getThreadOverlayState.mockResolvedValue(undefined);
+    getThreadOverlayStates.mockReset();
+    getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
@@ -404,6 +408,71 @@ describe("app server ipc", () => {
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
+      ],
+      workspaceRoots: [
+        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
+        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(os.homedir(), ".pwragnt", "projects"),
+      ],
+    });
+  });
+
+  it("hydrates retained worktree snapshots when listing archived threads", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
+    getThreadOverlayStates.mockResolvedValue({
+      "thread-archived": {
+        backend: "codex",
+        threadId: "thread-archived",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        worktreeSnapshots: [
+          {
+            id: "snapshot-1",
+            backend: "codex",
+            threadId: "thread-archived",
+            worktreePath: "/Users/test/.codex/worktrees/mp7efuda/PwrSnap",
+            repositoryPath: "/Users/test/github/PwrSnap",
+            snapshotRef: "refs/codex/snapshots/snapshot-1",
+            snapshotCommit: "abc123",
+            createdAt: 1000,
+            archivedAt: 3000,
+            state: "archived",
+            ignoredFilesExcluded: true,
+          },
+        ],
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_LIST_THREADS_CHANNEL)?.(
+      {},
+      { archived: true } satisfies AppServerListThreadsRequest,
+    );
+
+    expect(getThreadOverlayStates).toHaveBeenCalledWith({
+      backend: "codex",
+      threadIds: ["thread-archived"],
+    });
+    expect(response).toEqual({
+      backend: "all",
+      fetchedAt: expect.any(Number),
+      threads: [
+        expect.objectContaining({
+          id: "thread-archived",
+          worktreeSnapshots: [
+            expect.objectContaining({
+              repositoryPath: "/Users/test/github/PwrSnap",
+              worktreePath: "/Users/test/.codex/worktrees/mp7efuda/PwrSnap",
+            }),
+          ],
+        }),
+      ],
+      workspaceRoots: [
+        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
+        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
   });

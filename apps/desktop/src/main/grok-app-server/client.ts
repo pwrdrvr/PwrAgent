@@ -92,6 +92,7 @@ type RawThreadSummary = {
   fastMode?: boolean;
   createdAt?: number;
   updatedAt?: number;
+  archivedAt?: number;
 };
 
 type SkillCatalogEntry = {
@@ -149,6 +150,25 @@ function readString(
 ): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readTimestamp(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
 }
 
 function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
@@ -256,6 +276,7 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
             typeof record.createdAt === "number" ? record.createdAt : undefined,
           updatedAt:
             typeof record.updatedAt === "number" ? record.updatedAt : undefined,
+          archivedAt: readTimestamp(record, "archivedAt", "archived_at"),
         },
       ];
     })
@@ -831,6 +852,7 @@ export class GrokAppServerClient {
           ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
+          archivedAt: thread.archivedAt,
           model: thread.model,
           serviceTier: thread.serviceTier,
           reasoningEffort: thread.reasoningEffort,

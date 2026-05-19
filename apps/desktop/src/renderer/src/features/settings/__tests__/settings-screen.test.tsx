@@ -11,8 +11,11 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AppServerListThreadsResponse,
+  AppServerThreadSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
+  WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
@@ -296,6 +299,25 @@ function createSettingsState(
   };
 }
 
+function createArchivedSnapshot(
+  threadId: string,
+  archivedAt: number,
+): WorktreeSnapshotSummary {
+  return {
+    id: `snapshot-${threadId}-${archivedAt}`,
+    backend: "codex",
+    threadId,
+    worktreePath: `/worktrees/${threadId}`,
+    repositoryPath: "/repo/PwrAgnt",
+    snapshotRef: `refs/archive/${threadId}`,
+    snapshotCommit: "abc123",
+    createdAt: archivedAt,
+    archivedAt,
+    state: "archived",
+    ignoredFilesExcluded: true,
+  };
+}
+
 describe("SettingsScreen", () => {
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
@@ -517,11 +539,448 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Archived Threads" }),
+    );
+    expect(screen.getByRole("heading", { name: "Archived threads" })).toBeInTheDocument();
+
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
       "aria-current",
       "page",
     );
+  });
+
+  it("lists archived threads and restores one", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Archived code review",
+      titleSource: "explicit",
+      summary: "Needs to come back to the active thread list.",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          label: "PwrAgnt",
+          path: "/repo/PwrAgnt",
+          kind: "local",
+        },
+      ],
+      gitBranch: "feature/archive-settings",
+      source: "codex",
+    };
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [archivedThread],
+    }));
+    const restoreThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      restoredAt: 4_000,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Archived code review")).toBeInTheDocument();
+    expect(
+      screen.getByText("Needs to come back to the active thread list."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "PwrAgnt" })).toBeInTheDocument();
+    expect(screen.getByText("/repo/PwrAgnt")).toBeInTheDocument();
+    expect(listThreads).toHaveBeenCalledWith({ archived: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    await waitFor(() => {
+      expect(restoreThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-archived",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+  });
+
+  it("groups archived threads by project before restoration", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-pwragent-2",
+          title: "Second PwrAgent thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          worktreeSnapshots: [
+            createArchivedSnapshot("thread-pwragent-2", 2_000),
+          ],
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-other",
+          title: "Other project thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 3_000,
+          worktreeSnapshots: [createArchivedSnapshot("thread-other", 3_000)],
+          linkedDirectories: [
+            {
+              id: "directory-2",
+              label: "OtherProject",
+              path: "/repo/OtherProject",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-pwragent-1",
+          title: "First PwrAgent thread",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          worktreeSnapshots: [
+            createArchivedSnapshot("thread-pwragent-1", 5_000),
+          ],
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrAgentGroup = (await screen.findByRole("heading", {
+      name: "PwrAgnt",
+    })).closest("section")!;
+    expect(within(pwrAgentGroup).getByText("2 threads")).toBeInTheDocument();
+    const firstPwrAgentThread = within(pwrAgentGroup).getByText(
+      "First PwrAgent thread",
+    );
+    const secondPwrAgentThread = within(pwrAgentGroup).getByText(
+      "Second PwrAgent thread",
+    );
+    expect(
+      firstPwrAgentThread.compareDocumentPosition(secondPwrAgentThread) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const otherGroup = screen.getByRole("heading", {
+      name: "OtherProject",
+    }).closest("section")!;
+    expect(within(otherGroup).getByText("1 thread")).toBeInTheDocument();
+    expect(
+      within(otherGroup).getByText("Other project thread"),
+    ).toBeInTheDocument();
+  });
+
+  it("groups corrupted managed-worktree paths by project folder name", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: [
+        {
+          id: "thread-pwrsnap-1",
+          title: "Testing env setup",
+          titleSource: "explicit" as const,
+          archivedAt: 5_000,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              label: "PwrSnap",
+              path: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              kind: "worktree" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-pwrsnap-2",
+          title: "Popover window too tall",
+          titleSource: "explicit" as const,
+          archivedAt: 4_000,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              label: "PwrSnap",
+              path: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              worktreePath:
+                "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              kind: "worktree" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrSnapGroup = (await screen.findByRole("heading", {
+      name: "PwrSnap",
+    })).closest("section")!;
+    expect(within(pwrSnapGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(
+      within(pwrSnapGroup).getByText("Testing env setup"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrSnapGroup).getByText("Popover window too tall"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /mp7efuda/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /mp32wplq/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
+    const activeWorkspaceRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      workspaceRoots: [activeWorkspaceRoot],
+      threads: [
+        {
+          id: "thread-dev-workspace-1",
+          title: "lions roar",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 5_000,
+          linkedDirectories: [
+            {
+              id: `${activeWorkspaceRoot}/2026-05-10-844f31`,
+              label: "2026-05-10-844f31",
+              path: `${activeWorkspaceRoot}/2026-05-10-844f31`,
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-dev-workspace-2",
+          title: "what's up",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          projectKey: `${activeWorkspaceRoot}/2026-05-10-883761`,
+          linkedDirectories: [],
+          source: "codex" as const,
+        },
+        {
+          id: "thread-legacy-workspace",
+          title: "Key Lime Pie yum",
+          titleSource: "explicit" as const,
+          createdAt: 1_000,
+          updatedAt: 3_000,
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects",
+              label: "projects",
+              path: "/Users/huntharo/.pwragnt/projects",
+              kind: "local" as const,
+            },
+          ],
+          source: "codex" as const,
+        },
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const workspacesGroup = (await screen.findByRole("heading", {
+      name: "Workspaces",
+    })).closest("section")!;
+    expect(within(workspacesGroup).getByText("2 threads")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText("lions roar")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText("what's up")).toBeInTheDocument();
+    expect(within(workspacesGroup).getByText(activeWorkspaceRoot)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "2026-05-10-844f31" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "2026-05-10-883761" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Key Lime Pie yum")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "projects" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("limits each archived project to the 20 most recent archive timestamps", async () => {
+    const listThreads = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 3_000,
+      threads: Array.from({ length: 25 }, (_, index): AppServerThreadSummary => {
+        const threadNumber = index + 1;
+        const threadId = `thread-${threadNumber}`;
+        return {
+          id: threadId,
+          title: `Archived thread ${String(threadNumber).padStart(2, "0")}`,
+          titleSource: "explicit",
+          createdAt: 1_000,
+          updatedAt: 1_000 + threadNumber,
+          worktreeSnapshots: [createArchivedSnapshot(threadId, threadNumber)],
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+              kind: "local",
+            },
+          ],
+          source: "codex",
+        };
+      }),
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    const pwrAgentGroup = (await screen.findByRole("heading", {
+      name: "PwrAgnt",
+    })).closest("section")!;
+    expect(
+      within(pwrAgentGroup).getByText("Archived thread 25"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText("Archived thread 06"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).queryByText("Archived thread 05"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).getByText(
+        "Showing 20 of 25 most recent archived threads.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not re-add a restored thread when a stale archive refresh resolves", async () => {
+    const archivedThread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Archived code review",
+      titleSource: "explicit",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [],
+      source: "codex",
+    };
+    let resolveStaleRefresh:
+      | ((response: AppServerListThreadsResponse) => void)
+      | undefined;
+    const listThreads = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "all" as const,
+        fetchedAt: 3_000,
+        threads: [archivedThread],
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise<AppServerListThreadsResponse>((resolve) => {
+            resolveStaleRefresh = resolve;
+          }),
+      );
+    const restoreThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      restoredAt: 4_000,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listThreads, restoreThread }}
+        settings={createSettingsState()}
+        initialSection="archived"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Archived code review")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(listThreads).toHaveBeenCalledTimes(2);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveStaleRefresh?.({
+        backend: "all",
+        fetchedAt: 5_000,
+        threads: [archivedThread],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
   });
 
   it("can restart login for an existing Codex auth profile", async () => {
@@ -1983,6 +2442,35 @@ describe("SettingsScreen", () => {
     const label = document.querySelector(".settings-nav__group-label");
     expect(label).not.toBeNull();
     expect(label?.textContent?.toLowerCase()).toBe("general");
+  });
+
+  it("orders settings nav sections with worktree settings separated", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const buttons = within(nav)
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(buttons).toEqual([
+      "← Exit Settings",
+      "General",
+      "Applications",
+      "Profiles",
+      "Models",
+      "Messaging",
+      "Worktrees",
+      "Archived Threads",
+      "Experimental",
+      "About",
+    ]);
+    expect(within(nav).getByRole("separator")).toHaveClass(
+      "settings-nav__divider",
+    );
   });
 
   it("shows when messaging is disabled by a runtime override", () => {

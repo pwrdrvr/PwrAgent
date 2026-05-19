@@ -221,6 +221,7 @@ export type AppServerThreadSummary = {
   projectKey?: string;
   createdAt?: number;
   updatedAt?: number;
+  archivedAt?: number;
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
   observedGitBranch?: string;
@@ -402,6 +403,7 @@ export type AppServerListThreadsResponse = {
   backend: AppServerBackendScope;
   fetchedAt: number;
   threads: AppServerThreadSummary[];
+  workspaceRoots?: string[];
 };
 
 export type ArchiveThreadCleanupResult = {
@@ -430,10 +432,21 @@ export type RestoreThreadRequest = {
   threadId: ThreadIdentifier;
 };
 
+export type RestoreThreadWorktreeResult = {
+  worktreePath: string;
+  repositoryPath?: string;
+  snapshotRef?: string;
+  restored: boolean;
+  snapshot?: WorktreeSnapshotSummary;
+  skippedReason?: string;
+  error?: string;
+};
+
 export type RestoreThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   restoredAt: number;
+  worktrees?: RestoreThreadWorktreeResult[];
 };
 
 export type ArchiveWorktreeRequest = {

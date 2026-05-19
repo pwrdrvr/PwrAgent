@@ -2979,6 +2979,10 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
         pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
           pickNumber(sessionRecord ?? {}, ["updatedAt", "updated_at", "lastActivityAt"])
       ),
+      archivedAt: normalizeEpochTimestamp(
+        pickNumber(record, ["archivedAt", "archived_at"]) ??
+          pickNumber(sessionRecord ?? {}, ["archivedAt", "archived_at"])
+      ),
       gitBranch:
         pickString(gitInfoRecord ?? {}, ["branch"]) ??
         pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ??

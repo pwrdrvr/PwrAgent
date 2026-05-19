@@ -15,6 +15,7 @@ import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
@@ -25,7 +26,7 @@ import {
   buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "./settings-patch-delta";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 export type SettingsSection =
   | "general"
@@ -35,18 +36,47 @@ export type SettingsSection =
   | "profiles"
   | "applications"
   | "worktrees"
+  | "archived"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
-  { id: "worktrees", label: "Worktrees" },
-  { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
+  { id: "messaging", label: "Messaging" },
+  { id: "worktrees", label: "Worktrees" },
+  { id: "archived", label: "Archived Threads" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
 ];
+
+const PRIMARY_SECTIONS: SettingsSection[] = [
+  "general",
+  "applications",
+  "profiles",
+  "models",
+  "messaging",
+];
+
+const SETTINGS_NAV_DIVIDER_AFTER: SettingsSection = "messaging";
+
+const SECTION_LABELS = new Map(
+  SECTIONS.map((section) => [section.id, section.label] as const),
+);
+
+const ORDERED_SECTION_IDS: SettingsSection[] = [
+  ...PRIMARY_SECTIONS,
+  "worktrees",
+  "archived",
+  "experimental",
+  "about",
+];
+
+const ORDERED_SECTIONS = ORDERED_SECTION_IDS.map((id) => ({
+  id,
+  label: SECTION_LABELS.get(id) ?? id,
+}));
 
 export function SettingsScreen(props: {
   /** Live theme + density controller from the App root. Threaded down to
@@ -118,16 +148,20 @@ export function SettingsScreen(props: {
         {/* Group label between Exit and the section list. */}
         <p className="settings-nav__group-label">General</p>
 
-        {SECTIONS.map((item) => (
-          <button
-            key={item.id}
-            aria-current={section === item.id ? "page" : undefined}
-            className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
-            type="button"
-            onClick={() => setSection(item.id)}
-          >
-            {item.label}
-          </button>
+        {ORDERED_SECTIONS.map((item) => (
+          <Fragment key={item.id}>
+            <button
+              aria-current={section === item.id ? "page" : undefined}
+              className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
+              type="button"
+              onClick={() => setSection(item.id)}
+            >
+              {item.label}
+            </button>
+            {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
+              <hr className="settings-nav__divider" />
+            ) : null}
+          </Fragment>
         ))}
       </nav>
 
@@ -402,6 +436,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "archived") {
+    return <ArchivedThreadsSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "applications") {

@@ -428,6 +428,16 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("lets SettingsSection own the archive section header divider", () => {
+    // Archive rows live directly inside a SettingsSection body. Adding
+    // a second top border to the thread container stacks with the
+    // SettingsSection header divider and makes the pane visibly heavier
+    // than neighboring settings panes.
+    expect(css).not.toMatch(
+      /\.settings-archive-project__threads\s*\{[\s\S]*?border-top:/,
+    );
+  });
+
   it("keeps Activity and Settings titlebar breadcrumbs visually identical", () => {
     // The Activity window's titlebar mirrors the Settings overlay's
     // right-pane titlebar — same eyebrow color, same separator

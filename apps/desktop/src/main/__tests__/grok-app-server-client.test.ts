@@ -974,6 +974,54 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("parses Grok archived timestamps from archived thread summaries", async () => {
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
+            methods: ["thread/list"],
+          };
+        }
+        if (method === "thread/list") {
+          return {
+            threads: [
+              {
+                id: "thread-snake",
+                title: "Snake timestamp",
+                archived_at: "2026-05-16T23:00:00.000Z",
+                updatedAt: 1000,
+              },
+              {
+                threadId: "thread-camel",
+                title: "Camel timestamp",
+                archivedAt: 2000,
+                updatedAt: 500,
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([
+      {
+        id: "thread-snake",
+        archivedAt: Date.parse("2026-05-16T23:00:00.000Z"),
+      },
+      {
+        id: "thread-camel",
+        archivedAt: 2000,
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("renames Grok threads through the app-server contract", async () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),

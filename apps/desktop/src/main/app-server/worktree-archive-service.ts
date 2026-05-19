@@ -39,6 +39,16 @@ type RestoreWorktreeParams = {
   snapshotRef: string;
   snapshotCommit: string;
   snapshot?: WorktreeSnapshotSummary;
+  allowDetachedFallback?: boolean;
+  now?: number;
+};
+
+type RestoreDetachedWorktreeParams = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  worktreePath: string;
+  repositoryPath: string;
+  restoreRef?: string;
   now?: number;
 };
 
@@ -195,19 +205,53 @@ export class WorktreeArchiveService {
   async restore(params: RestoreWorktreeParams): Promise<WorktreeSnapshotSummary> {
     const worktreePath = path.resolve(params.worktreePath);
     const repositoryPath = path.resolve(params.repositoryPath);
+    const { commit: restoreCommit, fallbackReason } =
+      await this.resolveRestoreCommit(params);
+
+    await mkdir(path.dirname(worktreePath), { recursive: true });
+    await this.runGit(repositoryPath, [
+      "worktree",
+      "add",
+      "--detach",
+      worktreePath,
+      restoreCommit,
+    ]);
+
+    const restoredAt = params.now ?? Date.now();
+    return {
+      ...(params.snapshot ?? {
+        id: snapshotIdForPath(worktreePath),
+        backend: params.backend,
+        threadId: params.threadId,
+        worktreePath,
+        repositoryPath,
+        snapshotRef: params.snapshotRef,
+        snapshotCommit: restoreCommit,
+        createdAt: restoredAt,
+        ignoredFilesExcluded: true,
+      }),
+      backend: params.backend,
+      threadId: params.threadId,
+      worktreePath,
+      repositoryPath,
+      snapshotRef: params.snapshotRef,
+      snapshotCommit: restoreCommit,
+      restoredAt,
+      state: "restored",
+      unavailableReason: fallbackReason,
+    };
+  }
+
+  async restoreDetached(
+    params: RestoreDetachedWorktreeParams,
+  ): Promise<WorktreeSnapshotSummary> {
+    const worktreePath = path.resolve(params.worktreePath);
+    const repositoryPath = path.resolve(params.repositoryPath);
+    const restoreRef = params.restoreRef?.trim() || "HEAD";
     const snapshotCommit = trimGitOutput(
-      (await this.runGit(repositoryPath, [
-        "rev-parse",
-        `${params.snapshotRef}^{commit}`,
-      ]))
+      (await this.runGit(repositoryPath, ["rev-parse", `${restoreRef}^{commit}`]))
         .stdout,
     );
-
-    if (snapshotCommit !== params.snapshotCommit) {
-      throw new Error(
-        `Snapshot ref ${params.snapshotRef} points at ${snapshotCommit}, expected ${params.snapshotCommit}.`,
-      );
-    }
 
     await mkdir(path.dirname(worktreePath), { recursive: true });
     await this.runGit(repositoryPath, [
@@ -220,27 +264,94 @@ export class WorktreeArchiveService {
 
     const restoredAt = params.now ?? Date.now();
     return {
-      ...(params.snapshot ?? {
-        id: snapshotIdForPath(worktreePath),
-        backend: params.backend,
-        threadId: params.threadId,
-        worktreePath,
-        repositoryPath,
-        snapshotRef: params.snapshotRef,
-        snapshotCommit,
-        createdAt: restoredAt,
-        ignoredFilesExcluded: true,
-      }),
+      id: snapshotIdForPath(worktreePath),
       backend: params.backend,
       threadId: params.threadId,
       worktreePath,
       repositoryPath,
-      snapshotRef: params.snapshotRef,
+      snapshotRef: restoreRef,
       snapshotCommit,
+      sourceBranch: restoreRef === "HEAD" ? undefined : restoreRef,
+      createdAt: restoredAt,
       restoredAt,
       state: "restored",
-      unavailableReason: undefined,
+      ignoredFilesExcluded: true,
+      unavailableReason:
+        "Restored detached worktree from repository state because no archived snapshot was available.",
     };
+  }
+
+  private async resolveRestoreCommit(
+    params: RestoreWorktreeParams,
+  ): Promise<{ commit: string; fallbackReason?: string }> {
+    try {
+      const snapshotCommit = trimGitOutput(
+        (await this.runGit(params.repositoryPath, [
+          "rev-parse",
+          `${params.snapshotRef}^{commit}`,
+        ]))
+          .stdout,
+      );
+
+      if (snapshotCommit === params.snapshotCommit) {
+        return { commit: snapshotCommit };
+      }
+
+      const mismatch = `Snapshot ref ${params.snapshotRef} points at ${snapshotCommit}, expected ${params.snapshotCommit}.`;
+      if (!params.allowDetachedFallback) {
+        throw new Error(mismatch);
+      }
+      return await this.resolveDetachedFallbackCommit(params, mismatch);
+    } catch (error) {
+      if (!params.allowDetachedFallback) {
+        throw error;
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      return await this.resolveDetachedFallbackCommit(params, reason);
+    }
+  }
+
+  private async resolveDetachedFallbackCommit(
+    params: RestoreWorktreeParams,
+    reason: string,
+  ): Promise<{ commit: string; fallbackReason: string }> {
+    const fallbackCandidates = [
+      {
+        label: "retained snapshot commit",
+        value: params.snapshotCommit,
+      },
+      {
+        label: "source HEAD",
+        value: params.snapshot?.sourceHead,
+      },
+      {
+        label: "repository HEAD",
+        value: "HEAD",
+      },
+    ];
+
+    for (const candidate of fallbackCandidates) {
+      if (!candidate.value) {
+        continue;
+      }
+
+      try {
+        const commit = trimGitOutput(
+          (await this.runGit(params.repositoryPath, [
+            "rev-parse",
+            `${candidate.value}^{commit}`,
+          ])).stdout,
+        );
+        return {
+          commit,
+          fallbackReason: `${reason} Restored detached worktree from ${candidate.label}.`,
+        };
+      } catch {
+        // Try the next retained identity before giving up.
+      }
+    }
+
+    throw new Error(`${reason} No detached fallback commit is available.`);
   }
 
   private async createSnapshotCommit(params: {
