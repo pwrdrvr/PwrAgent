@@ -98,6 +98,27 @@ describe("provisionPairedProfiles", () => {
     ]);
   });
 
+  it("seeds onboarding.completed=true on the new PwrAgent profile", async () => {
+    // The flag must be set so the wizard doesn't re-fire when the
+    // operator auto-switches into the freshly-created profile.
+    const mock = makeApi();
+    await provisionPairedProfiles(mock.api, ["solo"]);
+    expect(mock.createPwrAgentProfile).toHaveBeenCalledWith({
+      profile: "solo",
+      seedOnboardingCompleted: true,
+    });
+  });
+
+  it("seeds onboarding on every name in a multiple-mode batch", async () => {
+    const mock = makeApi();
+    await provisionPairedProfiles(mock.api, ["a", "b", "c"]);
+    expect(mock.createPwrAgentProfile.mock.calls.map(([req]) => req)).toEqual([
+      { profile: "a", seedOnboardingCompleted: true },
+      { profile: "b", seedOnboardingCompleted: true },
+      { profile: "c", seedOnboardingCompleted: true },
+    ]);
+  });
+
   it("multiple path: provisions N paired profiles in sequence", async () => {
     const mock = makeApi();
     const created = await provisionPairedProfiles(mock.api, [

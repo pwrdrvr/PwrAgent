@@ -133,6 +133,58 @@ describe("profile IPC helpers", () => {
     }
   });
 
+  it("createDesktopPwrAgentProfile without seedOnboardingCompleted leaves the new profile ungated", async () => {
+    // Default behavior (Settings → Profiles, `PWRAGENT_PROFILE=<new>`,
+    // any non-wizard creation path): new profile gets onboarding gated
+    // per #500 so the wizard auto-fires on first open.
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    const response = createDesktopPwrAgentProfile({ profile: "work" });
+    expect(response.created).toBe(true);
+    const configPath = path.join(root, "profiles", "work", "config.toml");
+    // ensureNamedProfileExists writes the default `completed = false`.
+    // We verify here that the optional seed flag, when absent, does NOT
+    // flip that to true.
+    const contents = fs.existsSync(configPath)
+      ? fs.readFileSync(configPath, "utf8")
+      : "";
+    expect(contents).not.toContain("completed = true");
+    expect(contents).not.toContain('completed_source = "wizard"');
+  });
+
+  it("createDesktopPwrAgentProfile with seedOnboardingCompleted=true marks the new profile as wizard-completed", async () => {
+    // Wizard's Isolated + Multiple path: the operator just went through
+    // the wizard to create this profile, so it should NOT re-fire the
+    // wizard when they switch into it.
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { createDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    createDesktopPwrAgentProfile({
+      profile: "pwragent",
+      seedOnboardingCompleted: true,
+    });
+
+    const configPath = path.join(root, "profiles", "pwragent", "config.toml");
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("completed = true");
+    expect(contents).toContain('completed_source = "wizard"');
+  });
+
   it("keeps listing profiles when an inactive profile config is malformed", async () => {
     const root = createRoot();
     const env = {

@@ -308,8 +308,36 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         // to Settings → Profiles — we don't fire N SSO browser windows
         // mid-wizard. See `provisionPairedProfiles` for the IPC sequence
         // and best-effort error handling.
+        //
+        // After the provisioning loop, auto-switch the operator INTO the
+        // newly-created profile (the first one for Multiple). The wizard
+        // was running on the operator's *original* session profile
+        // (typically `default`), but the whole point of Isolated/Multiple
+        // is "I want to work in a different profile" — landing the
+        // operator there at Finish closes that loop. The created
+        // profiles have `onboarding.completed = true` already seeded
+        // (see `provisionPairedProfiles`), so the wizard does NOT
+        // re-fire when the new window opens. Best-effort: a missing
+        // `openPwrAgentProfile` IPC just leaves the operator in the
+        // original session — they can switch later from the Profiles
+        // menu.
         if (codexProfileModel !== "shared") {
-          await provisionPairedProfiles(props.desktopApi, codexProfileNames);
+          const created = await provisionPairedProfiles(
+            props.desktopApi,
+            codexProfileNames,
+          );
+          const switchTo = created[0];
+          if (switchTo && props.desktopApi?.openPwrAgentProfile) {
+            try {
+              await props.desktopApi.openPwrAgentProfile({ profile: switchTo });
+            } catch (caught) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `Onboarding: failed to auto-switch into "${switchTo}"`,
+                caught,
+              );
+            }
+          }
         }
       } finally {
         setSubmitting(false);

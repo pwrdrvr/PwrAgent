@@ -44,7 +44,14 @@ export async function provisionPairedProfiles(
     const name = raw.trim();
     if (!isValidProfileName(name)) continue;
     try {
-      await api.createPwrAgentProfile({ profile: name });
+      await api.createPwrAgentProfile({
+        profile: name,
+        // The operator went through the wizard to create this profile;
+        // don't re-fire the wizard the moment they switch into it.
+        // The flag is honored by the main-process handler in
+        // `apps/desktop/src/main/ipc/profiles.ts`.
+        seedOnboardingCompleted: true,
+      });
       await api.createCodexAuthProfile({ profile: name });
       await api.setPwrAgentProfileCodexProfile({
         profile: name,

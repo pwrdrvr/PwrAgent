@@ -171,6 +171,22 @@ export function createDesktopPwrAgentProfile(
     throw new Error(`Invalid profile name "${profile}".`);
   }
   const result = ensureNamedProfileExists(profile);
+
+  // First-run wizard path: when the wizard provisions a paired profile
+  // (Isolated or Multiple mode), the operator has *just* gone through
+  // onboarding to create this profile. Seed `onboarding.completed =
+  // true` on the new profile's config so the wizard doesn't auto-fire
+  // again the moment the operator switches into it. The default of
+  // `false` (per #500) still applies to profiles created from any
+  // other surface (Settings → Profiles, `PWRAGENT_PROFILE=<new>`, etc.).
+  if (request.seedOnboardingCompleted) {
+    applyDesktopSettingsPatch(
+      resolveDesktopConfigPath({ cliProfile: profile }),
+      {
+        onboarding: { completed: true, completedSource: "wizard" },
+      },
+    );
+  }
   return {
     profile,
     profileDir: result.profileDir,

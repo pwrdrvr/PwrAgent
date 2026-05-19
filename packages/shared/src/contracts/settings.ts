@@ -729,6 +729,18 @@ export type OpenDesktopPwrAgentProfileResponse = {
 
 export type CreateDesktopPwrAgentProfileRequest = {
   profile: string;
+  /**
+   * When `true`, seed `[onboarding] completed = true` +
+   * `completed_source = "wizard"` into the newly-created profile's
+   * `config.toml`. The first-run wizard uses this when provisioning
+   * paired profiles so the operator doesn't get re-onboarded the
+   * moment they switch into the freshly-created profile — they just
+   * went through the wizard to *create* it.
+   *
+   * Default: false (current behavior — new profiles start ungated
+   * and the wizard auto-fires on their first open per #500).
+   */
+  seedOnboardingCompleted?: boolean;
 };
 
 export type CreateDesktopPwrAgentProfileResponse = {
