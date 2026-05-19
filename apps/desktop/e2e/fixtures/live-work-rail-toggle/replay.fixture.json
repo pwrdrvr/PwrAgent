@@ -1,0 +1,123 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "live-work-rail-toggle",
+    "threadId": "thread-live-work-rail-toggle"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-work-rail-toggle",
+          "title": "LiveWorkRail chevron toggle replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded turn/diff/updated lifecycle for the rail collapse regression",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next rail check."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next rail check."
+          }
+        ],
+        "lastAssistantMessage": "Ready for the next rail check.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-live-work-rail-toggle",
+        "turnId": "turn-live-work-1"
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-live-work-rail-toggle",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-live-work-rail-toggle",
+          "turn": {
+            "id": "turn-live-work-1",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-diff-updated-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/diff/updated",
+        "params": {
+          "threadId": "thread-live-work-rail-toggle",
+          "turnId": "turn-live-work-1",
+          "diff": "diff --git a/apps/desktop/AGENTS.md b/apps/desktop/AGENTS.md\n--- a/apps/desktop/AGENTS.md\n+++ b/apps/desktop/AGENTS.md\n@@ -1,2 +1,5 @@\n existing line\n+a new line\n+another new line\n+third new line\n second existing line\ndiff --git a/apps/desktop/README.md b/apps/desktop/README.md\n--- a/apps/desktop/README.md\n+++ b/apps/desktop/README.md\n@@ -1,3 +1,3 @@\n keep\n-old line\n+new line\n keep\n"
+        }
+      }
+    }
+  ]
+}
