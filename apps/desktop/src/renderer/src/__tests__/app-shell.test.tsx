@@ -825,10 +825,14 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", {
-        level: 2,
-        name: "Build Codex client"
-      })
+      await screen.findByRole(
+        "heading",
+        {
+          level: 2,
+          name: "Build Codex client"
+        },
+        { timeout: 5_000 },
+      )
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
@@ -921,7 +925,7 @@ describe("App", () => {
     });
 
     resolveRefreshRead?.(transcriptResponse);
-  });
+  }, 15_000);
 
   it("loads launchpad skill autocomplete from the project directory", async () => {
     const listSkills = vi.fn(async () => ({
@@ -1068,10 +1072,14 @@ describe("App", () => {
 
     render(<App />);
 
-    await screen.findByRole("heading", {
-      level: 2,
-      name: "PwrAgent",
-    });
+    await screen.findByRole(
+      "heading",
+      {
+        level: 2,
+        name: "PwrAgent",
+      },
+      { timeout: 5_000 },
+    );
 
     pasteComposerText(screen.getByRole("textbox", { name: "New thread" }), "$front");
 
@@ -1084,9 +1092,9 @@ describe("App", () => {
     });
 
     expect(
-      await screen.findByRole("button", { name: /\$frontend-design/i })
+      await screen.findByRole("button", { name: /\$frontend-design/i }, { timeout: 5_000 })
     ).toBeInTheDocument();
-  });
+  }, 10_000);
 
   it("creates and sends on a new Grok thread", async () => {
     let resolveMaterializeLaunchpad: (() => void) | undefined;

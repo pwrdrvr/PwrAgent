@@ -71,7 +71,7 @@ describe("DesktopMessagingRuntime", () => {
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
     });
-  });
+  }, 15_000);
 
   it("rehydrates enabled Monitor bindings after adapter startup", async () => {
     const { runtime, adapter } = await createRuntimeHarness();

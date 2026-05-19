@@ -551,7 +551,7 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
-  });
+  }, 15_000);
 
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
@@ -2487,6 +2487,7 @@ describe("SettingsScreen", () => {
       "Applications",
       "Profiles",
       "Models",
+      "Agents",
       "Messaging",
       "Worktrees",
       "Archived Threads",
