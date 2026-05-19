@@ -809,6 +809,35 @@ export class SqliteOverlayStore {
     return row ? JSON.parse(row.payload) : undefined;
   }
 
+  /**
+   * Returns every thread overlay whose JSON payload mentions
+   * `codexEnvironmentRuntime`. The substring filter is done in SQL so a
+   * large `threads` table with mostly non-Codex rows doesn't pay the
+   * JSON.parse cost. Used by the startup cleanup pass that normalises
+   * prior-session env-action state.
+   */
+  async listThreadOverlaysWithCodexEnvironmentRuntime(): Promise<
+    ThreadOverlayState[]
+  > {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM threads WHERE payload LIKE '%"codexEnvironmentRuntime"%'`,
+      )
+      .all() as Array<{ payload: string }>;
+    const results: ThreadOverlayState[] = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as ThreadOverlayState;
+        if (parsed.codexEnvironmentRuntime) {
+          results.push(parsed);
+        }
+      } catch {
+        // Defensive: skip malformed rows rather than abort the whole scan.
+      }
+    }
+    return results;
+  }
+
   private putThread(threadKey: string, state: ThreadOverlayState): void {
     // Queue-only fields are registry-memory state; never persist them.
     // They reset to undefined on app restart by design.
@@ -966,4 +995,5 @@ export type OverlayStoreLike = Pick<
   | "resetDirectoryLaunchpad"
 > & {
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
+  listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
 };

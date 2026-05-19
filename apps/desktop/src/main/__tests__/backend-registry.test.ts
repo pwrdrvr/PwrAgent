@@ -195,6 +195,11 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    listThreadOverlaysWithCodexEnvironmentRuntime: async () => {
+      return Array.from(overlays.values()).filter(
+        (overlay) => overlay.codexEnvironmentRuntime !== undefined,
+      );
+    },
     setThreadExpectedBranch: async ({
       backend,
       threadId,
@@ -2922,8 +2927,13 @@ command = '''printf action-ran > ${outputPath}'''
         }),
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
-          actionName: "Dev - Messaging",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "dev-messaging",
+              actionName: "Dev - Messaging",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
@@ -2994,8 +3004,13 @@ command = '''printf action-ran > ${outputPath}'''
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
           cwd: worktreePath,
-          actionName: "Capture CWD",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "capture-cwd",
+              actionName: "Capture CWD",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(
@@ -3078,8 +3093,13 @@ command = '''printf action-ran > ${outputPath}'''
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
           cwd: localPath,
-          actionName: "Capture CWD",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "capture-cwd",
+              actionName: "Capture CWD",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(
@@ -3144,15 +3164,377 @@ command = '''printf action-ran > ${outputPath}'''
         }),
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
-          actionId: "dev-messaging",
-          actionName: "Dev - Messaging",
-          actionCommand: "pnpm dev",
-          actionStatus: "failed",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "dev-messaging",
+              actionName: "Dev - Messaging",
+              command: "pnpm dev",
+              status: "failed",
+            }),
+          ],
         },
       });
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("attributes output to the right run when two env actions run concurrently on the same thread", async () => {
+    // Multi-instance regression test: Start + Test (or E2E + Unit) workflows
+    // require independent run tracking, otherwise a second concurrent run
+    // would overwrite the first's overlay entry and the first run's output
+    // would disappear.
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-parallel-"));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: root,
+            setupEnabled: false,
+            actions: [
+              {
+                // Print a marker to stdout so the captured output (which
+                // gets attributed to the run via onDetachedExit) has a
+                // deterministic value to assert on. A small sleep makes
+                // the two children genuinely overlap in time.
+                id: "action-a",
+                name: "Action A",
+                command: "sleep 0.2 && printf 'A-output-marker'",
+              },
+              {
+                id: "action-b",
+                name: "Action B",
+                command: "sleep 0.2 && printf 'B-output-marker'",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      // Fire both run requests without awaiting either, so the spawn paths
+      // and their detached children interleave.
+      const [resultA, resultB] = await Promise.all([
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "action-a",
+        }),
+        registry.runCodexEnvironmentAction({
+          backend: "codex",
+          threadId: "thread-1",
+          actionId: "action-b",
+        }),
+      ]);
+
+      // Each invocation's return value should carry its own runId.
+      const runIdA = resultA.codexEnvironmentRuntime?.actionRuns?.find(
+        (run) => run.actionId === "action-a",
+      )?.runId;
+      const runIdB = resultB.codexEnvironmentRuntime?.actionRuns?.find(
+        (run) => run.actionId === "action-b",
+      )?.runId;
+      expect(runIdA).toBeTruthy();
+      expect(runIdB).toBeTruthy();
+      expect(runIdA).not.toBe(runIdB);
+
+      // After both detached children exit, the overlay's actionRuns should
+      // contain both entries, each with its own captured output. Poll
+      // until the exit + output handlers have both fired and persisted.
+      const deadline = Date.now() + 10_000;
+      let lastSnapshot: ReadonlyArray<unknown> | undefined;
+      let lastError: string | undefined;
+      while (Date.now() < deadline) {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        });
+        const runs = overlay?.codexEnvironmentRuntime?.actionRuns ?? [];
+        lastSnapshot = runs;
+        const a = runs.find((run) => run.actionId === "action-a");
+        const b = runs.find((run) => run.actionId === "action-b");
+        if (
+          a?.status === "exited" &&
+          b?.status === "exited" &&
+          a.output === "A-output-marker" &&
+          b.output === "B-output-marker"
+        ) {
+          // Sanity-check the runId attribution: each invocation's return
+          // value's run should match the overlay's persisted entry.
+          expect(a.runId).toBe(runIdA);
+          expect(b.runId).toBe(runIdB);
+          return;
+        }
+        lastError = `a.status=${a?.status} b.status=${b?.status} a.output=${JSON.stringify(a?.output)} b.output=${JSON.stringify(b?.output)}`;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(
+        `concurrent runs did not settle in time. last snapshot: ${JSON.stringify(lastSnapshot)} (${lastError ?? "no probe"})`,
+      );
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("cleans up prior-session env-action runs on startup", async () => {
+    // Before the cleanup pass: an overlay row from a previous app launch
+    // carries a "started" run that's effectively a zombie (the child died
+    // when the parent exited) plus completed runs whose ~36KB outputs no
+    // longer matter. After construction, those should be normalised:
+    // zombies become "failed" with output dropped; finished runs keep
+    // status but lose their stored output.
+    const fakeSessionStart = Date.now();
+    const longAgo = fakeSessionStart - 60_000; // 1 minute before this session
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-zombie": {
+          backend: "codex",
+          threadId: "thread-zombie",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: "/tmp/x",
+            setupEnabled: false,
+            actions: [],
+            actionRuns: [
+              {
+                runId: "old-zombie",
+                actionId: "dev",
+                actionName: "Dev",
+                command: "pnpm dev",
+                status: "started",
+                startedAt: longAgo,
+                pid: 12345,
+                output: "a lot of stale output bytes that nobody will read",
+              },
+            ],
+          },
+        },
+        "codex:thread-finished": {
+          backend: "codex",
+          threadId: "thread-finished",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: "/tmp/y",
+            setupEnabled: false,
+            actions: [],
+            actionRuns: [
+              {
+                runId: "old-exited",
+                actionId: "test",
+                actionName: "Test",
+                command: "pnpm test",
+                status: "exited",
+                startedAt: longAgo,
+                exitedAt: longAgo + 5_000,
+                exitCode: 0,
+                durationMs: 5_000,
+                output: "build done\nready\n…lots more bytes…",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      // The cleanup runs fire-and-forget in the constructor; poll until
+      // the persisted overlay reflects the post-cleanup shape.
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const zombie = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-zombie",
+        });
+        const finished = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-finished",
+        });
+        const zombieRun = zombie?.codexEnvironmentRuntime?.actionRuns?.[0];
+        const finishedRun = finished?.codexEnvironmentRuntime?.actionRuns?.[0];
+        if (
+          zombieRun?.status === "failed" &&
+          zombieRun.output === undefined &&
+          finishedRun?.status === "exited" &&
+          finishedRun.output === undefined
+        ) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("startup cleanup did not normalise overlays in time");
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("converts started env-action runs to failed even when timestamps are 0 or missing (legacy-synthesised data)", async () => {
+    // Reproduces the PwrAgent-killed-by-Computer-Use regression: an
+    // overlay row from a pre-actionStartedAt build (or any data where
+    // synthesis produces startedAt=0) used to slip past the
+    // timestamp-gated cleanup, then slip past the renderer's
+    // session-start filter, leaving the user with a perpetual
+    // "running" anchor and no Dismiss control. The fix is to convert
+    // any "started" run unconditionally — by lifecycle, anything we
+    // didn't start in this process lifetime is a zombie.
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-zombie-legacy": {
+          backend: "codex",
+          threadId: "thread-zombie-legacy",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: "/tmp/x",
+            setupEnabled: false,
+            actions: [],
+            actionRuns: [
+              {
+                runId: "legacy:dev:0",
+                actionId: "dev",
+                actionName: "Dev",
+                command: "pnpm dev",
+                status: "started",
+                startedAt: 0, // legacy-synthesised
+                pid: 72685,
+                output: "lots of stale bytes",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-zombie-legacy",
+        });
+        const run = overlay?.codexEnvironmentRuntime?.actionRuns?.[0];
+        if (run?.status === "failed" && run.output === undefined) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("cleanup did not convert legacy zombie run in time");
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("leaves current-session env-action runs untouched on startup", async () => {
+    // Negative case: a run whose startedAt is >= the registry's session
+    // start (which is captured at construction) must survive the cleanup
+    // pass intact. This guards against the cleanup accidentally clobbering
+    // runs that the auto-action emitted during the same session.
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: "/tmp/x",
+            setupEnabled: false,
+            actions: [],
+            // startedAt set well into the future so the cleanup is
+            // guaranteed to see this run as "fresh this session" no
+            // matter when the test executes.
+            actionRuns: [
+              {
+                runId: "fresh-run",
+                actionId: "dev",
+                actionName: "Dev",
+                command: "pnpm dev",
+                status: "started",
+                startedAt: Date.now() + 60_000,
+                pid: 99999,
+                output: "important live output",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      // Wait long enough for the cleanup pass to run.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      const run = overlay?.codexEnvironmentRuntime?.actionRuns?.[0];
+      expect(run?.status).toBe("started");
+      expect(run?.output).toBe("important live output");
+    } finally {
+      await registry.close();
     }
   });
 

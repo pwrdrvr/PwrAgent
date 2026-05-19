@@ -32,7 +32,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { isBranchDrifted } from "@pwragent/shared";
+import { isBranchDrifted, readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -207,9 +207,13 @@ function LaunchpadEnvironmentSetupPending(props: {
 function EnvironmentSetupFailureChoice(props: {
   archiving: boolean;
   continuing: boolean;
+  command?: string;
+  cwd?: string;
   error?: string;
   environmentName: string;
+  exitCode?: number;
   hasWorktree: boolean;
+  output?: string;
   phase: "setup" | "action";
   onCleanup: () => void;
   onContinue: () => void | Promise<void>;
@@ -217,18 +221,53 @@ function EnvironmentSetupFailureChoice(props: {
   const label =
     props.phase === "action" ? "Environment action failed" : "Environment setup failed";
   const commandLabel = props.phase === "action" ? "action command" : "setup command";
+  const trimmedOutput = props.output?.trim();
+  const hasDetails =
+    Boolean(props.command?.trim()) ||
+    Boolean(trimmedOutput) ||
+    typeof props.exitCode === "number";
   return (
     <section className="environment-setup-choice" aria-label={label}>
-      <div>
-        <p className="eyebrow">{label}</p>
-        <h3>{props.environmentName}</h3>
-        <p>
-          {props.hasWorktree
-            ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
-            : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
-        </p>
-        {props.error ? (
-          <p className="environment-setup-choice__error">{props.error}</p>
+      <div className="environment-setup-choice__body">
+        <div className="environment-setup-choice__heading">
+          <p className="eyebrow">{label}</p>
+          <h3>{props.environmentName}</h3>
+          <p>
+            {props.hasWorktree
+              ? `The ${commandLabel} exited with an error. You can delete the new worktree and close this thread, or keep the thread open and fix it yourself or with agent assistance.`
+              : `The ${commandLabel} exited with an error. You can close this thread, or keep it open and fix it yourself or with agent assistance.`}
+          </p>
+          {props.error ? (
+            <p className="environment-setup-choice__error">{props.error}</p>
+          ) : null}
+        </div>
+        {hasDetails ? (
+          <details className="environment-setup-choice__details" open>
+            <summary>
+              Show command output
+              {typeof props.exitCode === "number" ? ` (exit ${props.exitCode})` : ""}
+            </summary>
+            {props.command?.trim() ? (
+              <div className="environment-setup-choice__field">
+                <div className="environment-setup-choice__field-label">Command</div>
+                <pre className="environment-setup-choice__pre">
+                  <code>{`$ ${props.command.trim()}`}</code>
+                </pre>
+              </div>
+            ) : null}
+            {props.cwd?.trim() ? (
+              <div className="environment-setup-choice__field">
+                <div className="environment-setup-choice__field-label">Path</div>
+                <code className="environment-setup-choice__path">{props.cwd}</code>
+              </div>
+            ) : null}
+            <div className="environment-setup-choice__field">
+              <div className="environment-setup-choice__field-label">Output</div>
+              <pre className="environment-setup-choice__pre environment-setup-choice__pre--output">
+                <code>{trimmedOutput || "(no output captured)"}</code>
+              </pre>
+            </div>
+          </details>
         ) : null}
       </div>
       <div className="environment-setup-choice__actions">
@@ -996,8 +1035,17 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.suppressBranchDriftDialog]);
   const selectedThreadSetupFailed =
     selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
-  const selectedThreadActionFailed =
-    selectedThread?.codexEnvironmentRuntime?.actionStatus === "failed";
+  // The setup-failure dialog only surfaces during launchpad materialise
+  // (messageCount === 0), where at most one auto-action runs. Look for
+  // the most recent failed run in actionRuns to drive the action-phase
+  // branch of the dialog.
+  const selectedThreadActionRuns = readCodexEnvironmentActionRuns(
+    selectedThread?.codexEnvironmentRuntime,
+  );
+  const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
+    .reverse()
+    .find((run) => run.status === "failed");
+  const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
   const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
@@ -1945,36 +1993,58 @@ export function ThreadView(props: ThreadViewProps) {
         onOpenMessagingActivity={props.onOpenMessagingActivity}
       />
 
-      {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
-        <EnvironmentSetupFailureChoice
-          archiving={setupFailureArchiving}
-          continuing={setupFailureContinuing}
-          environmentName={
-            selectedThread.codexEnvironmentRuntime?.environmentName ??
-            "Codex environment"
-          }
-          error={props.archiveThreadError ?? setupFailureContinueError}
-          hasWorktree={Boolean(selectedThreadWorktree)}
-          phase={selectedThreadEnvironmentFailurePhase}
-          onCleanup={() => {
-            if (!props.onArchiveThread) {
-              return;
-            }
-            setSetupFailureArchiving(true);
-            void props.onArchiveThread(selectedThread).finally(() => {
-              setSetupFailureArchiving(false);
-            });
-          }}
-          onContinue={continueAfterSetupFailure}
-        />
-      ) : null}
-
       <div
         className={`thread-view__layout${
           contextRailEffectivePinned ? " has-pinned-context-rail" : ""
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
       >
         <div className="thread-view__primary">
+          {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
+            <EnvironmentSetupFailureChoice
+              archiving={setupFailureArchiving}
+              continuing={setupFailureContinuing}
+              command={
+                selectedThreadEnvironmentFailurePhase === "action"
+                  ? selectedThreadLatestFailedActionRun?.command
+                  : selectedThread.codexEnvironmentRuntime?.setupCommand ??
+                    launchpadSetupProgress?.command
+              }
+              cwd={
+                selectedThread.codexEnvironmentRuntime?.cwd ??
+                launchpadSetupProgress?.cwd
+              }
+              environmentName={
+                selectedThread.codexEnvironmentRuntime?.environmentName ??
+                "Codex environment"
+              }
+              error={props.archiveThreadError ?? setupFailureContinueError}
+              exitCode={
+                selectedThreadEnvironmentFailurePhase === "setup"
+                  ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
+                    launchpadSetupProgress?.exitCode
+                  : undefined
+              }
+              hasWorktree={Boolean(selectedThreadWorktree)}
+              output={
+                selectedThreadEnvironmentFailurePhase === "setup"
+                  ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
+                    launchpadSetupProgress?.output
+                  : undefined
+              }
+              phase={selectedThreadEnvironmentFailurePhase}
+              onCleanup={() => {
+                if (!props.onArchiveThread) {
+                  return;
+                }
+                setSetupFailureArchiving(true);
+                void props.onArchiveThread(selectedThread).finally(() => {
+                  setSetupFailureArchiving(false);
+                });
+              }}
+              onContinue={continueAfterSetupFailure}
+            />
+          ) : null}
+
           <section className="transcript-panel" aria-label="Transcript">
             <TranscriptList
               entries={props.transcriptEntries}

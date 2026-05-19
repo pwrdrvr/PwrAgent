@@ -19,6 +19,8 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  CodexEnvironmentActionRun,
+  CodexThreadEnvironmentRuntime,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
@@ -30,6 +32,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -461,6 +464,253 @@ function QueuedImageAttachments(props: {
         </span>
       ) : null}
     </div>
+  );
+}
+
+const ENV_ACTION_OUTPUT_MAX_LINES = 500;
+
+function tailLines(text: string, maxLines: number): string {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  const dropped = lines.length - maxLines;
+  return [
+    `[…${dropped} earlier lines truncated]`,
+    ...lines.slice(-maxLines),
+  ].join("\n");
+}
+
+// Exported for unit testing; the existing call sites import via the
+// in-file identifier.
+export function formatDurationMs(
+  ms?: number,
+  options?: { coarseAfterMinute?: boolean },
+): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  if (ms < 1_000) return `${Math.round(ms)}ms`;
+  // Always integer seconds — the previous `toFixed(1)` for elapsed < 10s
+  // produced "0.9s" / "1.9s" displays that kept changing the last digit
+  // every render even when the second hadn't actually advanced.
+  const totalSeconds = Math.round(ms / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  // Convert via totalSeconds rather than `Math.round(seconds % 60)`,
+  // which would have flipped `seconds=119.5` into `"1m 60s"` because of
+  // half-up rounding at the 60-second boundary.
+  const minutes = Math.floor(totalSeconds / 60);
+  // For live counters (e.g., the "running for Xm" anchor meta),
+  // coarseAfterMinute drops the seconds portion entirely past 1m so
+  // the display only changes on minute boundaries — otherwise the
+  // ticking "Xm Ys" with sub-minute updates was a distracting noise
+  // floor for long-running actions like `pnpm dev`. Static one-shot
+  // displays (e.g., "ran 2m 30s" on an already-exited run) leave the
+  // option off and keep full precision since the value never changes
+  // after first paint.
+  if (options?.coarseAfterMinute) return `${minutes}m`;
+  const remainder = totalSeconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+/**
+ * Set of run identities the user has explicitly dismissed in this session.
+ * Module-level so it survives Composer remounts (thread switches), but
+ * cleared on page reload — fresh runs always show, since each run gets a
+ * new runId on the server.
+ */
+const dismissedEnvActionAnchorKeys = new Set<string>();
+
+/**
+ * Approximate moment the renderer started this session. Runs whose latest
+ * activity timestamp predates this are treated as historical (persisted
+ * from a prior app launch) and not surfaced — otherwise the user would
+ * have to re-dismiss the same finished run on every restart. The
+ * persisted fields stay on the runtime so logs and a future "show last
+ * run" affordance can still inspect them.
+ */
+const envActionAnchorSessionStartedAt = Date.now();
+
+// Exported solely so the list filter + dismiss machinery can be unit-
+// tested without standing up the full Composer; consumers should still
+// reach the anchor through the Composer.
+export function EnvActionAnchorList(props: {
+  runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
+}): ReactNode {
+  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Tiered tick cadence for the per-run "running for X" meta:
+  //   < 1 min → tick every 1s   (seconds digit moves every second;
+  //                              format prints "Xs")
+  //   ≥ 1 min → tick every 30s  (display switches to coarse "Xm" with
+  //                              no seconds; we only need the tick to
+  //                              catch each minute boundary within
+  //                              ~30s, which is below user-perceived
+  //                              staleness for a minute-granularity
+  //                              display. Avoids the "distracting
+  //                              every-5s text-change" issue.)
+  // Single shared timer across all started runs on the thread; the
+  // interval re-arms when the longest-running run crosses the 1-min
+  // boundary.
+  const tickIntervalMs = useMemo(() => {
+    let maxElapsed = -1;
+    for (const run of runs) {
+      if (run.status !== "started") continue;
+      const startedAt = run.startedAt ?? Date.now();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > maxElapsed) maxElapsed = elapsed;
+    }
+    if (maxElapsed < 0) return 0; // no running runs → no timer
+    if (maxElapsed < 60_000) return 1_000;
+    return 30_000;
+  }, [runs]);
+  const [, setElapsedTick] = useState(0);
+  useEffect(() => {
+    if (!tickIntervalMs) return undefined;
+    const handle = setInterval(() => {
+      setElapsedTick((tick) => tick + 1);
+    }, tickIntervalMs);
+    return () => clearInterval(handle);
+  }, [tickIntervalMs]);
+  // Bumped after dismissal to force a re-render (the dismissed-set lives
+  // outside React state).
+  const [, setDismissTick] = useState(0);
+
+  const visible = runs.filter((run) => {
+    if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
+    const latestActivityAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
+    // Anything not started during this renderer session is treated as
+    // historical / zombie and hidden. Note: the `< envActionAnchorSessionStartedAt`
+    // check catches runs with timestamps that predate this session AND
+    // runs with missing/zero timestamps (legacy overlay rows from before
+    // actionStartedAt existed synthesise startedAt=0 via
+    // readCodexEnvironmentActionRuns). The earlier `latestActivityAt > 0`
+    // guard let those legacy entries slip through, leaving the user with
+    // an undismissable "running" zombie after an app crash — see the
+    // PwrAgent termination repro in PR #505 review.
+    if (latestActivityAt < envActionAnchorSessionStartedAt) {
+      return false;
+    }
+    return true;
+  });
+  if (visible.length === 0) return null;
+
+  return (
+    <>
+      {visible.map((run) => (
+        <EnvActionAnchorEntry
+          key={run.runId}
+          run={run}
+          environmentName={props.runtime?.environmentName}
+          onDismiss={() => {
+            dismissedEnvActionAnchorKeys.add(run.runId);
+            setDismissTick((tick) => tick + 1);
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// Exported solely so the entry can be unit-tested without standing up the
+// full Composer; consumers should still go through EnvActionAnchorList.
+export function EnvActionAnchorEntry(props: {
+  run: CodexEnvironmentActionRun;
+  environmentName: string | undefined;
+  onDismiss: () => void;
+}): ReactNode {
+  const { run } = props;
+  const status = run.status;
+  const label =
+    status === "started"
+      ? "Env action running"
+      : status === "exited"
+        ? "Env action exited"
+        : "Env action failed";
+
+  const meta: string[] = [];
+  if (run.pid) meta.push(`pid ${run.pid}`);
+  if (status === "started" && run.startedAt) {
+    meta.push(
+      `running for ${formatDurationMs(Date.now() - run.startedAt, { coarseAfterMinute: true })}`,
+    );
+  }
+  if (status !== "started") {
+    if (typeof run.exitCode === "number") {
+      meta.push(`exit ${run.exitCode}`);
+    } else if (run.exitSignal) {
+      meta.push(`signal ${run.exitSignal}`);
+    }
+    if (run.durationMs) {
+      meta.push(`ran ${formatDurationMs(run.durationMs)}`);
+    }
+  }
+
+  const truncatedOutput = tailLines((run.output ?? "").trim(), ENV_ACTION_OUTPUT_MAX_LINES);
+  const modifier =
+    status === "failed"
+      ? "composer__queued--env-action-failed"
+      : status === "exited"
+        ? "composer__queued--env-action-exited"
+        : "composer__queued--env-action-running";
+
+  return (
+    <details
+      className={`composer__queued composer__queued--env-action ${modifier}`}
+      aria-label={label}
+    >
+      <summary className="composer__queued-env-action-summary">
+        <span
+          className="composer__queued-env-action-chevron"
+          aria-hidden="true"
+        />
+        <span className="composer__queued-env-action-summary-text">
+          <span className="composer__queued-label">{label}</span>
+          <span className="composer__queued-text">
+            {run.actionName}
+            {props.environmentName ? ` · ${props.environmentName}` : ""}
+            {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
+          </span>
+        </span>
+        <button
+          className="composer__secondary-action composer__queued-env-action-dismiss"
+          type="button"
+          onClick={(event) => {
+            // Prevent the click from toggling the surrounding <details>.
+            event.preventDefault();
+            event.stopPropagation();
+            props.onDismiss();
+          }}
+        >
+          Dismiss
+        </button>
+      </summary>
+      <div className="composer__queued-env-action-body">
+        {run.command ? (
+          <div className="composer__queued-env-action-section">
+            <div className="composer__queued-env-action-section-label">
+              Command
+            </div>
+            <pre className="composer__queued-env-action-command-block">
+              <code>$ {run.command}</code>
+            </pre>
+          </div>
+        ) : null}
+        <div className="composer__queued-env-action-section">
+          <div className="composer__queued-env-action-section-label">
+            Output
+            {truncatedOutput
+              ? ` · ${truncatedOutput.split("\n").length} line${
+                  truncatedOutput.split("\n").length === 1 ? "" : "s"
+                }`
+              : ""}
+          </div>
+          <pre className="composer__queued-env-action-output">
+            <code>
+              {truncatedOutput ||
+                (status === "started"
+                  ? "(no output yet — waiting for the command to print something)"
+                  : "(no output captured)")}
+            </code>
+          </pre>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -3712,6 +3962,8 @@ export function Composer(props: ComposerProps) {
           conveys the action prompt visually. Stacking another header
           above an input that already names itself was redundant
           chrome. */}
+
+      <EnvActionAnchorList runtime={props.thread?.codexEnvironmentRuntime} />
 
       {pendingSteer ? (
         <div

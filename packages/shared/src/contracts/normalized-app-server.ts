@@ -124,6 +124,30 @@ export type CodexEnvironmentAction = {
   command: string;
 };
 
+/**
+ * A single invocation of a Codex environment action. Multiple runs can be
+ * alive at once on the same thread (e.g. "Start" + "E2E Tests" + "Unit
+ * Tests" running in parallel). Each run has a unique `runId` so output
+ * snapshots and exit events can be attributed to the right invocation
+ * even when the run order interleaves.
+ */
+export type CodexEnvironmentActionRun = {
+  /** Unique per invocation. Generated at action-start time in the backend. */
+  runId: string;
+  /** Which configured action this is a run of (matches CodexEnvironmentAction.id). */
+  actionId: string;
+  actionName: string;
+  command: string;
+  status: "started" | "exited" | "failed";
+  pid?: number;
+  startedAt: number;
+  exitedAt?: number;
+  exitCode?: number;
+  exitSignal?: string;
+  durationMs?: number;
+  output?: string;
+};
+
 export type CodexThreadEnvironmentRuntime = {
   environmentId: string;
   environmentName: string;
@@ -143,13 +167,48 @@ export type CodexThreadEnvironmentRuntime = {
   setupExitCode?: number;
   setupDurationMs?: number;
   actions?: CodexEnvironmentAction[];
-  actionId?: string;
-  actionName?: string;
-  actionCommand?: string;
-  actionStatus?: "started" | "failed";
-  actionPid?: number;
+  /**
+   * Live + recently-finished action invocations on this thread, oldest
+   * first. Multiple runs can be present simultaneously when parallel
+   * actions (Start + Test, E2E + Unit, etc.) are kicked off. Capped
+   * server-side; oldest non-running entries are evicted first when the
+   * cap is exceeded.
+   */
+  actionRuns?: CodexEnvironmentActionRun[];
   sourcePath?: string;
+
+  // --- Legacy fields, preserved for read-compatibility with overlay rows
+  // persisted before the multi-instance refactor. NEW code MUST NOT read
+  // these; on read, BackendRegistry normalises them into a synthesised
+  // single-element actionRuns array. They are not written by current
+  // code, so they will eventually disappear from disk as runtimes get
+  // rewritten.
+  /** @deprecated read via `actionRuns` */
+  actionId?: string;
+  /** @deprecated read via `actionRuns` */
+  actionName?: string;
+  /** @deprecated read via `actionRuns` */
+  actionCommand?: string;
+  /** @deprecated read via `actionRuns` */
+  actionStatus?: "started" | "exited" | "failed";
+  /** @deprecated read via `actionRuns` */
+  actionPid?: number;
+  /** @deprecated read via `actionRuns` */
+  actionStartedAt?: number;
+  /** @deprecated read via `actionRuns` */
+  actionExitedAt?: number;
+  /** @deprecated read via `actionRuns` */
+  actionExitCode?: number;
+  /** @deprecated read via `actionRuns` */
+  actionExitSignal?: string;
+  /** @deprecated read via `actionRuns` */
+  actionDurationMs?: number;
+  /** @deprecated read via `actionRuns` */
+  actionOutput?: string;
 };
+
+/** Maximum entries kept in `actionRuns`. Running entries are never evicted. */
+export const CODEX_ENVIRONMENT_ACTION_RUNS_MAX = 10;
 
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";

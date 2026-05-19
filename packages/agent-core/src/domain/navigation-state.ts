@@ -314,6 +314,30 @@ export function buildNavigationSnapshotHash(params: {
             actionCommand: thread.codexEnvironmentRuntime.actionCommand ?? null,
             actionStatus: thread.codexEnvironmentRuntime.actionStatus ?? null,
             actionPid: thread.codexEnvironmentRuntime.actionPid ?? null,
+            // Multi-instance env-action runs (PR #505). Each run's
+            // identity + lifecycle fields contribute to the hash so the
+            // navigation snapshot invalidates when any run starts, gets
+            // a new output snapshot, or exits.
+            actionRuns: (thread.codexEnvironmentRuntime.actionRuns ?? []).map(
+              (run) => ({
+                runId: run.runId,
+                actionId: run.actionId,
+                actionName: run.actionName,
+                command: run.command,
+                status: run.status,
+                pid: run.pid ?? null,
+                startedAt: run.startedAt,
+                exitedAt: run.exitedAt ?? null,
+                exitCode: run.exitCode ?? null,
+                exitSignal: run.exitSignal ?? null,
+                durationMs: run.durationMs ?? null,
+                // Hash the output's length only — the actual bytes can
+                // be megabytes and hashing them on every snapshot would
+                // be wasteful. Length still flips the hash on each new
+                // chunk's overlay write so live-output renders refresh.
+                outputLength: run.output?.length ?? 0,
+              }),
+            ),
             sourcePath: thread.codexEnvironmentRuntime.sourcePath ?? null,
           }
         : null,

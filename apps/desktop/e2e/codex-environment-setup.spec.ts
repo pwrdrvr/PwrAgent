@@ -506,7 +506,11 @@ test("thread environment Run command uses the current cwd after workspace handof
             const thread = snapshot.threads.find(
               (candidate: { id: string }) => candidate.id === "thread-existing",
             );
-            return thread?.codexEnvironmentRuntime?.actionStatus ?? "missing";
+            const runs = thread?.codexEnvironmentRuntime?.actionRuns ?? [];
+            // Take the most recently started run's status, which is the
+            // one the Run-button click just kicked off. (Multi-instance
+            // refactor: see PR #505.)
+            return runs.at(-1)?.status ?? "missing";
           }),
         { timeout: 5_000 },
       )
