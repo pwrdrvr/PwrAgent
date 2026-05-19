@@ -513,7 +513,14 @@ function EnvActionAnchorList(props: {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
   // Re-render every second while ANY run is started, so the per-run
   // "running for Xs" meta keeps ticking. Cheaper than one timer per run.
-  const anyRunning = runs.some((run) => run.status === "started");
+  // useMemo stabilises the effect dependency so the interval isn't torn
+  // down and re-created on every render (props.runtime is a fresh object
+  // each upstream re-render, so `runs` is a fresh array reference even
+  // when its contents haven't changed).
+  const anyRunning = useMemo(
+    () => runs.some((run) => run.status === "started"),
+    [runs],
+  );
   const [, setElapsedTick] = useState(0);
   useEffect(() => {
     if (!anyRunning) return undefined;
@@ -554,7 +561,9 @@ function EnvActionAnchorList(props: {
   );
 }
 
-function EnvActionAnchorEntry(props: {
+// Exported solely so the entry can be unit-tested without standing up the
+// full Composer; consumers should still go through EnvActionAnchorList.
+export function EnvActionAnchorEntry(props: {
   run: CodexEnvironmentActionRun;
   environmentName: string | undefined;
   onDismiss: () => void;

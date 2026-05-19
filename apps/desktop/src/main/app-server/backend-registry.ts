@@ -1511,6 +1511,18 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  /**
+   * Per-thread async chain serialising read-modify-write of
+   * codexEnvironmentRuntime. Concurrent Run-button clicks and
+   * concurrent detached-child exit/output callbacks all funnel through
+   * this so two simultaneous overlay writes can't clobber each other.
+   * Keyed by `${backend}:${threadId}`. Cleared lazily when a chain
+   * settles and no later task has been queued on it.
+   */
+  private readonly codexEnvironmentRuntimeLocks = new Map<
+    string,
+    Promise<unknown>
+  >();
   private readonly attemptedTitleGenerations = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
@@ -1652,6 +1664,90 @@ export class DesktopBackendRegistry {
 
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
+
+    // Kick off a one-shot scan of persisted codexEnvironmentRuntime
+    // entries: zombie "started" runs from a prior session become
+    // "failed", and output bytes get cleared on anything finished
+    // before this session started. Fire-and-forget — the renderer's
+    // session-startedAt filter already hides stale entries from view,
+    // so this is purely about reclaiming sqlite bytes and tidying
+    // persisted state. Errors are swallowed; this can't break startup.
+    void this.cleanupStaleCodexEnvironmentRuntimes().catch((error) => {
+      backendRegistryLog.warn("codex-environment-startup-cleanup-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  /**
+   * Captured at registry construction. Action-run entries from before
+   * this moment are treated as historical: their `output` is shed and
+   * any "started" entries are downgraded to "failed", since the child
+   * process didn't survive the parent restart.
+   */
+  private readonly registrySessionStartedAt = Date.now();
+
+  private async cleanupStaleCodexEnvironmentRuntimes(): Promise<void> {
+    const lister = this.overlayStore.listThreadOverlaysWithCodexEnvironmentRuntime;
+    if (!lister) {
+      // Test overlay mocks or older overlay-store implementations may
+      // not expose the bulk reader. Skip cleanup silently.
+      return;
+    }
+    const overlays = await lister.call(this.overlayStore);
+    const sessionStartedAt = this.registrySessionStartedAt;
+    let cleanedThreads = 0;
+    let bytesShed = 0;
+    let zombiesConverted = 0;
+    for (const overlay of overlays) {
+      const runtime = overlay.codexEnvironmentRuntime;
+      if (!runtime) continue;
+      const runs = readCodexEnvironmentActionRuns(runtime);
+      if (runs.length === 0) continue;
+      let changed = false;
+      const nextRuns = runs.map((run) => {
+        const latestAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
+        if (latestAt === 0 || latestAt >= sessionStartedAt) {
+          return run;
+        }
+        changed = true;
+        bytesShed += run.output?.length ?? 0;
+        if (run.status === "started") {
+          zombiesConverted += 1;
+          return {
+            ...run,
+            status: "failed" as const,
+            output: undefined,
+            // Without an authoritative exit time, use startedAt so the
+            // duration math doesn't go negative or absurd.
+            exitedAt: run.exitedAt ?? run.startedAt ?? sessionStartedAt,
+            durationMs:
+              run.durationMs ??
+              Math.max(0, (run.exitedAt ?? sessionStartedAt) - (run.startedAt ?? 0)),
+          };
+        }
+        return { ...run, output: undefined };
+      });
+      if (!changed) continue;
+      cleanedThreads += 1;
+      const nextRuntime: CodexThreadEnvironmentRuntime = {
+        ...runtime,
+        actionRuns: nextRuns,
+      };
+      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+        backend: overlay.backend,
+        threadId: overlay.threadId,
+        codexEnvironmentRuntime: nextRuntime,
+      });
+    }
+    if (cleanedThreads > 0) {
+      backendRegistryLog.info("codex-environment-startup-cleanup", {
+        cleanedThreads,
+        zombiesConverted,
+        bytesShed,
+        sessionStartedAt,
+      });
+    }
   }
 
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void {
@@ -3550,84 +3646,95 @@ export class DesktopBackendRegistry {
       throw new Error("Codex environment actions are only available for Codex threads.");
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
-    const runtime = overlay?.codexEnvironmentRuntime;
-    if (!runtime) {
-      throw new Error("This thread does not have a selected Codex environment.");
-    }
+    // Serialise the read-modify-write under the per-thread lock so two
+    // concurrent Run-button clicks can't clobber each other's appended
+    // run entry.
+    return this.withCodexEnvironmentRuntimeLock(
+      request.backend,
+      request.threadId,
+      async () => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: request.backend,
+          threadId: request.threadId,
+        });
+        const runtime = overlay?.codexEnvironmentRuntime;
+        if (!runtime) {
+          throw new Error(
+            "This thread does not have a selected Codex environment.",
+          );
+        }
 
-    const currentCwd =
-      request.cwd?.trim() ||
-      (await this.resolveCodexThreadTurnCwd(request.threadId, overlay));
-    const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
-      currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
-      request.actionId,
-    );
-    const runId = randomUUID();
-    let nextRuntime: CodexThreadEnvironmentRuntime;
-    try {
-      nextRuntime = await startLocalCodexEnvironmentAction({
-        actionId: request.actionId,
-        runId,
-        commandRunner: this.codexEnvironmentCommandRunner,
-        env: this.codexEnvironmentCommandEnv,
-        runtime: runtimeForAction,
-        onDetachedExit: (event) => {
-          void this.handleCodexEnvironmentActionDetachedExit({
-            backend: request.backend,
-            threadId: request.threadId,
+        const currentCwd =
+          request.cwd?.trim() ||
+          (await this.resolveCodexThreadTurnCwd(request.threadId, overlay));
+        const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
+          currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
+          request.actionId,
+        );
+        const runId = randomUUID();
+        let nextRuntime: CodexThreadEnvironmentRuntime;
+        try {
+          nextRuntime = await startLocalCodexEnvironmentAction({
+            actionId: request.actionId,
             runId,
-            event,
+            commandRunner: this.codexEnvironmentCommandRunner,
+            env: this.codexEnvironmentCommandEnv,
+            runtime: runtimeForAction,
+            onDetachedExit: (event) => {
+              void this.handleCodexEnvironmentActionDetachedExit({
+                backend: request.backend,
+                threadId: request.threadId,
+                runId,
+                event,
+              });
+            },
+            onDetachedOutput: (event) => {
+              void this.handleCodexEnvironmentActionDetachedOutput({
+                backend: request.backend,
+                threadId: request.threadId,
+                runId,
+                event,
+              });
+            },
           });
-        },
-        onDetachedOutput: (event) => {
-          void this.handleCodexEnvironmentActionDetachedOutput({
-            backend: request.backend,
-            threadId: request.threadId,
-            runId,
-            event,
-          });
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof CodexEnvironmentStartupError &&
-        error.phase === "action"
-      ) {
+        } catch (error) {
+          if (
+            error instanceof CodexEnvironmentStartupError &&
+            error.phase === "action"
+          ) {
+            await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+              backend: request.backend,
+              threadId: request.threadId,
+              codexEnvironmentRuntime: error.runtime,
+            });
+            this.invalidateThreadListCache(request.backend);
+            await this.emitCodexEnvironmentRuntimeUpdated({
+              backend: request.backend,
+              threadId: request.threadId,
+              codexEnvironmentRuntime: error.runtime,
+            });
+          }
+          throw error;
+        }
         await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
           backend: request.backend,
           threadId: request.threadId,
-          codexEnvironmentRuntime: error.runtime,
+          codexEnvironmentRuntime: nextRuntime,
         });
         this.invalidateThreadListCache(request.backend);
         await this.emitCodexEnvironmentRuntimeUpdated({
           backend: request.backend,
           threadId: request.threadId,
-          codexEnvironmentRuntime: error.runtime,
+          codexEnvironmentRuntime: nextRuntime,
         });
-      }
-      throw error;
-    }
-    await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-      backend: request.backend,
-      threadId: request.threadId,
-      codexEnvironmentRuntime: nextRuntime,
-    });
-    this.invalidateThreadListCache(request.backend);
-    await this.emitCodexEnvironmentRuntimeUpdated({
-      backend: request.backend,
-      threadId: request.threadId,
-      codexEnvironmentRuntime: nextRuntime,
-    });
 
-    return {
-      backend: request.backend,
-      threadId: request.threadId,
-      codexEnvironmentRuntime: nextRuntime,
-    };
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          codexEnvironmentRuntime: nextRuntime,
+        };
+      },
+    );
   }
 
   private async refreshCodexEnvironmentRuntimeActions(
@@ -3742,6 +3849,42 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Serialise codexEnvironmentRuntime read-modify-write operations
+   * per-thread. Without this, two concurrent run-button clicks (or two
+   * detached-child exit callbacks firing simultaneously) both read the
+   * same overlay state, each patch their own run, and the second writer
+   * silently overwrites the first.
+   */
+  private async withCodexEnvironmentRuntimeLock<T>(
+    backend: AppServerBackendKind,
+    threadId: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${backend}:${threadId}`;
+    const previous = this.codexEnvironmentRuntimeLocks.get(key) ?? Promise.resolve();
+    // Chain regardless of whether the previous task settled with success
+    // or failure — a single failed Run shouldn't poison the chain for
+    // subsequent Runs / exit handlers.
+    const next = previous.then(task, task);
+    // Track the swallowed-error form so future chains never reject when
+    // awaiting the previous link.
+    const tracked = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.codexEnvironmentRuntimeLocks.set(key, tracked);
+    try {
+      return await next;
+    } finally {
+      // Lazy cleanup: only drop the map entry if no later task got
+      // chained on this same slot while we were running.
+      if (this.codexEnvironmentRuntimeLocks.get(key) === tracked) {
+        this.codexEnvironmentRuntimeLocks.delete(key);
+      }
+    }
+  }
+
+  /**
    * Called when a detached env-action child (e.g., `pnpm dev` for the
    * PwrSnap run button) eventually exits. Patches the matching entry in
    * `codexEnvironmentRuntime.actionRuns` so the renderer's anchored
@@ -3758,60 +3901,71 @@ export class DesktopBackendRegistry {
     runId: string;
     event: CodexEnvironmentDetachedExit;
   }): Promise<void> {
-    try {
-      const overlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      const current = overlay?.codexEnvironmentRuntime;
-      if (!current) {
-        return;
-      }
-      const currentRuns = readCodexEnvironmentActionRuns(current);
-      if (!currentRuns.some((run) => run.runId === params.runId)) {
-        // The matching run has been evicted (cap exceeded) or this is a
-        // stale callback from a previous environment selection. Nothing
-        // to patch.
-        return;
-      }
-      const exitedSuccessfully =
-        params.event.exitCode === 0 && !params.event.exitSignal;
-      const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
-        kind: "patch",
-        runId: params.runId,
-        patch: {
-          status: exitedSuccessfully ? "exited" : "failed",
-          exitCode:
-            params.event.exitCode === null ? undefined : params.event.exitCode,
-          exitSignal: params.event.exitSignal ?? undefined,
-          durationMs: params.event.durationMs,
-          exitedAt: Date.now(),
-          output: params.event.output,
-        },
-      });
-      const next: CodexThreadEnvironmentRuntime = {
-        ...current,
-        actionRuns: nextRuns,
-      };
-      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-        backend: params.backend,
-        threadId: params.threadId,
-        codexEnvironmentRuntime: next,
-      });
-      this.invalidateThreadListCache(params.backend);
-      await this.emitCodexEnvironmentRuntimeUpdated({
-        backend: params.backend,
-        threadId: params.threadId,
-        codexEnvironmentRuntime: next,
-      });
-    } catch (error) {
-      backendRegistryLog.warn("codex-environment-action-exit-overlay-update-failed", {
-        backend: params.backend,
-        threadId: params.threadId,
-        runId: params.runId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await this.withCodexEnvironmentRuntimeLock(
+      params.backend,
+      params.threadId,
+      async () => {
+        try {
+          const overlay = await this.overlayStore.getThreadOverlayState({
+            backend: params.backend,
+            threadId: params.threadId,
+          });
+          const current = overlay?.codexEnvironmentRuntime;
+          if (!current) {
+            return;
+          }
+          const currentRuns = readCodexEnvironmentActionRuns(current);
+          if (!currentRuns.some((run) => run.runId === params.runId)) {
+            // The matching run has been evicted (cap exceeded) or this is
+            // a stale callback from a previous environment selection.
+            // Nothing to patch.
+            return;
+          }
+          const exitedSuccessfully =
+            params.event.exitCode === 0 && !params.event.exitSignal;
+          const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
+            kind: "patch",
+            runId: params.runId,
+            patch: {
+              status: exitedSuccessfully ? "exited" : "failed",
+              exitCode:
+                params.event.exitCode === null
+                  ? undefined
+                  : params.event.exitCode,
+              exitSignal: params.event.exitSignal ?? undefined,
+              durationMs: params.event.durationMs,
+              exitedAt: Date.now(),
+              output: params.event.output,
+            },
+          });
+          const next: CodexThreadEnvironmentRuntime = {
+            ...current,
+            actionRuns: nextRuns,
+          };
+          await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+            backend: params.backend,
+            threadId: params.threadId,
+            codexEnvironmentRuntime: next,
+          });
+          this.invalidateThreadListCache(params.backend);
+          await this.emitCodexEnvironmentRuntimeUpdated({
+            backend: params.backend,
+            threadId: params.threadId,
+            codexEnvironmentRuntime: next,
+          });
+        } catch (error) {
+          backendRegistryLog.warn(
+            "codex-environment-action-exit-overlay-update-failed",
+            {
+              backend: params.backend,
+              threadId: params.threadId,
+              runId: params.runId,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          );
+        }
+      },
+    );
   }
 
   /**
@@ -3827,56 +3981,62 @@ export class DesktopBackendRegistry {
     runId: string;
     event: CodexEnvironmentDetachedOutput;
   }): Promise<void> {
-    try {
-      const overlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      const current = overlay?.codexEnvironmentRuntime;
-      if (!current) {
-        return;
-      }
-      const currentRuns = readCodexEnvironmentActionRuns(current);
-      const matching = currentRuns.find((run) => run.runId === params.runId);
-      if (!matching) {
-        return;
-      }
-      // Skip the write+emit if the snapshot hasn't actually changed — keeps
-      // a quiet child from generating empty IPC noise.
-      if (matching.output === params.event.output) {
-        return;
-      }
-      const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
-        kind: "patch",
-        runId: params.runId,
-        patch: { output: params.event.output },
-      });
-      const next: CodexThreadEnvironmentRuntime = {
-        ...current,
-        actionRuns: nextRuns,
-      };
-      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-        backend: params.backend,
-        threadId: params.threadId,
-        codexEnvironmentRuntime: next,
-      });
-      this.invalidateThreadListCache(params.backend);
-      await this.emitCodexEnvironmentRuntimeUpdated({
-        backend: params.backend,
-        threadId: params.threadId,
-        codexEnvironmentRuntime: next,
-      });
-    } catch (error) {
-      backendRegistryLog.warn(
-        "codex-environment-action-output-overlay-update-failed",
-        {
-          backend: params.backend,
-          threadId: params.threadId,
-          runId: params.runId,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
+    await this.withCodexEnvironmentRuntimeLock(
+      params.backend,
+      params.threadId,
+      async () => {
+        try {
+          const overlay = await this.overlayStore.getThreadOverlayState({
+            backend: params.backend,
+            threadId: params.threadId,
+          });
+          const current = overlay?.codexEnvironmentRuntime;
+          if (!current) {
+            return;
+          }
+          const currentRuns = readCodexEnvironmentActionRuns(current);
+          const matching = currentRuns.find((run) => run.runId === params.runId);
+          if (!matching) {
+            return;
+          }
+          // Skip the write+emit if the snapshot hasn't actually changed —
+          // keeps a quiet child from generating empty IPC noise.
+          if (matching.output === params.event.output) {
+            return;
+          }
+          const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
+            kind: "patch",
+            runId: params.runId,
+            patch: { output: params.event.output },
+          });
+          const next: CodexThreadEnvironmentRuntime = {
+            ...current,
+            actionRuns: nextRuns,
+          };
+          await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+            backend: params.backend,
+            threadId: params.threadId,
+            codexEnvironmentRuntime: next,
+          });
+          this.invalidateThreadListCache(params.backend);
+          await this.emitCodexEnvironmentRuntimeUpdated({
+            backend: params.backend,
+            threadId: params.threadId,
+            codexEnvironmentRuntime: next,
+          });
+        } catch (error) {
+          backendRegistryLog.warn(
+            "codex-environment-action-output-overlay-update-failed",
+            {
+              backend: params.backend,
+              threadId: params.threadId,
+              runId: params.runId,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          );
+        }
+      },
+    );
   }
 
   async materializeDirectoryLaunchpad(
