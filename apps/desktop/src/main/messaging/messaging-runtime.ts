@@ -1943,10 +1943,7 @@ function buildMessagingInteractionMapperClient(
 function resolveGrokApiKeyForMessagingMapper(): string | undefined {
   try {
     return getDesktopSettingsService().resolveGrokApiKeySync();
-  } catch (error) {
-    messagingLog.warn("messaging interaction mapper api key unavailable", {
-      reason: error instanceof Error ? error.message : String(error),
-    });
+  } catch {
     return undefined;
   }
 }
