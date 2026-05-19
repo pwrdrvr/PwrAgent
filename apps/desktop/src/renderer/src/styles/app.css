@@ -4764,11 +4764,15 @@ textarea,
 
 .environment-setup-choice {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  margin: 0 22px 12px;
+  gap: 12px 18px;
+  margin: 12px 22px;
   padding: 14px 16px;
+  /* Stay inside the transcript column even when the context rail is pinned. */
+  max-width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--danger-border);
   border-radius: 8px;
   background: var(--danger-soft);
@@ -4776,7 +4780,7 @@ textarea,
 }
 
 .environment-setup-choice__body {
-  flex: 1 1 auto;
+  flex: 1 1 360px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -4806,6 +4810,8 @@ textarea,
 
 .environment-setup-choice__details {
   margin: 0;
+  width: 100%;
+  min-width: 0;
   border: 1px solid var(--surface-border);
   border-radius: 6px;
   background: var(--surface-raised);
@@ -4856,13 +4862,16 @@ textarea,
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
   overflow-x: auto;
+  /* Defensive: ensure the user can actually copy build output from the
+     dialog. Some upstream rules globally set user-select: none on chrome. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .environment-setup-choice__pre--output {
-  max-height: 280px;
+  max-height: 320px;
   overflow: auto;
 }
 
@@ -4871,13 +4880,16 @@ textarea,
   font-size: 12px;
   color: var(--text-secondary);
   word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .environment-setup-choice__actions {
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-self: flex-start;
   gap: 8px;
 }
 
@@ -7948,6 +7960,8 @@ textarea,
   color: var(--text-secondary);
   overflow-x: auto;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .composer__queued-env-action-details {
@@ -7973,7 +7987,7 @@ textarea,
 .composer__queued-env-action-output {
   margin: 0;
   padding: 6px 8px;
-  max-height: 260px;
+  max-height: 320px;
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--surface-border);
@@ -7982,8 +7996,9 @@ textarea,
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .composer__attachments {

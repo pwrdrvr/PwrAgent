@@ -1984,58 +1984,58 @@ export function ThreadView(props: ThreadViewProps) {
         onOpenMessagingActivity={props.onOpenMessagingActivity}
       />
 
-      {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
-        <EnvironmentSetupFailureChoice
-          archiving={setupFailureArchiving}
-          continuing={setupFailureContinuing}
-          command={
-            selectedThreadEnvironmentFailurePhase === "action"
-              ? selectedThread.codexEnvironmentRuntime?.actionCommand
-              : selectedThread.codexEnvironmentRuntime?.setupCommand ??
-                launchpadSetupProgress?.command
-          }
-          cwd={
-            selectedThread.codexEnvironmentRuntime?.cwd ??
-            launchpadSetupProgress?.cwd
-          }
-          environmentName={
-            selectedThread.codexEnvironmentRuntime?.environmentName ??
-            "Codex environment"
-          }
-          error={props.archiveThreadError ?? setupFailureContinueError}
-          exitCode={
-            selectedThreadEnvironmentFailurePhase === "setup"
-              ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
-                launchpadSetupProgress?.exitCode
-              : undefined
-          }
-          hasWorktree={Boolean(selectedThreadWorktree)}
-          output={
-            selectedThreadEnvironmentFailurePhase === "setup"
-              ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
-                launchpadSetupProgress?.output
-              : undefined
-          }
-          phase={selectedThreadEnvironmentFailurePhase}
-          onCleanup={() => {
-            if (!props.onArchiveThread) {
-              return;
-            }
-            setSetupFailureArchiving(true);
-            void props.onArchiveThread(selectedThread).finally(() => {
-              setSetupFailureArchiving(false);
-            });
-          }}
-          onContinue={continueAfterSetupFailure}
-        />
-      ) : null}
-
       <div
         className={`thread-view__layout${
           contextRailEffectivePinned ? " has-pinned-context-rail" : ""
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
       >
         <div className="thread-view__primary">
+          {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
+            <EnvironmentSetupFailureChoice
+              archiving={setupFailureArchiving}
+              continuing={setupFailureContinuing}
+              command={
+                selectedThreadEnvironmentFailurePhase === "action"
+                  ? selectedThread.codexEnvironmentRuntime?.actionCommand
+                  : selectedThread.codexEnvironmentRuntime?.setupCommand ??
+                    launchpadSetupProgress?.command
+              }
+              cwd={
+                selectedThread.codexEnvironmentRuntime?.cwd ??
+                launchpadSetupProgress?.cwd
+              }
+              environmentName={
+                selectedThread.codexEnvironmentRuntime?.environmentName ??
+                "Codex environment"
+              }
+              error={props.archiveThreadError ?? setupFailureContinueError}
+              exitCode={
+                selectedThreadEnvironmentFailurePhase === "setup"
+                  ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
+                    launchpadSetupProgress?.exitCode
+                  : undefined
+              }
+              hasWorktree={Boolean(selectedThreadWorktree)}
+              output={
+                selectedThreadEnvironmentFailurePhase === "setup"
+                  ? selectedThread.codexEnvironmentRuntime?.setupOutput ??
+                    launchpadSetupProgress?.output
+                  : undefined
+              }
+              phase={selectedThreadEnvironmentFailurePhase}
+              onCleanup={() => {
+                if (!props.onArchiveThread) {
+                  return;
+                }
+                setSetupFailureArchiving(true);
+                void props.onArchiveThread(selectedThread).finally(() => {
+                  setSetupFailureArchiving(false);
+                });
+              }}
+              onContinue={continueAfterSetupFailure}
+            />
+          ) : null}
+
           <section className="transcript-panel" aria-label="Transcript">
             <TranscriptList
               entries={props.transcriptEntries}
