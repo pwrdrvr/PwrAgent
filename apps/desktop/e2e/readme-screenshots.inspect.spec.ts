@@ -4,6 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type ElectronApplication } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
+
+// Resolved once per spec module from PWRAGENT_SCREENSHOT_THEME /
+// PWRAGENT_SCREENSHOT_DENSITY env vars (both optional). Defaults match
+// the production E2E defaults (theme=dark, density=mission-control) so
+// the committed PNGs stay pixel-stable when neither variable is set.
+// See `fixtures/screenshot-appearance.ts` for the env-var contract.
+const SCREENSHOT_APPEARANCE = resolveScreenshotAppearance();
 import {
   findLatestPairingEntryId,
   markPairingObserved,
@@ -127,6 +135,7 @@ test("recents-hero — populated Recents lens", async () => {
       "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -177,6 +186,7 @@ test("closed-by-default — Messaging Activity rejecting unauthorized inbound", 
       "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -384,6 +394,7 @@ test("messenger-status — Settings → Messaging surface", async () => {
       "fixtures/smoke/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {
@@ -494,6 +505,7 @@ test("pairing — Generate → observe → approve sequence (animated GIF)", asy
       "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
     // Pre-launch hook seeds a config.toml with `[messaging.telegram]
     // enabled = true` so the renderer's "Telegram → Enabled" toggle
     // reads as on and the Pairing field's Generate button isn't
@@ -634,6 +646,7 @@ test("bound-thread — thread row + detail with messenger chip", async () => {
       "fixtures/readme-recents-hero/replay.fixture.json",
     ),
     windowSize: WINDOW_SIZE,
+    appearance: SCREENSHOT_APPEARANCE,
   });
 
   try {

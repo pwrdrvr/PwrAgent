@@ -98,6 +98,36 @@ as its gate. See
 [`../../docs-site/assets/screenshots/DOCS_SITE_SHOT_LIST.md`](../../docs-site/assets/screenshots/DOCS_SITE_SHOT_LIST.md)
 for the shot list and what state each capture needs.
 
+### Capturing under a non-default theme or density
+
+Both screenshot pipelines honor two optional env vars that seed the
+launched profile's `[general.appearance]` block before Electron boots:
+
+- `PWRAGENT_SCREENSHOT_THEME` — `dark` (default), `light`, or `system`.
+- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default) or `compact`.
+
+Defaults match the committed PNGs (dark + mission-control), so omitting
+the variables leaves the existing pipeline pixel-stable. The pre-React
+bootstrap (main → preload → inline script in `index.html`) applies the
+matching `<html data-*>` attributes on the first paint, so no UI driving
+is required to flip the theme — just set the env var:
+
+```bash
+PWRAGENT_SCREENSHOT_THEME=light \
+  pnpm --filter @pwragent/desktop screenshot:readme
+```
+
+The wiring lives in
+[`e2e/fixtures/screenshot-appearance.ts`](e2e/fixtures/screenshot-appearance.ts)
+and is consumed by both inspect specs. The capability is intentionally
+scoped to the screenshot pipelines — production E2E keeps its dark
+default unconditionally so color-assertion tests stay deterministic on
+every CI runner.
+
+We do not currently regenerate the committed PNGs under light theme or
+ship them in the docs site. That's tracked separately under issue #508
+(theming v1 polish follow-up to #472).
+
 The script builds the desktop app, launches it headed against curated
 replay fixtures + state-seeded sqlite rows, takes the screenshots,
 then runs the **noise filter** (`filter-noise-screenshots.mjs`) to
