@@ -5951,20 +5951,20 @@ textarea,
   min-height: 0;
 }
 
+/* The `display: flex` rule above defeats the [hidden] attribute's
+   default `display: none` (same specificity, author wins over UA).
+   Without this, clicking the rail-level chevron toggled the React
+   state but the body never actually hid. Same fix for the per-file
+   diff container. */
+.live-work-rail__body[hidden],
+.live-work-rail__file-diff[hidden] {
+  display: none;
+}
+
 .live-work-rail__section {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.live-work-rail__section-heading {
-  margin: 0;
-  padding: 4px 6px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
 }
 
 .live-work-rail__file-list {
@@ -5998,11 +5998,22 @@ textarea,
   padding: 4px 6px;
   border: 0;
   border-radius: 4px;
-  background: transparent;
+  /* `--bg-panel` (not `--bg-panel-elevated`) so the row sits visually
+     INSIDE the rail card (which uses `--bg-panel-elevated`) instead
+     of blending flush with it. Required to be opaque for the sticky
+     overlay below — transparent would let diff text bleed through. */
+  background: var(--bg-panel);
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
   text-align: left;
+  /* Stay reachable while scrolling through an expanded file's diff
+     (#510). Sticky stacking is handled by the browser: when the next
+     file-toggle reaches top, it pushes the previous one out.
+     z-index sits above the diff body. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .live-work-rail__file-toggle:hover {

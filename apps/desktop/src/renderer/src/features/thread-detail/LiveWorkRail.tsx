@@ -37,8 +37,19 @@ export type LiveWorkRailProps = {
 };
 
 export function LiveWorkRail(props: LiveWorkRailProps) {
+  // Treat an editedFilesEntry as absent if none of its details carry a
+  // fileDiff — otherwise the rail title would claim "Edited N files,
+  // +A, -R" while the body had nothing to render below it (the gap
+  // would land on the user as "rail says something happened but the
+  // list is empty"). Same logic applied uniformly to title + body.
+  const editedFilesEntry =
+    props.editedFilesEntry &&
+    props.editedFilesEntry.details.some((detail) => detail.fileDiff)
+      ? props.editedFilesEntry
+      : undefined;
+
   const hasContent = Boolean(
-    props.planEntry || props.editedFilesEntry || props.changedFilesEntry,
+    props.planEntry || editedFilesEntry || props.changedFilesEntry,
   );
   const [collapsed, setCollapsed] = useState(false);
   const bodyId = useId();
@@ -47,14 +58,17 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
     return null;
   }
 
-  // Title is the comma-joined list of present section names — the rail
-  // is just an affordance for those sections, not a "Live work" / "Last
-  // turn" status surface (the pinned styling carries that signal).
+  // Title carries the full summary for each present section (e.g.
+  // "Edited 2 files, +5, -2 · Changed 1 file") joined by a midline
+  // dot so there's no redundant section heading inside the body.
+  // Plan delegates to TranscriptPlan's own header rendering — its
+  // contribution here is just the word "Plan" since the detail lives
+  // inside the section.
   const sectionLabels: string[] = [];
   if (props.planEntry) sectionLabels.push("Plan");
-  if (props.editedFilesEntry) sectionLabels.push("Edited Files");
-  if (props.changedFilesEntry) sectionLabels.push("Changed Files");
-  const railTitle = sectionLabels.join(", ");
+  if (editedFilesEntry) sectionLabels.push(editedFilesEntry.summary);
+  if (props.changedFilesEntry) sectionLabels.push(props.changedFilesEntry.summary);
+  const railTitle = sectionLabels.join(" · ");
   const railAriaLabel = props.pinned ? `${railTitle} (last turn)` : railTitle;
 
   const dockToggleLabel =
@@ -104,8 +118,8 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
           />
         ) : null}
 
-        {props.editedFilesEntry ? (
-          <EditedFilesSection entry={props.editedFilesEntry} />
+        {editedFilesEntry ? (
+          <EditedFilesSection entry={editedFilesEntry} />
         ) : null}
 
         {props.changedFilesEntry ? (
@@ -119,33 +133,26 @@ export function LiveWorkRail(props: LiveWorkRailProps) {
 function EditedFilesSection(props: {
   entry: AppServerThreadActivityEntry;
 }) {
-  const headingId = useId();
   const filesWithDiffs = props.entry.details.filter(
     (detail) => detail.fileDiff,
   );
-  const fileCount = filesWithDiffs.length;
-  const summaryLabel =
-    fileCount > 0
-      ? props.entry.summary
-      : `${props.entry.summary} (no file details)`;
+  if (filesWithDiffs.length === 0) {
+    return null;
+  }
 
+  // The cumulative summary (e.g. "Edited 2 files, +5, -2") lives in
+  // the rail-level title now (#510). No `aria-label` on the inner
+  // section — adding one would duplicate the rail-level landmark
+  // text in screen-reader landmark navigation.
   return (
-    <section
-      className="live-work-rail__section live-work-rail__section--edited"
-      aria-labelledby={headingId}
-    >
-      <h3 id={headingId} className="live-work-rail__section-heading">
-        {summaryLabel}
-      </h3>
-      {fileCount === 0 ? null : (
-        <ul className="live-work-rail__file-list">
-          {filesWithDiffs.map((detail) => (
-            <li key={detail.id} className="live-work-rail__file-row">
-              <EditedFileRow detail={detail} />
-            </li>
-          ))}
-        </ul>
-      )}
+    <section className="live-work-rail__section live-work-rail__section--edited">
+      <ul className="live-work-rail__file-list">
+        {filesWithDiffs.map((detail) => (
+          <li key={detail.id} className="live-work-rail__file-row">
+            <EditedFileRow detail={detail} />
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -195,15 +202,10 @@ function EditedFileRow(props: {
 function ChangedFilesSection(props: {
   entry: AppServerThreadActivityEntry;
 }) {
-  const headingId = useId();
+  // No inner `aria-label` — the rail-level complementary landmark
+  // already names the surface with the section summary.
   return (
-    <section
-      className="live-work-rail__section live-work-rail__section--changed"
-      aria-labelledby={headingId}
-    >
-      <h3 id={headingId} className="live-work-rail__section-heading">
-        {props.entry.summary}
-      </h3>
+    <section className="live-work-rail__section live-work-rail__section--changed">
       <ul className="live-work-rail__file-list live-work-rail__file-list--static">
         {props.entry.details.map((detail) => (
           <li

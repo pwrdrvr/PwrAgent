@@ -1607,11 +1607,12 @@ describe("ThreadView", () => {
     });
 
     // The LiveWorkRail (above the composer per issue #495) renders the
-    // cumulative diff summary as a section heading and each file as
-    // its own expand button — no second click needed to reach the
+    // cumulative diff summary in its rail-level title (#495 follow-up
+    // merged the section heading into the rail title) and each file
+    // as its own expand button — no second click needed to reach the
     // file list, unlike the old in-transcript activity row.
     expect(
-      screen.getByRole("heading", { level: 3, name: /Edited 1 file, \+1, -2/i }),
+      screen.getByRole("complementary", { name: /Edited 1 file, \+1, -2/ }),
     ).toBeInTheDocument();
     expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
@@ -3563,14 +3564,17 @@ describe("ThreadView", () => {
           },
         });
       });
+      // Rail title carries the summary (the section h3 was merged into
+      // the rail title in the #495 follow-up).
       expect(
-        screen.getAllByRole("heading", { level: 3, name: /Edited 1 file/i }),
+        screen.getAllByRole("complementary", { name: /Edited 1 file/ }),
       ).toHaveLength(1);
 
       // turn/completed → pending cleared, snapshot keeps the rail
       // showing, deferred entry settles into the transcript via
-      // optimisticEntries. Total "Edited 1 file" visible should still
-      // be exactly one (rail heading) plus zero or one transcript row.
+      // optimisticEntries. The rail's `complementary` landmark stays
+      // exactly one; the transcript may render zero or one
+      // TranscriptActivity toggle button as the persisted record.
       await act(async () => {
         agentEventHandler?.({
           backend: "codex",
@@ -3595,17 +3599,22 @@ describe("ThreadView", () => {
         await Promise.resolve();
       });
 
-      // Rail heading stays (pinned snapshot). The transcript also
-      // receives the deferred entry, which renders TranscriptActivity's
-      // toggle button — separate display surface. Two displays of the
-      // same conceptual entry across rail + transcript is the
+      // Rail stays (pinned snapshot). The transcript also receives the
+      // deferred entry, which renders TranscriptActivity's toggle
+      // button — separate display surface. Two displays of the same
+      // conceptual entry across rail + transcript is the
       // user-approved post-#495 model; what we strictly forbid is
-      // *duplication within a single surface*.
+      // *duplication within a single surface*. Scope the transcript
+      // check inside its region so the rail's own collapse button
+      // (now also labeled with the summary) isn't counted.
       expect(
-        screen.getAllByRole("heading", { level: 3, name: /Edited 1 file/i }),
+        screen.getAllByRole("complementary", { name: /Edited 1 file/ }),
       ).toHaveLength(1);
+      const transcriptRegion = screen.getByRole("region", { name: "Transcript" });
       expect(
-        screen.queryAllByRole("button", { name: /^Edited 1 file/i }).length,
+        within(transcriptRegion)
+          .queryAllByRole("button", { name: /^Edited 1 file/i })
+          .length,
       ).toBeLessThanOrEqual(1);
     } finally {
       consoleErrorSpy.mockRestore();
@@ -3720,12 +3729,12 @@ describe("ThreadView", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start turn 2" }));
     });
 
-    // Snapshot cleared. The rail still renders the persisted entry
-    // from optimisticEntries (Changed Files section) so it doesn't
-    // disappear entirely, but the Edited Files section is empty until
-    // turn 2 produces its own diff.
+    // Snapshot cleared. The rail's Edited Files section (which carried
+    // turn 1's summary in the title) is gone until turn 2 produces its
+    // own diff. Other sections may still render with their own
+    // content, but no "Edited 1 file" text should be on screen.
     expect(
-      screen.queryByRole("heading", { level: 3, name: /Edited 1 file/i }),
+      screen.queryByRole("complementary", { name: /Edited 1 file/ }),
     ).not.toBeInTheDocument();
   });
 });

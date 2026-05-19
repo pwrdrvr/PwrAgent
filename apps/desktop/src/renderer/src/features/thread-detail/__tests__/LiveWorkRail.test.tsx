@@ -82,7 +82,40 @@ describe("LiveWorkRail", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("titles the rail with the present section names when not pinned", () => {
+  it("treats an editedFilesEntry as absent when none of its details carry a fileDiff", () => {
+    // Defensive: a malformed entry with summary "Edited 1 file" but
+    // empty/non-diff details would otherwise produce a rail title
+    // claiming work-was-done while the body had nothing to render
+    // below it. The rail title and the section body share the same
+    // gating so they can't disagree (#510 follow-up).
+    const editedFilesEntryWithoutDiffs: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-diff-empty",
+      summary: "Edited 1 file",
+      createdAt: 1_000,
+      details: [
+        {
+          id: "detail-non-diff",
+          kind: "write",
+          label: "Update mystery.ts",
+          path: "/repo/mystery.ts",
+        },
+      ],
+    };
+    const { container } = render(
+      <LiveWorkRail
+        dock="above"
+        pinned={false}
+        editedFilesEntry={editedFilesEntryWithoutDiffs}
+        onDockChange={() => undefined}
+      />,
+    );
+    // No content → rail returns null entirely (just like the "no
+    // entries" empty-state case).
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("uses the section summary as the rail title when not pinned", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -92,14 +125,14 @@ describe("LiveWorkRail", () => {
       />,
     );
     expect(
-      screen.getByRole("complementary", { name: "Edited Files" }),
+      screen.getByRole("complementary", { name: "Edited 2 files, +5, -2" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Edited Files/i }),
+      screen.getByRole("button", { name: /Edited 2 files, \+5, -2/ }),
     ).toBeInTheDocument();
   });
 
-  it("suffixes the aria label with (last turn) when pinned but keeps the section name in the visible title", () => {
+  it("suffixes the aria label with (last turn) when pinned but keeps the same summary text in the visible title", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -109,14 +142,13 @@ describe("LiveWorkRail", () => {
       />,
     );
     expect(
-      screen.getByRole("complementary", { name: "Edited Files (last turn)" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Edited Files/i }),
+      screen.getByRole("complementary", {
+        name: "Edited 2 files, +5, -2 (last turn)",
+      }),
     ).toBeInTheDocument();
   });
 
-  it("joins multiple present section names with commas", () => {
+  it("joins multiple section summaries in the rail title with a midline dot", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -129,12 +161,12 @@ describe("LiveWorkRail", () => {
     );
     expect(
       screen.getByRole("complementary", {
-        name: "Plan, Edited Files, Changed Files",
+        name: "Plan · Edited 2 files, +5, -2 · Changed 1 file",
       }),
     ).toBeInTheDocument();
   });
 
-  it("renders the edited-files summary as a section heading and expands a file diff in place", () => {
+  it("expands a file's diff in place when its row is clicked", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -143,9 +175,11 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
+    // Section heading is gone — the rail title carries the summary
+    // (see "uses the section summary as the rail title" above).
     expect(
-      screen.getByRole("heading", { level: 3, name: /Edited 2 files, \+5, -2/i }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { level: 3, name: /Edited 2 files/i }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Update AGENTS\.md/i }),
     ).toBeInTheDocument();
@@ -156,7 +190,7 @@ describe("LiveWorkRail", () => {
     expect(screen.getByText(/Diff for AGENTS\.md|@@ -1,1 \+1,4 @@|\+a/)).toBeInTheDocument();
   });
 
-  it("renders the Changed Files section as a static list (no diff expand)", () => {
+  it("renders the Changed Files section as a static list (no diff expand, no section heading)", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -165,8 +199,13 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
+    // Section heading was redundant with the rail title, dropped.
     expect(
-      screen.getByRole("heading", { level: 3, name: /Changed 1 file/i }),
+      screen.queryByRole("heading", { level: 3, name: /Changed 1 file/i }),
+    ).not.toBeInTheDocument();
+    // The rail-level title carries the summary.
+    expect(
+      screen.getByRole("complementary", { name: "Changed 1 file" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Modified Composer.tsx")).toBeInTheDocument();
     // No expand button for the row — protocol fileChange notifications
@@ -197,20 +236,30 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
-    const collapseButton = screen.getByRole("button", { name: /Edited Files/i });
+    const collapseButton = screen.getByRole("button", {
+      name: /Edited 2 files, \+5, -2/,
+    });
+    expect(collapseButton).toHaveAttribute("aria-expanded", "true");
+
+    // The file row inside the body is the witness for collapsed-vs-not.
     expect(
-      screen.getByRole("heading", { level: 3, name: /Edited 2 files/i }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: /Update AGENTS\.md/i }),
+    ).toBeVisible();
 
     fireEvent.click(collapseButton);
+    expect(collapseButton).toHaveAttribute("aria-expanded", "false");
+    // `hidden` attribute removes the body from the accessibility tree
+    // and (via the [hidden] CSS rule) from layout. The file row's
+    // button stays mounted (cheap to re-show) but is not visible.
     expect(
-      screen.queryByRole("heading", { level: 3, name: /Edited 2 files/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /Update AGENTS\.md/i, hidden: true }),
+    ).not.toBeVisible();
 
     fireEvent.click(collapseButton);
+    expect(collapseButton).toHaveAttribute("aria-expanded", "true");
     expect(
-      screen.getByRole("heading", { level: 3, name: /Edited 2 files/i }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: /Update AGENTS\.md/i }),
+    ).toBeVisible();
   });
 
   it("flips the dock via the dock-toggle button", () => {
@@ -241,7 +290,7 @@ describe("LiveWorkRail", () => {
     expect(onDockChange).toHaveBeenCalledWith("above");
   });
 
-  it("renders all three sections together with the right headings", () => {
+  it("renders all three sections together with the joined rail title and per-section bodies", () => {
     render(
       <LiveWorkRail
         dock="above"
@@ -252,12 +301,24 @@ describe("LiveWorkRail", () => {
         onDockChange={() => undefined}
       />,
     );
+    expect(
+      screen.getByRole("complementary", {
+        name: "Plan · Edited 2 files, +5, -2 · Changed 1 file",
+      }),
+    ).toBeInTheDocument();
+    // Plan delegates to TranscriptPlan which renders its own summary.
     expect(screen.getByText("1 out of 3 tasks completed")).toBeInTheDocument();
+    // The other sections drop their h3 — the rail title carries it.
     expect(
-      screen.getByRole("heading", { level: 3, name: /Edited 2 files, \+5, -2/i }),
-    ).toBeInTheDocument();
+      screen.queryByRole("heading", { level: 3, name: /Edited 2 files/i }),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { level: 3, name: /Changed 1 file/i }),
+      screen.queryByRole("heading", { level: 3, name: /Changed 1 file/i }),
+    ).not.toBeInTheDocument();
+    // But the file rows + static path lines still render in the body.
+    expect(
+      screen.getByRole("button", { name: /Update AGENTS\.md/i }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Modified Composer.tsx")).toBeInTheDocument();
   });
 });
