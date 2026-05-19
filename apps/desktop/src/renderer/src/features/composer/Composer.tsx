@@ -481,7 +481,10 @@ function tailLines(text: string, maxLines: number): string {
 
 // Exported for unit testing; the existing call sites import via the
 // in-file identifier.
-export function formatDurationMs(ms?: number): string {
+export function formatDurationMs(
+  ms?: number,
+  options?: { coarseAfterMinute?: boolean },
+): string {
   if (!ms || !Number.isFinite(ms)) return "";
   if (ms < 1_000) return `${Math.round(ms)}ms`;
   // Always integer seconds — the previous `toFixed(1)` for elapsed < 10s
@@ -493,6 +496,15 @@ export function formatDurationMs(ms?: number): string {
   // which would have flipped `seconds=119.5` into `"1m 60s"` because of
   // half-up rounding at the 60-second boundary.
   const minutes = Math.floor(totalSeconds / 60);
+  // For live counters (e.g., the "running for Xm" anchor meta),
+  // coarseAfterMinute drops the seconds portion entirely past 1m so
+  // the display only changes on minute boundaries — otherwise the
+  // ticking "Xm Ys" with sub-minute updates was a distracting noise
+  // floor for long-running actions like `pnpm dev`. Static one-shot
+  // displays (e.g., "ran 2m 30s" on an already-exited run) leave the
+  // option off and keep full precision since the value never changes
+  // after first paint.
+  if (options?.coarseAfterMinute) return `${minutes}m`;
   const remainder = totalSeconds % 60;
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
@@ -519,18 +531,19 @@ function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
-  // Tiered tick cadence for the per-run "running for Xs" meta. Updating
-  // every second is the right resolution while elapsed is < 1 min; once
-  // we're into "Xm Ys" territory the seconds digit advances on its own
-  // and the user doesn't need the same fidelity:
-  //   < 1 min  → tick every 1s    (seconds digit moves every second)
-  //   < 1 hour → tick every 5s    ("Xm Ys" jumps in 5s increments —
-  //                                still feels live, ~12× less work)
-  //   ≥ 1 hour → tick every 30s   (long-running dev servers shouldn't
-  //                                burn renders to advance "Ys" every
-  //                                second for hours on end)
+  // Tiered tick cadence for the per-run "running for X" meta:
+  //   < 1 min → tick every 1s   (seconds digit moves every second;
+  //                              format prints "Xs")
+  //   ≥ 1 min → tick every 30s  (display switches to coarse "Xm" with
+  //                              no seconds; we only need the tick to
+  //                              catch each minute boundary within
+  //                              ~30s, which is below user-perceived
+  //                              staleness for a minute-granularity
+  //                              display. Avoids the "distracting
+  //                              every-5s text-change" issue.)
   // Single shared timer across all started runs on the thread; the
-  // interval re-arms when the longest-running run crosses a threshold.
+  // interval re-arms when the longest-running run crosses the 1-min
+  // boundary.
   const tickIntervalMs = useMemo(() => {
     let maxElapsed = -1;
     for (const run of runs) {
@@ -541,7 +554,6 @@ function EnvActionAnchorList(props: {
     }
     if (maxElapsed < 0) return 0; // no running runs → no timer
     if (maxElapsed < 60_000) return 1_000;
-    if (maxElapsed < 3_600_000) return 5_000;
     return 30_000;
   }, [runs]);
   const [, setElapsedTick] = useState(0);
@@ -611,7 +623,9 @@ export function EnvActionAnchorEntry(props: {
   const meta: string[] = [];
   if (run.pid) meta.push(`pid ${run.pid}`);
   if (status === "started" && run.startedAt) {
-    meta.push(`running for ${formatDurationMs(Date.now() - run.startedAt)}`);
+    meta.push(
+      `running for ${formatDurationMs(Date.now() - run.startedAt, { coarseAfterMinute: true })}`,
+    );
   }
   if (status !== "started") {
     if (typeof run.exitCode === "number") {

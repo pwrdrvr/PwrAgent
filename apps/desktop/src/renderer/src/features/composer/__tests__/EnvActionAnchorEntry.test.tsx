@@ -293,4 +293,31 @@ describe("formatDurationMs", () => {
     expect(formatDurationMs(60 * 60_000 + 5_000)).toBe("60m 5s");
     expect(formatDurationMs(2 * 60 * 60_000)).toBe("120m");
   });
+
+  describe("coarseAfterMinute", () => {
+    it("drops the seconds portion entirely past 1 minute", () => {
+      // For the live "running for X" anchor meta, we want minute-only
+      // updates past the 1-minute mark to avoid distracting the user
+      // with a ticking sub-minute display.
+      expect(formatDurationMs(60_500, { coarseAfterMinute: true })).toBe("1m");
+      expect(formatDurationMs(118_000, { coarseAfterMinute: true })).toBe("1m");
+      expect(formatDurationMs(119_499, { coarseAfterMinute: true })).toBe("1m");
+      expect(formatDurationMs(119_500, { coarseAfterMinute: true })).toBe("2m");
+      expect(formatDurationMs(6 * 60_000 + 23_000, { coarseAfterMinute: true })).toBe("6m");
+    });
+
+    it("does not affect sub-minute formatting", () => {
+      // Sub-minute uses second-precision in either mode — there's no
+      // distraction problem there since the display does update.
+      expect(formatDurationMs(5_500, { coarseAfterMinute: true })).toBe("6s");
+      expect(formatDurationMs(59_499, { coarseAfterMinute: true })).toBe("59s");
+    });
+
+    it("leaves the default precise behavior unchanged", () => {
+      // The "ran 2m 30s" suffix on completed runs is a static one-shot
+      // display, not a ticker — keep the seconds precision intact.
+      expect(formatDurationMs(60_500)).toBe("1m 1s");
+      expect(formatDurationMs(6 * 60_000 + 23_000)).toBe("6m 23s");
+    });
+  });
 });
