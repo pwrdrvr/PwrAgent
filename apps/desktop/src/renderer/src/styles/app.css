@@ -4780,7 +4780,10 @@ textarea,
 }
 
 .environment-setup-choice__body {
-  flex: 1 1 360px;
+  /* Take all remaining horizontal space so the output pre fills the
+     dialog. The actions column on the right is flex: 0 0 auto so it
+     only gets its natural width, leaving the rest to the body. */
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -4885,8 +4888,11 @@ textarea,
 }
 
 .environment-setup-choice__actions {
+  /* Natural width only so the body next to it can stretch to fill the
+     dialog. When the dialog wraps onto two rows (narrow widths), this
+     wraps under the body at full width with the buttons right-aligned. */
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   align-self: flex-start;
