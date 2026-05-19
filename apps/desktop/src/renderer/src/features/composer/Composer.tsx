@@ -604,7 +604,12 @@ function EnvActionAnchor(props: {
               : "Show output"}
           </summary>
           <pre className="composer__queued-env-action-output">
-            <code>{truncatedOutput || "(no output captured)"}</code>
+            <code>
+              {truncatedOutput ||
+                (status === "started"
+                  ? "(no output yet — waiting for the command to print something)"
+                  : "(no output captured)")}
+            </code>
           </pre>
         </details>
       </div>

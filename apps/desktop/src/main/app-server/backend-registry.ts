@@ -126,6 +126,7 @@ import {
   startLocalCodexEnvironmentAction,
   type CodexEnvironmentCommandRunner,
   type CodexEnvironmentDetachedExit,
+  type CodexEnvironmentDetachedOutput,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
@@ -3578,6 +3579,14 @@ export class DesktopBackendRegistry {
             event,
           });
         },
+        onDetachedOutput: (event) => {
+          void this.handleCodexEnvironmentActionDetachedOutput({
+            backend: request.backend,
+            threadId: request.threadId,
+            actionId: request.actionId,
+            event,
+          });
+        },
       });
     } catch (error) {
       if (
@@ -3790,6 +3799,67 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Called periodically (throttled to ~500ms) while a detached env-action
+   * child is running, with a snapshot of its accumulated stdout+stderr.
+   * Updates `actionOutput` on the overlay so the renderer's anchored UI
+   * shows live output instead of "(no output yet)". Does not change
+   * actionStatus — that stays "started" until the child closes.
+   *
+   * Same actionId guard as the exit handler so a stale snapshot can't
+   * overwrite a fresh action's output.
+   */
+  private async handleCodexEnvironmentActionDetachedOutput(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    actionId: string;
+    event: CodexEnvironmentDetachedOutput;
+  }): Promise<void> {
+    try {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      const current = overlay?.codexEnvironmentRuntime;
+      if (!current) {
+        return;
+      }
+      if (current.actionId && current.actionId !== params.actionId) {
+        return;
+      }
+      // Skip the write+emit if the snapshot hasn't actually changed — keeps
+      // a quiet child from generating empty IPC noise.
+      if (current.actionOutput === params.event.output) {
+        return;
+      }
+      const next: CodexThreadEnvironmentRuntime = {
+        ...current,
+        actionOutput: params.event.output,
+      };
+      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+        backend: params.backend,
+        threadId: params.threadId,
+        codexEnvironmentRuntime: next,
+      });
+      this.invalidateThreadListCache(params.backend);
+      await this.emitCodexEnvironmentRuntimeUpdated({
+        backend: params.backend,
+        threadId: params.threadId,
+        codexEnvironmentRuntime: next,
+      });
+    } catch (error) {
+      backendRegistryLog.warn(
+        "codex-environment-action-output-overlay-update-failed",
+        {
+          backend: params.backend,
+          threadId: params.threadId,
+          actionId: params.actionId,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+  }
+
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
     options?: {
@@ -3839,6 +3909,7 @@ export class DesktopBackendRegistry {
     // thread is started so we can attribute them to the right thread.
     let pendingActionThreadId: string | undefined;
     const queuedActionDetachedExits: CodexEnvironmentDetachedExit[] = [];
+    const queuedActionDetachedOutputs: CodexEnvironmentDetachedOutput[] = [];
     const codexActionBackend: AppServerBackendKind = launchpad.backend;
     const onActionDetachedExit = (event: CodexEnvironmentDetachedExit) => {
       if (pendingActionThreadId && codexEnvironmentSelection?.action?.id) {
@@ -3851,6 +3922,23 @@ export class DesktopBackendRegistry {
         return;
       }
       queuedActionDetachedExits.push(event);
+    };
+    const onActionDetachedOutput = (event: CodexEnvironmentDetachedOutput) => {
+      if (pendingActionThreadId && codexEnvironmentSelection?.action?.id) {
+        void this.handleCodexEnvironmentActionDetachedOutput({
+          backend: codexActionBackend,
+          threadId: pendingActionThreadId,
+          actionId: codexEnvironmentSelection.action.id,
+          event,
+        });
+        return;
+      }
+      // Output snapshots before startThread completes are rare (auto-action
+      // commands usually print after a moment) but worth queueing so the
+      // first post-start render of the anchor has something to show.
+      // Only keep the latest — older snapshots are strict subsets of newer.
+      queuedActionDetachedOutputs.length = 0;
+      queuedActionDetachedOutputs.push(event);
     };
     if (launchpad.backend === "codex") {
       try {
@@ -3867,6 +3955,7 @@ export class DesktopBackendRegistry {
               }
             : undefined,
           onActionDetachedExit,
+          onActionDetachedOutput,
           selection: codexEnvironmentSelection,
         });
       } catch (error) {
@@ -3893,11 +3982,17 @@ export class DesktopBackendRegistry {
       codexEnvironmentRuntime,
     });
     pendingActionThreadId = startThreadResponse.threadId;
-    if (
-      codexEnvironmentSelection?.action?.id &&
-      queuedActionDetachedExits.length > 0
-    ) {
+    if (codexEnvironmentSelection?.action?.id) {
       const actionId = codexEnvironmentSelection.action.id;
+      for (const event of queuedActionDetachedOutputs) {
+        void this.handleCodexEnvironmentActionDetachedOutput({
+          backend: codexActionBackend,
+          threadId: startThreadResponse.threadId,
+          actionId,
+          event,
+        });
+      }
+      queuedActionDetachedOutputs.length = 0;
       for (const event of queuedActionDetachedExits) {
         void this.handleCodexEnvironmentActionDetachedExit({
           backend: codexActionBackend,

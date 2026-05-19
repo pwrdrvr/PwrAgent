@@ -106,6 +106,17 @@ export type CodexEnvironmentCommandParams = {
    * resolve(). Not invoked for wait mode (use the resolved value instead).
    */
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
+  /**
+   * For detach mode only: fired with a snapshot of the running command's
+   * accumulated stdout+stderr buffers, throttled to at most one call per
+   * `DETACHED_OUTPUT_SNAPSHOT_MS` (default ~500ms) regardless of how
+   * chatty the child is. Lets callers stream live output into the
+   * anchored UI so users can see what a long-running command is doing
+   * before it exits, instead of staring at "(no output yet)" for
+   * minutes. The final pre-exit snapshot is also delivered via
+   * `onDetachedExit.output`, so callers don't need to merge.
+   */
+  onDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
 };
 
 export type CodexEnvironmentDetachedExit = {
@@ -114,6 +125,13 @@ export type CodexEnvironmentDetachedExit = {
   durationMs: number;
   output: string;
 };
+
+export type CodexEnvironmentDetachedOutput = {
+  /** Current combined-stdout+stderr snapshot, capped to runShellCommand's buffers. */
+  output: string;
+};
+
+export const DETACHED_OUTPUT_SNAPSHOT_MS = 500;
 
 export type CodexEnvironmentCommandResult = {
   durationMs?: number;
@@ -134,6 +152,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
   ) => void;
   onActionDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
+  onActionDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
@@ -264,6 +283,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         env: params.env,
         mode: "detach",
         onDetachedExit: params.onActionDetachedExit,
+        onDetachedOutput: params.onActionDetachedOutput,
       });
       runtime.actionPid = result.pid;
       runtime.actionStatus = "started";
@@ -296,6 +316,7 @@ export async function startLocalCodexEnvironmentAction(params: {
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
+  onDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
   runtime: CodexThreadEnvironmentRuntime;
 }): Promise<CodexThreadEnvironmentRuntime> {
   if (params.runtime.executionTarget !== "local") {
@@ -330,6 +351,7 @@ export async function startLocalCodexEnvironmentAction(params: {
       env: params.env,
       mode: "detach",
       onDetachedExit: params.onDetachedExit,
+      onDetachedOutput: params.onDetachedOutput,
     });
     nextRuntime.actionPid = result.pid;
     nextRuntime.actionStatus = "started";
@@ -448,6 +470,36 @@ function runShellCommand(
       }, params.timeoutMs);
     }
 
+    // Throttled snapshot for detach-mode live output streaming. Coalesces
+    // bursts of data events into at most one onDetachedOutput call per
+    // DETACHED_OUTPUT_SNAPSHOT_MS, regardless of how chatty the child is.
+    let snapshotTimer: NodeJS.Timeout | undefined;
+    const scheduleDetachedOutputSnapshot = () => {
+      if (params.mode !== "detach" || !params.onDetachedOutput || snapshotTimer) {
+        return;
+      }
+      snapshotTimer = setTimeout(() => {
+        snapshotTimer = undefined;
+        const snapshotOutput = [stdout.trimEnd(), stderr.trimEnd()]
+          .filter(Boolean)
+          .join("\n");
+        try {
+          params.onDetachedOutput?.({ output: snapshotOutput });
+        } catch (callbackError) {
+          environmentRuntimeLog.warn(
+            "codex-environment-detached-output-callback-failed",
+            {
+              processId,
+              message:
+                callbackError instanceof Error
+                  ? callbackError.message
+                  : String(callbackError),
+            },
+          );
+        }
+      }, DETACHED_OUTPUT_SNAPSHOT_MS);
+    };
+
     child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       stdout = `${stdout}${text}`.slice(-32_000);
@@ -456,6 +508,7 @@ function runShellCommand(
         chunk: text,
         at: Date.now(),
       });
+      scheduleDetachedOutputSnapshot();
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
@@ -465,6 +518,7 @@ function runShellCommand(
         chunk: text,
         at: Date.now(),
       });
+      scheduleDetachedOutputSnapshot();
     });
 
     child.once("error", (error) => {
@@ -513,6 +567,12 @@ function runShellCommand(
       // onDetachedExit so callers can persist the exit details to
       // overlay state for the anchored env-action output UI.
       child.once("close", (code, signal) => {
+        // Cancel any pending throttled snapshot so it doesn't race past
+        // onDetachedExit's final-output write to the overlay.
+        if (snapshotTimer) {
+          clearTimeout(snapshotTimer);
+          snapshotTimer = undefined;
+        }
         const durationMs = Date.now() - startedAt;
         const combinedOutput = [stdout.trimEnd(), stderr.trimEnd()]
           .filter(Boolean)
