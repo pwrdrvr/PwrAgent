@@ -6128,9 +6128,22 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px;
+  /* Horizontal + bottom padding only. `position: sticky; top: 0` on
+     the file-toggle pins to the body's content-box top edge, so any
+     padding-top here pushes the stuck toggle that many pixels down
+     the rail card and leaves a band of bg-panel-elevated visible
+     between the rail header divider and the sticky toggle. The 8px
+     of breathing room above the first child is restored via
+     `> *:first-child { margin-block-start: 8px }` below — that
+     margin scrolls with the content, so the non-scrolled state
+     stays inset and the scrolled state pins flush. */
+  padding: 0 8px 8px;
   overflow-y: auto;
   min-height: 0;
+}
+
+.live-work-rail__body > *:first-child {
+  margin-block-start: 8px;
 }
 
 /* The `display: flex` rule above defeats the [hidden] attribute's
