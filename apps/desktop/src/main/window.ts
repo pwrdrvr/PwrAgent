@@ -12,6 +12,7 @@ import {
 } from "./window-channels";
 import {
   AGENT_EVENT_CHANNEL,
+  APPEARANCE_CHANGED_EVENT_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
@@ -185,6 +186,13 @@ export function createMainWindow(options?: {
     title: "PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
+    // macOS-only: frosted-glass effect under the stoplight area. Without
+    // it, unfocused stoplights on light theme nearly vanish because
+    // macOS dims them to ~35% gray with no contrast remediation —
+    // gray-on-cream becomes invisible. Vibrancy gives the title-bar
+    // strip the native desaturated backdrop that pushes stoplights up
+    // into legibility. Silently ignored on Windows / Linux.
+    vibrancy: "titlebar",
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
     backgroundColor: themedWindowBackgroundColor(appearance),
@@ -350,6 +358,7 @@ export function createMainWindow(options?: {
   // consume. See `apps/desktop/src/main/window-channels.ts`.
   registerWindowChannels(window, WINDOW_KIND_MAIN, [
     AGENT_EVENT_CHANNEL,
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
     MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
     MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
     MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,

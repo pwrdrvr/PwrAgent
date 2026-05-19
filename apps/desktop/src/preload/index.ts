@@ -154,6 +154,7 @@ import type {
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -675,6 +676,24 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
+    };
+  },
+  onAppearanceChanged: (
+    callback: (appearance: {
+      theme: "system" | "dark" | "light";
+      density: "mission-control" | "compact";
+    }) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: {
+        theme: "system" | "dark" | "light";
+        density: "mission-control" | "compact";
+      },
+    ) => callback(payload);
+    ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   onCodexEnvironmentSetupProgress: (

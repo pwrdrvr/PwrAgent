@@ -9,6 +9,7 @@ import {
   WINDOW_KIND_MESSAGING_ACTIVITY,
   registerWindowChannels,
 } from "./window-channels";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -57,6 +58,10 @@ export function showMessagingActivityWindow(): void {
     title: "Messaging Activity — PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
+    // macOS-only vibrancy on the title-bar strip — see the rationale
+    // in `window.ts` (keeps unfocused stoplights legible on light
+    // theme). Silently ignored on non-macOS.
+    vibrancy: "titlebar",
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -73,7 +78,13 @@ export function showMessagingActivityWindow(): void {
   // every 5s. Register the window with no channels so the messaging
   // broadcasters skip it. If the window starts wanting push updates,
   // add the channels here.
-  registerWindowChannels(window, WINDOW_KIND_MESSAGING_ACTIVITY, []);
+  // Subscribe to appearance broadcasts so the renderer can re-apply
+  // <html data-theme/data-density> when the user changes the theme from
+  // Settings in another window. Otherwise this surface stays stuck on
+  // whatever theme it bootstrapped with at window creation.
+  registerWindowChannels(window, WINDOW_KIND_MESSAGING_ACTIVITY, [
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

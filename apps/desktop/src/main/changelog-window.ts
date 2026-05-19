@@ -9,6 +9,7 @@ import {
   WINDOW_KIND_CHANGELOG,
   registerWindowChannels,
 } from "./window-channels";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -40,6 +41,10 @@ export function showChangelogWindow(): void {
     title: "Changelog - PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
+    // macOS-only vibrancy on the title-bar strip — see the rationale
+    // in `window.ts` (keeps unfocused stoplights legible on light
+    // theme). Silently ignored on non-macOS.
+    vibrancy: "titlebar",
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -51,7 +56,9 @@ export function showChangelogWindow(): void {
   });
 
   applyWindowSecurityHardening(window);
-  registerWindowChannels(window, WINDOW_KIND_CHANGELOG, []);
+  registerWindowChannels(window, WINDOW_KIND_CHANGELOG, [
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

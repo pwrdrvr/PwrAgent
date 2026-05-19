@@ -9,7 +9,10 @@ import {
   WINDOW_KIND_APP_LOGS,
   registerWindowChannels,
 } from "./window-channels";
-import { APP_LOG_ENTRY_EVENT_CHANNEL } from "../shared/ipc";
+import {
+  APPEARANCE_CHANGED_EVENT_CHANNEL,
+  APP_LOG_ENTRY_EVENT_CHANNEL,
+} from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -41,6 +44,10 @@ export function showAppLogWindow(): void {
     title: "Logs - PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
+    // macOS-only vibrancy on the title-bar strip — see the rationale
+    // in `window.ts` (keeps unfocused stoplights legible on light
+    // theme). Silently ignored on non-macOS.
+    vibrancy: "titlebar",
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -52,7 +59,10 @@ export function showAppLogWindow(): void {
   });
 
   applyWindowSecurityHardening(window);
-  registerWindowChannels(window, WINDOW_KIND_APP_LOGS, [APP_LOG_ENTRY_EVENT_CHANNEL]);
+  registerWindowChannels(window, WINDOW_KIND_APP_LOGS, [
+    APP_LOG_ENTRY_EVENT_CHANNEL,
+    APPEARANCE_CHANGED_EVENT_CHANNEL,
+  ]);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

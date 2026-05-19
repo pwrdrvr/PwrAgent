@@ -2,10 +2,39 @@ import React, { Suspense, lazy, type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
+import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();
+
+// Subscribe to main → renderer appearance broadcasts. Every window
+// (including secondary surfaces like changelog, app-log, license,
+// messaging activity) listens here so when the user changes theme or
+// density in Settings, the active <html data-theme/data-density>
+// attributes update everywhere instead of staying stuck on whatever
+// the window bootstrapped with at creation. The main window's
+// useAppearance hook also re-applies via its own React state path,
+// which means this listener can run unconditionally — the DOM write
+// it performs is idempotent against the hook's parallel write.
+//
+// Done outside React so aux windows (which don't mount useAppearance)
+// still get the theme-flip behavior.
+const desktopApi = (
+  window as unknown as {
+    pwragent?: {
+      onAppearanceChanged?: (
+        callback: (appearance: {
+          theme: "system" | "dark" | "light";
+          density: "mission-control" | "compact";
+        }) => void,
+      ) => () => void;
+    };
+  }
+).pwragent;
+desktopApi?.onAppearanceChanged?.((appearance) => {
+  applyAppearanceAttributes(resolveTheme(appearance.theme), appearance.density);
+});
 
 const ChangelogWindow = lazy(async () => ({
   default: (await import("./features/changelog/ChangelogWindow")).ChangelogWindow,
