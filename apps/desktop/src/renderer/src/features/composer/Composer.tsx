@@ -479,13 +479,21 @@ function tailLines(text: string, maxLines: number): string {
   ].join("\n");
 }
 
-function formatDurationMs(ms?: number): string {
+// Exported for unit testing; the existing call sites import via the
+// in-file identifier.
+export function formatDurationMs(ms?: number): string {
   if (!ms || !Number.isFinite(ms)) return "";
-  if (ms < 1_000) return `${ms}ms`;
-  const seconds = ms / 1_000;
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = Math.round(seconds % 60);
+  if (ms < 1_000) return `${Math.round(ms)}ms`;
+  // Always integer seconds — the previous `toFixed(1)` for elapsed < 10s
+  // produced "0.9s" / "1.9s" displays that kept changing the last digit
+  // every render even when the second hadn't actually advanced.
+  const totalSeconds = Math.round(ms / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  // Convert via totalSeconds rather than `Math.round(seconds % 60)`,
+  // which would have flipped `seconds=119.5` into `"1m 60s"` because of
+  // half-up rounding at the 60-second boundary.
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainder = totalSeconds % 60;
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 

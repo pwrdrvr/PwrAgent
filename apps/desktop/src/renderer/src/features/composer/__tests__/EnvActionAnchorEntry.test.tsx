@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvActionAnchorEntry } from "../Composer";
+import { EnvActionAnchorEntry, formatDurationMs } from "../Composer";
 
 afterEach(() => {
   cleanup();
@@ -68,8 +68,8 @@ describe("EnvActionAnchorEntry", () => {
         screen.getByLabelText("Env action exited"),
       ).toBeInTheDocument();
       expect(screen.getByText(/exit 0/)).toBeInTheDocument();
-      // Duration formatter rounds <10s to 1 decimal.
-      expect(screen.getByText(/ran 4\.3s/)).toBeInTheDocument();
+      // Duration formatter rounds to integer seconds (4321ms → 4s).
+      expect(screen.getByText(/ran 4s/)).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Dismiss" }),
       ).toBeInTheDocument();
@@ -246,5 +246,51 @@ describe("EnvActionAnchorEntry", () => {
         screen.getByRole("button", { name: "Dismiss" }),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe("formatDurationMs", () => {
+  it("returns empty for falsy / non-finite inputs", () => {
+    expect(formatDurationMs(undefined)).toBe("");
+    expect(formatDurationMs(0)).toBe("");
+    expect(formatDurationMs(Number.NaN)).toBe("");
+    expect(formatDurationMs(Number.POSITIVE_INFINITY)).toBe("");
+  });
+
+  it("formats sub-second elapsed in integer milliseconds", () => {
+    expect(formatDurationMs(1)).toBe("1ms");
+    expect(formatDurationMs(750)).toBe("750ms");
+    expect(formatDurationMs(999)).toBe("999ms");
+  });
+
+  it("formats sub-minute elapsed in integer seconds (no decimal)", () => {
+    // Regression: the previous `toFixed(1)` for elapsed < 10s produced
+    // "0.9s" / "1.9s" displays that the user spotted as visual noise.
+    expect(formatDurationMs(1_000)).toBe("1s");
+    expect(formatDurationMs(1_499)).toBe("1s"); // rounds down
+    expect(formatDurationMs(1_500)).toBe("2s"); // rounds up
+    expect(formatDurationMs(9_400)).toBe("9s"); // never "9.4s"
+    expect(formatDurationMs(10_000)).toBe("10s");
+    expect(formatDurationMs(59_000)).toBe("59s");
+  });
+
+  it("crosses the 60-second boundary cleanly without producing 'Xm 60s'", () => {
+    // Regression: with `Math.round(seconds % 60)`, an elapsed of 59.5s
+    // produced "1m 60s" because half-up rounding rolled the remainder
+    // past 60 without bumping the minute.
+    expect(formatDurationMs(59_499)).toBe("59s");
+    expect(formatDurationMs(59_500)).toBe("1m");
+    expect(formatDurationMs(60_000)).toBe("1m");
+    expect(formatDurationMs(60_499)).toBe("1m");
+    expect(formatDurationMs(60_500)).toBe("1m 1s");
+    expect(formatDurationMs(119_499)).toBe("1m 59s");
+    expect(formatDurationMs(119_500)).toBe("2m");
+    expect(formatDurationMs(120_000)).toBe("2m");
+  });
+
+  it("formats hour-plus durations with the minute portion only", () => {
+    expect(formatDurationMs(60 * 60_000)).toBe("60m");
+    expect(formatDurationMs(60 * 60_000 + 5_000)).toBe("60m 5s");
+    expect(formatDurationMs(2 * 60 * 60_000)).toBe("120m");
   });
 });
