@@ -95,7 +95,7 @@ jobs:
       # auto-detects the repo root's `pnpm-lock.yaml`, tries to
       # enable the pnpm cache, and fails (pnpm isn't pre-installed
       # on the runner).
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
           package-manager-cache: false
