@@ -5,6 +5,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   isToolManagedWorktreePath,
   shortenDerivedThreadTitle,
@@ -1516,13 +1517,10 @@ export class DesktopBackendRegistry {
    * codexEnvironmentRuntime. Concurrent Run-button clicks and
    * concurrent detached-child exit/output callbacks all funnel through
    * this so two simultaneous overlay writes can't clobber each other.
-   * Keyed by `${backend}:${threadId}`. Cleared lazily when a chain
-   * settles and no later task has been queued on it.
+   * Keyed by `${backend}:${threadId}`. Implementation details and
+   * failure-poisoning semantics live in PerKeyAsyncLock.
    */
-  private readonly codexEnvironmentRuntimeLocks = new Map<
-    string,
-    Promise<unknown>
-  >();
+  private readonly codexEnvironmentRuntimeLocks = new PerKeyAsyncLock();
   private readonly attemptedTitleGenerations = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
@@ -3889,38 +3887,20 @@ export class DesktopBackendRegistry {
 
   /**
    * Serialise codexEnvironmentRuntime read-modify-write operations
-   * per-thread. Without this, two concurrent run-button clicks (or two
-   * detached-child exit callbacks firing simultaneously) both read the
-   * same overlay state, each patch their own run, and the second writer
-   * silently overwrites the first.
+   * per-thread via {@link PerKeyAsyncLock}. Two concurrent run-button
+   * clicks, or two detached-child exit callbacks firing at once, would
+   * otherwise both read the same overlay state, each patch their own
+   * run, and the second writer would silently overwrite the first.
    */
-  private async withCodexEnvironmentRuntimeLock<T>(
+  private withCodexEnvironmentRuntimeLock<T>(
     backend: AppServerBackendKind,
     threadId: string,
     task: () => Promise<T>,
   ): Promise<T> {
-    const key = `${backend}:${threadId}`;
-    const previous = this.codexEnvironmentRuntimeLocks.get(key) ?? Promise.resolve();
-    // Chain regardless of whether the previous task settled with success
-    // or failure — a single failed Run shouldn't poison the chain for
-    // subsequent Runs / exit handlers.
-    const next = previous.then(task, task);
-    // Track the swallowed-error form so future chains never reject when
-    // awaiting the previous link.
-    const tracked = next.then(
-      () => undefined,
-      () => undefined,
+    return this.codexEnvironmentRuntimeLocks.run(
+      `${backend}:${threadId}`,
+      task,
     );
-    this.codexEnvironmentRuntimeLocks.set(key, tracked);
-    try {
-      return await next;
-    } finally {
-      // Lazy cleanup: only drop the map entry if no later task got
-      // chained on this same slot while we were running.
-      if (this.codexEnvironmentRuntimeLocks.get(key) === tracked) {
-        this.codexEnvironmentRuntimeLocks.delete(key);
-      }
-    }
   }
 
   /**

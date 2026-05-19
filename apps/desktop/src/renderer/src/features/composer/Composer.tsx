@@ -527,7 +527,10 @@ const dismissedEnvActionAnchorKeys = new Set<string>();
  */
 const envActionAnchorSessionStartedAt = Date.now();
 
-function EnvActionAnchorList(props: {
+// Exported solely so the list filter + dismiss machinery can be unit-
+// tested without standing up the full Composer; consumers should still
+// reach the anchor through the Composer.
+export function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
