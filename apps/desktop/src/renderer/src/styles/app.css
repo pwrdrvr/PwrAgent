@@ -811,7 +811,14 @@ textarea,
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
-  line-height: 1;
+  /* line-height 1 was clipping descenders (g, j, p, q, y) — the em-box
+     doesn't include the descender region, and the surrounding
+     overflow: hidden (needed for the text-overflow: ellipsis path)
+     chopped anything below the baseline. 1.3 gives descenders the
+     ~3 px of vertical room they need; the flex parent's
+     align-items: center keeps the visual baseline aligned with the
+     eyebrow + separator next to it. */
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
