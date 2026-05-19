@@ -1354,16 +1354,68 @@ function CodexDiagramIsolated() {
 }
 
 function CodexDiagramMultiple() {
+  // Three PwrAgent profiles (work, personal, projects) each map to a
+  // Codex profile of the same name. Codex `personal` and `projects`
+  // happen to share an upstream OpenAI login (joe@example.com) — they're
+  // still separate Codex profile dirs under ~/.codex/auth-profiles, but
+  // both auth as the same account. `work` uses a different login.
+  // The existing `default` Codex profile is left untouched on disk and
+  // is intentionally shown as a faded dashed node in the footer so the
+  // operator sees "we don't touch your default Codex" at a glance.
   return (
-    <div className="onboarding-wizard__codex onboarding-wizard__codex--stack">
-      <div className="onboarding-wizard__codex-col">
-        <CodexNode label="personal" avatar="P" accent compact />
-        <CodexNode label="work" avatar="W" compact />
-        <CodexNode label="side-project" avatar="S" compact />
+    <div className="onboarding-wizard__codex onboarding-wizard__codex--multiple">
+      <div className="onboarding-wizard__codex-multi-pairs">
+        <div className="onboarding-wizard__codex-multi-pair">
+          <CodexNode label="work" avatar="PA" accent compact tight />
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <CodexNode
+            label="work"
+            avatar="CX"
+            meta="work@example.com"
+            compact
+            tight
+          />
+        </div>
+        <div className="onboarding-wizard__codex-multi-pair">
+          <CodexNode label="personal" avatar="PA" accent compact tight />
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <CodexNode
+            label="personal"
+            avatar="CX"
+            meta="joe@example.com"
+            compact
+            tight
+          />
+        </div>
+        <div className="onboarding-wizard__codex-multi-pair">
+          <CodexNode label="projects" avatar="PA" accent compact tight />
+          <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--small">→</span>
+          <CodexNode
+            label="projects"
+            avatar="CX"
+            meta="joe@example.com"
+            compact
+            tight
+          />
+        </div>
       </div>
-      <span className="onboarding-wizard__codex-link">↔</span>
-      <div className="onboarding-wizard__codex-col">
-        <CodexNode label="3 logins" avatar="CX" accent compact />
+      <div className="onboarding-wizard__codex-multi-default">
+        <span className="onboarding-wizard__codex-multi-default-label">
+          Untouched
+        </span>
+        <CodexNode label="(default)" avatar="?" muted dashed compact tight />
+        <span className="onboarding-wizard__codex-link onboarding-wizard__codex-link--dashed">
+          ╌╌
+        </span>
+        <CodexNode
+          label="Codex default"
+          avatar="CX"
+          meta="your existing login"
+          muted
+          dashed
+          compact
+          tight
+        />
       </div>
     </div>
   );
@@ -1375,13 +1427,23 @@ function CodexNode(props: {
   meta?: string;
   accent?: boolean;
   compact?: boolean;
+  /** Even tighter padding for high-density diagrams (Multiple). */
+  tight?: boolean;
+  /** Render as a desaturated/hint state — used for the "untouched" pair. */
+  muted?: boolean;
+  /** Switch the border to dashed (companion to muted). */
+  dashed?: boolean;
 }) {
+  const classes = ["onboarding-wizard__codex-node"];
+  if (props.accent) classes.push("is-accent");
+  if (props.compact) classes.push("is-compact");
+  if (props.tight) classes.push("is-tight");
+  if (props.muted) classes.push("is-muted");
+  if (props.dashed) classes.push("is-dashed");
   return (
-    <div
-      className={`onboarding-wizard__codex-node${props.accent ? " is-accent" : ""}${props.compact ? " is-compact" : ""}`}
-    >
+    <div className={classes.join(" ")}>
       <span className="onboarding-wizard__codex-avatar">{props.avatar}</span>
-      <div>
+      <div className="onboarding-wizard__codex-node-text">
         <div className="onboarding-wizard__codex-label">{props.label}</div>
         {props.meta ? (
           <div className="onboarding-wizard__codex-meta">{props.meta}</div>

@@ -10466,6 +10466,90 @@ textarea,
 .onboarding-wizard__codex-link--accent {
   color: var(--accent);
 }
+.onboarding-wizard__codex-link--small {
+  font-size: 13px;
+}
+.onboarding-wizard__codex-link--dashed {
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+/* Multiple variant: 3 mapped pairs stacked vertically + a faded
+   "Codex default — untouched" dashed footer that makes the data-leak
+   guarantee visible. Slightly taller than the other Codex diagrams
+   (260px vs 200px) so all three pairs plus the footer fit without
+   crowding. */
+.onboarding-wizard__codex--multiple {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  height: 260px;
+  padding: 8px;
+  gap: 8px;
+}
+.onboarding-wizard__codex-multi-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.onboarding-wizard__codex-multi-pair {
+  display: grid;
+  grid-template-columns: 1fr 14px 1fr;
+  align-items: center;
+  gap: 4px;
+}
+.onboarding-wizard__codex-node.is-tight {
+  padding: 4px 6px;
+  gap: 6px;
+  max-width: none;
+  min-width: 0;
+}
+.onboarding-wizard__codex-node.is-tight .onboarding-wizard__codex-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+.onboarding-wizard__codex-node.is-tight .onboarding-wizard__codex-label {
+  font-size: 10px;
+}
+.onboarding-wizard__codex-node.is-tight .onboarding-wizard__codex-meta {
+  font-size: 8px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.onboarding-wizard__codex-node-text {
+  min-width: 0;
+}
+.onboarding-wizard__codex-node.is-muted {
+  background: transparent;
+  opacity: 0.7;
+}
+.onboarding-wizard__codex-node.is-muted .onboarding-wizard__codex-label,
+.onboarding-wizard__codex-node.is-muted .onboarding-wizard__codex-meta {
+  color: var(--text-muted);
+}
+.onboarding-wizard__codex-node.is-dashed {
+  border-style: dashed;
+  border-color: var(--border-subtle);
+}
+.onboarding-wizard__codex-multi-default {
+  display: grid;
+  grid-template-columns: auto 1fr 14px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.onboarding-wizard__codex-multi-default-label {
+  font: 600 8px/1 var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
 
 /* Safety preamble */
 .onboarding-wizard__safety {
