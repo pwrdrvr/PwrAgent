@@ -58,6 +58,14 @@ jobs:
         timeout-minutes: 10
         run: pnpm licenses:check
 
+      - name: SQL template safety
+        timeout-minutes: 10
+        run: pnpm lint:sql
+
+      - name: Renderer color literals
+        timeout-minutes: 10
+        run: pnpm lint:colors
+
       - name: Type check
         timeout-minutes: 10
         run: pnpm typecheck
