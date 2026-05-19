@@ -1699,46 +1699,81 @@ export class DesktopBackendRegistry {
     let cleanedThreads = 0;
     let bytesShed = 0;
     let zombiesConverted = 0;
-    for (const overlay of overlays) {
-      const runtime = overlay.codexEnvironmentRuntime;
-      if (!runtime) continue;
-      const runs = readCodexEnvironmentActionRuns(runtime);
-      if (runs.length === 0) continue;
-      let changed = false;
-      const nextRuns = runs.map((run) => {
-        const latestAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
-        if (latestAt === 0 || latestAt >= sessionStartedAt) {
-          return run;
-        }
-        changed = true;
-        bytesShed += run.output?.length ?? 0;
+    for (const overlayHint of overlays) {
+      // Run each thread's clean under the per-thread lock and re-read
+      // overlay state inside it, so a concurrent runCodexEnvironmentAction
+      // can't append a fresh run that we then overwrite with a stale
+      // snapshot. The hint we got from `lister` is point-in-time; the
+      // re-read is the source of truth.
+      await this.withCodexEnvironmentRuntimeLock(
+        overlayHint.backend,
+        overlayHint.threadId,
+        async () => {
+          const overlay = await this.overlayStore.getThreadOverlayState({
+            backend: overlayHint.backend,
+            threadId: overlayHint.threadId,
+          });
+          const runtime = overlay?.codexEnvironmentRuntime;
+          if (!runtime) return;
+          const runs = readCodexEnvironmentActionRuns(runtime);
+          if (runs.length === 0) return;
+          let changed = false;
+          const nextRuns = runs.map((run) => {
+        // For "started" runs, decide ownership by timestamp: anything
+        // started before this registry session is a zombie (detached
+        // children with piped stdio died via SIGPIPE when the prior
+        // process exited). Anything started at or after sessionStartedAt
+        // was kicked off by this session and must be left alone — the
+        // cleanup is fire-and-forget so a fast user Run-click could
+        // land a fresh entry before this iteration commits.
+        //
+        // Legacy-synthesised runs (from overlays written before
+        // actionStartedAt existed) carry startedAt=0, which correctly
+        // falls into the "before this session" bucket and gets
+        // converted — fixing the regression where the renderer would
+        // show a stale, undismissable "running" anchor after a parent
+        // crash.
         if (run.status === "started") {
+          const startedAt = run.startedAt ?? 0;
+          if (startedAt >= sessionStartedAt) {
+            return run;
+          }
+          changed = true;
+          bytesShed += run.output?.length ?? 0;
           zombiesConverted += 1;
           return {
             ...run,
             status: "failed" as const,
             output: undefined,
-            // Without an authoritative exit time, use startedAt so the
-            // duration math doesn't go negative or absurd.
             exitedAt: run.exitedAt ?? run.startedAt ?? sessionStartedAt,
             durationMs:
               run.durationMs ??
-              Math.max(0, (run.exitedAt ?? sessionStartedAt) - (run.startedAt ?? 0)),
+              Math.max(0, (run.exitedAt ?? sessionStartedAt) - startedAt),
           };
         }
-        return { ...run, output: undefined };
+        // Finished runs: shed bytes only if their latest activity
+        // predates this session.
+        const latestAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
+        if (latestAt > 0 && latestAt < sessionStartedAt && run.output) {
+          changed = true;
+          bytesShed += run.output.length;
+          return { ...run, output: undefined };
+        }
+        return run;
       });
-      if (!changed) continue;
-      cleanedThreads += 1;
-      const nextRuntime: CodexThreadEnvironmentRuntime = {
-        ...runtime,
-        actionRuns: nextRuns,
-      };
-      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-        backend: overlay.backend,
-        threadId: overlay.threadId,
-        codexEnvironmentRuntime: nextRuntime,
-      });
+          if (!changed) return;
+          cleanedThreads += 1;
+          const nextRuntime: CodexThreadEnvironmentRuntime = {
+            ...runtime,
+            actionRuns: nextRuns,
+          };
+          await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+            backend: overlayHint.backend,
+            threadId: overlayHint.threadId,
+            codexEnvironmentRuntime: nextRuntime,
+          });
+        },
+      );
     }
     if (cleanedThreads > 0) {
       backendRegistryLog.info("codex-environment-startup-cleanup", {

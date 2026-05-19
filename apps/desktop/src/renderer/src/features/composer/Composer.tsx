@@ -536,8 +536,16 @@ function EnvActionAnchorList(props: {
   const visible = runs.filter((run) => {
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
     const latestActivityAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
-    if (latestActivityAt > 0 && latestActivityAt < envActionAnchorSessionStartedAt) {
-      // Persisted from a previous session; treat as historical.
+    // Anything not started during this renderer session is treated as
+    // historical / zombie and hidden. Note: the `< envActionAnchorSessionStartedAt`
+    // check catches runs with timestamps that predate this session AND
+    // runs with missing/zero timestamps (legacy overlay rows from before
+    // actionStartedAt existed synthesise startedAt=0 via
+    // readCodexEnvironmentActionRuns). The earlier `latestActivityAt > 0`
+    // guard let those legacy entries slip through, leaving the user with
+    // an undismissable "running" zombie after an app crash — see the
+    // PwrAgent termination repro in PR #505 review.
+    if (latestActivityAt < envActionAnchorSessionStartedAt) {
       return false;
     }
     return true;

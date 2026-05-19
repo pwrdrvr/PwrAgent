@@ -3405,6 +3405,75 @@ command = '''printf action-ran > ${outputPath}'''
     }
   });
 
+  it("converts started env-action runs to failed even when timestamps are 0 or missing (legacy-synthesised data)", async () => {
+    // Reproduces the PwrAgent-killed-by-Computer-Use regression: an
+    // overlay row from a pre-actionStartedAt build (or any data where
+    // synthesis produces startedAt=0) used to slip past the
+    // timestamp-gated cleanup, then slip past the renderer's
+    // session-start filter, leaving the user with a perpetual
+    // "running" anchor and no Dismiss control. The fix is to convert
+    // any "started" run unconditionally — by lifecycle, anything we
+    // didn't start in this process lifetime is a zombie.
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-zombie-legacy": {
+          backend: "codex",
+          threadId: "thread-zombie-legacy",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            cwd: "/tmp/x",
+            setupEnabled: false,
+            actions: [],
+            actionRuns: [
+              {
+                runId: "legacy:dev:0",
+                actionId: "dev",
+                actionName: "Dev",
+                command: "pnpm dev",
+                status: "started",
+                startedAt: 0, // legacy-synthesised
+                pid: 72685,
+                output: "lots of stale bytes",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    try {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const overlay = await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-zombie-legacy",
+        });
+        const run = overlay?.codexEnvironmentRuntime?.actionRuns?.[0];
+        if (run?.status === "failed" && run.output === undefined) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("cleanup did not convert legacy zombie run in time");
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("leaves current-session env-action runs untouched on startup", async () => {
     // Negative case: a run whose startedAt is >= the registry's session
     // start (which is captured at construction) must survive the cleanup

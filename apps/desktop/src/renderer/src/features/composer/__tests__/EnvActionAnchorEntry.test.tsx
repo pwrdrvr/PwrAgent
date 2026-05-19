@@ -188,4 +188,32 @@ describe("EnvActionAnchorEntry", () => {
       expect(screen.queryByText(/PwrAgnt/)).toBeNull();
     });
   });
+
+  describe("backend-converted zombie display", () => {
+    // EnvActionAnchorEntry itself doesn't apply the session-start filter
+    // (its parent EnvActionAnchorList does), but we assert the entry
+    // renders correctly for the "converted-by-backend-cleanup" path:
+    // a previously-started run that backend cleanup has flipped to
+    // "failed" must show with a Dismiss button so the user isn't stuck.
+    it("renders a backend-converted zombie run with a Dismiss button", () => {
+      render(
+        <EnvActionAnchorEntry
+          run={buildRun({
+            status: "failed",
+            startedAt: 1, // legacy-synthesised values may be 0/1 here
+            exitedAt: 1_700_000_000_000,
+            output: undefined,
+          })}
+          environmentName="PwrAgnt"
+          onDismiss={() => {}}
+        />,
+      );
+      expect(
+        screen.getByLabelText("Env action failed"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Dismiss" }),
+      ).toBeInTheDocument();
+    });
+  });
 });
