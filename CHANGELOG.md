@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0-beta.11 - 2026-05-19
+
+- Added archived-thread settings with project/profile grouping, restored-thread filtering, and worktree restore handling.
+- Added visible Codex environment setup and action-run failure diagnostics, including streamed command output, status anchors above the composer, dismiss controls, and safer stale-run cleanup.
+- Added first-run profile bootstrap plumbing so new profiles can defer Codex thread loading until onboarding completes when the onboarding gate is enabled.
+- Improved LiveWorkRail behavior with a working collapse chevron, merged summary title, sticky per-file diff headers, and real Electron E2E coverage for collapse behavior.
+- Improved theme polish with renderer color-literal linting, light/dark token documentation, screenshot theme/density controls, synced appearance updates across auxiliary windows, and better light-theme titlebar contrast.
+- Fixed compact-density skill chips so composer and transcript chips remain visible outside the thread list.
+- Updated GitHub Actions dependency maintenance to focus Dependabot on major action bumps, including release/download-artifact and docs-site action updates.
+
 ## v1.0.0-beta.10 - 2026-05-18
 
 - Added a live work rail above the composer that keeps active and last-turn plan, edited-files, and changed-files context visible without duplicating transcript rows.
