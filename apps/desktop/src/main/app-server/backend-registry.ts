@@ -87,6 +87,8 @@ import {
   type UpdateThreadExpectedBranchResponse,
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
+  applyCodexEnvironmentActionRunUpdate,
+  readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
@@ -3564,10 +3566,12 @@ export class DesktopBackendRegistry {
       currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
       request.actionId,
     );
+    const runId = randomUUID();
     let nextRuntime: CodexThreadEnvironmentRuntime;
     try {
       nextRuntime = await startLocalCodexEnvironmentAction({
         actionId: request.actionId,
+        runId,
         commandRunner: this.codexEnvironmentCommandRunner,
         env: this.codexEnvironmentCommandEnv,
         runtime: runtimeForAction,
@@ -3575,7 +3579,7 @@ export class DesktopBackendRegistry {
           void this.handleCodexEnvironmentActionDetachedExit({
             backend: request.backend,
             threadId: request.threadId,
-            actionId: request.actionId,
+            runId,
             event,
           });
         },
@@ -3583,7 +3587,7 @@ export class DesktopBackendRegistry {
           void this.handleCodexEnvironmentActionDetachedOutput({
             backend: request.backend,
             threadId: request.threadId,
-            actionId: request.actionId,
+            runId,
             event,
           });
         },
@@ -3739,18 +3743,19 @@ export class DesktopBackendRegistry {
 
   /**
    * Called when a detached env-action child (e.g., `pnpm dev` for the
-   * PwrSnap run button) eventually exits. Updates overlay state so the
-   * renderer's anchored env-action output UI shows exit code + output,
+   * PwrSnap run button) eventually exits. Patches the matching entry in
+   * `codexEnvironmentRuntime.actionRuns` so the renderer's anchored
+   * env-action output UI shows exit code + output for that specific run,
    * and emits `thread/codexEnvironment/updated` so the UI refreshes.
    *
-   * The current overlay runtime is the source of truth — we only patch
-   * the exit-related fields if the recorded action matches (so a stale
-   * exit from a prior run doesn't overwrite a freshly-started one).
+   * Patches by `runId` rather than `actionId` so a second concurrent run
+   * of the same action (e.g. user runs Test, it's still running, user
+   * runs Test again) doesn't have its output collide with the first.
    */
   private async handleCodexEnvironmentActionDetachedExit(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    actionId: string;
+    runId: string;
     event: CodexEnvironmentDetachedExit;
   }): Promise<void> {
     try {
@@ -3762,21 +3767,31 @@ export class DesktopBackendRegistry {
       if (!current) {
         return;
       }
-      if (current.actionId && current.actionId !== params.actionId) {
-        // A different action has since been started; don't clobber.
+      const currentRuns = readCodexEnvironmentActionRuns(current);
+      if (!currentRuns.some((run) => run.runId === params.runId)) {
+        // The matching run has been evicted (cap exceeded) or this is a
+        // stale callback from a previous environment selection. Nothing
+        // to patch.
         return;
       }
       const exitedSuccessfully =
         params.event.exitCode === 0 && !params.event.exitSignal;
+      const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
+        kind: "patch",
+        runId: params.runId,
+        patch: {
+          status: exitedSuccessfully ? "exited" : "failed",
+          exitCode:
+            params.event.exitCode === null ? undefined : params.event.exitCode,
+          exitSignal: params.event.exitSignal ?? undefined,
+          durationMs: params.event.durationMs,
+          exitedAt: Date.now(),
+          output: params.event.output,
+        },
+      });
       const next: CodexThreadEnvironmentRuntime = {
         ...current,
-        actionStatus: exitedSuccessfully ? "exited" : "failed",
-        actionExitCode:
-          params.event.exitCode === null ? undefined : params.event.exitCode,
-        actionExitSignal: params.event.exitSignal ?? undefined,
-        actionDurationMs: params.event.durationMs,
-        actionExitedAt: Date.now(),
-        actionOutput: params.event.output,
+        actionRuns: nextRuns,
       };
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: params.backend,
@@ -3793,7 +3808,7 @@ export class DesktopBackendRegistry {
       backendRegistryLog.warn("codex-environment-action-exit-overlay-update-failed", {
         backend: params.backend,
         threadId: params.threadId,
-        actionId: params.actionId,
+        runId: params.runId,
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -3802,17 +3817,14 @@ export class DesktopBackendRegistry {
   /**
    * Called periodically (throttled to ~500ms) while a detached env-action
    * child is running, with a snapshot of its accumulated stdout+stderr.
-   * Updates `actionOutput` on the overlay so the renderer's anchored UI
-   * shows live output instead of "(no output yet)". Does not change
-   * actionStatus — that stays "started" until the child closes.
-   *
-   * Same actionId guard as the exit handler so a stale snapshot can't
-   * overwrite a fresh action's output.
+   * Patches the matching run's `output` on the overlay so the renderer's
+   * anchored UI shows live output. Does not change `status` — that stays
+   * "started" until the child closes.
    */
   private async handleCodexEnvironmentActionDetachedOutput(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    actionId: string;
+    runId: string;
     event: CodexEnvironmentDetachedOutput;
   }): Promise<void> {
     try {
@@ -3824,17 +3836,24 @@ export class DesktopBackendRegistry {
       if (!current) {
         return;
       }
-      if (current.actionId && current.actionId !== params.actionId) {
+      const currentRuns = readCodexEnvironmentActionRuns(current);
+      const matching = currentRuns.find((run) => run.runId === params.runId);
+      if (!matching) {
         return;
       }
       // Skip the write+emit if the snapshot hasn't actually changed — keeps
       // a quiet child from generating empty IPC noise.
-      if (current.actionOutput === params.event.output) {
+      if (matching.output === params.event.output) {
         return;
       }
+      const nextRuns = applyCodexEnvironmentActionRunUpdate(currentRuns, {
+        kind: "patch",
+        runId: params.runId,
+        patch: { output: params.event.output },
+      });
       const next: CodexThreadEnvironmentRuntime = {
         ...current,
-        actionOutput: params.event.output,
+        actionRuns: nextRuns,
       };
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: params.backend,
@@ -3853,7 +3872,7 @@ export class DesktopBackendRegistry {
         {
           backend: params.backend,
           threadId: params.threadId,
-          actionId: params.actionId,
+          runId: params.runId,
           message: error instanceof Error ? error.message : String(error),
         },
       );
@@ -3907,6 +3926,10 @@ export class DesktopBackendRegistry {
     // The detached env-action child can exit asynchronously after we've
     // already returned to the caller. Queue any early exits until the
     // thread is started so we can attribute them to the right thread.
+    // Pre-generate the runId for the auto-action so the same id flows
+    // from the runtime helper into the renderer's actionRuns entry and
+    // into the post-startThread output/exit handlers.
+    const autoActionRunId = randomUUID();
     let pendingActionThreadId: string | undefined;
     const queuedActionDetachedExits: CodexEnvironmentDetachedExit[] = [];
     const queuedActionDetachedOutputs: CodexEnvironmentDetachedOutput[] = [];
@@ -3916,7 +3939,7 @@ export class DesktopBackendRegistry {
         void this.handleCodexEnvironmentActionDetachedExit({
           backend: codexActionBackend,
           threadId: pendingActionThreadId,
-          actionId: codexEnvironmentSelection.action.id,
+          runId: autoActionRunId,
           event,
         });
         return;
@@ -3928,7 +3951,7 @@ export class DesktopBackendRegistry {
         void this.handleCodexEnvironmentActionDetachedOutput({
           backend: codexActionBackend,
           threadId: pendingActionThreadId,
-          actionId: codexEnvironmentSelection.action.id,
+          runId: autoActionRunId,
           event,
         });
         return;
@@ -3956,6 +3979,7 @@ export class DesktopBackendRegistry {
             : undefined,
           onActionDetachedExit,
           onActionDetachedOutput,
+          actionRunId: autoActionRunId,
           selection: codexEnvironmentSelection,
         });
       } catch (error) {
@@ -3983,12 +4007,11 @@ export class DesktopBackendRegistry {
     });
     pendingActionThreadId = startThreadResponse.threadId;
     if (codexEnvironmentSelection?.action?.id) {
-      const actionId = codexEnvironmentSelection.action.id;
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
           backend: codexActionBackend,
           threadId: startThreadResponse.threadId,
-          actionId,
+          runId: autoActionRunId,
           event,
         });
       }
@@ -3997,7 +4020,7 @@ export class DesktopBackendRegistry {
         void this.handleCodexEnvironmentActionDetachedExit({
           backend: codexActionBackend,
           threadId: startThreadResponse.threadId,
-          actionId,
+          runId: autoActionRunId,
           event,
         });
       }

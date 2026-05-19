@@ -2922,8 +2922,13 @@ command = '''printf action-ran > ${outputPath}'''
         }),
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
-          actionName: "Dev - Messaging",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "dev-messaging",
+              actionName: "Dev - Messaging",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
@@ -2994,8 +2999,13 @@ command = '''printf action-ran > ${outputPath}'''
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
           cwd: worktreePath,
-          actionName: "Capture CWD",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "capture-cwd",
+              actionName: "Capture CWD",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(
@@ -3078,8 +3088,13 @@ command = '''printf action-ran > ${outputPath}'''
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
           cwd: localPath,
-          actionName: "Capture CWD",
-          actionStatus: "started",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "capture-cwd",
+              actionName: "Capture CWD",
+              status: "started",
+            }),
+          ],
         },
       });
       await expectEventually(
@@ -3144,10 +3159,14 @@ command = '''printf action-ran > ${outputPath}'''
         }),
       ).resolves.toMatchObject({
         codexEnvironmentRuntime: {
-          actionId: "dev-messaging",
-          actionName: "Dev - Messaging",
-          actionCommand: "pnpm dev",
-          actionStatus: "failed",
+          actionRuns: [
+            expect.objectContaining({
+              actionId: "dev-messaging",
+              actionName: "Dev - Messaging",
+              command: "pnpm dev",
+              status: "failed",
+            }),
+          ],
         },
       });
     } finally {

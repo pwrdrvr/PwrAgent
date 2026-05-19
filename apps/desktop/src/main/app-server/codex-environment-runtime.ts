@@ -1,8 +1,15 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { CodexEnvironmentSetupProgressEvent } from "@pwragent/shared";
-import type { CodexThreadEnvironmentRuntime } from "@pwragent/shared";
-import type { CodexEnvironmentOption } from "@pwragent/shared";
+import type {
+  CodexEnvironmentActionRun,
+  CodexEnvironmentOption,
+  CodexEnvironmentSetupProgressEvent,
+  CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared";
+import {
+  applyCodexEnvironmentActionRunUpdate,
+  readCodexEnvironmentActionRuns,
+} from "@pwragent/shared";
 import { getMainLogger } from "../log";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
@@ -153,6 +160,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   ) => void;
   onActionDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
   onActionDetachedOutput?: (event: CodexEnvironmentDetachedOutput) => void;
+  /** Optional caller-generated runId for the auto-action; falls back to a fresh UUID. */
+  actionRunId?: string;
   selection?: CodexEnvironmentSelection;
   setupTimeoutMs?: number;
 }): Promise<CodexThreadEnvironmentRuntime | undefined> {
@@ -273,9 +282,16 @@ export async function applyLocalCodexEnvironmentSelection(params: {
   }
 
   if (selection.action) {
-    runtime.actionId = selection.action.id;
-    runtime.actionName = selection.action.name;
-    runtime.actionCommand = selection.action.command;
+    const runId = params.actionRunId ?? randomUUID();
+    const startedAt = Date.now();
+    const run: CodexEnvironmentActionRun = {
+      runId,
+      actionId: selection.action.id,
+      actionName: selection.action.name,
+      command: selection.action.command,
+      status: "started",
+      startedAt,
+    };
     try {
       const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
@@ -285,11 +301,18 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         onDetachedExit: params.onActionDetachedExit,
         onDetachedOutput: params.onActionDetachedOutput,
       });
-      runtime.actionPid = result.pid;
-      runtime.actionStatus = "started";
-      runtime.actionStartedAt = Date.now();
+      run.pid = result.pid;
+      runtime.actionRuns = applyCodexEnvironmentActionRunUpdate(
+        readCodexEnvironmentActionRuns(runtime),
+        { kind: "append", run },
+      );
     } catch (error) {
-      runtime.actionStatus = "failed";
+      run.status = "failed";
+      run.exitedAt = Date.now();
+      runtime.actionRuns = applyCodexEnvironmentActionRunUpdate(
+        readCodexEnvironmentActionRuns(runtime),
+        { kind: "append", run },
+      );
       environmentRuntimeLog.error("codex-environment-action-failed", {
         environmentId: selection.environment.id,
         environmentName: selection.environment.name,
@@ -298,6 +321,7 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         cwd,
         command: selection.action.command,
         phase: "during-setup",
+        runId,
         message: error instanceof Error ? error.message : String(error),
       });
       throw new CodexEnvironmentStartupError(
@@ -313,6 +337,8 @@ export async function applyLocalCodexEnvironmentSelection(params: {
 
 export async function startLocalCodexEnvironmentAction(params: {
   actionId: string;
+  /** Caller-generated runId so output/exit callbacks can be pre-bound to the right run. */
+  runId: string;
   commandRunner?: CodexEnvironmentCommandRunner;
   env?: NodeJS.ProcessEnv;
   onDetachedExit?: (event: CodexEnvironmentDetachedExit) => void;
@@ -330,19 +356,16 @@ export async function startLocalCodexEnvironmentAction(params: {
     throw new Error(`Codex environment action '${params.actionId}' is not available.`);
   }
 
-  const nextRuntime: CodexThreadEnvironmentRuntime = {
-    ...params.runtime,
+  const startedAt = Date.now();
+  const run: CodexEnvironmentActionRun = {
+    runId: params.runId,
     actionId: action.id,
     actionName: action.name,
-    actionCommand: action.command,
-    // Clear stale exit fields from a prior run of this (or another) action
-    // so the renderer doesn't display old output while the new run starts.
-    actionExitedAt: undefined,
-    actionExitCode: undefined,
-    actionExitSignal: undefined,
-    actionDurationMs: undefined,
-    actionOutput: undefined,
+    command: action.command,
+    status: "started",
+    startedAt,
   };
+  const existingRuns = readCodexEnvironmentActionRuns(params.runtime);
 
   try {
     const result = await (params.commandRunner ?? runShellCommand)({
@@ -353,11 +376,24 @@ export async function startLocalCodexEnvironmentAction(params: {
       onDetachedExit: params.onDetachedExit,
       onDetachedOutput: params.onDetachedOutput,
     });
-    nextRuntime.actionPid = result.pid;
-    nextRuntime.actionStatus = "started";
-    nextRuntime.actionStartedAt = Date.now();
+    run.pid = result.pid;
+    return {
+      ...params.runtime,
+      actionRuns: applyCodexEnvironmentActionRunUpdate(existingRuns, {
+        kind: "append",
+        run,
+      }),
+    };
   } catch (error) {
-    nextRuntime.actionStatus = "failed";
+    run.status = "failed";
+    run.exitedAt = Date.now();
+    const nextRuntime: CodexThreadEnvironmentRuntime = {
+      ...params.runtime,
+      actionRuns: applyCodexEnvironmentActionRunUpdate(existingRuns, {
+        kind: "append",
+        run,
+      }),
+    };
     environmentRuntimeLog.error("codex-environment-action-failed", {
       environmentId: params.runtime.environmentId,
       environmentName: params.runtime.environmentName,
@@ -366,6 +402,7 @@ export async function startLocalCodexEnvironmentAction(params: {
       cwd: params.runtime.cwd,
       command: action.command,
       phase: "run-button",
+      runId: params.runId,
       message: error instanceof Error ? error.message : String(error),
     });
     throw new CodexEnvironmentStartupError(
@@ -374,8 +411,6 @@ export async function startLocalCodexEnvironmentAction(params: {
       nextRuntime,
     );
   }
-
-  return nextRuntime;
 }
 
 function runShellCommand(

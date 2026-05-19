@@ -19,6 +19,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  CodexEnvironmentActionRun,
   CodexThreadEnvironmentRuntime,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
@@ -31,6 +32,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -487,86 +489,78 @@ function formatDurationMs(ms?: number): string {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-type EnvActionAnchorRuntime = Pick<
-  CodexThreadEnvironmentRuntime,
-  | "actionCommand"
-  | "actionDurationMs"
-  | "actionExitCode"
-  | "actionExitSignal"
-  | "actionExitedAt"
-  | "actionName"
-  | "actionOutput"
-  | "actionPid"
-  | "actionStartedAt"
-  | "actionStatus"
-  | "environmentName"
->;
-
 /**
  * Set of run identities the user has explicitly dismissed in this session.
  * Module-level so it survives Composer remounts (thread switches), but
  * cleared on page reload — fresh runs always show, since each run gets a
- * new dismissKey from pid + startedAt + exitedAt.
+ * new runId on the server.
  */
 const dismissedEnvActionAnchorKeys = new Set<string>();
 
 /**
- * Approximate moment the renderer started this session. Runtime entries
- * whose latest activity timestamp predates this are treated as historical
- * (persisted from a prior app launch) and not surfaced in the anchor —
- * otherwise the user would have to re-dismiss the same finished run on
- * every restart. The persisted fields stay on the runtime so logs and
- * future "show last run" affordances can still inspect them.
+ * Approximate moment the renderer started this session. Runs whose latest
+ * activity timestamp predates this are treated as historical (persisted
+ * from a prior app launch) and not surfaced — otherwise the user would
+ * have to re-dismiss the same finished run on every restart. The
+ * persisted fields stay on the runtime so logs and a future "show last
+ * run" affordance can still inspect them.
  */
 const envActionAnchorSessionStartedAt = Date.now();
 
-function EnvActionAnchor(props: {
-  runtime?: EnvActionAnchorRuntime;
+function EnvActionAnchorList(props: {
+  runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
-  const runtime = props.runtime;
-  // Re-render version bumped each second while an action is running so the
-  // "running for Xs" elapsed meta keeps ticking — useState(0) on a 1Hz
-  // interval, only when status === "started" so idle/exited anchors don't
-  // burn cycles.
+  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Re-render every second while ANY run is started, so the per-run
+  // "running for Xs" meta keeps ticking. Cheaper than one timer per run.
+  const anyRunning = runs.some((run) => run.status === "started");
   const [, setElapsedTick] = useState(0);
-  const status = runtime?.actionStatus;
   useEffect(() => {
-    if (status !== "started") return undefined;
+    if (!anyRunning) return undefined;
     const handle = setInterval(() => {
       setElapsedTick((tick) => tick + 1);
     }, 1_000);
     return () => clearInterval(handle);
-  }, [status]);
-  // Force a re-render after dismissal even though the dismissed-set lives
-  // outside React state; bumping any state value will do.
+  }, [anyRunning]);
+  // Bumped after dismissal to force a re-render (the dismissed-set lives
+  // outside React state).
   const [, setDismissTick] = useState(0);
 
-  // Only surface when there's something meaningful to show.
-  if (!runtime || (status !== "started" && status !== "exited" && status !== "failed")) {
-    return null;
-  }
-  // Hide persisted-from-prior-session entries. After app restart, a
-  // runtime with actionStatus "started" is almost certainly a zombie
-  // (parent exited, child died via SIGPIPE on closed stdio), and a
-  // runtime with "exited"/"failed" is a finished run the user has
-  // already seen — no point shouting about it on every launch.
-  const latestActivityAt = Math.max(
-    runtime.actionExitedAt ?? 0,
-    runtime.actionStartedAt ?? 0,
-  );
-  if (
-    latestActivityAt > 0 &&
-    latestActivityAt < envActionAnchorSessionStartedAt
-  ) {
-    return null;
-  }
-  const dismissKey = `${runtime.actionPid ?? "?"}:${runtime.actionStartedAt ?? 0}:${
-    runtime.actionExitedAt ?? 0
-  }`;
-  if (dismissedEnvActionAnchorKeys.has(dismissKey)) {
-    return null;
-  }
+  const visible = runs.filter((run) => {
+    if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
+    const latestActivityAt = Math.max(run.exitedAt ?? 0, run.startedAt ?? 0);
+    if (latestActivityAt > 0 && latestActivityAt < envActionAnchorSessionStartedAt) {
+      // Persisted from a previous session; treat as historical.
+      return false;
+    }
+    return true;
+  });
+  if (visible.length === 0) return null;
 
+  return (
+    <>
+      {visible.map((run) => (
+        <EnvActionAnchorEntry
+          key={run.runId}
+          run={run}
+          environmentName={props.runtime?.environmentName}
+          onDismiss={() => {
+            dismissedEnvActionAnchorKeys.add(run.runId);
+            setDismissTick((tick) => tick + 1);
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+function EnvActionAnchorEntry(props: {
+  run: CodexEnvironmentActionRun;
+  environmentName: string | undefined;
+  onDismiss: () => void;
+}): ReactNode {
+  const { run } = props;
+  const status = run.status;
   const label =
     status === "started"
       ? "Env action running"
@@ -575,27 +569,22 @@ function EnvActionAnchor(props: {
         : "Env action failed";
 
   const meta: string[] = [];
-  if (runtime.actionPid) meta.push(`pid ${runtime.actionPid}`);
-  if (status === "started" && runtime.actionStartedAt) {
-    const elapsed = Date.now() - runtime.actionStartedAt;
-    meta.push(`running for ${formatDurationMs(elapsed)}`);
+  if (run.pid) meta.push(`pid ${run.pid}`);
+  if (status === "started" && run.startedAt) {
+    meta.push(`running for ${formatDurationMs(Date.now() - run.startedAt)}`);
   }
   if (status !== "started") {
-    if (typeof runtime.actionExitCode === "number") {
-      meta.push(`exit ${runtime.actionExitCode}`);
-    } else if (runtime.actionExitSignal) {
-      meta.push(`signal ${runtime.actionExitSignal}`);
+    if (typeof run.exitCode === "number") {
+      meta.push(`exit ${run.exitCode}`);
+    } else if (run.exitSignal) {
+      meta.push(`signal ${run.exitSignal}`);
     }
-    if (runtime.actionDurationMs) {
-      meta.push(`ran ${formatDurationMs(runtime.actionDurationMs)}`);
+    if (run.durationMs) {
+      meta.push(`ran ${formatDurationMs(run.durationMs)}`);
     }
   }
 
-  const truncatedOutput = tailLines(
-    (runtime.actionOutput ?? "").trim(),
-    ENV_ACTION_OUTPUT_MAX_LINES,
-  );
-
+  const truncatedOutput = tailLines((run.output ?? "").trim(), ENV_ACTION_OUTPUT_MAX_LINES);
   const modifier =
     status === "failed"
       ? "composer__queued--env-action-failed"
@@ -611,14 +600,12 @@ function EnvActionAnchor(props: {
       <div className="composer__queued-copy">
         <span className="composer__queued-label">{label}</span>
         <span className="composer__queued-text">
-          {runtime.actionName ?? "Action"}
-          {runtime.environmentName ? ` · ${runtime.environmentName}` : ""}
+          {run.actionName}
+          {props.environmentName ? ` · ${props.environmentName}` : ""}
           {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
         </span>
-        {runtime.actionCommand ? (
-          <code className="composer__queued-env-action-command">
-            $ {runtime.actionCommand}
-          </code>
+        {run.command ? (
+          <code className="composer__queued-env-action-command">$ {run.command}</code>
         ) : null}
         <details className="composer__queued-env-action-details">
           <summary>
@@ -643,10 +630,7 @@ function EnvActionAnchor(props: {
           <button
             className="composer__secondary-action"
             type="button"
-            onClick={() => {
-              dismissedEnvActionAnchorKeys.add(dismissKey);
-              setDismissTick((tick) => tick + 1);
-            }}
+            onClick={props.onDismiss}
           >
             Dismiss
           </button>
@@ -3905,7 +3889,7 @@ export function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
-      <EnvActionAnchor runtime={props.thread?.codexEnvironmentRuntime} />
+      <EnvActionAnchorList runtime={props.thread?.codexEnvironmentRuntime} />
 
       {pendingSteer ? (
         <div

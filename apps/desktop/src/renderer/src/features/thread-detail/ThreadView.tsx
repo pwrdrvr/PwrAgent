@@ -32,7 +32,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { isBranchDrifted } from "@pwragent/shared";
+import { isBranchDrifted, readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -1035,8 +1035,17 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.suppressBranchDriftDialog]);
   const selectedThreadSetupFailed =
     selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
-  const selectedThreadActionFailed =
-    selectedThread?.codexEnvironmentRuntime?.actionStatus === "failed";
+  // The setup-failure dialog only surfaces during launchpad materialise
+  // (messageCount === 0), where at most one auto-action runs. Look for
+  // the most recent failed run in actionRuns to drive the action-phase
+  // branch of the dialog.
+  const selectedThreadActionRuns = readCodexEnvironmentActionRuns(
+    selectedThread?.codexEnvironmentRuntime,
+  );
+  const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
+    .reverse()
+    .find((run) => run.status === "failed");
+  const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
   const selectedThreadWorktree = selectedThread?.linkedDirectories.find(
     (directory) =>
       directory.kind === "worktree" || Boolean(directory.worktreePath?.trim()),
@@ -1996,7 +2005,7 @@ export function ThreadView(props: ThreadViewProps) {
               continuing={setupFailureContinuing}
               command={
                 selectedThreadEnvironmentFailurePhase === "action"
-                  ? selectedThread.codexEnvironmentRuntime?.actionCommand
+                  ? selectedThreadLatestFailedActionRun?.command
                   : selectedThread.codexEnvironmentRuntime?.setupCommand ??
                     launchpadSetupProgress?.command
               }
