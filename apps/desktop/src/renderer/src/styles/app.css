@@ -226,6 +226,26 @@
      heavy against white). */
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.18);
 
+  /* Light-surface drop shadows need much lower alpha than dark-surface
+     ones — at the dark-theme values (32 / 40 / 58%) on white, the soft
+     blur reads as a hard rectangular slab behind the card and visually
+     overrides the card's own rounded corners. Approximately matches
+     the shadow-popover ratio (dark 0.42 → light 0.18). The four
+     --shadow-tint-* tokens cascade through every popover, drag-image,
+     and modal scrim in the renderer, so getting these right per theme
+     is what makes elevation read correctly on both. */
+  --shadow-tint-faint: color-mix(in srgb, var(--shadow-base) 8%, transparent);
+  --shadow-tint-soft: color-mix(in srgb, var(--shadow-base) 14%, transparent);
+  --shadow-tint-medium: color-mix(in srgb, var(--shadow-base) 17%, transparent);
+  --shadow-tint-strong: color-mix(in srgb, var(--shadow-base) 22%, transparent);
+
+  /* Modal scrims also need to be lighter on white — at the dark-theme
+     alphas (22 / 62 / 88%) they obliterate the underlying surface
+     instead of dimming it. */
+  --scrim-subtle: color-mix(in srgb, var(--shadow-base) 10%, transparent);
+  --scrim-strong: color-mix(in srgb, var(--shadow-base) 32%, transparent);
+  --scrim-opaque: color-mix(in srgb, var(--shadow-base) 55%, transparent);
+
   /* Danger base override — darker for light theme. */
   --danger-base: #8a1f12;
 
