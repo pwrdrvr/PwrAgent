@@ -510,6 +510,16 @@ type EnvActionAnchorRuntime = Pick<
  */
 const dismissedEnvActionAnchorKeys = new Set<string>();
 
+/**
+ * Approximate moment the renderer started this session. Runtime entries
+ * whose latest activity timestamp predates this are treated as historical
+ * (persisted from a prior app launch) and not surfaced in the anchor —
+ * otherwise the user would have to re-dismiss the same finished run on
+ * every restart. The persisted fields stay on the runtime so logs and
+ * future "show last run" affordances can still inspect them.
+ */
+const envActionAnchorSessionStartedAt = Date.now();
+
 function EnvActionAnchor(props: {
   runtime?: EnvActionAnchorRuntime;
 }): ReactNode {
@@ -533,6 +543,21 @@ function EnvActionAnchor(props: {
 
   // Only surface when there's something meaningful to show.
   if (!runtime || (status !== "started" && status !== "exited" && status !== "failed")) {
+    return null;
+  }
+  // Hide persisted-from-prior-session entries. After app restart, a
+  // runtime with actionStatus "started" is almost certainly a zombie
+  // (parent exited, child died via SIGPIPE on closed stdio), and a
+  // runtime with "exited"/"failed" is a finished run the user has
+  // already seen — no point shouting about it on every launch.
+  const latestActivityAt = Math.max(
+    runtime.actionExitedAt ?? 0,
+    runtime.actionStartedAt ?? 0,
+  );
+  if (
+    latestActivityAt > 0 &&
+    latestActivityAt < envActionAnchorSessionStartedAt
+  ) {
     return null;
   }
   const dismissKey = `${runtime.actionPid ?? "?"}:${runtime.actionStartedAt ?? 0}:${
