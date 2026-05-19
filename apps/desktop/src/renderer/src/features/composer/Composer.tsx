@@ -511,24 +511,39 @@ function EnvActionAnchorList(props: {
   runtime?: Pick<CodexThreadEnvironmentRuntime, "actionRuns" | "environmentName"> | undefined;
 }): ReactNode {
   const runs = readCodexEnvironmentActionRuns(props.runtime);
-  // Re-render every second while ANY run is started, so the per-run
-  // "running for Xs" meta keeps ticking. Cheaper than one timer per run.
-  // useMemo stabilises the effect dependency so the interval isn't torn
-  // down and re-created on every render (props.runtime is a fresh object
-  // each upstream re-render, so `runs` is a fresh array reference even
-  // when its contents haven't changed).
-  const anyRunning = useMemo(
-    () => runs.some((run) => run.status === "started"),
-    [runs],
-  );
+  // Tiered tick cadence for the per-run "running for Xs" meta. Updating
+  // every second is the right resolution while elapsed is < 1 min; once
+  // we're into "Xm Ys" territory the seconds digit advances on its own
+  // and the user doesn't need the same fidelity:
+  //   < 1 min  → tick every 1s    (seconds digit moves every second)
+  //   < 1 hour → tick every 5s    ("Xm Ys" jumps in 5s increments —
+  //                                still feels live, ~12× less work)
+  //   ≥ 1 hour → tick every 30s   (long-running dev servers shouldn't
+  //                                burn renders to advance "Ys" every
+  //                                second for hours on end)
+  // Single shared timer across all started runs on the thread; the
+  // interval re-arms when the longest-running run crosses a threshold.
+  const tickIntervalMs = useMemo(() => {
+    let maxElapsed = -1;
+    for (const run of runs) {
+      if (run.status !== "started") continue;
+      const startedAt = run.startedAt ?? Date.now();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > maxElapsed) maxElapsed = elapsed;
+    }
+    if (maxElapsed < 0) return 0; // no running runs → no timer
+    if (maxElapsed < 60_000) return 1_000;
+    if (maxElapsed < 3_600_000) return 5_000;
+    return 30_000;
+  }, [runs]);
   const [, setElapsedTick] = useState(0);
   useEffect(() => {
-    if (!anyRunning) return undefined;
+    if (!tickIntervalMs) return undefined;
     const handle = setInterval(() => {
       setElapsedTick((tick) => tick + 1);
-    }, 1_000);
+    }, tickIntervalMs);
     return () => clearInterval(handle);
-  }, [anyRunning]);
+  }, [tickIntervalMs]);
   // Bumped after dismissal to force a re-render (the dismissed-set lives
   // outside React state).
   const [, setDismissTick] = useState(0);
