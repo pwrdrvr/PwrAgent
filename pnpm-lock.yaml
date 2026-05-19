@@ -6,9 +6,10 @@ settings:
 
 overrides:
   axios: ^1.16.0
+  protobufjs: 7.5.8
   ws: 8.20.1
 
-pnpmfileChecksum: sha256-qhUjtdsDx+KID8QibUkWT/nJBDVb/TMK08fsoGdLy78=
+pnpmfileChecksum: sha256-l+QzxfS11BtK+deH01/WT+xIHHSpNZ4LVvVbmeGnNLU=
 
 importers:
 
@@ -3072,8 +3073,8 @@ packages:
   prosemirror-view@1.41.8:
     resolution: {integrity: sha512-TnKDdohEatgyZNGCDWIdccOHXhYloJwbwU+phw/a23KBvJIR9lWQWW7WHHK3vBdOLDNuF7TaX98GObUZOWkOnA==}
 
-  protobufjs@7.5.7:
-    resolution: {integrity: sha512-NGnrxS/nLKUo5nkbVQxlC71sB4hdfImdYIbFeSCidxtwATx0AHRPcANSLd0q5Bb2BkoSWo2iisQhGg5/r+ihbA==}
+  protobufjs@7.5.8:
+    resolution: {integrity: sha512-dvpCIeLPbXZS/Ete7yLaO7RenOdken2NHKykBXbsaGxZT0UTltcarBciw+A78SRQs9iMAAVpsYA+l8b1hTePIA==}
     engines: {node: '>=12.0.0'}
 
   proxy-from-env@2.1.0:
@@ -4377,7 +4378,7 @@ snapshots:
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
-      protobufjs: 7.5.7
+      protobufjs: 7.5.8
       qs: 6.15.1
       ws: 8.20.1
     transitivePeerDependencies:
@@ -6889,7 +6890,7 @@ snapshots:
       prosemirror-state: 1.4.4
       prosemirror-transform: 1.12.0
 
-  protobufjs@7.5.7:
+  protobufjs@7.5.8:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
