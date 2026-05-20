@@ -156,7 +156,7 @@ describe("MessagingController", () => {
     const delivered = harness.delivered[0];
     expect(delivered).toMatchObject({
       kind: "thread_picker",
-      prompt: expect.stringContaining("Reply with: 1, projects, new, cancel."),
+      prompt: expect.stringContaining("Reply with one of:"),
       fallbackText: undefined,
       page: {
         actions: [],
@@ -167,6 +167,8 @@ describe("MessagingController", () => {
     }
     expect(delivered.prompt).toContain("1. Thread one");
     expect(delivered.prompt).toContain("Reply with a number");
+    expect(delivered.prompt).toContain("- 1 - Thread one");
+    expect(delivered.prompt).toContain("- projects");
     const pending = await harness.store.getPendingIntent(delivered!.id, {
       now: 1000,
     });
@@ -189,13 +191,14 @@ describe("MessagingController", () => {
     const delivered = harness.delivered.at(-1);
     expect(delivered).toMatchObject({
       kind: "thread_picker",
-      prompt: expect.stringContaining("Reply with: 1, projects, new, cancel."),
+      prompt: expect.stringContaining("Reply with one of:"),
     });
     if (delivered?.kind !== "thread_picker") {
       throw new Error("expected thread picker");
     }
     expect(delivered.prompt).toContain("1. Thread one");
     expect(delivered.prompt).toContain("Reply with a number");
+    expect(delivered.prompt).toContain("- 1 - Thread one");
   });
 
   it("lets text-mode help prompts be cancelled before sending normal replies", async () => {
@@ -206,10 +209,13 @@ describe("MessagingController", () => {
     const help = harness.delivered[0];
     expect(help).toMatchObject({
       kind: "confirmation",
-      body: expect.stringContaining(
-        "Reply with: /resume, /new, /status, /detach, /monitor, /help, cancel.",
-      ),
+      body: expect.stringContaining("Reply with one of:"),
     });
+    if (help?.kind !== "confirmation") {
+      throw new Error("expected confirmation");
+    }
+    expect(help?.body).toContain("- /resume - Resume");
+    expect(help?.body).toContain("- cancel");
     await expect(
       harness.store.findActivePendingIntentForChannel({
         actorId: "user-1",
@@ -5233,12 +5239,12 @@ describe("MessagingController", () => {
     expect(harness.delivered.find((intent) => intent.kind === "approval"))
       .toMatchObject({
         kind: "approval",
-        body: expect.stringContaining("Reply with:"),
+        body: expect.stringContaining("Reply with one of:"),
         decisions: [],
       });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Reply with:"),
+      text: expect.stringContaining("Reply with one of:"),
       actions: [],
     });
 
@@ -5499,6 +5505,34 @@ describe("MessagingController", () => {
       preferences: {
         model: "gpt-5.3-codex",
       },
+    });
+  });
+
+  it("renders text-mode model pickers as readable new messages", async () => {
+    const harness = await createHarness({ interactionModeDefault: "text" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+
+    const delivered = harness.delivered.at(-1);
+    expect(delivered).toMatchObject({
+      kind: "single_select",
+      choices: [],
+      delivery: {
+        mode: "present",
+      },
+      prompt: expect.stringContaining("Reply with one of:"),
+    });
+    if (delivered?.kind !== "single_select") {
+      throw new Error("expected single select");
+    }
+    expect(delivered.prompt).toContain("- 1 - GPT-5.3 Codex");
+    expect(delivered.prompt).toContain("- back");
+    expect(delivered.prompt).not.toContain("Reply with: 1");
+    expect(delivered).not.toHaveProperty("targetSurface");
+    expect(delivered.delivery).not.toMatchObject({
+      replaceMarkup: true,
     });
   });
 
