@@ -24,6 +24,7 @@ export type ThreadTurnQueueEntry = {
   reasoningEffort?: string;
   fastMode?: boolean;
   automationRunId?: string;
+  automationName?: string;
   createdAt: number;
 };
 

@@ -1584,6 +1584,137 @@ describe("MessagingController", () => {
     });
   });
 
+  it("posts a durable start notice for automation turns", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "queue-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "system",
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("Automation started: Batphone"),
+          }),
+        ],
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+  });
+
+  it("keeps automation messaging quiet until the final assistant response", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_all",
+      streamingResponsesDefault: true,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "queue-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "pnpm test"),
+    );
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-stream-1",
+          delta: "Intermediate thinking.",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-commentary-1",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Intermediate commentary.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Final automation response." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "stream_update" ||
+          (intent.kind === "message" && intent.role === "system" &&
+            intent.id.startsWith("tool-update")),
+      ),
+    ).toEqual([]);
+    expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate thinking");
+    expect(JSON.stringify(harness.delivered)).not.toContain("Intermediate commentary");
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Final automation response.",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("echoes binding routing state into typing activity intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

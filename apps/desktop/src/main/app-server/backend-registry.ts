@@ -2026,6 +2026,7 @@ export class DesktopBackendRegistry {
       queueEntryId: event.entry.id,
       origin: event.entry.origin,
       automationRunId: event.entry.automationRunId,
+      automationName: event.entry.automationName,
     };
 
     await this.emit({
