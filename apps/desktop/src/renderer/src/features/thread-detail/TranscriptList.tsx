@@ -755,7 +755,7 @@ export function TranscriptList(props: TranscriptListProps) {
                 />
               );
             return (
-              <div key={entryKey} role="listitem">
+              <div key={entryKey} className="transcript-list__item" role="listitem">
                 {body}
               </div>
             );
