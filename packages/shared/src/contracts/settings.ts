@@ -766,6 +766,40 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
   profile: string;
 };
 
+/**
+ * Graduate the bootstrap profile (`.bootstrap/`) into a real profile.
+ * Called by the wizard's Finish path when the boot decision routed
+ * the app into bootstrap mode (no profile configured, or env/CLI
+ * named a missing profile).
+ *
+ * Semantics:
+ *   - When the main process is NOT in bootstrap mode, this is a
+ *     no-op (`graduated: false`, `reason: "not-bootstrap-mode"`).
+ *     The wizard can safely call it unconditionally on Finish.
+ *   - When in bootstrap mode: copy the bootstrap profile's
+ *     `config.toml` into `<targetProfile>/config.toml` (replacing
+ *     bootstrap-only fields like `onboarding.completed`), set
+ *     `profiles.toml::default_profile = targetProfile`, and mark
+ *     the `.bootstrap/` dir for cleanup on the next boot.
+ *
+ * Does NOT close the bootstrap window or open a new window for the
+ * target profile — the caller still does that via `openPwrAgentProfile`.
+ * Splitting those responsibilities keeps the IPC purely about data
+ * graduation.
+ */
+export type GraduateDesktopBootstrapToProfileRequest = {
+  targetProfile: string;
+};
+
+export type GraduateDesktopBootstrapToProfileResponse = {
+  graduated: boolean;
+  /** Populated when `graduated === false` to explain why. The wizard
+   *  uses this to log diagnostics; operator-facing UI just ignores
+   *  it (a no-op graduation is always recoverable). */
+  reason?: "not-bootstrap-mode" | "no-bootstrap-config";
+  targetProfile: string;
+};
+
 export type DeleteDesktopPwrAgentProfileRequest = {
   profile: string;
 };

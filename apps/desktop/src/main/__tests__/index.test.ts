@@ -97,11 +97,12 @@ const startProfileFocusRequestWatcherMock = vi.fn(() => ({
 // don't care about the boot-decision branching continue to exercise
 // the normal in-flight initialization. Tests that specifically want
 // to cover bootstrap mode override this mock per-case.
-const resolveProfileBootDecisionMock = vi.fn(() => ({
-  kind: "open" as const,
+type BootDecisionLike = Record<string, unknown>;
+const resolveProfileBootDecisionMock = vi.fn<() => BootDecisionLike>(() => ({
+  kind: "open",
   profileName: "default",
   profileDir: "/tmp/pwragent/profiles/default",
-  source: "migration" as const,
+  source: "migration",
 }));
 const cleanupBootstrapProfileMock = vi.fn();
 

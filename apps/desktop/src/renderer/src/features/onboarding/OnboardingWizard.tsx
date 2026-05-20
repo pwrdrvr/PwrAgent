@@ -377,15 +377,37 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             codexProfileNames,
           );
           const switchTo = created[0];
-          if (switchTo && props.desktopApi?.openPwrAgentProfile) {
-            try {
-              await props.desktopApi.openPwrAgentProfile({ profile: switchTo });
-            } catch (caught) {
-              // eslint-disable-next-line no-console
-              console.warn(
-                `Onboarding: failed to auto-switch into "${switchTo}"`,
-                caught,
-              );
+          if (switchTo) {
+            // Graduate the bootstrap profile's settings (theme,
+            // density, messaging acknowledgment, etc.) onto the
+            // operator's chosen real profile. The IPC is a no-op
+            // when the main process isn't actually in bootstrap
+            // mode (e.g. Help → Replay Onboarding, where the
+            // wizard runs against an existing real profile), so
+            // the wizard calls it unconditionally.
+            if (props.desktopApi?.graduateBootstrapToProfile) {
+              try {
+                await props.desktopApi.graduateBootstrapToProfile({
+                  targetProfile: switchTo,
+                });
+              } catch (caught) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  `Onboarding: graduateBootstrapToProfile failed for "${switchTo}"`,
+                  caught,
+                );
+              }
+            }
+            if (props.desktopApi?.openPwrAgentProfile) {
+              try {
+                await props.desktopApi.openPwrAgentProfile({ profile: switchTo });
+              } catch (caught) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  `Onboarding: failed to auto-switch into "${switchTo}"`,
+                  caught,
+                );
+              }
             }
           }
         }

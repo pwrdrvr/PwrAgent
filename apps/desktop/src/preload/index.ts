@@ -136,6 +136,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  GraduateDesktopBootstrapToProfileRequest,
+  GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
@@ -238,6 +240,7 @@ import {
   PRELOAD_LOG_CHANNEL,
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
@@ -370,6 +373,10 @@ const desktopApi = Object.freeze({
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
+  graduateBootstrapToProfile: async (
+    request: GraduateDesktopBootstrapToProfileRequest,
+  ): Promise<GraduateDesktopBootstrapToProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

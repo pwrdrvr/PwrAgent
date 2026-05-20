@@ -142,6 +142,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  GraduateDesktopBootstrapToProfileRequest,
+  GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
@@ -203,6 +205,12 @@ export type DesktopApi = {
   setPwrAgentProfileCodexProfile?: (
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ) => Promise<SetDesktopPwrAgentProfileCodexProfileResponse>;
+  /** Graduate the bootstrap profile's settings to the target real
+   *  profile. No-op when the main process isn't in bootstrap mode —
+   *  the wizard calls it unconditionally on Finish. */
+  graduateBootstrapToProfile?: (
+    request: GraduateDesktopBootstrapToProfileRequest,
+  ) => Promise<GraduateDesktopBootstrapToProfileResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

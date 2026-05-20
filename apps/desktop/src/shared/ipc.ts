@@ -213,3 +213,4 @@ export const PROFILES_CREATE_CHANNEL = "profiles:create";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
 export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";
+export const PROFILES_GRADUATE_BOOTSTRAP_CHANNEL = "profiles:graduate-bootstrap";

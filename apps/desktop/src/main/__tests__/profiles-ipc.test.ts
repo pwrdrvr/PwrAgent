@@ -28,8 +28,31 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: vi.fn(async () => undefined),
 }));
 
+const getAppStateModeMock = vi.fn<() => "active-profile" | "bootstrap" | null>(
+  () => "active-profile",
+);
+vi.mock("../state/app-state", () => ({
+  // graduateDesktopBootstrapToProfile branches on this; default to
+  // active-profile so the pre-existing tests stay no-op-only on the
+  // graduation path. Tests that want to exercise the bootstrap branch
+  // override this mock per-case.
+  getAppStateMode: getAppStateModeMock,
+  initializeAppState: vi.fn(),
+  isAppStateInitialized: vi.fn(() => false),
+  getAppStateDb: vi.fn(),
+  getAppMessagingStore: vi.fn(),
+  getAppOverlayStore: vi.fn(),
+  getAppRuntimeInstanceStore: vi.fn(),
+}));
+
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+  // Other parts of the import graph (e.g. agent-core's review-runner
+  // module, loaded transitively when this test imports profile IPC
+  // helpers that now reference state/app-state) bind execFile at
+  // module load. We never call them in these tests; a no-op mock
+  // suffices.
+  execFile: vi.fn(),
 }));
 
 const roots: string[] = [];
@@ -183,6 +206,98 @@ describe("profile IPC helpers", () => {
     const contents = fs.readFileSync(configPath, "utf8");
     expect(contents).toContain("completed = true");
     expect(contents).toContain('completed_source = "wizard"');
+  });
+
+  describe("graduateDesktopBootstrapToProfile", () => {
+    afterEach(() => {
+      getAppStateModeMock.mockReset();
+      getAppStateModeMock.mockReturnValue("active-profile");
+    });
+
+    it("is a no-op when the main process is not in bootstrap mode", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      getAppStateModeMock.mockReturnValue("active-profile");
+
+      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+
+      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+
+      expect(result).toEqual({
+        graduated: false,
+        reason: "not-bootstrap-mode",
+        targetProfile: "personal",
+      });
+      // No profile dir should have been created.
+      expect(fs.existsSync(path.join(root, "profiles", "personal"))).toBe(false);
+    });
+
+    it("returns no-bootstrap-config when bootstrap mode but the dir is missing", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      getAppStateModeMock.mockReturnValue("bootstrap");
+
+      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+
+      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+
+      expect(result).toEqual({
+        graduated: false,
+        reason: "no-bootstrap-config",
+        targetProfile: "personal",
+      });
+    });
+
+    it("copies bootstrap config to target and sets default_profile when graduating", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      getAppStateModeMock.mockReturnValue("bootstrap");
+
+      // Seed a bootstrap profile with operator's wizard choices.
+      const bootstrapDir = path.join(root, ".bootstrap");
+      fs.mkdirSync(bootstrapDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(bootstrapDir, "config.toml"),
+        [
+          "[general]",
+          'developer_mode = false',
+          "[general.appearance]",
+          'theme = "dark"',
+          'density = "compact"',
+          "[onboarding]",
+          "completed = false",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+
+      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+
+      expect(result).toEqual({ graduated: true, targetProfile: "personal" });
+
+      // Target profile config gets the bootstrap settings (minus onboarding).
+      const targetConfig = fs.readFileSync(
+        path.join(root, "profiles", "personal", "config.toml"),
+        "utf8",
+      );
+      expect(targetConfig).toContain('theme = "dark"');
+      expect(targetConfig).toContain('density = "compact"');
+      // Onboarding section MUST NOT be stamped from bootstrap (which
+      // has completed=false). The target was just created by the
+      // wizard with completed=true via createPwrAgentProfile, and
+      // overwriting that would re-fire the wizard on next launch.
+      // ensureNamedProfileExists, called inside graduate, seeds a
+      // fresh [onboarding] completed=false IF the target dir didn't
+      // already exist — but that's an edge case where the operator
+      // is graduating to a never-before-seen profile name and the
+      // wizard will run again. The caller (wizard) creates the
+      // profile beforehand with seedOnboardingCompleted, so this
+      // path is exercised in production.
+      const profilesToml = fs.readFileSync(path.join(root, "profiles.toml"), "utf8");
+      expect(profilesToml).toContain('default_profile = "personal"');
+    });
   });
 
   it("keeps listing profiles when an inactive profile config is malformed", async () => {

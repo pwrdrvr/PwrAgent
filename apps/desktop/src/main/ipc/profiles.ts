@@ -6,6 +6,8 @@ import type {
   CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
+  GraduateDesktopBootstrapToProfileRequest,
+  GraduateDesktopBootstrapToProfileResponse,
   ListDesktopPwrAgentProfilesResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
@@ -17,6 +19,7 @@ import type {
 import {
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
@@ -33,6 +36,7 @@ import {
   readProfilesRegistry,
   requestProfileInstanceFocus,
   resolveActiveProfileName,
+  resolveBootstrapProfilePath,
   resolveDefaultProfileName,
   resolveProfileDir,
   setDefaultProfileName,
@@ -43,6 +47,7 @@ import {
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
 import { discoverCodexAuthProfiles } from "../settings/codex-profiles";
+import { getAppStateMode } from "../state/app-state";
 
 type ProfilesIpcHandlerOptions = {
   onProfilesChanged?: () => void;
@@ -220,6 +225,89 @@ export async function deleteDesktopPwrAgentProfile(
   return { deleted: true, movedToTrash, profile };
 }
 
+/**
+ * Graduate the bootstrap profile's settings into a real profile.
+ *
+ * Called by the wizard's Finish path. Safe to call unconditionally:
+ * when the main process isn't in bootstrap mode, this returns
+ * `{ graduated: false, reason: "not-bootstrap-mode" }` and does
+ * nothing. The wizard always calls it; the main process figures out
+ * whether there's actually anything to graduate.
+ *
+ * What gets copied:
+ *   - `general` (developerMode, appearance, codexProfileModel,
+ *     messagingAcknowledgment)
+ *   - `experimental`, `imageUploads`, `updates`, `messaging` —
+ *     everything the operator might have set in the wizard or
+ *     bootstrap session.
+ *
+ * What does NOT get copied:
+ *   - `onboarding` — the target profile was just created by the
+ *     wizard via `createPwrAgentProfile({ seedOnboardingCompleted:
+ *     true })`, which already wrote `[onboarding] completed = true`.
+ *     Copying the bootstrap profile's `completed = false` over that
+ *     would re-fire the wizard on the next launch.
+ *   - Per-profile state (state.db rows, runtime markers). Bootstrap
+ *     state.db is intentionally throwaway. Operator's wizard
+ *     choices that go through `replaceSecret` (e.g. xAI API key)
+ *     are stored in the keychain via DbBackedSafeStorageSecretStore,
+ *     keyed on the active state.db. Graduating secrets is a Task E
+ *     follow-up — for now, the operator re-enters them in the new
+ *     profile's Settings → Models if needed.
+ *
+ * On success: also writes `profiles.toml::default_profile =
+ * targetProfile`, so the next boot opens directly into the chosen
+ * profile without re-firing the wizard. The `.bootstrap/` directory
+ * stays on disk; the next boot's `cleanupBootstrapProfile()` call
+ * removes it.
+ */
+export function graduateDesktopBootstrapToProfile(
+  request: GraduateDesktopBootstrapToProfileRequest,
+): GraduateDesktopBootstrapToProfileResponse {
+  const targetProfile = request.targetProfile.trim();
+  if (!isValidProfileName(targetProfile)) {
+    throw new Error(`Invalid profile name "${targetProfile}".`);
+  }
+
+  if (getAppStateMode() !== "bootstrap") {
+    return {
+      graduated: false,
+      reason: "not-bootstrap-mode",
+      targetProfile,
+    };
+  }
+
+  const bootstrapConfigPath = resolveBootstrapProfilePath("config.toml");
+  if (!fs.existsSync(bootstrapConfigPath)) {
+    return {
+      graduated: false,
+      reason: "no-bootstrap-config",
+      targetProfile,
+    };
+  }
+
+  // Ensure the target profile dir exists (idempotent if the wizard
+  // already called createPwrAgentProfile during the name step).
+  ensureNamedProfileExists(targetProfile);
+
+  // Strip the onboarding section — the target profile already has
+  // the right marker seeded by createPwrAgentProfile(seedOnboardingCompleted).
+  const bootstrapConfig = readDesktopSettingsConfig(bootstrapConfigPath);
+  const { onboarding: _drop, ...patch } = bootstrapConfig;
+  void _drop;
+
+  applyDesktopSettingsPatch(
+    resolveDesktopConfigPath({ cliProfile: targetProfile }),
+    patch,
+  );
+
+  // The chosen profile becomes the registry default so the next
+  // boot opens directly into it (no wizard, no .bootstrap/ re-fire).
+  setDefaultProfileName(targetProfile);
+
+  return { graduated: true, targetProfile };
+}
+
 export async function setDesktopPwrAgentProfileCodexProfile(
   request: SetDesktopPwrAgentProfileCodexProfileRequest,
 ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> {
@@ -310,6 +398,21 @@ export function registerProfilesIpcHandlers(
     ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
       await setDesktopPwrAgentProfileCodexProfile(request),
   );
+
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL);
+  ipcMain.handle(
+    PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
+    async (
+      _event,
+      request: GraduateDesktopBootstrapToProfileRequest,
+    ): Promise<GraduateDesktopBootstrapToProfileResponse> => {
+      const response = graduateDesktopBootstrapToProfile(request);
+      if (response.graduated) {
+        options.onProfilesChanged?.();
+      }
+      return response;
+    },
+  );
 }
 
 export function disposeProfilesIpcHandlers(): void {
@@ -319,4 +422,5 @@ export function disposeProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL);
 }
