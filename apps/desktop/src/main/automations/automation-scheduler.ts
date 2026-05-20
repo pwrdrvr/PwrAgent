@@ -238,6 +238,7 @@ export class AutomationScheduler {
         threadId: params.automation.threadId,
         origin: "automation",
         automationRunId: params.runId,
+        automationName: params.automation.name,
         input: buildAutomationTurnInput({
           automation: params.automation,
           run,
