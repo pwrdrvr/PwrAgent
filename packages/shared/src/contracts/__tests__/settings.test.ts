@@ -27,6 +27,8 @@ describe("desktop settings contracts", () => {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },
         },
+        codexProfileModel: { value: "shared", source: "default" },
+        messagingAcknowledgment: { value: null, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },

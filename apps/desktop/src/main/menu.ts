@@ -9,6 +9,7 @@ export type ApplicationMenuActions = {
   openProfilesSettings: () => void;
   openSettings: () => void;
   openWebsite: () => void | Promise<void>;
+  replayOnboarding: () => void;
   showAboutPanel: () => void;
   showChangelogWindow: () => void;
   showLicenseWindow: () => void;
@@ -186,6 +187,10 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
       {
         label: "Documentation",
         click: options.actions.openDocumentation,
+      },
+      {
+        label: "Replay Onboarding…",
+        click: options.actions.replayOnboarding,
       },
       {
         label: "Report an Issue",

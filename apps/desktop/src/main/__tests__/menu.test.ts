@@ -30,6 +30,7 @@ function buildTemplate(
       openProfilesSettings: options?.openProfilesSettings ?? vi.fn(),
       openSettings: options?.openSettings ?? vi.fn(),
       openWebsite: vi.fn(),
+      replayOnboarding: vi.fn(),
       showAboutPanel: vi.fn(),
       showChangelogWindow: vi.fn(),
       showLicenseWindow: vi.fn(),

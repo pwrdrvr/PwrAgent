@@ -1,0 +1,2140 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>PwrAgent — First-run wizard (design pass for #467)</title>
+    <meta name="viewport" content="width=1440, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ----------------------------------------------------------------
+         PwrAgent token bridge.
+         Mirrors apps/desktop/src/renderer/src/styles/app.css :root.
+         If those tokens drift, this prototype drifts too — intentional,
+         the design pass should reflect the shipping theme.
+         ---------------------------------------------------------------- */
+      :root {
+        color-scheme: dark;
+
+        --font-sans: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter",
+          system-ui, sans-serif;
+        --font-mono: "Geist Mono", "IBM Plex Mono", "SFMono-Regular",
+          "SF Mono", Consolas, monospace;
+
+        --bg-app: #000000;
+        --bg-sidebar: #050505;
+        --bg-panel: #0a0a0a;
+        --bg-panel-elevated: #101010;
+        --bg-panel-hover: #14110d;
+        --bg-row-active: #120800;
+        --bg-input: #080808;
+
+        --border-subtle: rgba(247, 243, 235, 0.1);
+        --border-strong: rgba(247, 243, 235, 0.2);
+
+        --text-primary: #f7f3eb;
+        --text-secondary: #b8b0a5;
+        --text-muted: #8c857a;
+        --text-subtle: rgba(247, 243, 235, 0.42);
+
+        --accent: #ff8a1f;
+        --accent-strong: #ffa33d;
+        --accent-bright: #ffb35c;
+        --accent-soft: rgba(255, 138, 31, 0.12);
+        --accent-border: rgba(255, 138, 31, 0.42);
+
+        --danger-text: #ffb0a1;
+        --danger-border: rgba(232, 90, 58, 0.36);
+        --danger-soft: rgba(232, 90, 58, 0.12);
+
+        --success-text: #9ce5b3;
+        --success-border: rgba(74, 148, 92, 0.32);
+        --success-soft: rgba(74, 148, 92, 0.16);
+
+        --info-text: #9fc8ff;
+        --info-border: rgba(86, 137, 196, 0.28);
+        --info-soft: rgba(86, 137, 196, 0.16);
+
+        --status-ok: #5fa969;
+        --status-warning: #d99a3d;
+        --status-error: #c45a3a;
+        --status-suspended: #6b6660;
+
+        --button-text: #120800;
+
+        --scrim-strong: rgba(0, 0, 0, 0.62);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: #1a1a1c;
+        font-family: var(--font-sans);
+        color: var(--text-primary);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ----------------------------------------------------------------
+         Slide layout — each slide is a 1440x900 capture target
+         ---------------------------------------------------------------- */
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 64px;
+        padding: 64px 32px;
+      }
+      .slide {
+        width: 1440px;
+        height: 900px;
+        position: relative;
+        background: var(--bg-app);
+        overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+        border-radius: 12px;
+      }
+      .slide-label {
+        position: absolute;
+        top: -34px;
+        left: 0;
+        font: 600 11px/1 var(--font-mono);
+        color: #6b6660;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      /* ----------------------------------------------------------------
+         App-shell scaffold (faded behind the wizard scrim)
+         ---------------------------------------------------------------- */
+      .app-shell {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        filter: blur(2px) saturate(0.7);
+        opacity: 0.45;
+      }
+      .app-sidebar {
+        background: var(--bg-sidebar);
+        border-right: 1px solid var(--border-subtle);
+        padding: 16px 12px;
+      }
+      .app-sidebar__brand {
+        font: 700 14px/1 var(--font-sans);
+        letter-spacing: -0.005em;
+        margin: 6px 4px 22px;
+        color: var(--text-primary);
+      }
+      .app-sidebar__brand span {
+        color: var(--accent);
+      }
+      .app-sidebar__seg {
+        display: flex;
+        gap: 2px;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 3px;
+        margin-bottom: 14px;
+      }
+      .app-sidebar__seg-btn {
+        flex: 1;
+        text-align: center;
+        font: 600 11px/1 var(--font-sans);
+        color: var(--text-muted);
+        padding: 7px 0;
+        border-radius: 5px;
+      }
+      .app-sidebar__seg-btn.is-on {
+        background: var(--bg-row-active);
+        color: var(--accent);
+      }
+      .app-row {
+        height: 38px;
+        border-radius: 6px;
+        background: var(--bg-panel);
+        margin-bottom: 4px;
+      }
+      .app-main {
+        background: var(--bg-app);
+        padding: 28px 32px;
+      }
+      .app-main__title {
+        font: 700 22px/1.1 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0 0 16px;
+      }
+      .app-main__card {
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        height: 280px;
+        margin-bottom: 14px;
+      }
+
+      /* ----------------------------------------------------------------
+         Wizard scrim + chrome
+         ---------------------------------------------------------------- */
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.78);
+      }
+      .wizard {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 1120px;
+        max-height: 840px;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: 14px;
+        box-shadow: 0 32px 100px rgba(0, 0, 0, 0.7);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        overflow: hidden;
+      }
+
+      /* Titlebar — matches the Settings titlebar primitive's eyebrow + breadcrumb tokens */
+      .wiz-titlebar {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 22px 14px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-panel);
+      }
+      .wiz-titlebar__eyebrow {
+        font: 600 10px/1 var(--font-sans);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .wiz-titlebar__crumbs {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 500 12px/1 var(--font-sans);
+        color: var(--text-muted);
+      }
+      .wiz-titlebar__current {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+      .wiz-titlebar__sep {
+        color: var(--text-subtle);
+      }
+      .wiz-titlebar__spacer {
+        flex: 1;
+      }
+      .wiz-titlebar__close {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-panel-elevated);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      /* Step rail */
+      .wiz-rail {
+        display: flex;
+        gap: 6px;
+        padding: 14px 22px 0;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-panel);
+      }
+      .wiz-rail__step {
+        flex: 1;
+        padding: 6px 10px 14px;
+        position: relative;
+      }
+      .wiz-rail__num {
+        font: 600 10px/1 var(--font-mono);
+        color: var(--text-muted);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .wiz-rail__label {
+        font: 600 13px/1 var(--font-sans);
+        color: var(--text-secondary);
+        margin-top: 6px;
+      }
+      .wiz-rail__step.is-done .wiz-rail__num,
+      .wiz-rail__step.is-done .wiz-rail__label {
+        color: var(--text-secondary);
+      }
+      .wiz-rail__step.is-current .wiz-rail__num {
+        color: var(--accent);
+      }
+      .wiz-rail__step.is-current .wiz-rail__label {
+        color: var(--text-primary);
+      }
+      .wiz-rail__step::after {
+        content: "";
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        background: transparent;
+        border-radius: 1px;
+      }
+      .wiz-rail__step.is-done::after {
+        background: var(--accent-border);
+      }
+      .wiz-rail__step.is-current::after {
+        background: var(--accent);
+      }
+
+      /* Body */
+      .wiz-body {
+        padding: 26px 34px 22px;
+        overflow: hidden;
+      }
+      .wiz-body__head {
+        margin-bottom: 18px;
+      }
+      .wiz-body__title {
+        font: 650 24px/1.2 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0 0 8px;
+        letter-spacing: -0.005em;
+      }
+      .wiz-body__sub {
+        font: 400 14px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0;
+        max-width: 720px;
+      }
+
+      /* Footer */
+      .wiz-footer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 22px;
+        border-top: 1px solid var(--border-subtle);
+        background: var(--bg-panel);
+      }
+      .wiz-footer__hint {
+        font: 500 12px/1 var(--font-sans);
+        color: var(--text-muted);
+      }
+      .wiz-footer__spacer {
+        flex: 1;
+      }
+
+      /* Buttons */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        font: 600 13px/1 var(--font-sans);
+        border-radius: 6px;
+        border: 1px solid transparent;
+        cursor: pointer;
+      }
+      .btn--primary {
+        background: var(--accent);
+        color: var(--button-text);
+      }
+      .btn--primary[disabled] {
+        background: var(--bg-panel-elevated);
+        color: var(--text-muted);
+        cursor: not-allowed;
+      }
+      .btn--ghost {
+        background: transparent;
+        color: var(--text-secondary);
+        border-color: var(--border-subtle);
+      }
+      .btn--ghost:hover {
+        border-color: var(--accent-border);
+        color: var(--text-primary);
+      }
+      .btn--link {
+        background: transparent;
+        color: var(--text-muted);
+        border: none;
+        padding: 8px 6px;
+      }
+
+      /* ----------------------------------------------------------------
+         Generic choice-card grid
+         ---------------------------------------------------------------- */
+      .choice-grid {
+        display: grid;
+        gap: 16px;
+      }
+      .choice-grid--2 {
+        grid-template-columns: 1fr 1fr;
+      }
+      .choice-grid--3 {
+        grid-template-columns: 1fr 1fr 1fr;
+      }
+      .choice {
+        position: relative;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 16px 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        cursor: pointer;
+        transition:
+          border-color 140ms ease,
+          background 140ms ease;
+      }
+      .choice:hover {
+        border-color: var(--accent-border);
+        background: var(--bg-panel-hover);
+      }
+      .choice.is-selected {
+        border-color: var(--accent);
+        background: var(--bg-row-active);
+        box-shadow: 0 0 0 1px var(--accent-border);
+      }
+      .choice__badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        font: 600 10px/1 var(--font-sans);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .choice__eyebrow {
+        font: 600 10px/1 var(--font-mono);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .choice__title {
+        font: 650 17px/1.1 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0;
+      }
+      .choice__desc {
+        font: 400 13px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0;
+      }
+      .choice__hint {
+        font: 500 12px/1.4 var(--font-sans);
+        color: var(--text-muted);
+        border-top: 1px dashed var(--border-subtle);
+        padding-top: 10px;
+      }
+
+      /* ----------------------------------------------------------------
+         Mini app-preview embedded inside choice cards
+         ---------------------------------------------------------------- */
+      .mini {
+        background: var(--bg-app);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        height: 220px;
+        padding: 10px;
+        overflow: hidden;
+      }
+      .mini__row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 8px;
+        border-radius: 6px;
+        background: var(--bg-panel);
+        margin-bottom: 5px;
+      }
+      .mini__row.is-active {
+        background: var(--bg-row-active);
+        box-shadow: inset 2px 0 0 var(--accent);
+      }
+      .mini__cookie {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex-shrink: 0;
+      }
+      .mini__cookie--off {
+        background: transparent;
+      }
+      .mini__title {
+        font: 600 11px/1.2 var(--font-sans);
+        color: var(--text-primary);
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mini__chip {
+        font: 600 9px/1 var(--font-sans);
+        color: var(--text-secondary);
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 4px;
+        padding: 3px 5px;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+      }
+      .mini__chip--accent {
+        color: var(--accent);
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+      }
+      .mini__chip--ok {
+        color: var(--success-text);
+        border-color: var(--success-border);
+        background: var(--success-soft);
+      }
+      .mini__chip-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .mini__icon {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        display: inline-block;
+      }
+      .mini__icon--tg {
+        background: #0088cc;
+        border-color: transparent;
+      }
+      .mini__icon--dc {
+        background: #5865f2;
+        border-color: transparent;
+      }
+      .mini__icon--sl {
+        background: linear-gradient(135deg, #e01e5a 0%, #ecb22e 100%);
+        border-color: transparent;
+      }
+      .mini__emoji {
+        font-size: 12px;
+        line-height: 1;
+      }
+      .mini__section {
+        font: 600 9px/1 var(--font-mono);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 6px 8px 4px;
+      }
+
+      /* ----------------------------------------------------------------
+         Step 2 — Codex Profile diagrams
+         ---------------------------------------------------------------- */
+      .codex-diagram {
+        background: var(--bg-app);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        height: 200px;
+        padding: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        position: relative;
+      }
+      .codex-node {
+        flex: 1;
+        max-width: 120px;
+        height: 100%;
+        border-radius: 6px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-panel);
+        padding: 10px 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        text-align: center;
+      }
+      .codex-node--accent {
+        border-color: var(--accent-border);
+        background: var(--bg-row-active);
+      }
+      .codex-node__avatar {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-strong);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font: 700 10px/1 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .codex-node__label {
+        font: 600 11px/1.2 var(--font-sans);
+        color: var(--text-primary);
+      }
+      .codex-node__meta {
+        font: 500 9px/1.2 var(--font-mono);
+        color: var(--text-muted);
+      }
+      .codex-arrow {
+        font-size: 14px;
+        color: var(--text-muted);
+      }
+      .codex-arrow--accent {
+        color: var(--accent);
+      }
+      .codex-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+        max-width: 120px;
+      }
+      .codex-stack .codex-node {
+        height: 38px;
+        flex-direction: row;
+        text-align: left;
+        padding: 6px 8px;
+        gap: 8px;
+      }
+      .codex-stack .codex-node__avatar {
+        width: 22px;
+        height: 22px;
+        font-size: 9px;
+      }
+
+      /* ----------------------------------------------------------------
+         Step 3a — safety preamble
+         ---------------------------------------------------------------- */
+      .safety {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      .safety__icon {
+        width: 44px;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        border-radius: 10px;
+        color: var(--accent);
+        margin: 0 auto 18px;
+      }
+      .safety__list {
+        list-style: none;
+        margin: 0 0 22px;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .safety__list li {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 12px;
+        font: 400 14px/1.55 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .safety__list li strong {
+        color: var(--text-primary);
+      }
+      .safety__list li::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        margin-top: 8px;
+        margin-left: 6px;
+      }
+      .safety__ack {
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 16px 18px;
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 14px;
+        align-items: flex-start;
+      }
+      .safety__ack--checked {
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+      }
+      .safety__check {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1.5px solid var(--text-muted);
+        background: var(--bg-input);
+        margin-top: 2px;
+      }
+      .safety__check--on {
+        background: var(--accent);
+        border-color: var(--accent);
+        position: relative;
+      }
+      .safety__check--on::after {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 1px;
+        width: 5px;
+        height: 9px;
+        border-right: 2px solid var(--button-text);
+        border-bottom: 2px solid var(--button-text);
+        transform: rotate(45deg);
+      }
+      .safety__ack-text {
+        font: 500 13px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .safety__ack-text strong {
+        color: var(--text-primary);
+      }
+
+      /* ----------------------------------------------------------------
+         Step 3b — provider table
+         ---------------------------------------------------------------- */
+      .prov-table {
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--bg-panel-elevated);
+      }
+      .prov-row {
+        display: grid;
+        grid-template-columns: 36px 200px 1fr 130px 130px;
+        align-items: center;
+        gap: 14px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .prov-row:last-child {
+        border-bottom: none;
+      }
+      .prov-row.is-head {
+        background: var(--bg-panel);
+        font: 600 10px/1 var(--font-mono);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
+      .prov-row.is-checked {
+        background: var(--bg-row-active);
+      }
+      .prov-check {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1.5px solid var(--text-muted);
+        background: var(--bg-input);
+      }
+      .prov-check.is-on {
+        background: var(--accent);
+        border-color: var(--accent);
+        position: relative;
+      }
+      .prov-check.is-on::after {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 1px;
+        width: 5px;
+        height: 9px;
+        border-right: 2px solid var(--button-text);
+        border-bottom: 2px solid var(--button-text);
+        transform: rotate(45deg);
+      }
+      .prov-name {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font: 650 14px/1.2 var(--font-sans);
+        color: var(--text-primary);
+      }
+      .prov-name .pill-rec {
+        font: 600 9px/1 var(--font-sans);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        border-radius: 4px;
+        padding: 3px 5px;
+      }
+      .prov-mark {
+        width: 22px;
+        height: 22px;
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font: 700 11px/1 var(--font-sans);
+        color: #fff;
+      }
+      .prov-mark--tg {
+        background: #0088cc;
+      }
+      .prov-mark--dc {
+        background: #5865f2;
+      }
+      .prov-mark--mm {
+        background: #0058cc;
+      }
+      .prov-mark--fl {
+        background: #00d6b9;
+      }
+      .prov-mark--sl {
+        background: linear-gradient(135deg, #e01e5a, #ecb22e);
+      }
+      .prov-mark--ln {
+        background: #06c755;
+      }
+      .prov-notes {
+        font: 400 12px/1.45 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .prov-meta {
+        font: 500 12px/1 var(--font-mono);
+        color: var(--text-muted);
+      }
+      .prov-risk {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: 600 11px/1 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .prov-risk__dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .prov-risk--low .prov-risk__dot {
+        background: var(--status-ok);
+      }
+      .prov-risk--med .prov-risk__dot {
+        background: var(--status-warning);
+      }
+      .prov-risk--high .prov-risk__dot {
+        background: var(--status-error);
+      }
+
+      /* ----------------------------------------------------------------
+         Step 3c — Telegram setup
+         ---------------------------------------------------------------- */
+      .tg-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        height: 100%;
+      }
+      .tg-card {
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 12px 14px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .tg-card__step {
+        font: 600 10px/1 var(--font-mono);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .tg-card__title {
+        font: 650 14px/1.2 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0;
+      }
+      .tg-card__desc {
+        font: 400 12px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0;
+      }
+      .tg-input {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--bg-input);
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: 500 12px/1 var(--font-mono);
+        color: var(--text-primary);
+      }
+      .tg-input--accent {
+        border-color: var(--accent-border);
+        color: var(--accent-strong);
+      }
+      .tg-input__copy {
+        margin-left: auto;
+        font: 600 10px/1 var(--font-sans);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .tg-chat {
+        background: var(--bg-input);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: 500 12px/1.55 var(--font-mono);
+        color: var(--text-secondary);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .tg-chat__from {
+        color: var(--text-muted);
+        font-weight: 600;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .tg-chat__line--me {
+        color: var(--accent-strong);
+      }
+      .tg-chat__line--bot {
+        color: var(--text-primary);
+      }
+      .tg-pill {
+        align-self: flex-start;
+        font: 600 10px/1 var(--font-sans);
+        color: var(--success-text);
+        background: var(--success-soft);
+        border: 1px solid var(--success-border);
+        border-radius: 4px;
+        padding: 4px 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      /* Telegram horizontal substep rail */
+      .tg-rail {
+        display: flex;
+        align-items: stretch;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 10px 14px;
+        gap: 6px;
+        margin-bottom: 16px;
+      }
+      .tg-rail__step {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 10px;
+      }
+      .tg-rail__num {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: var(--bg-input);
+        border: 1px solid var(--border-strong);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font: 700 12px/1 var(--font-sans);
+        color: var(--text-secondary);
+      }
+      .tg-rail__step.is-done .tg-rail__num {
+        background: var(--success-soft);
+        border-color: var(--success-border);
+        color: var(--success-text);
+      }
+      .tg-rail__step.is-current .tg-rail__num {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--button-text);
+        box-shadow: 0 0 0 4px var(--accent-soft);
+      }
+      .tg-rail__label {
+        font: 650 12px/1.2 var(--font-sans);
+        color: var(--text-primary);
+      }
+      .tg-rail__step.is-done .tg-rail__label {
+        color: var(--text-secondary);
+      }
+      .tg-rail__step:not(.is-done):not(.is-current) .tg-rail__label {
+        color: var(--text-muted);
+      }
+      .tg-rail__meta {
+        font: 500 10px/1.2 var(--font-mono);
+        color: var(--text-muted);
+        margin-top: 3px;
+      }
+      .tg-rail__arrow {
+        font: 600 14px/1 var(--font-sans);
+        color: var(--text-subtle);
+        align-self: center;
+      }
+
+      /* Telegram active-step expanded pane */
+      .tg-active {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 16px;
+      }
+      .tg-active__left {
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 18px 22px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .tg-active__title {
+        font: 650 18px/1.25 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0;
+      }
+      .tg-active__desc {
+        font: 400 13px/1.55 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0;
+      }
+      .tg-active__hint {
+        margin-top: auto;
+        padding-top: 12px;
+        border-top: 1px dashed var(--border-subtle);
+        font: 500 12px/1.5 var(--font-sans);
+        color: var(--text-muted);
+      }
+      .tg-active__right {
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        padding: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .tg-phone {
+        width: 240px;
+        background: var(--bg-app);
+        border: 1px solid var(--border-strong);
+        border-radius: 18px;
+        padding: 10px 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .tg-phone__bar {
+        font: 600 11px/1 var(--font-sans);
+        color: var(--text-muted);
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+      .tg-phone__msg {
+        font: 500 12px/1.45 var(--font-mono);
+        border-radius: 10px;
+        padding: 8px 10px;
+        max-width: 85%;
+      }
+      .tg-phone__msg--me {
+        align-self: flex-end;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        color: var(--accent-strong);
+      }
+      .tg-phone__msg--bot {
+        align-self: flex-start;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        font-family: var(--font-sans);
+        font-weight: 500;
+      }
+      .tg-phone__hint {
+        font: 500 10px/1 var(--font-mono);
+        color: var(--text-subtle);
+        text-align: center;
+        margin-top: 4px;
+      }
+
+      /* ----------------------------------------------------------------
+         Step 4 — done screen
+         ---------------------------------------------------------------- */
+      .done {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 18px;
+        padding-top: 30px;
+      }
+      .done__check {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+      }
+      .done__title {
+        font: 700 28px/1.2 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0;
+        letter-spacing: -0.005em;
+      }
+      .done__sub {
+        font: 400 15px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0;
+        max-width: 540px;
+      }
+      .done__summary {
+        margin-top: 12px;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        padding: 18px 22px;
+        width: 100%;
+        max-width: 640px;
+        text-align: left;
+        display: grid;
+        gap: 12px;
+      }
+      .done__row {
+        display: grid;
+        grid-template-columns: 150px 1fr auto;
+        align-items: center;
+        gap: 14px;
+      }
+      .done__label {
+        font: 600 11px/1 var(--font-mono);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .done__value {
+        font: 600 13px/1.2 var(--font-sans);
+        color: var(--text-primary);
+      }
+      .done__edit {
+        font: 600 11px/1 var(--font-sans);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      /* ----------------------------------------------------------------
+         Settings → General reflection
+         ---------------------------------------------------------------- */
+      .settings-shot {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        background: var(--bg-app);
+      }
+      .settings-nav {
+        background: var(--bg-sidebar);
+        border-right: 1px solid var(--border-subtle);
+        padding: 18px 14px;
+      }
+      .settings-nav__brand {
+        font: 700 14px/1 var(--font-sans);
+        color: var(--text-primary);
+        margin: 4px 4px 18px;
+      }
+      .settings-nav__brand span {
+        color: var(--accent);
+      }
+      .settings-nav__item {
+        padding: 9px 10px;
+        font: 600 12px/1 var(--font-sans);
+        color: var(--text-secondary);
+        border-radius: 6px;
+        margin-bottom: 2px;
+      }
+      .settings-nav__item.is-on {
+        background: var(--bg-row-active);
+        color: var(--accent);
+      }
+      .settings-pane {
+        padding: 26px 36px;
+        overflow: hidden;
+      }
+      .settings-pane__titlebar {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border-subtle);
+        margin-bottom: 20px;
+      }
+      .settings-pane__eyebrow {
+        font: 600 10px/1 var(--font-sans);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .settings-pane__sep {
+        color: var(--text-subtle);
+      }
+      .settings-pane__title {
+        font: 650 17px/1 var(--font-sans);
+        color: var(--text-primary);
+      }
+      .settings-card {
+        background: var(--bg-panel);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+      }
+      .settings-card__title {
+        font: 650 14px/1.2 var(--font-sans);
+        color: var(--text-primary);
+        margin: 0 0 4px;
+      }
+      .settings-card__sub {
+        font: 400 12px/1.5 var(--font-sans);
+        color: var(--text-secondary);
+        margin: 0 0 12px;
+      }
+      .settings-seg {
+        display: inline-flex;
+        background: var(--bg-input);
+        border: 1px solid var(--border-subtle);
+        border-radius: 6px;
+        padding: 3px;
+      }
+      .settings-seg button {
+        font: 600 11px/1 var(--font-sans);
+        color: var(--text-secondary);
+        background: transparent;
+        border: none;
+        padding: 7px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .settings-seg button.is-on {
+        background: var(--bg-row-active);
+        color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent-border);
+      }
+      .settings-meta {
+        font: 500 11px/1.4 var(--font-mono);
+        color: var(--text-muted);
+        margin-top: 10px;
+      }
+
+      .help-menu {
+        position: absolute;
+        top: 36px;
+        right: 28px;
+        background: var(--bg-panel-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        padding: 6px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+        min-width: 220px;
+      }
+      .help-menu__item {
+        padding: 8px 10px;
+        font: 500 12px/1.2 var(--font-sans);
+        color: var(--text-secondary);
+        border-radius: 5px;
+      }
+      .help-menu__item.is-on {
+        background: var(--bg-row-active);
+        color: var(--accent);
+      }
+      .help-menu__item.is-on::before {
+        content: "↻ ";
+        color: var(--accent);
+      }
+
+      .doc-title {
+        max-width: 1120px;
+        font: 700 22px/1.2 var(--font-sans);
+        color: #f7f3eb;
+        margin: 12px 0 4px;
+        align-self: flex-start;
+        padding-left: 32px;
+      }
+      .doc-title small {
+        color: #8c857a;
+        font: 500 13px/1 var(--font-mono);
+        letter-spacing: 0.04em;
+        margin-left: 12px;
+        text-transform: uppercase;
+      }
+      .doc-blurb {
+        max-width: 1120px;
+        font: 400 14px/1.6 var(--font-sans);
+        color: #b8b0a5;
+        margin: 0 0 20px;
+        align-self: flex-start;
+        padding-left: 32px;
+        padding-right: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 class="doc-title">PwrAgent — First-run onboarding wizard<small>design pass · issue #467</small></h1>
+    <p class="doc-blurb">
+      Self-contained design prototype. Each panel below is a 1440×900 capture target — wizard chrome
+      and choice cards composed from the production token set in
+      <code>apps/desktop/src/renderer/src/styles/app.css</code>. Embedded mini-previews use the same
+      thread-row / segmented-control / titlebar primitives that already ship.
+    </p>
+
+    <!-- ============================================================
+         SLIDE 1 — Welcome
+         ============================================================ -->
+    <div class="slide" id="slide-welcome">
+      <div class="slide-label">01 · welcome (first launch of fresh profile)</div>
+      <div class="app-shell">
+        <aside class="app-sidebar">
+          <div class="app-sidebar__brand">Pwr<span>Agent</span></div>
+          <div class="app-sidebar__seg">
+            <span class="app-sidebar__seg-btn is-on">Recents</span>
+            <span class="app-sidebar__seg-btn">Directories</span>
+          </div>
+          <div class="app-row" style="opacity: 0.5"></div>
+          <div class="app-row" style="opacity: 0.4"></div>
+          <div class="app-row" style="opacity: 0.3"></div>
+        </aside>
+        <main class="app-main">
+          <h2 class="app-main__title">Recents</h2>
+          <div class="app-main__card"></div>
+        </main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard" style="width: 720px">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">Welcome</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">First-run setup</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-body" style="padding: 36px 44px 28px">
+          <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap: 18px">
+            <div style="font: 800 28px/1 var(--font-sans); letter-spacing: -0.01em; color: var(--text-primary)">
+              Pwr<span style="color: var(--accent)">Agent</span>
+            </div>
+            <h1 class="wiz-body__title" style="margin: 0">Three short choices, then you're operating.</h1>
+            <p class="wiz-body__sub" style="max-width: 520px">
+              Pick how your thread list looks, how PwrAgent relates to your Codex install, and which
+              messaging platform you want — if any. Every choice persists in Settings → General and is
+              reversible at any time.
+            </p>
+            <div style="display:flex; gap: 24px; margin-top: 12px; align-items: flex-start; text-align: left">
+              <div style="display:flex; gap: 10px; align-items: flex-start; max-width: 180px">
+                <div style="width:24px;height:24px;border-radius:6px;background:var(--accent-soft);border:1px solid var(--accent-border);color:var(--accent);display:inline-flex;align-items:center;justify-content:center;font:700 12px/1 var(--font-sans);flex-shrink:0">1</div>
+                <div>
+                  <div style="font:650 13px/1.2 var(--font-sans);color:var(--text-primary);margin-bottom:4px">Thread Presentation</div>
+                  <div style="font:400 12px/1.4 var(--font-sans);color:var(--text-secondary)">Compact rows or Mission Control chips.</div>
+                </div>
+              </div>
+              <div style="display:flex; gap: 10px; align-items: flex-start; max-width: 180px">
+                <div style="width:24px;height:24px;border-radius:6px;background:var(--bg-panel-elevated);border:1px solid var(--border-subtle);color:var(--text-secondary);display:inline-flex;align-items:center;justify-content:center;font:700 12px/1 var(--font-sans);flex-shrink:0">2</div>
+                <div>
+                  <div style="font:650 13px/1.2 var(--font-sans);color:var(--text-primary);margin-bottom:4px">Codex Profile</div>
+                  <div style="font:400 12px/1.4 var(--font-sans);color:var(--text-secondary)">Share, isolate, or run multiple identities.</div>
+                </div>
+              </div>
+              <div style="display:flex; gap: 10px; align-items: flex-start; max-width: 180px">
+                <div style="width:24px;height:24px;border-radius:6px;background:var(--bg-panel-elevated);border:1px solid var(--border-subtle);color:var(--text-secondary);display:inline-flex;align-items:center;justify-content:center;font:700 12px/1 var(--font-sans);flex-shrink:0">3</div>
+                <div>
+                  <div style="font:650 13px/1.2 var(--font-sans);color:var(--text-primary);margin-bottom:4px">Messaging</div>
+                  <div style="font:400 12px/1.4 var(--font-sans);color:var(--text-secondary)">Optional. Telegram-first; others available.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--link">Skip setup — I'll configure later</button>
+          <div class="wiz-footer__spacer"></div>
+          <button class="btn btn--primary">Get started →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 2 — Step 1: Thread Presentation
+         ============================================================ -->
+    <div class="slide" id="slide-step1">
+      <div class="slide-label">02 · step 1 · thread presentation</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Step 1 — Thread presentation</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-rail">
+          <div class="wiz-rail__step is-current">
+            <div class="wiz-rail__num">Step 1</div>
+            <div class="wiz-rail__label">Thread presentation</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Step 2</div>
+            <div class="wiz-rail__label">Codex profile</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Step 3</div>
+            <div class="wiz-rail__label">Messaging</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Done</div>
+            <div class="wiz-rail__label">Review</div>
+          </div>
+        </div>
+        <div class="wiz-body">
+          <div class="wiz-body__head">
+            <h1 class="wiz-body__title">How densely do you want your thread list?</h1>
+            <p class="wiz-body__sub">
+              You can switch between these any time from Settings → General → Thread presentation.
+              This choice only affects how thread rows render in the sidebar.
+            </p>
+          </div>
+          <div class="choice-grid choice-grid--2">
+            <!-- Compact -->
+            <div class="choice is-selected">
+              <div class="choice__badge">Selected</div>
+              <div class="choice__eyebrow">Compact</div>
+              <h3 class="choice__title">Titles only · maximum density</h3>
+              <div class="mini">
+                <div class="mini__section">Pinned</div>
+                <div class="mini__row is-active">
+                  <div class="mini__cookie"></div>
+                  <span class="mini__emoji">✅</span>
+                  <div class="mini__title">Migrate auth middleware to v2 contract</div>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <span class="mini__emoji">🚀</span>
+                  <div class="mini__title">Ship Phase 2 distribution channel cutover</div>
+                </div>
+                <div class="mini__section" style="margin-top: 6px">Recents</div>
+                <div class="mini__row">
+                  <div class="mini__cookie"></div>
+                  <div class="mini__title">Investigate sqlite WAL lock under concurrent profiles</div>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Document branch-drift dialog fixture seed flow</div>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Tighten messaging adapter contract: capability flags</div>
+                </div>
+              </div>
+              <p class="choice__desc">
+                Title fills the row. No status chips. User-added emoji still render. The orange
+                cookie marker still shows unread state.
+              </p>
+              <div class="choice__hint">Best for: power users with many open threads.</div>
+            </div>
+
+            <!-- Mission Control -->
+            <div class="choice">
+              <div class="choice__eyebrow">Mission control</div>
+              <h3 class="choice__title">Full chips · maximum context</h3>
+              <div class="mini">
+                <div class="mini__section">Pinned</div>
+                <div class="mini__row is-active">
+                  <div class="mini__cookie"></div>
+                  <div class="mini__title">Migrate auth middleware</div>
+                  <span class="mini__chip mini__chip--accent">Running</span>
+                  <span class="mini__icon mini__icon--tg"></span>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Phase 2 distribution</div>
+                  <span class="mini__chip mini__chip--ok">Ready</span>
+                  <span class="mini__icon mini__icon--dc"></span>
+                </div>
+                <div class="mini__section" style="margin-top: 6px">Recents</div>
+                <div class="mini__row">
+                  <div class="mini__cookie"></div>
+                  <div class="mini__title">sqlite WAL lock investigation</div>
+                  <span class="mini__chip">Blocked</span>
+                  <span class="mini__icon mini__icon--tg"></span>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Branch-drift fixture docs</div>
+                  <span class="mini__chip">Draft</span>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Messaging adapter contract</div>
+                  <span class="mini__chip">Idle</span>
+                  <span class="mini__icon mini__icon--sl"></span>
+                </div>
+                <div class="mini__row">
+                  <div class="mini__cookie mini__cookie--off"></div>
+                  <div class="mini__title">Tighten DB lock semantics</div>
+                  <span class="mini__chip">Idle</span>
+                </div>
+              </div>
+              <p class="choice__desc">
+                Every row carries status, branch, and messaging-platform chips. More to scan,
+                more context at a glance.
+              </p>
+              <div class="choice__hint">Best for: many concurrent threads with different states.</div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <button class="btn btn--link">Skip setup</button>
+          <div class="wiz-footer__spacer"></div>
+          <span class="wiz-footer__hint">Compact selected · 1 of 3</span>
+          <button class="btn btn--primary">Continue →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 3 — Step 2: Codex Profile model
+         ============================================================ -->
+    <div class="slide" id="slide-step2">
+      <div class="slide-label">03 · step 2 · codex profile model</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Step 2 — Codex profile</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-rail">
+          <div class="wiz-rail__step is-done">
+            <div class="wiz-rail__num">Step 1 ✓</div>
+            <div class="wiz-rail__label">Compact</div>
+          </div>
+          <div class="wiz-rail__step is-current">
+            <div class="wiz-rail__num">Step 2</div>
+            <div class="wiz-rail__label">Codex profile</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Step 3</div>
+            <div class="wiz-rail__label">Messaging</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Done</div>
+            <div class="wiz-rail__label">Review</div>
+          </div>
+        </div>
+        <div class="wiz-body">
+          <div class="wiz-body__head">
+            <h1 class="wiz-body__title">How should PwrAgent relate to your Codex install?</h1>
+            <p class="wiz-body__sub">
+              PwrAgent runs on top of the same Codex backend you may already use. Pick whether
+              you share that identity, isolate a fresh one, or set up several at once.
+            </p>
+          </div>
+          <div class="choice-grid choice-grid--3">
+            <!-- Shared -->
+            <div class="choice is-selected">
+              <div class="choice__badge">Default</div>
+              <div class="choice__eyebrow">Shared</div>
+              <h3 class="choice__title">Reuse your existing Codex login</h3>
+              <div class="codex-diagram">
+                <div class="codex-node codex-node--accent">
+                  <div class="codex-node__avatar">PA</div>
+                  <div class="codex-node__label">PwrAgent</div>
+                </div>
+                <div class="codex-arrow">↔</div>
+                <div class="codex-node">
+                  <div class="codex-node__avatar">CX</div>
+                  <div class="codex-node__label">Codex Desktop</div>
+                  <div class="codex-node__meta">same threads</div>
+                </div>
+              </div>
+              <p class="choice__desc">
+                Zero new logins. Threads created in PwrAgent show up in Codex Desktop and
+                <code style="font: 500 11px/1 var(--font-mono); color: var(--text-secondary)">codex</code>
+                CLI, and vice versa.
+              </p>
+              <div class="choice__hint">Best for: trying PwrAgent without disturbing anything.</div>
+            </div>
+
+            <!-- Isolated -->
+            <div class="choice">
+              <div class="choice__eyebrow">Isolated</div>
+              <h3 class="choice__title">Create a fresh Codex profile for PwrAgent</h3>
+              <div class="codex-diagram">
+                <div class="codex-node codex-node--accent">
+                  <div class="codex-node__avatar">PA</div>
+                  <div class="codex-node__label">PwrAgent</div>
+                  <div class="codex-node__meta">personal</div>
+                </div>
+                <div class="codex-arrow">||</div>
+                <div class="codex-node">
+                  <div class="codex-node__avatar">CX</div>
+                  <div class="codex-node__label">Codex Desktop</div>
+                  <div class="codex-node__meta">work — untouched</div>
+                </div>
+              </div>
+              <p class="choice__desc">
+                One login click. PwrAgent threads stay separate from your other Codex
+                account(s). Still reachable via
+                <code style="font: 500 11px/1 var(--font-mono); color: var(--text-secondary)">CODEX_HOME</code>.
+              </p>
+              <div class="choice__hint">Best for: kicking the tires without touching work's Codex session.</div>
+            </div>
+
+            <!-- Multiple -->
+            <div class="choice">
+              <div class="choice__eyebrow">Multiple · power user</div>
+              <h3 class="choice__title">Set up several profiles at once</h3>
+              <div class="codex-diagram" style="padding: 10px">
+                <div class="codex-stack">
+                  <div class="codex-node codex-node--accent">
+                    <div class="codex-node__avatar">P</div>
+                    <div class="codex-node__label" style="font-size: 10px">personal</div>
+                  </div>
+                  <div class="codex-node">
+                    <div class="codex-node__avatar">W</div>
+                    <div class="codex-node__label" style="font-size: 10px">work</div>
+                  </div>
+                  <div class="codex-node">
+                    <div class="codex-node__avatar">S</div>
+                    <div class="codex-node__label" style="font-size: 10px">side-project</div>
+                  </div>
+                </div>
+                <div class="codex-arrow">↔</div>
+                <div class="codex-stack">
+                  <div class="codex-node codex-node--accent">
+                    <div class="codex-node__avatar">CX</div>
+                    <div class="codex-node__label" style="font-size: 10px">3 logins</div>
+                  </div>
+                </div>
+              </div>
+              <p class="choice__desc">
+                Name up to 5 paired profiles. Each gets its own login, identity, and (later)
+                messaging setup. We'll repeat Step 3 once per profile.
+              </p>
+              <div class="choice__hint">Best for: operators with multiple distinct identities.</div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <button class="btn btn--link">Skip setup</button>
+          <div class="wiz-footer__spacer"></div>
+          <span class="wiz-footer__hint">Shared selected · 2 of 3</span>
+          <button class="btn btn--primary">Continue →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 4 — Step 3a: Safety preamble
+         ============================================================ -->
+    <div class="slide" id="slide-step3a">
+      <div class="slide-label">04 · step 3a · messaging safety preamble</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard" style="width: 880px">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Step 3 — Messaging</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current" style="color: var(--text-secondary); font-weight: 500">Before you connect</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-rail">
+          <div class="wiz-rail__step is-done">
+            <div class="wiz-rail__num">Step 1 ✓</div>
+            <div class="wiz-rail__label">Compact</div>
+          </div>
+          <div class="wiz-rail__step is-done">
+            <div class="wiz-rail__num">Step 2 ✓</div>
+            <div class="wiz-rail__label">Shared</div>
+          </div>
+          <div class="wiz-rail__step is-current">
+            <div class="wiz-rail__num">Step 3</div>
+            <div class="wiz-rail__label">Messaging</div>
+          </div>
+          <div class="wiz-rail__step">
+            <div class="wiz-rail__num">Done</div>
+            <div class="wiz-rail__label">Review</div>
+          </div>
+        </div>
+        <div class="wiz-body" style="padding: 30px 60px 24px">
+          <div class="safety">
+            <div style="text-align:center">
+              <div class="safety__icon">
+                <!-- shield -->
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              </div>
+              <h1 class="wiz-body__title" style="text-align: center; margin: 0 0 8px">Before you connect a messaging platform</h1>
+              <p class="wiz-body__sub" style="text-align: center; margin: 0 auto 20px; max-width: 540px">
+                A short pause to think this through. Three principles, then one acknowledgement.
+              </p>
+            </div>
+            <ul class="safety__list">
+              <li>
+                <span><strong>Try personal first.</strong> Use a personal computer and personal accounts before
+                connecting any work device or work account.</span>
+              </li>
+              <li>
+                <span><strong>If you do connect a work device:</strong> connect only the work messaging
+                platform — never personal messaging platforms — on that device.</span>
+              </li>
+              <li>
+                <span><strong>Talk to your security team</strong> before connecting a work device to anything.
+                Sadly, we know what the answer often will be. Act responsibly.</span>
+              </li>
+            </ul>
+            <div class="safety__ack safety__ack--checked">
+              <div class="safety__check safety__check--on"></div>
+              <div class="safety__ack-text">
+                <strong>I understand.</strong> I have carefully evaluated whether and how to proceed with
+                connecting an agent to messaging platforms. All risk — including risk to my employment —
+                is my own. I agree to hold PwrDrvr LLC and all PwrAgent contributors harmless for the
+                outcomes of any actions I take here.
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <button class="btn btn--link">Skip messaging setup</button>
+          <div class="wiz-footer__spacer"></div>
+          <span class="wiz-footer__hint">Acknowledgement recorded</span>
+          <button class="btn btn--primary">Continue →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 5 — Step 3b: Provider table
+         ============================================================ -->
+    <div class="slide" id="slide-step3b">
+      <div class="slide-label">05 · step 3b · provider selection</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Step 3 — Messaging</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current" style="color: var(--text-secondary); font-weight: 500">Pick providers</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-rail">
+          <div class="wiz-rail__step is-done"><div class="wiz-rail__num">Step 1 ✓</div><div class="wiz-rail__label">Compact</div></div>
+          <div class="wiz-rail__step is-done"><div class="wiz-rail__num">Step 2 ✓</div><div class="wiz-rail__label">Shared</div></div>
+          <div class="wiz-rail__step is-current"><div class="wiz-rail__num">Step 3</div><div class="wiz-rail__label">Messaging</div></div>
+          <div class="wiz-rail__step"><div class="wiz-rail__num">Done</div><div class="wiz-rail__label">Review</div></div>
+        </div>
+        <div class="wiz-body">
+          <div class="wiz-body__head">
+            <h1 class="wiz-body__title">Pick the messaging platforms you want to connect</h1>
+            <p class="wiz-body__sub">
+              Ranked by setup time and risk profile. Telegram is preselected — it's the lowest-friction
+              path. You can add more later in Settings → Messaging.
+            </p>
+          </div>
+          <div class="prov-table">
+            <div class="prov-row is-head">
+              <div></div>
+              <div>Provider</div>
+              <div>Notes</div>
+              <div>Setup time</div>
+              <div>Risk profile</div>
+            </div>
+            <div class="prov-row is-checked">
+              <div class="prov-check is-on"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--tg">T</span>
+                Telegram
+                <span class="pill-rec">Recommended</span>
+              </div>
+              <div class="prov-notes">Sign up on mobile · BotFather /newbot · paste token · pairing code · go. No ports, no tunnels.</div>
+              <div class="prov-meta">~2 min</div>
+              <div class="prov-risk prov-risk--low"><span class="prov-risk__dot"></span>Lowest</div>
+            </div>
+            <div class="prov-row">
+              <div class="prov-check"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--dc">D</span>
+                Discord
+              </div>
+              <div class="prov-notes">Developer Portal app · bot token · OAuth invite to a guild. No ports or tunnels needed.</div>
+              <div class="prov-meta">~10 min</div>
+              <div class="prov-risk prov-risk--low"><span class="prov-risk__dot"></span>Low</div>
+            </div>
+            <div class="prov-row">
+              <div class="prov-check"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--mm">M</span>
+                Mattermost
+              </div>
+              <div class="prov-notes">Self-hosted: easy. Callback URL needed — private network low, public higher.</div>
+              <div class="prov-meta">~15 min</div>
+              <div class="prov-risk prov-risk--med"><span class="prov-risk__dot"></span>Medium</div>
+            </div>
+            <div class="prov-row">
+              <div class="prov-check"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--fl">F</span>
+                Feishu / Lark
+              </div>
+              <div class="prov-notes">Open Platform app · app secret · webhook may apply depending on region.</div>
+              <div class="prov-meta">~20 min</div>
+              <div class="prov-risk prov-risk--med"><span class="prov-risk__dot"></span>Low–medium</div>
+            </div>
+            <div class="prov-row">
+              <div class="prov-check"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--sl">S</span>
+                Slack
+              </div>
+              <div class="prov-notes">Multi-step app config · OAuth scopes · Socket Mode vs Events API. Most fiddly.</div>
+              <div class="prov-meta">~30 min</div>
+              <div class="prov-risk prov-risk--med"><span class="prov-risk__dot"></span>Low–medium</div>
+            </div>
+            <div class="prov-row">
+              <div class="prov-check"></div>
+              <div class="prov-name">
+                <span class="prov-mark prov-mark--ln">L</span>
+                LINE
+              </div>
+              <div class="prov-notes">Webhook-only inbound. Requires public HTTPS URL (tunnel needed for self-hosted).</div>
+              <div class="prov-meta">~25 min + tunnel</div>
+              <div class="prov-risk prov-risk--high"><span class="prov-risk__dot"></span>Medium-high</div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <button class="btn btn--link">Skip messaging setup</button>
+          <div class="wiz-footer__spacer"></div>
+          <span class="wiz-footer__hint">1 provider selected · Telegram</span>
+          <button class="btn btn--primary">Set up Telegram →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 6 — Step 3c: Telegram setup
+         ============================================================ -->
+    <div class="slide" id="slide-step3c">
+      <div class="slide-label">06 · step 3c · telegram setup (exemplar for all providers)</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Step 3 — Messaging</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current" style="color: var(--text-secondary); font-weight: 500">Telegram</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-rail">
+          <div class="wiz-rail__step is-done"><div class="wiz-rail__num">Step 1 ✓</div><div class="wiz-rail__label">Compact</div></div>
+          <div class="wiz-rail__step is-done"><div class="wiz-rail__num">Step 2 ✓</div><div class="wiz-rail__label">Shared</div></div>
+          <div class="wiz-rail__step is-current"><div class="wiz-rail__num">Step 3</div><div class="wiz-rail__label">Telegram (1 of 1)</div></div>
+          <div class="wiz-rail__step"><div class="wiz-rail__num">Done</div><div class="wiz-rail__label">Review</div></div>
+        </div>
+        <div class="wiz-body">
+          <div class="wiz-body__head">
+            <h1 class="wiz-body__title">
+              <span class="prov-mark prov-mark--tg" style="width: 22px; height: 22px; margin-right: 8px; vertical-align: -3px">T</span>
+              Connect Telegram
+            </h1>
+            <p class="wiz-body__sub">
+              Four short steps. The actual fields here are the same primitives that ship in
+              Settings → Messaging, so the muscle memory transfers.
+            </p>
+          </div>
+          <!-- horizontal substep rail -->
+          <div class="tg-rail">
+            <div class="tg-rail__step is-done">
+              <div class="tg-rail__num">✓</div>
+              <div>
+                <div class="tg-rail__label">Bot token</div>
+                <div class="tg-rail__meta">7891034:AAF…</div>
+              </div>
+            </div>
+            <div class="tg-rail__arrow">›</div>
+            <div class="tg-rail__step is-done">
+              <div class="tg-rail__num">✓</div>
+              <div>
+                <div class="tg-rail__label">Your peer ID</div>
+                <div class="tg-rail__meta">249108577</div>
+              </div>
+            </div>
+            <div class="tg-rail__arrow">›</div>
+            <div class="tg-rail__step is-current">
+              <div class="tg-rail__num">3</div>
+              <div>
+                <div class="tg-rail__label">Pair this bot</div>
+                <div class="tg-rail__meta">waiting…</div>
+              </div>
+            </div>
+            <div class="tg-rail__arrow">›</div>
+            <div class="tg-rail__step">
+              <div class="tg-rail__num">4</div>
+              <div>
+                <div class="tg-rail__label">Done</div>
+                <div class="tg-rail__meta">verify</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- expanded current sub-step -->
+          <div class="tg-active">
+            <div class="tg-active__left">
+              <div class="tg-card__step">Step 3 of 4 · Pair</div>
+              <h3 class="tg-active__title">Send this code to your bot from Telegram</h3>
+              <p class="tg-active__desc">
+                Open the chat with <strong>@PwrAgentPersonalBot</strong> on Telegram and send
+                <strong>/pair</strong> with the code below. We'll see the message land and finish
+                pairing automatically — no need to come back here.
+              </p>
+              <div class="tg-input tg-input--accent" style="font-size: 17px; letter-spacing: 0.16em; padding: 12px 14px">
+                <span>/pair</span>
+                <span style="font-weight: 700; color: var(--accent-bright)">HX-4Q-9T</span>
+                <span class="tg-input__copy">Copy</span>
+              </div>
+              <div class="tg-pill">● Waiting for pairing message…</div>
+              <div class="tg-active__hint">
+                You can add more authorized users, groups, or channels later in
+                <strong>Settings → Messaging → Telegram</strong>.
+              </div>
+            </div>
+            <div class="tg-active__right">
+              <div class="tg-phone">
+                <div class="tg-phone__bar">PwrAgent Personal Bot</div>
+                <div class="tg-phone__msg tg-phone__msg--me">/pair HX-4Q-9T</div>
+                <div class="tg-phone__msg tg-phone__msg--bot">
+                  ✅ Paired! Mention me in any authorized chat to start a thread.
+                </div>
+                <div class="tg-phone__hint">preview · what you'll see on your phone</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <button class="btn btn--link">Skip Telegram for now</button>
+          <div class="wiz-footer__spacer"></div>
+          <span class="wiz-footer__hint">Telegram connected · 3 of 3 done</span>
+          <button class="btn btn--primary">Finish →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 7 — Done / review
+         ============================================================ -->
+    <div class="slide" id="slide-done">
+      <div class="slide-label">07 · done · review and land in the app</div>
+      <div class="app-shell">
+        <aside class="app-sidebar"><div class="app-sidebar__brand">Pwr<span>Agent</span></div></aside>
+        <main class="app-main"></main>
+      </div>
+      <div class="scrim"></div>
+      <div class="wizard" style="width: 720px">
+        <div class="wiz-titlebar">
+          <span class="wiz-titlebar__eyebrow">First-run setup</span>
+          <span class="wiz-titlebar__sep">/</span>
+          <span class="wiz-titlebar__current">Done</span>
+          <div class="wiz-titlebar__spacer"></div>
+          <div class="wiz-titlebar__close">✕</div>
+        </div>
+        <div class="wiz-body" style="padding: 36px 48px 28px">
+          <div class="done">
+            <div class="done__check">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <h1 class="done__title">You're operating.</h1>
+            <p class="done__sub">
+              Every choice persists in Settings → General and Settings → Messaging. Change your
+              mind anytime — Help → Replay onboarding brings this back.
+            </p>
+            <div class="done__summary">
+              <div class="done__row">
+                <span class="done__label">Thread presentation</span>
+                <span class="done__value">Compact</span>
+                <span class="done__edit">Change</span>
+              </div>
+              <div class="done__row">
+                <span class="done__label">Codex profile</span>
+                <span class="done__value">Shared with your existing Codex login</span>
+                <span class="done__edit">Change</span>
+              </div>
+              <div class="done__row">
+                <span class="done__label">Messaging</span>
+                <span class="done__value">Telegram — PwrAgent Personal · 1 authorized user</span>
+                <span class="done__edit">Change</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wiz-footer">
+          <button class="btn btn--ghost">← Back</button>
+          <div class="wiz-footer__spacer"></div>
+          <button class="btn btn--primary">Open my workspace →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         SLIDE 8 — Settings → General reflection + Help menu
+         ============================================================ -->
+    <div class="slide" id="slide-settings">
+      <div class="slide-label">08 · post-wizard · settings persistence + help-menu re-entry</div>
+      <div class="settings-shot">
+        <nav class="settings-nav">
+          <div class="settings-nav__brand">Pwr<span>Agent</span></div>
+          <div class="settings-nav__item is-on">General</div>
+          <div class="settings-nav__item">Models</div>
+          <div class="settings-nav__item">Worktrees</div>
+          <div class="settings-nav__item">Applications</div>
+          <div class="settings-nav__item">Messaging</div>
+          <div class="settings-nav__item">Profiles</div>
+          <div class="settings-nav__item">About</div>
+        </nav>
+        <section class="settings-pane">
+          <div class="settings-pane__titlebar">
+            <span class="settings-pane__eyebrow">Settings</span>
+            <span class="settings-pane__sep">/</span>
+            <span class="settings-pane__title">General</span>
+          </div>
+
+          <div class="settings-card">
+            <h3 class="settings-card__title">Thread presentation</h3>
+            <p class="settings-card__sub">How densely thread rows render in the sidebar. The wizard's pick lives here.</p>
+            <div class="settings-seg">
+              <button class="is-on">Compact</button>
+              <button>Mission control</button>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h3 class="settings-card__title">Codex profile</h3>
+            <p class="settings-card__sub">How PwrAgent relates to your Codex install for this profile.</p>
+            <div class="settings-seg">
+              <button class="is-on">Shared</button>
+              <button>Isolated</button>
+              <button>Multiple</button>
+            </div>
+            <div class="settings-meta">
+              currently using <strong style="color: var(--text-secondary)">~/.codex</strong> · last verified 12s ago
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h3 class="settings-card__title">Messaging acknowledgment</h3>
+            <p class="settings-card__sub">Your record of when you acknowledged the messaging-safety preamble.</p>
+            <div class="settings-meta" style="margin-top: 0">
+              acknowledged <strong style="color: var(--text-secondary)">2026-05-17 14:08:32 UTC</strong>
+              · providers configured: <strong style="color: var(--text-secondary)">Telegram</strong>
+            </div>
+            <div style="margin-top: 12px">
+              <button class="btn btn--ghost" style="padding: 6px 10px; font-size: 12px">Replay onboarding wizard</button>
+            </div>
+          </div>
+        </section>
+        <div class="help-menu">
+          <div style="font: 600 10px/1 var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 10px 4px">Help</div>
+          <div class="help-menu__item">Documentation</div>
+          <div class="help-menu__item">Keyboard shortcuts</div>
+          <div class="help-menu__item">Report an issue</div>
+          <div class="help-menu__item is-on">Replay onboarding wizard</div>
+          <div class="help-menu__item">About PwrAgent</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      // ?slide=<id> isolates a single slide for screenshot capture, removing
+      // the surrounding doc chrome and centering the slide in the viewport.
+      (() => {
+        const params = new URLSearchParams(location.search);
+        const target = params.get("slide");
+        if (!target) return;
+        document.querySelector(".doc-title")?.remove();
+        document.querySelector(".doc-blurb")?.remove();
+        document.body.style.padding = "0";
+        document.body.style.gap = "0";
+        document.body.style.background = "var(--bg-app)";
+        document.querySelectorAll(".slide").forEach((s) => {
+          if (s.id !== `slide-${target}`) s.remove();
+        });
+        const only = document.querySelector(".slide");
+        if (only) {
+          only.style.boxShadow = "none";
+          only.style.borderRadius = "0";
+          only.querySelector(".slide-label")?.remove();
+        }
+      })();
+    </script>
+  </body>
+</html>

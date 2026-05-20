@@ -3,6 +3,7 @@ import type {
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
+  DesktopCodexProfileModel,
   DesktopMessagingFullAccessWarningGlobalPolicy,
   DesktopMessagingImageProfile,
   DesktopOnboardingCompletedSource,
@@ -20,6 +21,7 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
+  DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
@@ -171,7 +173,12 @@ const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
  * directly via the backend-registry constructor option or mock the
  * settings singleton, so this constant does not block test coverage.
  */
-export const ONBOARDING_CODEX_GATE_ENABLED = false;
+// Flipped on rebase by the first-run wizard PR (#491) to activate the
+// gate. With the wizard now shipping, brand-new profiles get a deferred
+// Codex `listThreads` probe until the operator clicks Finish or Skip and
+// the wizard calls `completeOnboardingCodexBootstrap`. Pre-existing
+// profiles read as `completedSource = "migrated"` and bypass the gate.
+export const ONBOARDING_CODEX_GATE_ENABLED = true;
 const FEISHU_DEFAULT_TENANT_URL = "https://open.feishu.cn";
 const LARK_DEFAULT_TENANT_URL = "https://open.larksuite.com";
 const FEISHU_DEFAULT_CALLBACK_BASE_URL = "http://127.0.0.1:47823";
@@ -334,6 +341,16 @@ export class DesktopSettingsService {
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),
+        },
+        codexProfileModel: this.resolveCodexProfileModel(
+          config.general?.codexProfileModel,
+        ),
+        messagingAcknowledgment: {
+          value: config.general?.messagingAcknowledgment ?? null,
+          source:
+            config.general?.messagingAcknowledgment === undefined
+              ? "default"
+              : "config",
         },
       },
       onboarding: this.resolveOnboarding(config.onboarding),
@@ -1042,6 +1059,15 @@ export class DesktopSettingsService {
         ? { value: "migrated", source: "default" }
         : { value: "", source: "default" };
     return { completed, completedSource };
+  }
+
+  private resolveCodexProfileModel(
+    configValue: DesktopCodexProfileModel | undefined,
+  ): DesktopSettingsValue<DesktopCodexProfileModel> {
+    return {
+      value: configValue ?? DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
   }
 
   private resolveNumber(

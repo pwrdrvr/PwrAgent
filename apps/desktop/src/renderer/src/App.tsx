@@ -7,6 +7,7 @@ import {
   type PointerEvent,
 } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { OnboardingWizard } from "./features/onboarding/OnboardingWizard";
 import {
   SettingsScreen,
   type SettingsSection,
@@ -121,6 +122,17 @@ function DesktopAppShell(props: {
     SettingsSection | undefined
   >(undefined);
   const [threadViewReady, setThreadViewReady] = useState(false);
+  // Onboarding wizard overlay state. Two paths into it:
+  //  (1) auto-launch on first snapshot if `onboarding.completed` is
+  //      false for the active profile;
+  //  (2) explicit replay via Help → Replay Onboarding (main process
+  //      menu push → renderer subscribes below).
+  // The auto-launch leans on `autoOpenSeen` so we don't re-open after
+  // the user dismisses without persisting (snapshot refresh case).
+  const [onboardingOpen, setOnboardingOpen] = useState<
+    "auto" | "replay" | null
+  >(null);
+  const [autoOpenSeen, setAutoOpenSeen] = useState(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -212,6 +224,37 @@ function DesktopAppShell(props: {
       setMainView("settings");
     });
   }, [desktopApi]);
+  useEffect(() => {
+    // Subscribe to Help → Replay Onboarding push from the menu. Forces
+    // the wizard overlay open in "replay" mode — dismissal does NOT
+    // touch `onboarding.completed`.
+    if (!desktopApi?.onReplayOnboardingRequested) {
+      return;
+    }
+    return desktopApi.onReplayOnboardingRequested(() => {
+      setOnboardingOpen("replay");
+    });
+  }, [desktopApi]);
+  useEffect(() => {
+    // Auto-launch on the first snapshot where `completed === false`.
+    // `autoOpenSeen` blocks re-opens after the user dismissed without
+    // persisting (which can happen if they hit ESC). Once shown, the
+    // wizard's Skip/Finish path writes `completed = true` and the
+    // snapshot path stops triggering us on subsequent refreshes.
+    const completed = settings.snapshot?.onboarding?.completed.value;
+    if (
+      completed === false &&
+      onboardingOpen === null &&
+      !autoOpenSeen
+    ) {
+      setOnboardingOpen("auto");
+      setAutoOpenSeen(true);
+    }
+  }, [
+    autoOpenSeen,
+    onboardingOpen,
+    settings.snapshot?.onboarding?.completed.value,
+  ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
@@ -432,6 +475,68 @@ function DesktopAppShell(props: {
             onOpenMessagingActivity={openMessagingActivityWindow}
           />
         </div>
+      ) : null}
+
+      {onboardingOpen !== null && settings.snapshot ? (
+        <OnboardingWizard
+          isReplay={onboardingOpen === "replay"}
+          initialDensity={settings.snapshot.general.appearance.density.value}
+          initialTheme={settings.snapshot.general.appearance.theme.value}
+          initialCodexProfileModel={
+            settings.snapshot.general.codexProfileModel.value
+          }
+          appearanceController={props.appearanceController}
+          settings={settings}
+          desktopApi={desktopApi}
+          onComplete={async (patch) => {
+            await settings.writeConfig(patch);
+            // The wizard already flips theme + density live via
+            // appearanceController as the operator clicks — the
+            // explicit setters below are a belt-and-suspenders to keep
+            // the controller's React state aligned with whatever the
+            // final patch holds, even if persistAndComplete adjusts.
+            if (patch.general?.appearance?.density) {
+              props.appearanceController.setDensity(
+                patch.general.appearance.density,
+              );
+            }
+            if (patch.general?.appearance?.theme) {
+              props.appearanceController.setTheme(
+                patch.general.appearance.theme,
+              );
+            }
+            // Mark onboarding complete AND kick off the deferred Codex
+            // `listThreads` prefetch in one IPC call (#500). On replay,
+            // skip the call entirely — replays don't touch onboarding.
+            if (!onboardingOpen) return;
+            if (
+              onboardingOpen !== "replay" &&
+              desktopApi?.completeOnboardingCodexBootstrap
+            ) {
+              await desktopApi.completeOnboardingCodexBootstrap({
+                connect: true,
+              });
+            }
+            setOnboardingOpen(null);
+          }}
+          onDismiss={(persistCompleted) => {
+            if (persistCompleted) {
+              // Skip path: persist `completed = true` so the wizard
+              // doesn't auto-fire again, but pass `connect: false` so
+              // we don't auto-load Codex threads under an unverified
+              // identity. The renderer's next explicit refresh (or app
+              // restart) will surface them.
+              void desktopApi?.completeOnboardingCodexBootstrap?.({
+                connect: false,
+              });
+            }
+            setOnboardingOpen(null);
+          }}
+          onOpenMessagingSettings={() => {
+            setSettingsInitialSection("messaging");
+            setMainView("settings");
+          }}
+        />
       ) : null}
 
       <AppUpdateBanner desktopApi={desktopApi} />

@@ -1533,11 +1533,14 @@ describe("DesktopSettingsService", () => {
       expect(service.resolveOnboardingCompleted()).toBe(false);
     });
 
-    // The gate's read-side effect is dormant until the first-run
-    // wizard PR (#491) flips `ONBOARDING_CODEX_GATE_ENABLED` to true.
-    // This test pins the dormant behavior so we don't accidentally
-    // activate the gate before the wizard UI exists to drive past it.
-    it("isCodexBootstrapDeferred is dormant by default even when completed = false", async () => {
+    // The wizard PR (#491) flipped `ONBOARDING_CODEX_GATE_ENABLED` to
+    // true now that the wizard UI exists to drive past the gate. This
+    // test pins the active behavior: persisted `completed = false`
+    // defers the Codex listThreads probe until the wizard calls
+    // `completeOnboardingCodexBootstrap`. Pre-existing profiles (no
+    // `[onboarding]` table) read as `completedSource = "migrated"` —
+    // covered by a separate test below.
+    it("isCodexBootstrapDeferred returns true when completed = false (gate active)", async () => {
       const root = createTempRoot();
       const configPath = path.join(root, "config.toml");
       fs.writeFileSync(
@@ -1553,9 +1556,7 @@ describe("DesktopSettingsService", () => {
       });
 
       expect(service.resolveOnboardingCompleted()).toBe(false);
-      // Persistence reads `false`, but the gate consults the feature
-      // flag first so the read-side effect stays off.
-      expect(service.isCodexBootstrapDeferred()).toBe(false);
+      expect(service.isCodexBootstrapDeferred()).toBe(true);
     });
 
     it("round-trips a wizard completion through writeConfigPatch", async () => {
