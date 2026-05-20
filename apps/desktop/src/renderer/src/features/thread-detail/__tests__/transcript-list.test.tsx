@@ -313,6 +313,36 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
   });
 
+  it("copies the full original message when the rendered message is split into segments", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const messageText = `Intro prose should stay in the normal readable assistant bubble.\n\n${wideMarkdownTable}\n\nFollow-up prose should not inherit the table width.`;
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-table",
+            role: "assistant",
+            text: messageText,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(messageText);
+    });
+  });
+
   it("preserves reference-style links inside split wide markdown tables", () => {
     const { container } = render(
       <TranscriptList

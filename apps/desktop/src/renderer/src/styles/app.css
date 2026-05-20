@@ -5729,11 +5729,57 @@ textarea,
   gap: 12px;
 }
 
+.transcript-message__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .transcript-message__role {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-secondary);
+}
+
+.transcript-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.transcript-copy-button:hover,
+.transcript-copy-button:focus-visible,
+.transcript-copy-button[data-copied="true"] {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+}
+
+.transcript-copy-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+.transcript-message:hover .transcript-copy-button--message,
+.transcript-message:focus-within .transcript-copy-button--message,
+.transcript-copy-button--message[data-copied="true"] {
+  opacity: 1;
 }
 
 .transcript-message__text {
@@ -5831,7 +5877,10 @@ textarea,
 }
 
 .transcript-message__blockquote {
+  position: relative;
   margin: 0;
+  min-height: 28px;
+  padding-right: 38px;
   padding-left: 12px;
   border-left: 2px solid var(--border-subtle);
   color: var(--text-secondary);
@@ -5849,8 +5898,40 @@ textarea,
   overflow-wrap: anywhere;
 }
 
+.transcript-message__pre-wrap {
+  position: relative;
+}
+
+.transcript-message__pre-wrap:hover .transcript-copy-button--section,
+.transcript-message__pre-wrap:focus-within .transcript-copy-button--section,
+.transcript-message__blockquote:hover .transcript-copy-button--section,
+.transcript-message__blockquote:focus-within .transcript-copy-button--section,
+.transcript-copy-button--section[data-copied="true"] {
+  opacity: 1;
+}
+
+.transcript-copy-button--section {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  background: color-mix(in srgb, var(--bg-app) 92%, transparent);
+}
+
+.transcript-message__blockquote .transcript-copy-button--section {
+  top: 0;
+  right: 0;
+}
+
+@media (hover: none) {
+  .transcript-copy-button--message,
+  .transcript-copy-button--section {
+    opacity: 1;
+  }
+}
+
 .transcript-message__pre {
-  padding: 12px;
+  padding: 12px 44px 12px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-app);
