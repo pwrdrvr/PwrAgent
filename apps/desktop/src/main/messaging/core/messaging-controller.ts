@@ -92,6 +92,7 @@ import {
   directoryForProjectSelection,
   parseResumeCommandArgs,
   resumeBrowserPageSize,
+  resumeReturnTargetForSession,
   selectProjectFromValue,
   selectThreadFromValue,
 } from "./messaging-resume-browser.js";
@@ -2783,7 +2784,28 @@ export class MessagingController {
           launchAction: "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
+          returnTo: resumeReturnTargetForSession(nextSession),
           selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:resume") {
+      const target = session.returnTo;
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "resume_thread",
+          mode: target?.mode ?? "recents",
+          pageIndex: target?.pageIndex ?? 0,
+          preferences: target?.preferences,
+          query: target?.query,
+          returnTo: undefined,
+          selectedProject: target?.selectedProject,
+          workMode: undefined,
+          branchName: undefined,
         },
         navigation,
         event,

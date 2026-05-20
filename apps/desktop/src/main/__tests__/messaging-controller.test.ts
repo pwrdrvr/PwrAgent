@@ -92,6 +92,48 @@ describe("MessagingController", () => {
       });
   });
 
+  it("returns from the nested new-thread picker back to the resume browser", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new",
+      }),
+    );
+
+    const newPicker = harness.delivered.at(-1);
+    expect(newPicker).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:resume",
+            label: "Resume",
+          }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:resume",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      prompt: expect.stringContaining("Choose a thread to resume"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:new", label: "New" }),
+        ]),
+      },
+    });
+  });
+
   it("filters Full Access threads out of messaging resume when disabled", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads = [

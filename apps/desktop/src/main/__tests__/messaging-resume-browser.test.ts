@@ -234,6 +234,38 @@ describe("messaging resume browser", () => {
     expect(intent.prompt).not.toContain("1. PwrAgent");
     expect(intent.fallbackText).toContain("1. PwrAgent");
   });
+
+  it("renders a Resume return action for new-thread pickers opened from resume", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot(),
+      session: buildBrowseSession({
+        launchAction: "start_new_thread",
+        mode: "new_project",
+        returnTo: {
+          launchAction: "resume_thread",
+          mode: "recents",
+          pageIndex: 0,
+        },
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("resume or cancel"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "browse:mode:resume",
+            label: "Resume",
+            fallbackText: "resume",
+          }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+  });
 });
 
 function buildBrowseSession(
