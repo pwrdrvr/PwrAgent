@@ -223,7 +223,7 @@ async function seedPersistedDirectoryLaunchpad(params: {
 }
 
 async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElectronApp>>) {
-  await app.window.getByRole("button", { name: "directories" }).click();
+  await app.window.getByRole("tab", { name: "directories" }).click();
   await app.window
     .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
     .click();
@@ -315,7 +315,14 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
 
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
-    await expect(textbox).toHaveAttribute("aria-expanded", "true");
+    // The composer follows the ARIA 1.2 textbox + autocomplete pattern:
+    // popup state is conveyed via aria-controls toggling (set to the
+    // listbox id when open, removed when closed), NOT aria-expanded —
+    // which the spec disallows on role="textbox". See the rationale
+    // in ComposerTiptapInput.tsx where the attributes are declared.
+    const listboxId = await listbox.getAttribute("id");
+    expect(listboxId).toBeTruthy();
+    await expect(textbox).toHaveAttribute("aria-controls", listboxId ?? "");
 
     const firstActiveOption = listbox.locator('[aria-selected="true"]');
     const firstActiveOptionId = await firstActiveOption.getAttribute("id");

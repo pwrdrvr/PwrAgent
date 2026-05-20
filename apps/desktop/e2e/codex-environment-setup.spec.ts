@@ -373,7 +373,7 @@ test("selected Codex environments run setup and show transcript output", async (
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -637,7 +637,7 @@ test("directory launchpad opens without an environment picker when no environmen
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for NoEnvRepo" })
       .click();

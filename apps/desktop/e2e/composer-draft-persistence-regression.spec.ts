@@ -159,7 +159,7 @@ async function createComposerDraftPersistenceFixture(): Promise<{
 }
 
 async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElectronApp>>) {
-  await app.window.getByRole("button", { name: "directories" }).click();
+  await app.window.getByRole("tab", { name: "directories" }).click();
   await app.window
     .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
     .click();

@@ -653,7 +653,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -698,7 +698,7 @@ test("directory launchpad does not show workspace application buttons before a t
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -804,7 +804,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for PwrTester" })
       .click();
@@ -855,7 +855,7 @@ test("opening a directory launchpad persists directory identity for future draft
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -895,7 +895,7 @@ test("directory launchpad draft save does not leak the directory key into projec
     const repoDir = path.join(rootDir, "FixtureRepo");
     const directoryKey = `directory:${repoDir}`;
 
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -952,7 +952,7 @@ test("directory launchpad repairs stale drafts that saved the internal directory
       });
     }, directoryKey);
 
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -987,7 +987,7 @@ test("directory launchpad keeps full access as the sticky default after user cha
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -1033,7 +1033,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -1183,7 +1183,7 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -1207,7 +1207,7 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
       }),
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await expect(app.window.locator(".directory-row").filter({
       has: app.window.getByText("FixtureRepo", { exact: true }),
     })).toHaveCount(1);
@@ -1227,7 +1227,7 @@ test("directory launchpad keeps Tiptap Markdown focus and fenced-code formatting
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
@@ -1273,7 +1273,7 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })

@@ -16,7 +16,7 @@ test("shows only the Codex Desktop search-product threads in directory browse mo
   try {
     const sidebar = app.window.locator(".sidebar");
 
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
 
     await expect(sidebar.getByText("search-product ProjMgr")).toBeVisible();
     await expect(sidebar.getByText("Plan Slidev theme extraction")).toBeVisible();
