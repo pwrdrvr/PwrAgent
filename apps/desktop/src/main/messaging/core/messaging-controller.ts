@@ -1310,6 +1310,18 @@ export class MessagingController {
       return;
     }
 
+    const bareCommand = await this.parseTextModeBareCommand(event.text);
+    if (bareCommand) {
+      await this.handleCommand({
+        ...event,
+        kind: "command",
+        command: bareCommand.command,
+        args: bareCommand.args,
+        rawText: event.text,
+      });
+      return;
+    }
+
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
       await this.presentHelp(event);
@@ -10052,6 +10064,15 @@ export class MessagingController {
     return configured ?? "buttons";
   }
 
+  private async parseTextModeBareCommand(
+    text: string,
+  ): Promise<{ command: string; args: string[] } | undefined> {
+    if (await this.resolveInteractionMode() !== "text") {
+      return undefined;
+    }
+    return parseBareTextCommand(text);
+  }
+
   private async shouldStoreTextModePendingIntent(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -12450,6 +12471,23 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function parseBareTextCommand(
+  text: string,
+): { command: string; args: string[] } | undefined {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.startsWith("/")) {
+    return undefined;
+  }
+
+  const [rawCommand, ...args] = trimmed.split(/\s+/);
+  const command = matchMessagingCommandVerb(rawCommand ?? "");
+  if (!command) {
+    return undefined;
+  }
+
+  return { command, args };
 }
 
 function skillSearchCwdsForThreadState(

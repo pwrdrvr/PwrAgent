@@ -228,6 +228,24 @@ describe("MessagingController", () => {
     });
   });
 
+  it("accepts bare command words in text mode when no prompt is active", async () => {
+    const harness = await createHarness({ interactionModeDefault: "text" });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("resume "));
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    const delivered = harness.delivered.at(-1);
+    expect(delivered).toMatchObject({
+      kind: "thread_picker",
+      prompt: expect.stringContaining("Reply with: 1, projects, new, cancel."),
+    });
+    if (delivered?.kind !== "thread_picker") {
+      throw new Error("expected thread picker");
+    }
+    expect(delivered.prompt).toContain("1. Thread one");
+    expect(delivered.prompt).toContain("Reply with a number");
+  });
+
   it("lets text-mode help prompts be cancelled before sending normal replies", async () => {
     const harness = await createHarness({ interactionModeDefault: "text" });
 
