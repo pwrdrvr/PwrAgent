@@ -1088,6 +1088,18 @@ function withCompletedResponseTurnMetadata(
   };
 }
 
+function normalizeLiveAssistantMessagePhase(
+  value: unknown
+): AppServerThreadMessageEntry["phase"] | undefined {
+  if (value === "commentary") {
+    return "commentary";
+  }
+  if (value === "final" || value === "final_answer") {
+    return "final";
+  }
+  return undefined;
+}
+
 function flushPendingAssistantToOptimistic(
   current: ThreadSessionEntry
 ): ThreadSessionEntry {
@@ -1574,6 +1586,57 @@ function userMessageEntryFromCompletedItem(params: {
   };
 }
 
+function assistantMessageEntryFromCompletedItem(params: {
+  itemParams: AppServerNotification["params"];
+  turn: AppServerThreadTurnMetadata | undefined;
+}): AppServerThreadMessageEntry | undefined {
+  const itemParams = params.itemParams as Record<string, unknown>;
+  const item = itemParams.item;
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return undefined;
+  }
+
+  const record = item as Record<string, unknown>;
+  const itemType =
+    typeof record.type === "string"
+      ? record.type.replace(/[-_\s]/g, "").toLowerCase()
+      : undefined;
+  if (
+    itemType !== "agentmessage" &&
+    itemType !== "assistantmessage" &&
+    itemType !== "assistant"
+  ) {
+    return undefined;
+  }
+
+  const text = typeof record.text === "string" ? record.text.trim() : "";
+  if (!text) {
+    return undefined;
+  }
+
+  const id =
+    typeof record.id === "string" && record.id.trim()
+      ? record.id
+      : typeof record.itemId === "string" && record.itemId.trim()
+        ? record.itemId
+        : typeof record.item_id === "string" && record.item_id.trim()
+          ? record.item_id
+          : typeof itemParams.turnId === "string"
+            ? `${itemParams.turnId}:assistant`
+            : `assistant-${Date.now()}`;
+  const phase = normalizeLiveAssistantMessagePhase(record.phase);
+
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    text,
+    createdAt: Date.now(),
+    ...(params.turn ? { turn: params.turn } : {}),
+    ...(phase ? { phase } : {}),
+  };
+}
+
 function hasReviewEntryForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined
@@ -2031,6 +2094,14 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    if (
+      session.needsHydrationAfterCompletion &&
+      session.completionHydrationRetries < 2
+    ) {
+      void loadLatest(thread);
+      return;
+    }
+
     if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
       return;
     }
@@ -2397,6 +2468,49 @@ export function useThreadSessionState(params: {
                   entry.type !== "message" ||
                   !messageMatchesOptimisticEntry(userMessageEntry, entry)
               ),
+              response: nextResponse,
+            };
+          }
+
+          const assistantTurn = buildTurnMetadata({
+            fallbackId:
+              typeof event.notification.params.turnId === "string"
+                ? event.notification.params.turnId
+                : current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "in_progress",
+          });
+          const assistantMessageEntry = assistantMessageEntryFromCompletedItem({
+            itemParams: event.notification.params,
+            turn: assistantTurn,
+          });
+          if (assistantMessageEntry) {
+            const nextResponse = appendMessageEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [
+                ...current.optimisticEntries.filter(
+                  (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+                ),
+                assistantMessageEntry,
+              ]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              optimisticEntries: current.optimisticEntries.filter(
+                (entry) => entry.type !== "message"
+              ),
+              pendingAssistantMessage:
+                current.pendingAssistantMessage?.id === assistantMessageEntry.id
+                  ? undefined
+                  : current.pendingAssistantMessage,
               response: nextResponse,
             };
           }
