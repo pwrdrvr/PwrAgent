@@ -20,6 +20,32 @@ const RESERVED_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
 const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
 const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;
 
+/**
+ * Disk location for the throwaway "bootstrap" profile the wizard
+ * runs inside when `resolveProfileBootDecision` returns a non-`open`
+ * decision. Dot-prefixed and sibling to `profiles/` on purpose:
+ *
+ *   - Dot prefix keeps it from being mistaken for a real user
+ *     profile in directory listings, and it's never enumerated by
+ *     the profiles-discovery IPC (which scans `profiles/`).
+ *   - Sibling-not-child of `profiles/` means it doesn't pollute the
+ *     "list my profiles" UX or trip on profile-name validation
+ *     (`isValidProfileName` rejects names starting with `.`).
+ *
+ * Lifecycle:
+ *   - Created on demand by `ensureBootstrapProfileDir` when the
+ *     wizard window initializes.
+ *   - Wizard reads/writes its in-flight settings here.
+ *   - On Finish, `finalizeBootstrapProfileSelection` copies settings
+ *     out of here into the real profile and best-effort removes the
+ *     directory.
+ *   - On abnormal exit (operator quits mid-wizard), the directory
+ *     remains. Next boot's `resolveProfileBootDecision` ignores it
+ *     entirely; the cleanup happens on the next successful boot via
+ *     `cleanupStaleBootstrapProfile`.
+ */
+const BOOTSTRAP_PROFILE_DIRNAME = ".bootstrap";
+
 export type ProfileEntry = {
   name: string;
   display_name?: string;
@@ -403,6 +429,73 @@ export function ensureNamedProfileExists(
   }
 
   return { profileDir, profileName, created };
+}
+
+/**
+ * Path to the throwaway "bootstrap" profile root used by the wizard
+ * when `resolveProfileBootDecision` returns a non-`open` decision.
+ * See the `BOOTSTRAP_PROFILE_DIRNAME` comment for lifecycle notes.
+ */
+export function resolveBootstrapProfileDir(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  return path.join(resolvePwragentRoot(options), BOOTSTRAP_PROFILE_DIRNAME);
+}
+
+export function resolveBootstrapProfilePath(
+  segment: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  return path.join(resolveBootstrapProfileDir(options), segment);
+}
+
+/**
+ * Materialize the bootstrap profile dir (idempotent). Seeds the
+ * `[onboarding]` marker exactly like a freshly created real profile
+ * so the wizard's gating logic behaves identically — the wizard sees
+ * `completed = false`, runs through the flow, and any settings it
+ * writes (theme, density, messaging ack) land in the bootstrap
+ * `config.toml`. Finish-time graduation copies them out.
+ */
+export function ensureBootstrapProfileDir(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): { profileDir: string; created: boolean } {
+  const profileDir = resolveBootstrapProfileDir(options);
+  const created = !fs.existsSync(profileDir);
+  fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
+  writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
+  return { profileDir, created };
+}
+
+export function bootstrapProfileExists(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): boolean {
+  return fs.existsSync(resolveBootstrapProfileDir(options));
+}
+
+/**
+ * Best-effort cleanup of the bootstrap profile. Called by the wizard
+ * Finish path after the operator's real profile is created and their
+ * settings have been copied out, and also at boot time when a stale
+ * bootstrap dir is detected from a prior crashed/abandoned wizard
+ * session. Swallows errors — leaving the directory around is annoying
+ * but not actively harmful.
+ */
+export function cleanupBootstrapProfile(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): void {
+  const profileDir = resolveBootstrapProfileDir(options);
+  if (!fs.existsSync(profileDir)) return;
+  try {
+    fs.rmSync(profileDir, { recursive: true, force: true });
+  } catch {
+    // Filesystem hiccups don't justify aborting a wizard graduation.
+    // The next boot's cleanupStaleBootstrapProfile retries.
+  }
 }
 
 /**

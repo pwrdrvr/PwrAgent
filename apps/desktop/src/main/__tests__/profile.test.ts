@@ -6,13 +6,18 @@ import {
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   PWRAGENT_PROFILE_ENV,
+  bootstrapProfileExists,
+  cleanupBootstrapProfile,
   deleteProfile,
+  ensureBootstrapProfileDir,
   ensureNamedProfileExists,
   readProfileArg,
   readProfilesRegistry,
   requestProfileInstanceFocus,
   resetCachedActiveProfileNameForTests,
   resolveActiveProfileName,
+  resolveBootstrapProfileDir,
+  resolveBootstrapProfilePath,
   resolveDefaultProfileName,
   resolveProfileBootDecision,
   setDefaultProfileName,
@@ -345,6 +350,84 @@ describe("PwrAgent profiles", () => {
           env: { ...env, [PWRAGENT_PROFILE_ENV]: "Bad Name" },
         }),
       ).toThrow(/Invalid PWRAGENT_PROFILE/);
+    });
+
+    it("ignores a stale .bootstrap/ dir — only profiles/ counts for decisions", () => {
+      const { env } = createRoot();
+      // A previous wizard session crashed without graduating; .bootstrap/
+      // is left over on disk. The decision must NOT treat it as a
+      // profile — otherwise a single failed wizard run would forever
+      // suppress the fresh-install wizard on subsequent launches.
+      ensureBootstrapProfileDir({ env });
+      const decision = resolveProfileBootDecision({ env });
+      expect(decision).toEqual({ kind: "no-profile-configured" });
+    });
+  });
+
+  describe("bootstrap profile (.bootstrap/)", () => {
+    it("resolves to a sibling of profiles/, not a child", () => {
+      const { env, root } = createRoot();
+      expect(resolveBootstrapProfileDir({ env })).toBe(path.join(root, ".bootstrap"));
+      expect(resolveBootstrapProfilePath("config.toml", { env })).toBe(
+        path.join(root, ".bootstrap", "config.toml"),
+      );
+    });
+
+    it("ensureBootstrapProfileDir seeds an [onboarding] marker like a real profile", () => {
+      const { env, root } = createRoot();
+      const result = ensureBootstrapProfileDir({ env });
+      expect(result.created).toBe(true);
+      expect(result.profileDir).toBe(path.join(root, ".bootstrap"));
+
+      const configPath = path.join(root, ".bootstrap", "config.toml");
+      const contents = fs.readFileSync(configPath, "utf8");
+      // Without the marker the wizard wouldn't fire — it gates on
+      // onboarding.completed === false. Bootstrap profile MUST look
+      // like a fresh real profile to the wizard's perspective.
+      expect(contents).toContain("[onboarding]");
+      expect(contents).toContain("completed = false");
+      expect(fs.existsSync(path.join(root, ".bootstrap", "state"))).toBe(true);
+    });
+
+    it("ensureBootstrapProfileDir is idempotent and does not stomp an in-flight config.toml", () => {
+      const { env, root } = createRoot();
+      ensureBootstrapProfileDir({ env });
+      const configPath = path.join(root, ".bootstrap", "config.toml");
+      // Wizard wrote some choices mid-flow. A second ensure call
+      // (e.g. operator quit + relaunch without graduating) must
+      // preserve them — the marker is only seeded on first creation.
+      fs.writeFileSync(configPath, "[general]\n[appearance]\ntheme = \"dark\"\n", "utf8");
+      const second = ensureBootstrapProfileDir({ env });
+      expect(second.created).toBe(false);
+      expect(fs.readFileSync(configPath, "utf8")).toContain('theme = "dark"');
+    });
+
+    it("cleanupBootstrapProfile removes the dir; subsequent existence check is false", () => {
+      const { env, root } = createRoot();
+      ensureBootstrapProfileDir({ env });
+      expect(bootstrapProfileExists({ env })).toBe(true);
+      cleanupBootstrapProfile({ env });
+      expect(bootstrapProfileExists({ env })).toBe(false);
+      expect(fs.existsSync(path.join(root, ".bootstrap"))).toBe(false);
+    });
+
+    it("cleanupBootstrapProfile is a no-op when the dir doesn't exist", () => {
+      const { env } = createRoot();
+      expect(bootstrapProfileExists({ env })).toBe(false);
+      // Should not throw.
+      cleanupBootstrapProfile({ env });
+    });
+
+    it("bootstrap dir is NOT enumerated by profiles registry / listing", () => {
+      const { env } = createRoot();
+      ensureBootstrapProfileDir({ env });
+      ensureNamedProfileExists("dev", { env });
+      const registry = readProfilesRegistry({ env });
+      // The registry tracks `profiles/`-style entries via explicit
+      // writes through ensureNamedProfileExists / setDefaultProfileName.
+      // `.bootstrap/` lives outside `profiles/` and is never added,
+      // so a listing shows only the real profile.
+      expect(registry.profiles.map((entry) => entry.name)).toEqual(["dev"]);
     });
   });
 
