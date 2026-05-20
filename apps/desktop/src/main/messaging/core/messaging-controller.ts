@@ -10191,7 +10191,7 @@ function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceInten
           ...intent.page,
           actions: [],
         },
-        prompt: appendTextModeFallback(intent.prompt, fallback),
+        prompt: appendTextModeFallback(intent.fallbackText ?? intent.prompt, fallback),
       };
     case "project_picker":
       return {
@@ -10201,7 +10201,7 @@ function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceInten
           ...intent.page,
           actions: [],
         },
-        prompt: appendTextModeFallback(intent.prompt, fallback),
+        prompt: appendTextModeFallback(intent.fallbackText ?? intent.prompt, fallback),
       };
     case "single_select":
     case "multi_select":

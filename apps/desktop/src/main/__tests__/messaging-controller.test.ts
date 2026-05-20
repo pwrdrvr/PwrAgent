@@ -210,6 +210,11 @@ describe("MessagingController", () => {
         actions: [],
       },
     });
+    if (delivered?.kind !== "thread_picker") {
+      throw new Error("expected thread picker");
+    }
+    expect(delivered.prompt).toContain("1. Thread one");
+    expect(delivered.prompt).toContain("Reply with a number");
     const pending = await harness.store.getPendingIntent(delivered!.id, {
       now: 1000,
     });
