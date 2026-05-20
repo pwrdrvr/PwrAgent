@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0-beta.12 - 2026-05-20
+
+- Added a WCAG AA accessibility gate for the desktop renderer, including baseline fixes for composer autocomplete, sidebar tabs, resize controls, and transcript list semantics.
+- Added IntelliJ IDEA and Warp autodiscovery for desktop application settings.
+- Added Electron E2E coverage proving appearance theme and density updates broadcast across auxiliary windows.
+- Improved LiveWorkRail expanded-diff scrolling so sticky file toggles pin flush to the rail header without a visual gap.
+- Fixed environment setup transcript output so command/path/output text can be selected and copied while setup is still running.
+- Enforced SQL and renderer color lint checks in CI.
+- Patched dependency advisories by pinning updated `brace-expansion`, `ws`, and `protobufjs` resolutions.
+
 ## v1.0.0-beta.11 - 2026-05-19
 
 - Added archived-thread settings with project/profile grouping, restored-thread filtering, and worktree restore handling.
