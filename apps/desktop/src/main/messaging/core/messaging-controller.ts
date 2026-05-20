@@ -10194,18 +10194,18 @@ function isHelpPendingIntent(record: MessagingPendingIntentRecord): boolean {
 function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceIntent {
   const fallback = formatTextModeActionFallback(actionsForIntent(intent));
   if (!fallback) {
-    return intent;
+    return withTextModePresentation(intent);
   }
 
   switch (intent.kind) {
     case "status":
-      return {
+      return withTextModePresentation({
         ...intent,
         text: appendTextModeFallback(intent.text, fallback),
         actions: [],
-      };
+      });
     case "thread_picker":
-      return {
+      return withTextModePresentation({
         ...intent,
         fallbackText: undefined,
         page: {
@@ -10213,9 +10213,9 @@ function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceInten
           actions: [],
         },
         prompt: appendTextModeFallback(intent.fallbackText ?? intent.prompt, fallback),
-      };
+      });
     case "project_picker":
-      return {
+      return withTextModePresentation({
         ...intent,
         fallbackText: undefined,
         page: {
@@ -10223,15 +10223,15 @@ function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceInten
           actions: [],
         },
         prompt: appendTextModeFallback(intent.fallbackText ?? intent.prompt, fallback),
-      };
+      });
     case "single_select":
     case "multi_select":
-      return {
+      return withTextModePresentation({
         ...intent,
         choices: [],
         fallbackText: undefined,
         prompt: appendTextModeFallback(intent.prompt, fallback),
-      };
+      });
     case "questionnaire": {
       const questions = intent.questions.map((question, index) =>
         index === intent.currentIndex
@@ -10242,47 +10242,102 @@ function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceInten
             }
           : question,
       );
-      return {
+      return withTextModePresentation({
         ...intent,
         questions,
-      };
+      });
     }
     case "approval":
-      return {
+      return withTextModePresentation({
         ...intent,
         body: appendTextModeFallback(intent.body, fallback),
         decisions: [],
-      };
+      });
     case "confirmation":
-      return {
+      return withTextModePresentation({
         ...intent,
         actions: [],
         body: appendTextModeFallback(intent.body, fallback),
-      };
+      });
     default:
-      return intent;
+      return withTextModePresentation(intent);
   }
 }
 
 function formatTextModeActionFallback(
   actions: readonly MessagingSurfaceAction[],
 ): string | undefined {
-  const labels = new Set<string>();
+  const lines = new Set<string>();
   for (const action of actions) {
     if (action.disabled) continue;
-    const label = (action.fallbackText ?? action.label).trim();
-    if (label) {
-      labels.add(label);
+    const line = formatTextModeActionLine(action);
+    if (line) {
+      lines.add(line);
     }
   }
-  if (labels.size === 0) {
+  if (lines.size === 0) {
     return undefined;
   }
-  return `Reply with: ${Array.from(labels).join(", ")}.`;
+  return `Reply with one of:\n${Array.from(lines).map((line) => `- ${line}`).join("\n")}`;
+}
+
+function formatTextModeActionLine(action: MessagingSurfaceAction): string | undefined {
+  const reply = (action.fallbackText ?? action.label).trim();
+  const label = action.label.trim();
+  if (!reply && !label) {
+    return undefined;
+  }
+  if (!reply) {
+    return label;
+  }
+  const normalizedReply = reply.toLowerCase();
+  if (!label || label.toLowerCase() === normalizedReply) {
+    return reply;
+  }
+
+  const numericReply = /^\d+$/.test(reply);
+  const labelWithoutNumber = numericReply
+    ? label.replace(new RegExp(`^${escapeRegExp(reply)}[.)]?\\s*`), "").trim()
+    : label;
+  if (!labelWithoutNumber || labelWithoutNumber.toLowerCase() === normalizedReply) {
+    return reply;
+  }
+  return `${reply} - ${labelWithoutNumber}`;
 }
 
 function appendTextModeFallback(text: string, fallback: string): string {
   return text.includes(fallback) ? text : [text, fallback].filter(Boolean).join("\n\n");
+}
+
+function withTextModePresentation(intent: MessagingSurfaceIntent): MessagingSurfaceIntent {
+  if (
+    intent.kind === "activity"
+    || intent.kind === "dismiss"
+    || intent.kind === "stream_update"
+  ) {
+    return intent;
+  }
+
+  const { delivery, targetSurface: _targetSurface, ...rest } = intent;
+  if (!delivery) {
+    return rest as MessagingSurfaceIntent;
+  }
+
+  const { replaceMarkup: _replaceMarkup, ...deliveryRest } = delivery;
+  const nextDelivery = delivery.mode === "update"
+    ? { ...deliveryRest, mode: "present" as const }
+    : deliveryRest;
+  if (Object.keys(nextDelivery).length === 0) {
+    return rest as MessagingSurfaceIntent;
+  }
+  return {
+    ...rest,
+    delivery: nextDelivery,
+  } as MessagingSurfaceIntent;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
