@@ -43,6 +43,7 @@ export type OnboardingProvider =
   | "line";
 
 type WizardStep =
+  | "backend-requirements"
   | "welcome"
   | "thread-presentation"
   | "codex-profile"
@@ -62,7 +63,10 @@ const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
 ];
 
 function railIndexForStep(step: WizardStep): RailIndex | -1 {
-  if (step === "welcome") return -1;
+  // `backend-requirements` and `welcome` are pre-rail screens —
+  // prerequisite + intro, before the four numbered steps the rail
+  // tracks.
+  if (step === "backend-requirements" || step === "welcome") return -1;
   if (step === "thread-presentation") return 0;
   if (step === "codex-profile" || step === "name-codex-profiles") return 1;
   if (
@@ -104,7 +108,15 @@ export type OnboardingWizardProps = {
 };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
-  const [step, setStep] = useState<WizardStep>("welcome");
+  // Backend requirements is the first stop. If the operator opens the
+  // wizard with neither Codex CLI nor an xAI key configured, we have to
+  // resolve that before any of the downstream steps make sense. Replays
+  // (Help → Replay Onboarding) skip straight to Welcome since the user
+  // is presumably already past the backend gate — they're re-running to
+  // change settings, not bootstrap.
+  const [step, setStep] = useState<WizardStep>(
+    props.isReplay ? "welcome" : "backend-requirements",
+  );
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
@@ -137,17 +149,25 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   );
   const currentProvider = orderedProviders[providerSetupIndex];
 
-  // ESC = dismiss (same as Skip — see onDismiss contract)
+  // ESC = dismiss without persisting onboarding.completed. Previous
+  // behavior wrote completed=true on ESC during first-run, which left
+  // the operator with a profile that *says* it finished onboarding but
+  // has no working backend configured. The user's #467 follow-up
+  // explicitly called this out: "don't write anything to the config
+  // saying we succeeded with the wizard until we really truly did."
+  // Now: ESC + Skip both leave `completed` unchanged (false for fresh
+  // profiles → wizard auto-fires again next launch). Only the Done
+  // step's "Open my workspace" persists completion.
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
       if (event.key === "Escape" && !submitting) {
         event.preventDefault();
-        props.onDismiss(!isReplay);
+        props.onDismiss(false);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isReplay, props, submitting]);
+  }, [props, submitting]);
 
   // Reset the naming step's defaults when the operator changes Step 2's
   // selection. Isolated → single canonical default "pwragent" (unless
@@ -183,6 +203,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const nextStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
+        case "backend-requirements":
+          return "welcome";
         case "welcome":
           return "thread-presentation";
         case "thread-presentation":
@@ -213,7 +235,14 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const prevStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
+        case "backend-requirements":
+          return null;
         case "welcome":
+          // Replay path doesn't include backend-requirements, so back
+          // from welcome goes nowhere. First-run path could go back to
+          // backend-requirements but the operator already satisfied
+          // that to leave it — make Back from welcome a no-op too so
+          // the gate doesn't get re-checked midway.
           return null;
         case "thread-presentation":
           return "welcome";
@@ -357,11 +386,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   );
 
   const handleSkip = useCallback((): void => {
-    // Skip mirrors Finish from a persistence standpoint when the
-    // operator was already on first-run — we still mark completed so
-    // they don't see the wizard auto-launch again. Replays skip persist.
-    props.onDismiss(!isReplay);
-  }, [isReplay, props]);
+    // Skip never persists `onboarding.completed = true`. Anything else
+    // would let the operator end up with a "completed" profile that
+    // doesn't actually have a working backend. The wizard re-fires on
+    // the next launch — see the docs on the ESC keydown handler above
+    // for the full reasoning.
+    props.onDismiss(false);
+  }, [props]);
 
   const currentRailIndex = railIndexForStep(step);
 
@@ -374,7 +405,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     >
       <div className="onboarding-wizard-overlay__scrim" />
       <div
-        className={`onboarding-wizard${step === "welcome" || step === "done" ? " onboarding-wizard--narrow" : ""}`}
+        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "backend-requirements" ? " onboarding-wizard--narrow" : ""}`}
       >
         <WizardTitlebar
           step={step}
@@ -389,7 +420,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               ? `${providerSetupIndex + 1} of ${orderedProviders.length}`
               : undefined
           }
-          onClose={() => props.onDismiss(!isReplay)}
+          onClose={() => props.onDismiss(false)}
         />
         {step !== "welcome" ? (
           <WizardRail
@@ -399,6 +430,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           />
         ) : null}
         <div className="onboarding-wizard__body">
+          {step === "backend-requirements" ? (
+            <BackendRequirementsStep
+              settings={props.settings}
+              desktopApi={props.desktopApi}
+            />
+          ) : null}
           {step === "welcome" ? <WelcomeStep /> : null}
           {step === "thread-presentation" ? (
             <ThreadPresentationStep
@@ -470,6 +507,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             currentProvider ? providerName(currentProvider) : undefined
           }
           codexProfileNamesValid={validateProfileNames(codexProfileNames)}
+          backendRequirementSatisfied={isBackendRequirementSatisfied(
+            props.settings.snapshot,
+          )}
           density={density}
           codexProfileModel={codexProfileModel}
           onBack={goPrev}
@@ -501,9 +541,15 @@ function WizardTitlebar(props: {
   providerPosition?: string;
   onClose: () => void;
 }) {
-  const eyebrow = props.isReplay ? "Replay" : "Welcome";
+  const eyebrow = props.isReplay
+    ? "Replay"
+    : props.step === "backend-requirements"
+      ? "Prerequisites"
+      : "Welcome";
   const crumb = (() => {
     switch (props.step) {
+      case "backend-requirements":
+        return "Backend requirements";
       case "welcome":
         return "First-run setup";
       case "thread-presentation":
@@ -592,6 +638,7 @@ function WizardFooter(props: {
   providerSetupTotal: number;
   currentProviderName?: string;
   codexProfileNamesValid: boolean;
+  backendRequirementSatisfied: boolean;
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
   onBack: () => void;
@@ -635,10 +682,25 @@ function WizardFooter(props: {
         : "No providers selected";
   } else if (props.step === "provider-setup") {
     hint = `Provider ${props.providerSetupIndex + 1} of ${props.providerSetupTotal}`;
+  } else if (props.step === "backend-requirements") {
+    hint = props.backendRequirementSatisfied
+      ? "Ready"
+      : "Install Codex CLI or paste an xAI API key to continue";
   }
 
   let primary: ReactNode = null;
-  if (props.step === "welcome") {
+  if (props.step === "backend-requirements") {
+    primary = (
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        disabled={!props.backendRequirementSatisfied || props.submitting}
+        onClick={props.onNext}
+      >
+        Continue →
+      </button>
+    );
+  } else if (props.step === "welcome") {
     primary = (
       <button
         type="button"
@@ -750,6 +812,234 @@ function WizardFooter(props: {
 /* ----------------------------------------------------------------
    Step bodies
    ---------------------------------------------------------------- */
+
+/**
+ * Returns true when the live snapshot shows at least one valid backend
+ * — either a discoverable Codex CLI candidate that's executable and at
+ * the minimum supported version, OR an xAI/Grok API key configured in
+ * the keychain. The wizard's Step 0 footer enables Continue based on
+ * this; downstream wizard steps assume this has already been satisfied,
+ * which lets them defer Codex CLI execution until a known-good backend
+ * exists (see `CodexAppServerClient.isCodexBootstrapDeferred`).
+ */
+function isBackendRequirementSatisfied(
+  snapshot: DesktopSettingsSnapshot | undefined,
+): boolean {
+  if (!snapshot) return false;
+  const codexSelected = snapshot.models.codex.discovery.candidates.some(
+    (candidate) => candidate.selected && candidate.executable,
+  );
+  const grokConfigured = snapshot.models.grok.apiKey.configured;
+  return codexSelected || grokConfigured;
+}
+
+function BackendRequirementsStep(props: {
+  settings: DesktopSettingsState;
+  desktopApi?: DesktopApi;
+}) {
+  const snapshot = props.settings.snapshot;
+  const discovery = snapshot?.models.codex.discovery;
+  const grokKey = snapshot?.models.grok.apiKey;
+  const codexCandidate = discovery?.candidates.find(
+    (candidate) => candidate.selected && candidate.executable,
+  );
+  const codexOk = Boolean(codexCandidate);
+  const grokOk = Boolean(grokKey?.configured);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [grokKeyInput, setGrokKeyInput] = useState("");
+  const [savingGrok, setSavingGrok] = useState(false);
+  const [grokError, setGrokError] = useState<string | undefined>(undefined);
+
+  const refresh = async (): Promise<void> => {
+    if (!props.desktopApi?.refreshCodexDiscovery || refreshing) return;
+    setRefreshing(true);
+    try {
+      await props.desktopApi.refreshCodexDiscovery({});
+    } catch (caught) {
+      // eslint-disable-next-line no-console
+      console.warn("Onboarding: refreshCodexDiscovery failed", caught);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const saveGrokKey = async (): Promise<void> => {
+    const value = grokKeyInput.trim();
+    if (!value || savingGrok) return;
+    setSavingGrok(true);
+    setGrokError(undefined);
+    const ok = await props.settings.replaceSecret("grokApiKey", value);
+    if (ok) {
+      setGrokKeyInput("");
+    } else {
+      setGrokError(
+        props.settings.error ??
+          "Could not save the API key. Check the Settings → Models error log.",
+      );
+    }
+    setSavingGrok(false);
+  };
+
+  return (
+    <div className="onboarding-wizard__prereqs">
+      <header className="onboarding-wizard__head">
+        <h1 className="onboarding-wizard__title">
+          Pick at least one backend to continue
+        </h1>
+        <p className="onboarding-wizard__sub">
+          PwrAgent runs on top of one or both of these backends. You only
+          need one to get started — the rest of the wizard configures
+          profiles and messaging on top.
+        </p>
+      </header>
+
+      <div className="onboarding-wizard__prereq-card">
+        <div className="onboarding-wizard__prereq-head">
+          <div>
+            <div className="onboarding-wizard__prereq-title">Codex CLI</div>
+            <div className="onboarding-wizard__prereq-sub">
+              Required for the Codex backend. PwrAgent shells out to the
+              installed binary; we don&rsquo;t bundle it.
+            </div>
+          </div>
+          <span
+            className={`onboarding-wizard__prereq-status ${
+              codexOk
+                ? "onboarding-wizard__prereq-status--ok"
+                : "onboarding-wizard__prereq-status--missing"
+            }`}
+          >
+            {codexOk ? (
+              <>
+                ✓ Found{codexCandidate?.version ? ` v${codexCandidate.version}` : ""}
+              </>
+            ) : (
+              "Not found"
+            )}
+          </span>
+        </div>
+        {codexOk ? (
+          <div className="onboarding-wizard__prereq-detail">
+            <code>{codexCandidate?.command}</code>
+            <button
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+              disabled={refreshing}
+              onClick={() => void refresh()}
+            >
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        ) : (
+          <div className="onboarding-wizard__prereq-detail">
+            <details className="onboarding-wizard__prereq-paths">
+              <summary>
+                Searched {discovery?.candidates.length ?? 0} location
+                {discovery && discovery.candidates.length === 1 ? "" : "s"}{" "}
+                — none with a usable Codex
+              </summary>
+              <ul>
+                {discovery?.candidates.map((candidate) => (
+                  <li key={candidate.command}>
+                    <code>{candidate.command}</code>
+                    <span className="onboarding-wizard__prereq-paths-reason">
+                      {candidate.executable
+                        ? candidate.failureReason ?? "no version"
+                        : candidate.failureReason === "not_found"
+                          ? "not found"
+                          : candidate.failureReason ?? "not executable"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <div className="onboarding-wizard__prereq-install">
+              <strong>Install:</strong>
+              <ul>
+                <li>
+                  npm: <code>npm install -g @openai/codex</code>
+                </li>
+                <li>
+                  pnpm: <code>pnpm add -g @openai/codex</code>
+                </li>
+                <li>
+                  Homebrew (macOS / Linux):{" "}
+                  <code>brew install --cask codex</code>
+                </li>
+              </ul>
+              <button
+                type="button"
+                className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+              >
+                {refreshing ? "Refreshing…" : "Refresh after install"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="onboarding-wizard__prereq-card">
+        <div className="onboarding-wizard__prereq-head">
+          <div>
+            <div className="onboarding-wizard__prereq-title">xAI API key</div>
+            <div className="onboarding-wizard__prereq-sub">
+              Required for the Grok backend. Stored in your system keychain.
+            </div>
+          </div>
+          <span
+            className={`onboarding-wizard__prereq-status ${
+              grokOk
+                ? "onboarding-wizard__prereq-status--ok"
+                : "onboarding-wizard__prereq-status--missing"
+            }`}
+          >
+            {grokOk ? "✓ Configured" : "Not configured"}
+          </span>
+        </div>
+        {!grokOk ? (
+          <div className="onboarding-wizard__prereq-detail">
+            <div className="onboarding-wizard__field-row">
+              <input
+                type="password"
+                className="onboarding-wizard__input"
+                placeholder="xai-…"
+                value={grokKeyInput}
+                disabled={savingGrok}
+                onChange={(e) => setGrokKeyInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveGrokKey();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                disabled={!grokKeyInput.trim() || savingGrok}
+                onClick={() => void saveGrokKey()}
+              >
+                {savingGrok ? "Saving…" : "Save"}
+              </button>
+            </div>
+            <div className="onboarding-wizard__prereq-link">
+              Get a key at{" "}
+              <code>https://console.x.ai/team/default/api-keys</code>
+            </div>
+            {grokError ? (
+              <span className="onboarding-wizard__field-error">
+                {grokError}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function WelcomeStep() {
   return (

@@ -11080,3 +11080,128 @@ textarea,
   letter-spacing: 0.08em;
   word-break: break-all;
 }
+
+/* ============================================================
+   ONBOARDING WIZARD — Step 0: Backend requirements
+   Pre-rail prerequisite check shown before Welcome. Uses the
+   --narrow width (same as Welcome / Done) — two stacked cards
+   (Codex CLI + xAI key) read fine at 720px; anything wider just
+   leaves dead horizontal space.
+   ============================================================ */
+.onboarding-wizard__prereqs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.onboarding-wizard__prereq-card {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.onboarding-wizard__prereq-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.onboarding-wizard__prereq-title {
+  font: 650 14px/1.2 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.onboarding-wizard__prereq-sub {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.onboarding-wizard__prereq-status {
+  font: 600 11px/1 var(--font-sans, sans-serif);
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.onboarding-wizard__prereq-status--ok {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+.onboarding-wizard__prereq-status--missing {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+.onboarding-wizard__prereq-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-wizard__prereq-detail code {
+  font: 500 12px/1.4 var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 2px 6px;
+  word-break: break-all;
+}
+.onboarding-wizard__prereq-paths summary {
+  font: 500 12px/1.3 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: revert;
+}
+.onboarding-wizard__prereq-paths ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.onboarding-wizard__prereq-paths li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font: 500 11px/1.3 var(--font-mono);
+}
+.onboarding-wizard__prereq-paths-reason {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.onboarding-wizard__prereq-install {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.onboarding-wizard__prereq-install ul {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.onboarding-wizard__prereq-install code {
+  font: 500 11px/1.3 var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.onboarding-wizard__prereq-link {
+  font: 400 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+.onboarding-wizard__prereq-link code {
+  font-size: 11px;
+}

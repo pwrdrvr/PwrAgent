@@ -117,11 +117,63 @@ function validateCodexCliVersion(version: string): string | undefined {
     : undefined;
 }
 
-function getCodexAppCandidatePaths(): string[] {
-  return [
-    "/Applications/Codex.app/Contents/Resources/codex",
-    path.join(os.homedir(), "Applications/Codex.app/Contents/Resources/codex"),
-  ];
+/**
+ * Well-known install locations for the Codex CLI, used as auto-candidates
+ * alongside the PATH lookup. Platform-aware: macOS gets `Codex.app`
+ * resource bundles, Linux gets the standard FHS dirs plus the common
+ * user-local Node/Rust/Bun toolchain locations that aren't typically on
+ * an Electron-spawned process's PATH. Returned in priority order
+ * (system-wide first, user-local second) so the discovery prefers the
+ * canonical install when both are present.
+ */
+function getCodexInstallCandidatePaths(platform: NodeJS.Platform): string[] {
+  const homeDir = os.homedir();
+  if (platform === "darwin") {
+    return [
+      "/Applications/Codex.app/Contents/Resources/codex",
+      path.join(homeDir, "Applications/Codex.app/Contents/Resources/codex"),
+    ];
+  }
+  if (platform === "linux") {
+    return [
+      // System-wide installs (the typical "apt install", "rpm install",
+      // or homebrew-on-linux destination).
+      "/usr/bin/codex",
+      "/usr/local/bin/codex",
+      "/opt/codex/bin/codex",
+      // Ubuntu Snap installs land here when installed via `snap install
+      // codex`. The snap-wrapper exec is a shim that delegates to the
+      // real binary under `/snap/codex/current/`, but `/snap/bin/codex`
+      // is what shows up on PATH for a normal shell.
+      "/snap/bin/codex",
+      // User-local installs. Electron's spawned-process PATH on Linux
+      // does NOT typically include `~/.local/bin` or any of the per-
+      // language toolchain bin dirs (npm-global, pnpm, bun, cargo),
+      // so these need explicit auto-candidates to be discoverable
+      // without the operator setting CODEX_COMMAND or `PATH`.
+      path.join(homeDir, ".local/bin/codex"),
+      path.join(homeDir, ".npm-global/bin/codex"),
+      path.join(homeDir, ".local/share/pnpm/codex"),
+      path.join(homeDir, ".bun/bin/codex"),
+      path.join(homeDir, ".cargo/bin/codex"),
+      // Linuxbrew on Linux. Two common prefixes:
+      "/home/linuxbrew/.linuxbrew/bin/codex",
+      path.join(homeDir, ".linuxbrew/bin/codex"),
+    ];
+  }
+  if (platform === "win32") {
+    // Windows isn't a user-reported gap yet, but include the obvious
+    // npm + LOCALAPPDATA installs so the discovery snapshot is
+    // symmetric. The npm-global `.cmd` shim is what gets executed by
+    // `spawn` on win32.
+    return [
+      path.join(homeDir, "AppData/Roaming/npm/codex.cmd"),
+      path.join(homeDir, "AppData/Local/Programs/codex/codex.exe"),
+    ];
+  }
+  // Other Unix flavors (freebsd, openbsd, sunos) — fall back to the FHS
+  // basics, no user-local guesses.
+  return ["/usr/bin/codex", "/usr/local/bin/codex"];
 }
 
 async function inspectCodexCandidateBeforeVersionProbe(params: {
@@ -187,6 +239,7 @@ export async function discoverCodexCommands(params?: {
   const envOverride = env[CODEX_COMMAND_ENV]?.trim();
   const configuredCommand = params?.configuredCommand?.trim();
 
+  const resolvedPlatform = params?.platform ?? process.platform;
   return discoverCommands<DesktopCodexCandidateSource>({
     env,
     platform: params?.platform,
@@ -196,10 +249,12 @@ export async function discoverCodexCommands(params?: {
     ],
     autoCandidates: [
       { command: "codex", source: "path" },
-      ...getCodexAppCandidatePaths().map((candidatePath) => ({
-        command: candidatePath,
-        source: "application" as const,
-      })),
+      ...getCodexInstallCandidatePaths(resolvedPlatform).map(
+        (candidatePath) => ({
+          command: candidatePath,
+          source: "application" as const,
+        }),
+      ),
     ],
     parseVersion: parseCodexVersionOutput,
     compareVersions: compareCodexCliVersions,
@@ -207,6 +262,22 @@ export async function discoverCodexCommands(params?: {
     preflightCandidate: ({ command, platform }) =>
       inspectCodexCandidateBeforeVersionProbe({ command, platform }),
   }) as Promise<DesktopCodexDiscoverySnapshot>;
+}
+
+/**
+ * Thrown by `resolveCodexCommand` when discovery finds no executable
+ * Codex CLI on this machine. Callers catch this to surface a clean
+ * "Codex CLI not installed" state instead of attempting a spawn that
+ * would `ENOENT` (the previous fallback behavior on Linux without
+ * Codex). The wizard's Step 0 backend-requirements check also uses
+ * the discovery output directly and decorates this with install
+ * instructions.
+ */
+export class CodexCliNotInstalledError extends Error {
+  constructor(message = "codex CLI not found on PATH or in known install locations") {
+    super(message);
+    this.name = "CodexCliNotInstalledError";
+  }
 }
 
 export async function resolveCodexCommand(params: {
@@ -242,8 +313,12 @@ export async function resolveCodexCommand(params: {
     );
   }
 
-  return {
-    command: params.command.trim() || "codex",
-    source: "path",
-  };
+  // No selected candidate and no version-rejected candidate — discovery
+  // turned up nothing usable. Throw a typed error so the transport can
+  // refuse to spawn cleanly instead of attempting `spawn("codex")` and
+  // letting it `ENOENT`. Pre-fix behavior was to fall back to `"codex"`
+  // (PATH lookup); discovery already searched PATH plus the
+  // platform-specific install locations, so a fallback would just
+  // repeat the same lookup that already failed.
+  throw new CodexCliNotInstalledError();
 }
