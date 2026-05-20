@@ -64,6 +64,8 @@ export class DesktopAutomationService {
         canStartImmediately: (params) =>
           options.registry.canStartThreadTurnImmediately(params),
         submit: async (entry) => await options.registry.submitTurn(entry),
+        updateQueuedInput: (entryId, input) =>
+          options.registry.updateQueuedTurnInput(entryId, input),
       },
     });
     this.reconcileStartupRuns();
@@ -155,6 +157,12 @@ export class DesktopAutomationService {
     }
     const now = Date.now();
     const schedule = request.schedule ?? current.schedule;
+    const enablingFromPaused = request.enabled === true && current.status !== "enabled";
+    const disabling = request.enabled === false;
+    const shouldRecomputeNextRun =
+      request.nextRunAt === undefined &&
+      !disabling &&
+      (enablingFromPaused || (request.schedule !== undefined && current.status === "enabled"));
     const updated = this.options.store.updateAutomation(request.automationId, {
       name: request.name,
       taskPrompt: request.taskPrompt,
@@ -169,20 +177,27 @@ export class DesktopAutomationService {
       nextRunAt:
         request.nextRunAt !== undefined
           ? request.nextRunAt
-          : request.schedule && current.status === "enabled"
+          : disabling
+            ? null
+            : shouldRecomputeNextRun
             ? computeNextAutomationRunAt(schedule, now)
             : undefined,
       now,
     });
     if (!updated) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(updated);
+    this.scheduler.start();
     return { automation: toAutomationDetail(updated) };
   }
 
   async pause(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
-    const automation = this.options.store.pauseAutomation(request.automationId);
+    const automation = this.options.store.updateAutomation(request.automationId, {
+      status: "paused",
+      nextRunAt: null,
+    });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
+    this.scheduler.start();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -199,9 +214,21 @@ export class DesktopAutomationService {
   }
 
   async delete(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
+    const pendingQueueEntryIds = this.options.store
+      .listRunsForAutomation(request.automationId)
+      .filter((run) => run.status === "pending" || run.status === "queued")
+      .map((run) => run.queueEntryId)
+      .filter((entryId): entryId is string => Boolean(entryId));
     const automation = this.options.store.deleteAutomation(request.automationId);
     if (!automation) throw new Error("Automation not found.");
+    for (const entryId of pendingQueueEntryIds) {
+      this.options.registry.cancelQueuedTurn(
+        entryId,
+        "Automation deleted before the run started.",
+      );
+    }
     await this.notifyThreadAutomationsUpdated(automation);
+    this.scheduler.start();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -248,7 +275,7 @@ export class DesktopAutomationService {
       errorMessage: params.errorMessage,
     });
     if (params.automationRunId) {
-      const [run] = this.options.store.listRunsForAutomation(params.automationRunId, 1);
+      const run = this.options.store.getRun(params.automationRunId);
       if (!run) return;
       const automation = run
         ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })

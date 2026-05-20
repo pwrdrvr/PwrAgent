@@ -2704,6 +2704,17 @@ export class DesktopBackendRegistry {
     });
   }
 
+  cancelQueuedTurn(entryId: string, reason?: string): void {
+    this.threadTurnQueue.cancelEntry(entryId, reason);
+  }
+
+  updateQueuedTurnInput(
+    entryId: string,
+    input: AppServerTurnInputItem[],
+  ): void {
+    this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
+  }
+
   canStartThreadTurnImmediately(params: {
     backend: AppServerBackendKind;
     threadId: string;

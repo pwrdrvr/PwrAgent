@@ -138,6 +138,7 @@ export type AutomationRunSummary = {
   scheduledFor?: number;
   scheduledWindows: AutomationRunWindow[];
   queuedAt?: number;
+  queueEntryId?: string;
   startedAt?: number;
   completedAt?: number;
   backendTurnId?: string;

@@ -275,6 +275,7 @@ export class AutomationStore {
       scheduledFor: input.scheduledFor ?? scheduledWindows[0]?.scheduledFor,
       scheduledWindows,
       queuedAt: input.queuedAt,
+      queueEntryId: input.queueEntryId,
     };
 
     this.upsertRun(run, {
@@ -378,6 +379,11 @@ export class AutomationStore {
       now: params.now ?? completedAt,
     });
     return run;
+  }
+
+  getRun(runId: string): AutomationRunSummary | undefined {
+    const row = this.getRunRow(runId);
+    return row ? this.runFromRow(row) : undefined;
   }
 
   listRunsForAutomation(automationId: string, limit = 50): AutomationRunSummary[] {
@@ -723,6 +729,7 @@ export class AutomationStore {
       scheduledFor: row.scheduled_for ?? undefined,
       scheduledWindows: payload.scheduledWindows,
       queuedAt: row.queued_at ?? undefined,
+      queueEntryId: row.queue_entry_id ?? undefined,
       startedAt: row.started_at ?? undefined,
       completedAt: row.completed_at ?? undefined,
       backendTurnId: row.backend_turn_id ?? undefined,

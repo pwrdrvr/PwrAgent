@@ -12,6 +12,7 @@ let tempDir: string;
 let stateDb: StateDb;
 let store: AutomationStore;
 let publishedEvents: AgentEvent[];
+let registryListeners: Array<(event: AgentEvent) => void | Promise<void>>;
 let registry: DesktopBackendRegistry;
 
 beforeEach(() => {
@@ -19,8 +20,10 @@ beforeEach(() => {
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new AutomationStore(stateDb);
   publishedEvents = [];
+  registryListeners = [];
   registry = {
     canStartThreadTurnImmediately: vi.fn(() => true),
+    cancelQueuedTurn: vi.fn(),
     submitTurn: vi.fn(async (entry) => ({
       status: "started" as const,
       entry: {
@@ -30,7 +33,13 @@ beforeEach(() => {
       },
       turnId: "turn-1",
     })),
-    onEvent: vi.fn(() => () => undefined),
+    updateQueuedTurnInput: vi.fn(),
+    onEvent: vi.fn((listener) => {
+      registryListeners.push(listener);
+      return () => {
+        registryListeners = registryListeners.filter((entry) => entry !== listener);
+      };
+    }),
     publishLocalEvent: vi.fn(async (event: AgentEvent) => {
       publishedEvents.push(event);
     }),
@@ -105,5 +114,79 @@ describe("DesktopAutomationService", () => {
         automationRunId: expect.any(String),
       }),
     );
+  });
+
+  it("schedules from now when update enables a paused automation", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      enabled: false,
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+
+    const updated = await service.update({
+      automationId: created.automation.id,
+      enabled: true,
+    });
+
+    expect(updated.automation.status).toBe("enabled");
+    expect(updated.automation.nextRunAt).toBeGreaterThan(Date.now());
+  });
+
+  it("publishes run updates for queue lifecycle events by run id", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+    const runNow = await service.runNow({ automationId: created.automation.id });
+    publishedEvents = [];
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: runNow.queueEntryId ?? "queue-1",
+              origin: "automation",
+              status: "terminal",
+              automationRunId: runNow.run.id,
+              terminalStatus: "turn/completed",
+              turnId: "turn-1",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          automationId: created.automation.id,
+          runId: runNow.run.id,
+          status: "completed",
+          threadId: "thread-1",
+        },
+      },
+    });
   });
 });
