@@ -2104,6 +2104,17 @@ textarea,
   pointer-events: none;
 }
 
+/* Directory-summary rows reuse `.thread-row` for typography + selection
+   tokens, but the row's lateral padding is tightened to 4px so the
+   folder icon sits close to the row edge. The base `::before` accent
+   bar (positioned at left:5px) would paint over the folder icon under
+   that tighter inset. The row already telegraphs selection via the
+   accent border and tinted background from `.thread-row.is-selected`,
+   so the redundant bar is suppressed here. */
+.directory-row__summary.is-selected::before {
+  content: none;
+}
+
 .thread-row__header {
   display: flex;
   align-items: baseline;
