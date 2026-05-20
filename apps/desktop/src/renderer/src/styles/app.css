@@ -11083,15 +11083,11 @@ textarea,
 
 /* ============================================================
    ONBOARDING WIZARD — Step 0: Backend requirements
-   Pre-rail prerequisite check shown before Welcome. Two cards
-   side-by-side conceptually but stacked vertically for narrower
-   widths — Codex CLI discovery + xAI key.
+   Pre-rail prerequisite check shown before Welcome. Uses the
+   --narrow width (same as Welcome / Done) — two stacked cards
+   (Codex CLI + xAI key) read fine at 720px; anything wider just
+   leaves dead horizontal space.
    ============================================================ */
-.onboarding-wizard--medium {
-  width: min(880px, calc(100vw - 64px));
-  grid-template-rows: auto 1fr auto;
-}
-
 .onboarding-wizard__prereqs {
   display: flex;
   flex-direction: column;

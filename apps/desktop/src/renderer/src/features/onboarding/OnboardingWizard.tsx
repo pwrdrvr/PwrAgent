@@ -405,7 +405,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     >
       <div className="onboarding-wizard-overlay__scrim" />
       <div
-        className={`onboarding-wizard${step === "welcome" || step === "done" ? " onboarding-wizard--narrow" : ""}${step === "backend-requirements" ? " onboarding-wizard--medium" : ""}`}
+        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "backend-requirements" ? " onboarding-wizard--narrow" : ""}`}
       >
         <WizardTitlebar
           step={step}
