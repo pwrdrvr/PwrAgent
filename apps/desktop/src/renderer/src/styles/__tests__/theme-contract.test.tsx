@@ -312,6 +312,24 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
+  it("suppresses the selection-indicator bar on directory-summary rows so it can't paint over the folder icon", () => {
+    // `.directory-row__summary` reuses `.thread-row` for typography and
+    // selection tokens, but tightens its lateral padding to 4px so the
+    // folder icon sits close to the row edge. The base
+    // `.thread-row.is-selected::before` accent bar (positioned at
+    // left:5px, width:3px) would paint over the folder icon under that
+    // tighter inset. The header already conveys selection via the
+    // accent border + tinted background from `.thread-row.is-selected`,
+    // so the redundant bar is suppressed via `content: none`. If this
+    // override is removed, the orange bar reappears across the folder
+    // glyph the next time a directory header is selected.
+    const overrideRule = extractRuleBody(
+      css,
+      ".directory-row__summary.is-selected::before",
+    );
+    expect(overrideRule).toContain("content: none;");
+  });
+
   it("keeps thread context menu hover states visible (skipping disabled rows)", () => {
     // The `:not(:disabled)` qualifier was added so disabled menu
     // items (Move Up at top of pinned list / Move Down at bottom)
