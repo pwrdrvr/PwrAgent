@@ -5,6 +5,15 @@ import path from "node:path";
 
 export const PWRAGENT_PROFILE_ENV = "PWRAGENT_PROFILE";
 export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
+/**
+ * Bypass the wizard for missing-profile boot decisions. Intended for
+ * E2E fixtures and replay tests where the test harness wants to spin
+ * up a fresh profile non-interactively. Production launches MUST go
+ * through the wizard so the operator never gets a silently-created
+ * profile mapped to a Codex auth profile they didn't ask for (see
+ * issue #524).
+ */
+export const PWRAGENT_PROFILE_AUTO_CREATE_ENV = "PWRAGENT_PROFILE_AUTO_CREATE";
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const RESERVED_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
@@ -54,6 +63,166 @@ export function resolvePwragentRoot(options?: {
   if (pwragentHome) return path.resolve(pwragentHome);
   const homeDir = options?.homeDir ?? os.homedir();
   return path.join(homeDir, ".pwragent");
+}
+
+/**
+ * Boot-time decision tree for "which profile should this Electron
+ * instance open into?" Returns a tagged union so the caller can
+ * branch on `kind` rather than relying on a magic `"default"` string
+ * fallback. The pre-#524 behavior was to silently mkdir a fresh
+ * `default/` profile (mapped to the operator's Codex `default` auth
+ * profile, which usually carries their real workspace threads) on
+ * every clean boot. That contaminated fresh `PWRAGENT_HOME` testbeds
+ * and silently materialized typo'd profile names — a bad surprise.
+ *
+ * Resolution order:
+ * 1. `--profile=foo` CLI flag (or `--profile foo`)
+ * 2. `PWRAGENT_PROFILE=foo` env var
+ * 3. `profiles.toml::default_profile` setting
+ * 4. Migration: pre-existing `~/.pwragent/profiles/default/` dir
+ * 5. Nothing → first-run wizard
+ *
+ * For 1–4, if the named profile dir is missing on disk the caller
+ * gets a `missing-named-profile` / `missing-default-profile`
+ * decision instead of `open`. The caller is expected to surface the
+ * onboarding wizard (with the requested name pre-populated) rather
+ * than fabricate a profile. The `PWRAGENT_PROFILE_AUTO_CREATE=1`
+ * escape hatch turns missing branches back into `open` for test
+ * fixtures and replay harnesses.
+ */
+export type ProfileBootDecision =
+  | {
+      kind: "open";
+      profileName: string;
+      profileDir: string;
+      /** Where the profile name came from. Useful for telemetry and
+       *  for tagging migrated installs ("found existing default/") in
+       *  logs without changing semantics. */
+      source: "cli" | "env" | "registry" | "migration";
+    }
+  | {
+      /** CLI or env named a profile that doesn't exist on disk. The
+       *  wizard should pre-populate this name and ask "set up `foo`,
+       *  or exit?" rather than silently materializing it. */
+      kind: "missing-named-profile";
+      requestedName: string;
+      source: "cli" | "env";
+    }
+  | {
+      /** `profiles.toml::default_profile` points at a profile whose
+       *  directory no longer exists. Usually means the operator
+       *  manually deleted the directory but the registry wasn't
+       *  cleaned up. Treat like missing-named with the registry
+       *  pointer as the requested name. */
+      kind: "missing-default-profile";
+      configuredName: string;
+    }
+  | {
+      /** Fresh `PWRAGENT_HOME` — nothing configured, no `default/`
+       *  on disk. Pop the full first-run wizard. */
+      kind: "no-profile-configured";
+    };
+
+export function resolveProfileBootDecision(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  cliProfile?: string;
+  argv?: readonly string[];
+}): ProfileBootDecision {
+  const env = options?.env ?? process.env;
+  const autoCreate = isAutoCreateEnabled(env);
+
+  // 1. CLI flag.
+  const cliProfile =
+    options?.cliProfile?.trim() || readProfileArg(options?.argv)?.trim();
+  if (cliProfile) {
+    const name = cliProfile.trim();
+    if (!isValidProfileName(name)) {
+      throw new Error(
+        `Invalid profile name "${name}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+      );
+    }
+    return decideForRequestedName(name, "cli", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+  }
+
+  // 2. PWRAGENT_PROFILE env var.
+  const envProfile = env[PWRAGENT_PROFILE_ENV]?.trim();
+  if (envProfile) {
+    if (!isValidProfileName(envProfile)) {
+      throw new Error(
+        `Invalid PWRAGENT_PROFILE="${envProfile}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+      );
+    }
+    return decideForRequestedName(envProfile, "env", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+  }
+
+  // 3. profiles.toml::default_profile.
+  const registryDefault = readProfilesRegistry({ env: options?.env, homeDir: options?.homeDir }).default_profile?.trim();
+  if (registryDefault && isValidProfileName(registryDefault)) {
+    const profileDir = resolveProfileDir(registryDefault, { env: options?.env, homeDir: options?.homeDir });
+    if (fs.existsSync(profileDir)) {
+      return {
+        kind: "open",
+        profileName: registryDefault,
+        profileDir,
+        source: "registry",
+      };
+    }
+    if (autoCreate) {
+      return {
+        kind: "open",
+        profileName: registryDefault,
+        profileDir,
+        source: "registry",
+      };
+    }
+    return { kind: "missing-default-profile", configuredName: registryDefault };
+  }
+
+  // 4. Migration: pre-existing `default/` dir from before #524.
+  // Honor it as the implicit default so currently-fielded installs
+  // don't suddenly hit the wizard on next launch. Only the on-disk
+  // dir counts — we don't fabricate it.
+  const defaultDir = resolveProfileDir("default", { env: options?.env, homeDir: options?.homeDir });
+  if (fs.existsSync(defaultDir)) {
+    return {
+      kind: "open",
+      profileName: "default",
+      profileDir: defaultDir,
+      source: "migration",
+    };
+  }
+
+  // 5. Auto-create escape hatch for E2E.
+  if (autoCreate) {
+    return {
+      kind: "open",
+      profileName: "default",
+      profileDir: defaultDir,
+      source: "migration",
+    };
+  }
+
+  // Nothing configured, no existing profile to migrate. First-run.
+  return { kind: "no-profile-configured" };
+}
+
+function decideForRequestedName(
+  name: string,
+  source: "cli" | "env",
+  options: { env?: NodeJS.ProcessEnv; homeDir?: string },
+  autoCreate: boolean,
+): ProfileBootDecision {
+  const profileDir = resolveProfileDir(name, options);
+  if (fs.existsSync(profileDir) || autoCreate) {
+    return { kind: "open", profileName: name, profileDir, source };
+  }
+  return { kind: "missing-named-profile", requestedName: name, source };
+}
+
+function isAutoCreateEnabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env[PWRAGENT_PROFILE_AUTO_CREATE_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }
 
 export function resolveActiveProfileName(options?: {
