@@ -343,6 +343,71 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("preserves boundary whitespace when copying a full message", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const messageText = "\n  Replay this prompt exactly.  \n\n";
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-whitespace",
+            role: "user",
+            text: messageText,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(messageText);
+    });
+  });
+
+  it("preserves whitespace-only text parts when copying a multipart message", async () => {
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-whitespace-parts",
+            role: "assistant",
+            text: "",
+            parts: [
+              {
+                type: "text",
+                text: "  ",
+              },
+              {
+                type: "text",
+                text: "\nkeep this boundary\n",
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith("  \n\n\nkeep this boundary\n");
+    });
+  });
+
   it("preserves reference-style links inside split wide markdown tables", () => {
     const { container } = render(
       <TranscriptList

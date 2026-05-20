@@ -26,7 +26,10 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       : props.message.text
         ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
         : [];
-  const messageCopyText = useMemo(() => buildMessageCopyText(contentParts), [contentParts]);
+  const messageCopyText = useMemo(
+    () => buildMessageCopyText(props.message, contentParts),
+    [contentParts, props.message]
+  );
   const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
 
   if (messageSegments.length === 0) {
@@ -390,13 +393,18 @@ function labelForRole(role: AppServerThreadMessageEntry["role"]): string {
   return "User";
 }
 
-function buildMessageCopyText(parts: AppServerThreadMessagePart[]): string {
+function buildMessageCopyText(
+  message: AppServerThreadMessageEntry,
+  parts: AppServerThreadMessagePart[]
+): string {
+  if (typeof message.text === "string" && message.text.length > 0) {
+    return message.text;
+  }
+
   return parts
     .filter((part): part is Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> =>
       part.type !== "image"
     )
     .map((part) => part.text)
-    .filter((text) => text.trim() !== "")
-    .join("\n\n")
-    .trim();
+    .join("\n\n");
 }
