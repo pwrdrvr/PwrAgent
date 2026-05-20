@@ -1622,6 +1622,16 @@ export class DesktopBackendRegistry {
         connectionObserver: codexObserver,
         env: codexEnv,
         clientVersion,
+        // Fire the gate at the client level too, not just the
+        // listThreads layer. Without this, `describeCodexBackend`
+        // (called by `listBackends` on app startup) would call
+        // `ensureInitialized` → spawn the Codex CLI subprocess —
+        // even on a fresh PwrAgent profile mid-wizard, and on
+        // machines where the operator doesn't have Codex installed
+        // yet. The client throws `CodexBootstrapDeferredError` which
+        // `describeCodexBackend` catches via `Promise.allSettled` and
+        // surfaces as `available: false` with a clean reason.
+        isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
     this.grokClient =
       options?.grokClient ??

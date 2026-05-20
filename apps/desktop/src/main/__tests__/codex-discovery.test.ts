@@ -328,4 +328,112 @@ describe("Codex discovery", () => {
       version: "0.126.0-alpha.8",
     });
   });
+
+  it("discovers Codex at /usr/local/bin on Linux when PATH does not include it", async () => {
+    // Repro of the bug from the field: Electron-spawned process on
+    // Linux gets a stripped PATH that may not include common system
+    // bin dirs, so the PATH lookup misses. The well-known auto-
+    // candidates need to find /usr/local/bin/codex explicitly.
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === "/usr/local/bin/codex") return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, result?: { stdout: string }) => void,
+      ) => {
+        if (command === "/usr/local/bin/codex") {
+          callback(null, { stdout: "codex-cli 0.130.0\n" });
+          return;
+        }
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        callback(error);
+      },
+    );
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({
+      env: { PATH: "" }, // Intentionally empty — must find via well-known paths.
+      platform: "linux",
+    });
+
+    expect(snapshot.selectedCommand).toBe("/usr/local/bin/codex");
+    expect(
+      snapshot.candidates.find((c) => c.command === "/usr/local/bin/codex"),
+    ).toMatchObject({ executable: true, selected: true, version: "0.130.0" });
+  });
+
+  it("discovers Codex at ~/.local/bin/codex (npm/pnpm/bun user install) on Linux", async () => {
+    const homeDir = (await import("node:os")).homedir();
+    const userBinCodex = `${homeDir}/.local/bin/codex`;
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === userBinCodex) return undefined;
+      throw notFoundError;
+    });
+    realpathMock.mockImplementation(async (candidate: string) => candidate);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, result?: { stdout: string }) => void,
+      ) => {
+        if (command === userBinCodex) {
+          callback(null, { stdout: "codex-cli 0.130.0\n" });
+          return;
+        }
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        callback(error);
+      },
+    );
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({
+      env: {},
+      platform: "linux",
+    });
+
+    expect(snapshot.selectedCommand).toBe(userBinCodex);
+  });
+
+  it("resolveCodexCommand throws CodexCliNotInstalledError when nothing is found", async () => {
+    // The transport relies on this to refuse to spawn — previous
+    // behavior of falling back to `codex` (PATH) then letting
+    // `spawn` ENOENT was confusing on Linux without Codex installed.
+    const notFoundError = new Error("missing") as NodeJS.ErrnoException;
+    notFoundError.code = "ENOENT";
+    accessMock.mockRejectedValue(notFoundError);
+    realpathMock.mockResolvedValue("/no/such/path");
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null) => void,
+      ) => {
+        callback(notFoundError);
+      },
+    );
+    const { resolveCodexCommand, CodexCliNotInstalledError } = await import(
+      "../settings/codex-discovery"
+    );
+
+    await expect(
+      resolveCodexCommand({
+        command: "codex",
+        env: { PATH: "/nowhere" },
+        platform: "linux",
+      }),
+    ).rejects.toThrow(CodexCliNotInstalledError);
+  });
 });

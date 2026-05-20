@@ -109,7 +109,33 @@ type CodexClientOptions = {
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
   clientVersion?: string;
+  /**
+   * Gate predicate consulted on every `ensureInitialized` call. When it
+   * returns true, the client refuses to spawn / connect the Codex CLI
+   * subprocess and throws {@link CodexBootstrapDeferredError}. The
+   * BackendRegistry wires this to `DesktopSettingsService
+   * .isCodexBootstrapDeferred()` so a brand-new PwrAgent profile (or
+   * one mid-wizard) doesn't slurp threads from an arbitrary Codex
+   * identity AND, importantly, doesn't even attempt to spawn the
+   * `codex` binary on machines that don't have it installed yet. The
+   * gate is the architectural boundary between "we know what backend
+   * the operator wants" and "fire it up."
+   */
+  isCodexBootstrapDeferred?: () => boolean;
 };
+
+/**
+ * Thrown by `ensureInitialized` when `isCodexBootstrapDeferred` returns
+ * true. Callers catch this to surface a clean "backend deferred" state
+ * (e.g. `describeCodexBackend` reports `available: false` with a
+ * recognizable reason) instead of treating it as a Codex CLI error.
+ */
+export class CodexBootstrapDeferredError extends Error {
+  constructor(message = "codex bootstrap deferred until onboarding completes") {
+    super(message);
+    this.name = "CodexBootstrapDeferredError";
+  }
+}
 
 type InitializeResult = {
   serverInfo?: {
@@ -4688,6 +4714,17 @@ export class CodexAppServerClient {
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
+    }
+
+    // Bootstrap gate: when the deferred predicate is set and active,
+    // refuse to spawn the Codex CLI subprocess at all. This is the
+    // architectural choke point that lets `describeCodexBackend`
+    // return a clean "deferred" placeholder for both (a) a fresh
+    // PwrAgent profile mid-wizard and (b) a machine where the
+    // operator hasn't yet confirmed they have a Codex CLI installed
+    // (e.g. Linux without `codex` on PATH).
+    if (this.options.isCodexBootstrapDeferred?.()) {
+      throw new CodexBootstrapDeferredError();
     }
 
     if (this.initializationPromise) {
