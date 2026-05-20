@@ -267,7 +267,7 @@ test("directory launchpad rereads the created thread after completion when the f
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();

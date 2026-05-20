@@ -5558,6 +5558,20 @@ textarea,
   margin-right: auto;
 }
 
+/*
+  Wrapper around each transcript entry that exists purely to carry
+  role="listitem" for the role="list" on the scroll container (see
+  TranscriptList.tsx). `display: contents` skips the wrapper for
+  layout, so .transcript-message + friends remain direct flex children
+  of .transcript-list__content and keep their align-self docking
+  (user → right, assistant → left). Modern Chromium preserves the
+  role in the a11y tree under display: contents, so axe's
+  aria-required-children rule is still satisfied.
+*/
+.transcript-list__item {
+  display: contents;
+}
+
 .transcript-list__scroll-bottom {
   position: absolute;
   left: 50%;

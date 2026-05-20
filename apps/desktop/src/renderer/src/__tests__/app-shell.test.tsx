@@ -638,9 +638,9 @@ describe("App", () => {
 
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "inbox" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "inbox" })).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Created" })
+      screen.getByRole("tab", { name: "Created" })
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
     expect(

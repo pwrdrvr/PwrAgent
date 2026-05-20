@@ -701,12 +701,22 @@ export function TranscriptList(props: TranscriptListProps) {
           syncScrollState({ preserveGlueOnResize: true });
         }}
       >
-        <div ref={scrollContentRef} className="transcript-list__content">
+        {/*
+          role="presentation" on the inner scroll wrapper removes it
+          from the accessibility tree, letting the role="listitem"
+          entries below appear as direct owned children of the
+          role="list" scroll container above — which is what axe's
+          aria-required-children rule looks for. Without this, the
+          inner wrapper sits between the list role and its items in
+          the a11y tree and the rule fails.
+        */}
+        <div ref={scrollContentRef} className="transcript-list__content" role="presentation">
           {transcriptRenderItems.map((item) => {
-            if (item.type === "workPhaseGroup") {
-              return (
+            const entryKey =
+              item.type === "workPhaseGroup" ? item.id : item.entry.id;
+            const body =
+              item.type === "workPhaseGroup" ? (
                 <TranscriptWorkPhaseGroup
-                  key={item.id}
                   applications={props.applications}
                   collapsible={item.collapsible}
                   directoryPaths={props.directoryPaths}
@@ -720,36 +730,34 @@ export function TranscriptList(props: TranscriptListProps) {
                     toggleCommentaryGroup(item.id);
                   }}
                 />
+              ) : item.entry.type === "activity" ? (
+                <TranscriptActivity entry={item.entry} />
+              ) : item.entry.type === "plan" ? (
+                <TranscriptPlan
+                  applications={props.applications}
+                  desktopApi={props.desktopApi}
+                  entry={item.entry}
+                />
+              ) : item.entry.type === "review" ? (
+                <TranscriptReview
+                  applications={props.applications}
+                  directoryPaths={props.directoryPaths}
+                  desktopApi={props.desktopApi}
+                  entry={item.entry}
+                />
+              ) : (
+                <TranscriptMessage
+                  applications={props.applications}
+                  desktopApi={props.desktopApi}
+                  message={item.entry}
+                  skills={skills}
+                  onOpenImage={props.onOpenImage}
+                />
               );
-            }
-
-            const entry = item.entry;
-            return entry.type === "activity" ? (
-              <TranscriptActivity key={entry.id} entry={entry} />
-            ) : entry.type === "plan" ? (
-              <TranscriptPlan
-                key={entry.id}
-                applications={props.applications}
-                desktopApi={props.desktopApi}
-                entry={entry}
-              />
-            ) : entry.type === "review" ? (
-              <TranscriptReview
-                key={entry.id}
-                applications={props.applications}
-                directoryPaths={props.directoryPaths}
-                desktopApi={props.desktopApi}
-                entry={entry}
-              />
-            ) : (
-              <TranscriptMessage
-                key={entry.id}
-                applications={props.applications}
-                desktopApi={props.desktopApi}
-                message={entry}
-                skills={skills}
-                onOpenImage={props.onOpenImage}
-              />
+            return (
+              <div key={entryKey} className="transcript-list__item" role="listitem">
+                {body}
+              </div>
             );
           })}
           {props.pendingStatusText ? (
