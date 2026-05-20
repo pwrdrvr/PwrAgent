@@ -159,6 +159,25 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
+  updateQueuedEntryInput(
+    entryId: string,
+    input: AppServerTurnInputItem[],
+  ): ThreadTurnQueueEntry | undefined {
+    for (const queue of this.queuedEntries.values()) {
+      const index = queue.findIndex((entry) => entry.id === entryId);
+      if (index === -1) continue;
+      const current = queue[index];
+      if (!current) return undefined;
+      const updated = {
+        ...current,
+        input,
+      };
+      queue[index] = updated;
+      return updated;
+    }
+    return undefined;
+  }
+
   async releaseThread(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;

@@ -22,6 +22,7 @@ export type AutomationTurnQueue = {
     entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
   ): Promise<ThreadTurnQueueSubmissionResult>;
+  updateQueuedInput?(entryId: string, input: ThreadTurnQueueEntry["input"]): void;
 };
 
 export type AutomationSchedulerOptions = {
@@ -42,7 +43,10 @@ export class AutomationScheduler {
   }
 
   start(): void {
-    if (this.running) return;
+    if (this.running) {
+      this.scheduleNextTimer();
+      return;
+    }
     this.running = true;
     this.scheduleNextTimer();
   }
@@ -174,11 +178,17 @@ export class AutomationScheduler {
     } else {
       const existing = this.options.store.findPendingScheduledRun(automation.id);
       if (existing) {
-        this.options.store.coalescePendingScheduledRun({
+        const coalesced = this.options.store.coalescePendingScheduledRun({
           automationId: automation.id,
           scheduledWindows: windows,
           now,
         });
+        if (coalesced?.queueEntryId) {
+          this.options.queue.updateQueuedInput?.(
+            coalesced.queueEntryId,
+            buildAutomationTurnInput({ automation, run: coalesced }),
+          );
+        }
       } else {
         await this.enqueueScheduledRun({ automation, windows, now });
       }

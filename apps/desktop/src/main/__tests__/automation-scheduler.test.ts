@@ -38,6 +38,13 @@ class FakeQueue {
       turnId: `turn-${queuedEntry.id}`,
     };
   }
+
+  updateQueuedInput(entryId: string, input: ThreadTurnQueueEntry["input"]): void {
+    const entry = this.submitted.find((candidate) => candidate.id === entryId);
+    if (entry) {
+      entry.input = input;
+    }
+  }
 }
 
 let tempDir: string;
@@ -92,6 +99,28 @@ function buildScheduler(): AutomationScheduler {
 }
 
 describe("AutomationScheduler", () => {
+  it("reschedules timers when start is called after an automation is added", () => {
+    const timerDelays: number[] = [];
+    const scheduler = new AutomationScheduler({
+      store,
+      queue,
+      now: () => now,
+      setTimer: ((_callback: () => void, delayMs: number) => {
+        timerDelays.push(delayMs);
+        return timerDelays.length;
+      }) as unknown as typeof setTimeout,
+      clearTimer: () => undefined,
+    });
+
+    scheduler.start();
+    expect(timerDelays).toEqual([]);
+
+    createIntervalAutomation();
+    scheduler.start();
+
+    expect(timerDelays).toEqual([5 * 60 * 1000]);
+  });
+
   it("starts due interval automations on idle threads and advances next run", async () => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
@@ -144,6 +173,11 @@ describe("AutomationScheduler", () => {
     await scheduler.evaluateDueAutomations();
 
     expect(queue.submitted).toHaveLength(1);
+    expect(queue.submitted[0]?.input).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("- 1970-01-01T00:15:00.000Z"),
+      }),
+    ]);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({
         scheduledWindows: [
