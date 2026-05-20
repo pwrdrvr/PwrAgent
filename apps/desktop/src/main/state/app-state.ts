@@ -1,6 +1,8 @@
 import {
+  ensureBootstrapProfileDir,
   ensureProfileExists,
   resolveActiveProfilePath,
+  resolveBootstrapProfilePath,
   startProfileRuntimeHeartbeat,
   type ProfileRuntimeHeartbeat,
   updateLastUsed,
@@ -16,37 +18,95 @@ let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
+let activeMode: AppStateMode | null = null;
 
-export function initializeAppState(): {
+/**
+ * The two flavors of app state init:
+ *
+ * - `active-profile`: today's flow. The active profile (resolved via
+ *   CLI flag / env var / registry / migration) gets its directory
+ *   materialized, state.db opened, heartbeat started, last_used
+ *   stamped in profiles.toml. Used when `resolveProfileBootDecision`
+ *   returns `open`.
+ *
+ * - `bootstrap`: state lives under `.bootstrap/` (sibling to
+ *   `profiles/`). No heartbeat, no last_used write, no entry in
+ *   profiles.toml. The bootstrap wizard runs against this, and on
+ *   Finish the operator's choices graduate into a real profile —
+ *   this dir gets cleaned up afterward. Used when
+ *   `resolveProfileBootDecision` returns anything except `open`.
+ *   See `cleanupBootstrapProfile` in `../profile.ts` for cleanup.
+ */
+export type AppStateMode = "active-profile" | "bootstrap";
+
+export function initializeAppState(
+  mode: AppStateMode = "active-profile",
+): {
   stateDb: StateDb;
   messagingStore: SqliteMessagingStore;
   overlayStore: SqliteOverlayStore;
   runtimeInstanceStore: AppRuntimeInstanceStore;
+  mode: AppStateMode;
 } {
   if (stateDb) {
+    if (activeMode !== mode) {
+      // Mismatched re-init. Should never happen during a single
+      // process lifetime — bootstrap mode is graduated by tearing
+      // down state and opening a new window into the real profile,
+      // not by flipping the mode in place.
+      throw new Error(
+        `App state already initialized in mode "${activeMode}"; cannot re-init as "${mode}".`,
+      );
+    }
     return {
       stateDb,
       messagingStore: messagingStore!,
       overlayStore: overlayStore!,
       runtimeInstanceStore: runtimeInstanceStore!,
+      mode,
     };
   }
 
-  const { profileName } = ensureProfileExists();
-  migrateIfNeeded();
+  if (mode === "bootstrap") {
+    ensureBootstrapProfileDir();
+    // Intentionally skip `migrateIfNeeded` — the bootstrap profile
+    // is freshly minted each onboarding session and has no legacy
+    // XDG paths to migrate from. Real-profile migration runs when
+    // the operator's chosen profile gets initialized on graduation.
+    const dbPath = resolveBootstrapProfilePath("state/state.db");
+    stateDb = StateDb.open(dbPath, { profileName: "__bootstrap__" });
+    stateDb.startGc();
+    // Intentionally no profile heartbeat / last_used. The bootstrap
+    // profile is transient and must not appear in any user-facing
+    // profile listing.
+  } else {
+    const { profileName } = ensureProfileExists();
+    migrateIfNeeded();
 
-  const dbPath = resolveActiveProfilePath("state/state.db");
-  stateDb = StateDb.open(dbPath, { profileName });
-  stateDb.startGc();
+    const dbPath = resolveActiveProfilePath("state/state.db");
+    stateDb = StateDb.open(dbPath, { profileName });
+    stateDb.startGc();
 
-  updateLastUsed(profileName);
-  profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName);
+    updateLastUsed(profileName);
+    profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName);
+  }
 
   messagingStore = new SqliteMessagingStore(stateDb);
   overlayStore = new SqliteOverlayStore(stateDb);
   runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
+  activeMode = mode;
 
-  return { stateDb, messagingStore, overlayStore, runtimeInstanceStore };
+  return {
+    stateDb,
+    messagingStore: messagingStore!,
+    overlayStore: overlayStore!,
+    runtimeInstanceStore: runtimeInstanceStore!,
+    mode,
+  };
+}
+
+export function getAppStateMode(): AppStateMode | null {
+  return activeMode;
 }
 
 export function getAppStateDb(): StateDb {
@@ -85,6 +145,7 @@ export function disposeAppState(): void {
     overlayStore = null;
     runtimeInstanceStore = null;
   }
+  activeMode = null;
 }
 
 export function resetAppStateForTests(): void {
@@ -94,4 +155,5 @@ export function resetAppStateForTests(): void {
   messagingStore = null;
   overlayStore = null;
   runtimeInstanceStore = null;
+  activeMode = null;
 }
