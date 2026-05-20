@@ -26,6 +26,7 @@ import {
 } from "./settings/appearance-bootstrap";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const isMac = process.platform === "darwin";
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
@@ -178,6 +179,12 @@ export function createMainWindow(options?: {
 }): BrowserWindow {
   const preloadPath = getPreloadPath();
   const appearance = readBootstrapAppearance();
+  const macWindowChrome = isMac
+    ? {
+        titleBarStyle: "hiddenInset" as const,
+        trafficLightPosition: { x: 20, y: 18 },
+      }
+    : {};
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -185,8 +192,7 @@ export function createMainWindow(options?: {
     minHeight: 760,
     show: false,
     title: "PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...macWindowChrome,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
     //
@@ -231,9 +237,25 @@ export function createMainWindow(options?: {
     void window.loadFile(rendererEntry.value);
   }
 
-  window.once("ready-to-show", () => {
+  let windowShown = false;
+  const showWindow = (reason: "ready-to-show" | "fallback"): void => {
+    if (windowShown || window.isDestroyed?.()) {
+      return;
+    }
+    windowShown = true;
+    if (isDevelopment) {
+      mainLog.info("showing window", { reason });
+    }
     window.show();
+  };
+  window.once("ready-to-show", () => {
+    showWindow("ready-to-show");
   });
+  if (!isMac) {
+    window.webContents.once("did-finish-load", () => {
+      setTimeout(() => showWindow("fallback"), 500);
+    });
+  }
 
   const { webContents } = window;
   attachWindowFocusSync(window);
