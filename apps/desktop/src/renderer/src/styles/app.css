@@ -10673,6 +10673,25 @@ textarea,
 .onboarding-wizard__safety-ack-text strong {
   color: var(--text-primary);
 }
+.onboarding-wizard__safety-fork {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-top: 4px;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__safety-fork .onboarding-wizard__btn--primary {
+  margin-left: auto;
+}
+.onboarding-wizard__safety-fork-hint {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  width: 100%;
+  text-align: center;
+  margin: 4px 0 0 0;
+}
 
 /* Provider table */
 .onboarding-wizard__provider-table {
@@ -10890,9 +10909,90 @@ textarea,
 .onboarding-wizard__profile-input.is-invalid {
   border-color: var(--status-error);
 }
+.onboarding-wizard__profile-input[readonly] {
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
 .onboarding-wizard__profile-add {
   align-self: flex-start;
   margin-top: 6px;
+}
+
+/* Rows with inline login controls — wider layout, expand to fit
+   per-row Log in / Copy URL / Check status buttons next to the name
+   input, plus a second row underneath for status text (email +
+   plan or error detail). */
+.onboarding-wizard__profile-row--has-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  align-items: stretch;
+}
+.onboarding-wizard__profile-row--has-login.is-ok {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.onboarding-wizard__profile-row--has-login.is-error {
+  border-color: var(--status-error);
+}
+.onboarding-wizard__profile-row-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__profile-row-top .onboarding-wizard__profile-input {
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+.onboarding-wizard__profile-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.onboarding-wizard__profile-row-status--ok {
+  display: inline-flex;
+  align-items: center;
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.onboarding-wizard__profile-row-detail {
+  font: 400 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  padding-left: 42px;
+}
+.onboarding-wizard__profile-row-detail--ok {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.onboarding-wizard__profile-row-detail--error {
+  color: var(--status-error);
+}
+
+/* "I'll log in later" deferral link — intentionally low-affordance,
+   sits between the spacer and the hint so the operator's eye still
+   goes to the disabled Continue button first. */
+.onboarding-wizard__btn--microlink {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: 400 11px/1.2 var(--font-sans, sans-serif);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.onboarding-wizard__btn--microlink:hover {
+  color: var(--text-secondary);
 }
 
 /* ============================================================

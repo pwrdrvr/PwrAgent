@@ -687,6 +687,15 @@ export type CheckDesktopCodexAuthProfileStatusResponse = {
   authenticated: boolean;
   status: "authenticated" | "unauthenticated" | "failed";
   detail?: string;
+  /** ChatGPT account email extracted from the JWT in `auth.json`,
+   *  when present. The onboarding wizard surfaces this after login so
+   *  the operator can confirm they signed in with the right account. */
+  email?: string;
+  /** ChatGPT plan type ("free", "plus", "pro", "team", "enterprise", …)
+   *  pulled from the JWT's OpenAI-namespaced auth claim. Best-effort —
+   *  if the claim shape changes we fall back to `undefined` rather than
+   *  surfacing wrong info. */
+  planType?: string;
 };
 
 export type PickGhCommandResponse = {

@@ -43,9 +43,9 @@ export type OnboardingProvider =
   | "line";
 
 type WizardStep =
-  | "backend-requirements"
   | "welcome"
   | "thread-presentation"
+  | "models-providers"
   | "codex-profile"
   | "name-codex-profiles"
   | "messaging-safety"
@@ -53,29 +53,30 @@ type WizardStep =
   | "provider-setup"
   | "done";
 
-type RailIndex = 0 | 1 | 2 | 3;
+type RailIndex = 0 | 1 | 2 | 3 | 4;
 
 const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
   { label: "Thread presentation" },
-  { label: "Codex profile" },
+  { label: "Models / Providers" },
+  { label: "Profiles" },
   { label: "Messaging" },
   { label: "Review" },
 ];
 
 function railIndexForStep(step: WizardStep): RailIndex | -1 {
-  // `backend-requirements` and `welcome` are pre-rail screens —
-  // prerequisite + intro, before the four numbered steps the rail
-  // tracks.
-  if (step === "backend-requirements" || step === "welcome") return -1;
+  // `welcome` is the pre-rail intro — first-impression screen before
+  // the five numbered steps the rail tracks.
+  if (step === "welcome") return -1;
   if (step === "thread-presentation") return 0;
-  if (step === "codex-profile" || step === "name-codex-profiles") return 1;
+  if (step === "models-providers") return 1;
+  if (step === "codex-profile" || step === "name-codex-profiles") return 2;
   if (
     step === "messaging-safety" ||
     step === "messaging-providers" ||
     step === "provider-setup"
   )
-    return 2;
-  if (step === "done") return 3;
+    return 3;
+  if (step === "done") return 4;
   return -1;
 }
 
@@ -108,15 +109,13 @@ export type OnboardingWizardProps = {
 };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
-  // Backend requirements is the first stop. If the operator opens the
-  // wizard with neither Codex CLI nor an xAI key configured, we have to
-  // resolve that before any of the downstream steps make sense. Replays
-  // (Help → Replay Onboarding) skip straight to Welcome since the user
-  // is presumably already past the backend gate — they're re-running to
-  // change settings, not bootstrap.
-  const [step, setStep] = useState<WizardStep>(
-    props.isReplay ? "welcome" : "backend-requirements",
-  );
+  // Welcome is always the first stop. The flow is:
+  //   Welcome → Thread presentation → Models / Providers (the backend
+  //   gate) → Codex profile → optional Name profiles → Messaging
+  //   warning → optional Messaging providers / Provider setup → Done.
+  // Both first-run and replay enter at Welcome — replay just doesn't
+  // persist `onboarding.completed` at Finish.
+  const [step, setStep] = useState<WizardStep>("welcome");
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
@@ -133,6 +132,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       : ["personal", "work"],
   );
   const [acknowledged, setAcknowledged] = useState(false);
+  // Snapshot reported by the name-codex-profiles step: are all named
+  // rows authenticated? Drives the footer Continue button's enabled
+  // state. `codexLoginDeferred` is the operator's escape hatch — a
+  // subtle "I'll log in later" link lifts the gate without finishing
+  // the logins. We intentionally don't persist `codexLoginDeferred`
+  // anywhere; backing out and re-entering the step recomputes the
+  // gate from the on-disk auth state.
+  const [codexAuthSnapshot, setCodexAuthSnapshot] = useState<{
+    allAuthed: boolean;
+    namedRows: number;
+  }>({ allAuthed: false, namedRows: 0 });
+  const [codexLoginDeferred, setCodexLoginDeferred] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<
     ReadonlySet<OnboardingProvider>
   >(new Set(["telegram"]));
@@ -203,11 +214,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const nextStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
-        case "backend-requirements":
-          return "welcome";
         case "welcome":
           return "thread-presentation";
         case "thread-presentation":
+          return "models-providers";
+        case "models-providers":
           return "codex-profile";
         case "codex-profile":
           // Both Isolated (single new profile) and Multiple (1–5)
@@ -219,6 +230,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "name-codex-profiles":
           return "messaging-safety";
         case "messaging-safety":
+          // The body of `messaging-safety` renders an explicit
+          // Skip-messaging vs. Continue choice. `goNext` only fires
+          // for Continue, which always advances to the provider
+          // picker. The Skip path uses `skipMessaging` to jump to
+          // Done with `selectedProviders` cleared.
           return "messaging-providers";
         case "messaging-providers":
           return orderedProviders.length > 0 ? "provider-setup" : "done";
@@ -235,19 +251,14 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const prevStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
-        case "backend-requirements":
-          return null;
         case "welcome":
-          // Replay path doesn't include backend-requirements, so back
-          // from welcome goes nowhere. First-run path could go back to
-          // backend-requirements but the operator already satisfied
-          // that to leave it — make Back from welcome a no-op too so
-          // the gate doesn't get re-checked midway.
           return null;
         case "thread-presentation":
           return "welcome";
-        case "codex-profile":
+        case "models-providers":
           return "thread-presentation";
+        case "codex-profile":
+          return "models-providers";
         case "name-codex-profiles":
           return "codex-profile";
         case "messaging-safety":
@@ -265,7 +276,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "done":
           return orderedProviders.length > 0
             ? "provider-setup"
-            : "messaging-providers";
+            : "messaging-safety";
       }
     },
     [codexProfileModel, orderedProviders.length, providerSetupIndex],
@@ -298,6 +309,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     const next = nextStep(step);
     if (next !== null) setStep(next);
   }, [nextStep, orderedProviders.length, providerSetupIndex, step]);
+
+  // Inline "Skip messaging setup" button on the messaging-safety step.
+  // Different from the footer skip link (which exits the wizard entirely
+  // without persisting completion). This one CLEARS provider selection,
+  // marks the operator as having decided to skip, and jumps to the Done
+  // step so they can land their other choices.
+  const skipMessaging = useCallback(() => {
+    setSelectedProviders(new Set());
+    setStep("done");
+  }, []);
 
   const persistAndComplete = useCallback(
     async (extra?: DesktopSettingsConfigPatch): Promise<void> => {
@@ -405,7 +426,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     >
       <div className="onboarding-wizard-overlay__scrim" />
       <div
-        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "backend-requirements" ? " onboarding-wizard--narrow" : ""}`}
+        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "models-providers" ? " onboarding-wizard--narrow" : ""}`}
       >
         <WizardTitlebar
           step={step}
@@ -430,7 +451,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           />
         ) : null}
         <div className="onboarding-wizard__body">
-          {step === "backend-requirements" ? (
+          {step === "models-providers" ? (
             <BackendRequirementsStep
               settings={props.settings}
               desktopApi={props.desktopApi}
@@ -462,12 +483,17 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               mode={codexProfileModel === "isolated" ? "isolated" : "multiple"}
               names={codexProfileNames}
               onChange={setCodexProfileNames}
+              desktopApi={props.desktopApi}
+              onAuthStateChange={setCodexAuthSnapshot}
             />
           ) : null}
           {step === "messaging-safety" ? (
             <MessagingSafetyStep
               acknowledged={acknowledged}
               onAcknowledgedChange={setAcknowledged}
+              onSkipMessaging={skipMessaging}
+              onContinue={goNext}
+              submitting={submitting}
             />
           ) : null}
           {step === "messaging-providers" ? (
@@ -507,6 +533,10 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             currentProvider ? providerName(currentProvider) : undefined
           }
           codexProfileNamesValid={validateProfileNames(codexProfileNames)}
+          codexAuthAllAuthed={codexAuthSnapshot.allAuthed}
+          codexAuthNamedRows={codexAuthSnapshot.namedRows}
+          codexLoginDeferred={codexLoginDeferred}
+          onDeferCodexLogin={() => setCodexLoginDeferred(true)}
           backendRequirementSatisfied={isBackendRequirementSatisfied(
             props.settings.snapshot,
           )}
@@ -541,31 +571,27 @@ function WizardTitlebar(props: {
   providerPosition?: string;
   onClose: () => void;
 }) {
-  const eyebrow = props.isReplay
-    ? "Replay"
-    : props.step === "backend-requirements"
-      ? "Prerequisites"
-      : "Welcome";
+  const eyebrow = props.isReplay ? "Replay" : "Welcome";
   const crumb = (() => {
     switch (props.step) {
-      case "backend-requirements":
-        return "Backend requirements";
       case "welcome":
         return "First-run setup";
       case "thread-presentation":
         return "Step 1 — Thread presentation";
+      case "models-providers":
+        return "Step 2 — Models / Providers";
       case "codex-profile":
-        return "Step 2 — Codex profile";
+        return "Step 3 — Codex profile";
       case "name-codex-profiles":
-        return "Step 2 — Name your profiles";
+        return "Step 3 — Name your profiles";
       case "messaging-safety":
-        return "Step 3 — Messaging — Before you connect";
+        return "Step 4 — Messaging — Before you connect";
       case "messaging-providers":
-        return "Step 3 — Messaging — Pick providers";
+        return "Step 4 — Messaging — Pick providers";
       case "provider-setup":
         return props.providerName
-          ? `Step 3 — ${props.providerName}${props.providerPosition ? ` (${props.providerPosition})` : ""}`
-          : "Step 3 — Provider setup";
+          ? `Step 4 — ${props.providerName}${props.providerPosition ? ` (${props.providerPosition})` : ""}`
+          : "Step 4 — Provider setup";
       case "done":
         return "Done";
     }
@@ -595,11 +621,13 @@ function WizardRail(props: {
 }) {
   const labelOverrides: Record<number, string> = {
     0: props.currentIndex > 0 ? densityLabel(props.chosenDensity) : "Thread presentation",
-    1:
-      props.currentIndex > 1
+    1: "Models / Providers",
+    2:
+      props.currentIndex > 2
         ? codexProfileLabel(props.chosenCodexProfileModel)
-        : "Codex profile",
-    2: "Messaging",
+        : "Profiles",
+    3: "Messaging",
+    4: "Review",
   };
   return (
     <nav className="onboarding-wizard__rail" aria-label="Setup progress">
@@ -611,7 +639,7 @@ function WizardRail(props: {
               ? "current"
               : "pending";
         const numLabel =
-          state === "done" ? `Step ${idx + 1} ✓` : idx === 3 ? "Done" : `Step ${idx + 1}`;
+          state === "done" ? `Step ${idx + 1} ✓` : idx === 4 ? "Done" : `Step ${idx + 1}`;
         return (
           <div
             key={idx}
@@ -638,6 +666,18 @@ function WizardFooter(props: {
   providerSetupTotal: number;
   currentProviderName?: string;
   codexProfileNamesValid: boolean;
+  /** True when every named row on `name-codex-profiles` has finished
+   *  the Codex OAuth flow. Combined with `codexLoginDeferred`, drives
+   *  the Continue button's enabled state on that step. */
+  codexAuthAllAuthed: boolean;
+  /** Count of non-blank profile-name rows. Used to differentiate
+   *  "no names entered yet" (disable Continue for name validity) from
+   *  "names entered but not logged in" (show the deferral link). */
+  codexAuthNamedRows: number;
+  /** Operator clicked "I'll log in later" — lift the auth gate on
+   *  Continue without forcing them to finish. */
+  codexLoginDeferred: boolean;
+  onDeferCodexLogin: () => void;
   backendRequirementSatisfied: boolean;
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
@@ -648,33 +688,34 @@ function WizardFooter(props: {
 }) {
   const showBack =
     props.step !== "welcome" && props.step !== "done" && !props.submitting;
-  const showSkip = props.step !== "done";
+  // `messaging-safety` renders its own Skip/Continue buttons in the body,
+  // so the footer doesn't show a redundant exit link there.
+  const showSkip =
+    props.step !== "done" && props.step !== "messaging-safety";
   const skipLabel = (() => {
-    if (
-      props.step === "messaging-safety" ||
-      props.step === "messaging-providers"
-    )
-      return "Skip messaging setup";
+    if (props.step === "messaging-providers") return "Skip messaging setup";
     if (props.step === "provider-setup") return `Skip ${props.currentProviderName}`;
     return "Skip setup";
   })();
 
   let hint: string | undefined;
   if (props.step === "thread-presentation") {
-    hint = `${densityLabel(props.density)} selected · 1 of 3`;
+    hint = `${densityLabel(props.density)} selected`;
   } else if (props.step === "codex-profile") {
-    hint = `${codexProfileLabel(props.codexProfileModel)} selected · 2 of 3`;
+    hint = `${codexProfileLabel(props.codexProfileModel)} selected`;
   } else if (props.step === "name-codex-profiles") {
     const isSingle = props.codexProfileModel === "isolated";
-    hint = props.codexProfileNamesValid
-      ? isSingle
-        ? "Name looks good"
-        : "Names look good"
-      : isSingle
+    if (!props.codexProfileNamesValid) {
+      hint = isSingle
         ? "Lowercase letters, digits, _ , -. 1–31 chars."
         : "1–5 unique lowercase names (letters, digits, _ , -)";
-  } else if (props.step === "messaging-safety") {
-    hint = props.acknowledged ? "Acknowledgement recorded" : undefined;
+    } else if (props.codexAuthAllAuthed) {
+      hint = isSingle ? "Logged in" : "All profiles logged in";
+    } else if (props.codexLoginDeferred) {
+      hint = "Logins deferred — finish from Settings → Profiles later";
+    } else {
+      hint = isSingle ? "Log in to continue" : "Log in to each profile to continue";
+    }
   } else if (props.step === "messaging-providers") {
     hint =
       props.providerCount > 0
@@ -682,14 +723,14 @@ function WizardFooter(props: {
         : "No providers selected";
   } else if (props.step === "provider-setup") {
     hint = `Provider ${props.providerSetupIndex + 1} of ${props.providerSetupTotal}`;
-  } else if (props.step === "backend-requirements") {
+  } else if (props.step === "models-providers") {
     hint = props.backendRequirementSatisfied
       ? "Ready"
       : "Install Codex CLI or paste an xAI API key to continue";
   }
 
   let primary: ReactNode = null;
-  if (props.step === "backend-requirements") {
+  if (props.step === "models-providers") {
     primary = (
       <button
         type="button"
@@ -724,22 +765,14 @@ function WizardFooter(props: {
       </button>
     );
   } else if (props.step === "name-codex-profiles") {
+    const authGateLifted = props.codexAuthAllAuthed || props.codexLoginDeferred;
     primary = (
       <button
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-        disabled={!props.codexProfileNamesValid || props.submitting}
-        onClick={props.onNext}
-      >
-        Continue →
-      </button>
-    );
-  } else if (props.step === "messaging-safety") {
-    primary = (
-      <button
-        type="button"
-        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-        disabled={!props.acknowledged || props.submitting}
+        disabled={
+          !props.codexProfileNamesValid || !authGateLifted || props.submitting
+        }
         onClick={props.onNext}
       >
         Continue →
@@ -803,6 +836,18 @@ function WizardFooter(props: {
         </button>
       ) : null}
       <span className="onboarding-wizard__spacer" />
+      {props.step === "name-codex-profiles" &&
+      !props.codexLoginDeferred &&
+      !props.codexAuthAllAuthed &&
+      props.codexAuthNamedRows > 0 ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
+          onClick={props.onDeferCodexLogin}
+        >
+          I&rsquo;ll log in later
+        </button>
+      ) : null}
       {hint ? <span className="onboarding-wizard__hint">{hint}</span> : null}
       {primary}
     </footer>
@@ -885,12 +930,12 @@ function BackendRequirementsStep(props: {
     <div className="onboarding-wizard__prereqs">
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
-          Pick at least one backend to continue
+          Pick at least one model backend to continue
         </h1>
         <p className="onboarding-wizard__sub">
-          PwrAgent runs on top of one or both of these backends. You only
+          PwrAgent runs on top of one or both of these providers. You only
           need one to get started — the rest of the wizard configures
-          profiles and messaging on top.
+          profiles and (optionally) messaging on top.
         </p>
       </header>
 
@@ -1048,12 +1093,13 @@ function WelcomeStep() {
         Pwr<span>Agent</span>
       </div>
       <h1 className="onboarding-wizard__title">
-        Three short choices, then you&rsquo;re operating.
+        A few short choices, then you&rsquo;re operating.
       </h1>
       <p className="onboarding-wizard__sub">
-        Pick how your thread list looks, how PwrAgent relates to your Codex
-        install, and which messaging platform you want — if any. Every choice
-        persists in Settings → General and is reversible at any time.
+        Pick how your thread list looks, which model backend you&rsquo;ll run
+        on, how PwrAgent relates to your Codex install, and (optionally) a
+        messaging platform. Every choice persists in Settings and is
+        reversible at any time.
       </p>
       <ol className="onboarding-wizard__welcome-list">
         <li>
@@ -1063,7 +1109,7 @@ function WelcomeStep() {
               Thread presentation
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Compact rows or Mission Control chips.
+              Compact rows or Mission Control chips. Light, dark, or follow OS.
             </div>
           </div>
         </li>
@@ -1071,10 +1117,11 @@ function WelcomeStep() {
           <span className="onboarding-wizard__welcome-num">2</span>
           <div>
             <div className="onboarding-wizard__welcome-row-title">
-              Codex profile
+              Models / Providers
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Share, isolate, or run multiple identities.
+              Confirm Codex CLI is installed, or paste an xAI API key — one is
+              enough.
             </div>
           </div>
         </li>
@@ -1082,10 +1129,23 @@ function WelcomeStep() {
           <span className="onboarding-wizard__welcome-num">3</span>
           <div>
             <div className="onboarding-wizard__welcome-row-title">
+              Profiles
+            </div>
+            <div className="onboarding-wizard__welcome-row-sub">
+              Share your existing Codex login, isolate a fresh one, or set up
+              several at once.
+            </div>
+          </div>
+        </li>
+        <li>
+          <span className="onboarding-wizard__welcome-num">4</span>
+          <div>
+            <div className="onboarding-wizard__welcome-row-title">
               Messaging
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Optional. Telegram-first; others available.
+              Optional. Skip and stay on the desktop, or connect Telegram /
+              Discord / Slack / others.
             </div>
           </div>
         </li>
@@ -1223,6 +1283,9 @@ function CodexProfileStep(props: {
 function MessagingSafetyStep(props: {
   acknowledged: boolean;
   onAcknowledgedChange: (next: boolean) => void;
+  onSkipMessaging: () => void;
+  onContinue: () => void;
+  submitting: boolean;
 }) {
   return (
     <div className="onboarding-wizard__safety">
@@ -1230,11 +1293,12 @@ function MessagingSafetyStep(props: {
         <ShieldIcon />
       </div>
       <h1 className="onboarding-wizard__title onboarding-wizard__title--center">
-        Before you connect a messaging platform
+        Messaging is optional — and worth thinking about first
       </h1>
       <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
-        A short pause to think this through. Three principles, then one
-        acknowledgement.
+        Connecting a chat platform lets you drive PwrAgent from your phone.
+        You can also skip this and stay on the desktop. Either way, three
+        principles to read before you decide.
       </p>
       <ul className="onboarding-wizard__safety-list">
         <li>
@@ -1273,6 +1337,28 @@ function MessagingSafetyStep(props: {
           outcomes of any actions I take here.
         </span>
       </label>
+      <div className="onboarding-wizard__safety-fork">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={props.submitting}
+          onClick={props.onSkipMessaging}
+        >
+          Skip messaging for now
+        </button>
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+          disabled={!props.acknowledged || props.submitting}
+          onClick={props.onContinue}
+        >
+          Continue to messaging setup →
+        </button>
+      </div>
+      <p className="onboarding-wizard__safety-fork-hint">
+        You can always add or change messaging providers later from
+        Settings → Messaging.
+      </p>
     </div>
   );
 }
@@ -1834,20 +1920,64 @@ function CodexNode(props: {
    Step: Name your Codex profiles (Step 2b — only when "Multiple")
    ---------------------------------------------------------------- */
 
+/**
+ * Per-row login state for the inline Codex login UX on the
+ * name-codex-profiles step. Keyed by the row's *committed* name (the
+ * name at the moment the operator clicked "Log in" — name edits after
+ * that point are blocked by `isRowLocked`). `ok` carries email/plan
+ * from the JWT so the row can display them inline as confirmation.
+ */
+type RowLoginState =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "waiting"; url?: string; detail?: string }
+  | { kind: "checking"; url?: string }
+  | { kind: "ok"; email?: string; planType?: string }
+  | { kind: "error"; detail: string; url?: string };
+
 function NameCodexProfilesStep(props: {
   /** Isolated = single profile (max 1). Multiple = 1–5 profiles. */
   mode: "isolated" | "multiple";
   names: string[];
   onChange: (next: string[]) => void;
+  desktopApi?: DesktopApi;
+  /** Called whenever the per-row login states change, so the wizard
+   *  root can gate the footer Continue button on "all named rows
+   *  authenticated". `namedRows` excludes blank inputs. */
+  onAuthStateChange: (snapshot: { allAuthed: boolean; namedRows: number }) => void;
 }) {
   const maxCount = props.mode === "isolated" ? 1 : 5;
   const isSingle = props.mode === "isolated";
+  // Login state keyed by the *committed* row name, so name edits before
+  // Login is clicked don't carry orphan state, and so a Back-out and
+  // re-entry to this step preserves authenticated rows.
+  const [loginStates, setLoginStates] = useState<Record<string, RowLoginState>>({});
+  const apiRef = useRef(props.desktopApi);
+  apiRef.current = props.desktopApi;
+
+  const stateFor = (name: string): RowLoginState =>
+    loginStates[name] ?? { kind: "idle" };
+  const setStateFor = (name: string, next: RowLoginState): void => {
+    setLoginStates((prev) => ({ ...prev, [name]: next }));
+  };
+
+  const isRowLocked = (name: string): boolean => {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    const state = stateFor(trimmed).kind;
+    return state === "starting" || state === "waiting" || state === "checking" || state === "ok";
+  };
+
   const setAt = (idx: number, value: string): void => {
+    const current = props.names[idx]?.trim() ?? "";
+    if (isRowLocked(current)) return;
     const next = [...props.names];
     next[idx] = value;
     props.onChange(next);
   };
   const removeAt = (idx: number): void => {
+    const current = props.names[idx]?.trim() ?? "";
+    if (isRowLocked(current)) return;
     const next = [...props.names];
     next.splice(idx, 1);
     props.onChange(next);
@@ -1856,34 +1986,202 @@ function NameCodexProfilesStep(props: {
     if (props.names.length >= maxCount) return;
     props.onChange([...props.names, ""]);
   };
+
+  /**
+   * Kick off (or re-kick) login for one row. Creates the Codex auth
+   * profile shell if it doesn't exist (idempotent — the IPC returns
+   * `created: false` if it was already there), spawns `codex login`,
+   * and surfaces the login URL so the operator can either let the
+   * default browser open it or copy/paste into a different browser
+   * with the right SSO session.
+   */
+  const startLogin = useCallback(
+    async (name: string): Promise<void> => {
+      const api = apiRef.current;
+      if (
+        !api?.createCodexAuthProfile ||
+        !api.startCodexAuthProfileLogin ||
+        !isValidProfileName(name)
+      ) {
+        return;
+      }
+      setStateFor(name, { kind: "starting" });
+      try {
+        await api.createCodexAuthProfile({ profile: name });
+        const result = await api.startCodexAuthProfileLogin({ profile: name });
+        if (result.authenticated) {
+          // The shell reused an existing token — finish immediately
+          // by re-reading identity via checkCodexAuthProfileStatus
+          // (which extracts email + plan from the JWT).
+          await refreshStatus(name);
+          return;
+        }
+        setStateFor(name, {
+          kind: "waiting",
+          url: result.loginUrl,
+          detail: result.detail,
+        });
+      } catch (caught) {
+        setStateFor(name, {
+          kind: "error",
+          detail: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
+    },
+    // refreshStatus is defined below — it's stable because it closes
+    // over apiRef (which is mutable but read at call-time).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const refreshStatus = useCallback(async (name: string): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus || !isValidProfileName(name)) return;
+    setLoginStates((prev) => {
+      const existing = prev[name];
+      // Only show a "checking" indicator if the row had something in
+      // flight already; auto-recheck on focus shouldn't flash idle
+      // rows into a checking state.
+      if (!existing || existing.kind === "ok") return prev;
+      return {
+        ...prev,
+        [name]: {
+          kind: "checking",
+          url: "url" in existing ? existing.url : undefined,
+        },
+      };
+    });
+    try {
+      const result = await api.checkCodexAuthProfileStatus({ profile: name });
+      if (result.authenticated) {
+        setStateFor(name, {
+          kind: "ok",
+          email: result.email,
+          planType: result.planType,
+        });
+      } else {
+        setLoginStates((prev) => {
+          const previousUrl =
+            prev[name] && "url" in prev[name]! ? (prev[name] as { url?: string }).url : undefined;
+          return {
+            ...prev,
+            [name]: {
+              kind: "waiting",
+              url: previousUrl,
+              detail: result.detail,
+            },
+          };
+        });
+      }
+    } catch (caught) {
+      setStateFor(name, {
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, []);
+
+  const copyLoginUrl = useCallback(async (url: string | undefined): Promise<void> => {
+    const api = apiRef.current;
+    if (!url || !api?.copyText) return;
+    try {
+      await api.copyText(url);
+    } catch {
+      // Best-effort; nothing to recover.
+    }
+  }, []);
+
+  // Auto-recheck on window focus: when the operator finishes the OAuth
+  // dance in a browser, focus returns to PwrAgent. Re-poll every row
+  // that's in a non-terminal state.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.onWindowFocus) return undefined;
+    return api.onWindowFocus(() => {
+      for (const [name, state] of Object.entries(loginStates)) {
+        if (state.kind === "waiting" || state.kind === "checking") {
+          void refreshStatus(name);
+        }
+      }
+    });
+  }, [loginStates, refreshStatus]);
+
+  // On mount, probe each valid name for an already-authenticated state
+  // so back-nav doesn't lose login progress. Runs once per name → ok
+  // transition, idempotent against reordering.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus) return;
+    for (const raw of props.names) {
+      const name = raw.trim();
+      if (!isValidProfileName(name)) continue;
+      if (stateFor(name).kind !== "idle") continue;
+      void (async () => {
+        try {
+          const result = await api.checkCodexAuthProfileStatus!({ profile: name });
+          if (result.authenticated) {
+            setStateFor(name, {
+              kind: "ok",
+              email: result.email,
+              planType: result.planType,
+            });
+          }
+        } catch {
+          // Silent — idle rows where the auth profile doesn't exist
+          // yet legitimately fail this check. Showing an error here
+          // would scream at the operator before they've even clicked
+          // Log in.
+        }
+      })();
+    }
+    // We deliberately depend on names only — adding loginStates would
+    // re-fire after every state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.names]);
+
+  // Propagate auth completion to the wizard root for Continue gating.
+  useEffect(() => {
+    const validNames = props.names
+      .map((name) => name.trim())
+      .filter((name) => isValidProfileName(name));
+    const allAuthed =
+      validNames.length > 0 &&
+      validNames.every((name) => stateFor(name).kind === "ok");
+    props.onAuthStateChange({ allAuthed, namedRows: validNames.length });
+    // stateFor is derived from loginStates; depending on names + loginStates
+    // is sufficient to drive the snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginStates, props.names]);
+
   return (
     <div>
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
           {isSingle
-            ? "Name your isolated PwrAgent profile"
-            : "Name your PwrAgent + Codex profiles"}
+            ? "Name and log in to your isolated profile"
+            : "Name and log in to your PwrAgent + Codex profiles"}
         </h1>
         <p className="onboarding-wizard__sub">
           {isSingle ? (
             <>
-              The name applies to <strong>both sides</strong>: PwrAgent creates
-              a new profile under <code>~/.pwragent/profiles/</code> and a
-              matching Codex auth profile under{" "}
-              <code>~/.codex/auth-profiles/</code>. Your existing PwrAgent{" "}
-              <code>default</code> profile and your Codex default both stay
-              untouched. Lowercase letters, digits, underscores, and hyphens —
-              1 to 31 characters. Codex login happens after the wizard from
-              Settings → Profiles.
+              The name applies to <strong>both sides</strong>: a new PwrAgent
+              profile under <code>~/.pwragent/profiles/</code> and a matching
+              Codex auth profile under <code>~/.codex/auth-profiles/</code>.
+              Click <strong>Log in</strong> to start the Codex OAuth flow for
+              that profile. Tip: focus the browser window that&rsquo;s already
+              signed in to the right account first, or use{" "}
+              <strong>Copy URL</strong> to paste the login link into the
+              browser you want.
             </>
           ) : (
             <>
               Up to 5. Each name becomes <strong>both</strong> a new PwrAgent
-              profile and a matching Codex auth profile of the same name. Your
-              existing <code>default</code> profile on either side stays
-              untouched. Lowercase letters, digits, underscores, and hyphens —
-              1 to 31 characters. Codex login for each happens after the
-              wizard from Settings → Profiles.
+              profile and a matching Codex auth profile of the same name.
+              Click <strong>Log in</strong> on each row to start the Codex
+              OAuth flow for that profile. Tip: focus the browser window
+              that&rsquo;s already signed in to the right account first, or
+              use <strong>Copy URL</strong> to paste the link into the browser
+              you want.
             </>
           )}
         </p>
@@ -1892,27 +2190,45 @@ function NameCodexProfilesStep(props: {
         {props.names.map((name, idx) => {
           const trimmed = name.trim();
           const valid = trimmed === "" || isValidProfileName(trimmed);
+          const state = trimmed ? stateFor(trimmed) : { kind: "idle" as const };
+          const locked = isRowLocked(trimmed);
           return (
-            <div key={idx} className="onboarding-wizard__profile-row">
-              <span className="onboarding-wizard__profile-num">{idx + 1}</span>
-              <input
-                type="text"
-                className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
-                placeholder={isSingle ? "pwragent" : "profile-name"}
-                value={name}
-                onChange={(e) => setAt(idx, e.target.value)}
-                aria-invalid={!valid}
-              />
-              {!isSingle && props.names.length > 1 ? (
-                <button
-                  type="button"
-                  className="onboarding-wizard__btn onboarding-wizard__btn--link"
-                  onClick={() => removeAt(idx)}
-                  aria-label={`Remove profile ${idx + 1}`}
-                >
-                  Remove
-                </button>
-              ) : null}
+            <div
+              key={idx}
+              className={`onboarding-wizard__profile-row onboarding-wizard__profile-row--has-login is-${state.kind}`}
+            >
+              <div className="onboarding-wizard__profile-row-top">
+                <span className="onboarding-wizard__profile-num">{idx + 1}</span>
+                <input
+                  type="text"
+                  className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
+                  placeholder={isSingle ? "pwragent" : "profile-name"}
+                  value={name}
+                  onChange={(e) => setAt(idx, e.target.value)}
+                  aria-invalid={!valid}
+                  readOnly={locked}
+                />
+                <ProfileRowLoginControls
+                  name={trimmed}
+                  valid={valid && trimmed.length > 0}
+                  state={state}
+                  onLogin={() => void startLogin(trimmed)}
+                  onCheck={() => void refreshStatus(trimmed)}
+                  onCopyUrl={() => void copyLoginUrl("url" in state ? state.url : undefined)}
+                />
+                {!isSingle && props.names.length > 1 ? (
+                  <button
+                    type="button"
+                    className="onboarding-wizard__btn onboarding-wizard__btn--link"
+                    onClick={() => removeAt(idx)}
+                    aria-label={`Remove profile ${idx + 1}`}
+                    disabled={locked}
+                  >
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+              <ProfileRowLoginStatus state={state} />
             </div>
           );
         })}
@@ -1928,6 +2244,90 @@ function NameCodexProfilesStep(props: {
       </div>
     </div>
   );
+}
+
+function ProfileRowLoginControls(props: {
+  name: string;
+  valid: boolean;
+  state: RowLoginState;
+  onLogin: () => void;
+  onCheck: () => void;
+  onCopyUrl: () => void;
+}) {
+  if (props.state.kind === "ok") {
+    return (
+      <span className="onboarding-wizard__profile-row-status onboarding-wizard__profile-row-status--ok">
+        ✓ Logged in
+      </span>
+    );
+  }
+  const hasUrl = "url" in props.state && Boolean(props.state.url);
+  const inFlight =
+    props.state.kind === "starting" || props.state.kind === "checking";
+  const loginLabel = (() => {
+    if (props.state.kind === "starting") return "Starting…";
+    if (props.state.kind === "waiting") return "Re-open browser";
+    if (props.state.kind === "error") return "Try again";
+    if (props.state.kind === "checking") return "Checking…";
+    return "Log in";
+  })();
+  return (
+    <div className="onboarding-wizard__profile-row-actions">
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+        disabled={!props.valid || inFlight}
+        onClick={props.onLogin}
+      >
+        {loginLabel}
+      </button>
+      {hasUrl ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={props.onCopyUrl}
+        >
+          Copy URL
+        </button>
+      ) : null}
+      {props.state.kind === "waiting" ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={props.onCheck}
+        >
+          Check status
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileRowLoginStatus(props: { state: RowLoginState }) {
+  if (props.state.kind === "ok") {
+    const bits = [props.state.email, props.state.planType].filter(Boolean);
+    return (
+      <div className="onboarding-wizard__profile-row-detail onboarding-wizard__profile-row-detail--ok">
+        {bits.length > 0 ? bits.join(" · ") : "Authenticated"}
+      </div>
+    );
+  }
+  if (props.state.kind === "waiting") {
+    return (
+      <div className="onboarding-wizard__profile-row-detail">
+        Browser opened. Complete the Codex sign-in, then return here — we
+        re-check automatically when this window regains focus.
+      </div>
+    );
+  }
+  if (props.state.kind === "error") {
+    return (
+      <div className="onboarding-wizard__profile-row-detail onboarding-wizard__profile-row-detail--error">
+        {props.state.detail}
+      </div>
+    );
+  }
+  return null;
 }
 
 /* ----------------------------------------------------------------
