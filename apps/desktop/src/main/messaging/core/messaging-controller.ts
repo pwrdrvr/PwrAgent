@@ -6891,15 +6891,21 @@ export class MessagingController {
     const actionCount = actionsForIntent(routedIntent).filter(
       (action) => !action.disabled,
     ).length;
+    let textModePendingIntentStored = false;
     if (
       interactionMode === "text"
       && actionCount > 0
       && await this.shouldStoreTextModePendingIntent(routedIntent, binding, event)
     ) {
       await this.storePendingIntent(routedIntent, binding, event);
+      textModePendingIntentStored = true;
     }
     const deliverableIntent =
-      interactionMode === "text" ? toTextModeIntent(routedIntent) : routedIntent;
+      interactionMode === "text"
+        ? toTextModeIntent(routedIntent, {
+            includeActionFallback: textModePendingIntentStored,
+          })
+        : routedIntent;
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     let scope = this.options.adapter.resolveDeliveryScope?.(deliverableIntent);
     const priority = messagingDeliveryPriority(routedIntent);
@@ -7282,11 +7288,13 @@ function isHelpPendingIntent(record: MessagingPendingIntentRecord): boolean {
   );
 }
 
-function toTextModeIntent(intent: MessagingSurfaceIntent): MessagingSurfaceIntent {
-  const fallback = formatTextModeActionFallback(actionsForIntent(intent));
-  if (!fallback) {
-    return withTextModePresentation(intent);
-  }
+function toTextModeIntent(
+  intent: MessagingSurfaceIntent,
+  options?: { includeActionFallback?: boolean },
+): MessagingSurfaceIntent {
+  const fallback = options?.includeActionFallback === true
+    ? formatTextModeActionFallback(actionsForIntent(intent))
+    : undefined;
 
   switch (intent.kind) {
     case "status":
@@ -7393,10 +7401,21 @@ function formatTextModeActionLine(action: MessagingSurfaceAction): string | unde
   if (!labelWithoutNumber || labelWithoutNumber.toLowerCase() === normalizedReply) {
     return reply;
   }
-  return `${reply} - ${labelWithoutNumber}`;
+  return `${reply} - ${labelWithoutNumber}${formatTextModeActionDescription(action)}`;
 }
 
-function appendTextModeFallback(text: string, fallback: string): string {
+function formatTextModeActionDescription(action: MessagingSurfaceAction): string {
+  const description = action.description?.trim();
+  if (!description) {
+    return "";
+  }
+  return `: ${description}`;
+}
+
+function appendTextModeFallback(text: string, fallback: string | undefined): string {
+  if (!fallback) {
+    return text;
+  }
   return text.includes(fallback) ? text : [text, fallback].filter(Boolean).join("\n\n");
 }
 

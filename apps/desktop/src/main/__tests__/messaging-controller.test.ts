@@ -214,7 +214,9 @@ describe("MessagingController", () => {
     if (help?.kind !== "confirmation") {
       throw new Error("expected confirmation");
     }
-    expect(help?.body).toContain("- /resume - Resume");
+    expect(help.body).toContain(
+      "- /resume - Resume: choose a thread to control from this conversation",
+    );
     expect(help?.body).toContain("- cancel");
     await expect(
       harness.store.findActivePendingIntentForChannel({
@@ -5244,8 +5246,10 @@ describe("MessagingController", () => {
       });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Reply with one of:"),
       actions: [],
+    });
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      text: expect.stringContaining("Reply with one of:"),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));

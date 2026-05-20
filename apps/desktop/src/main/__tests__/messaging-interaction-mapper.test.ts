@@ -171,7 +171,12 @@ describe("ModelInteractionMapper", () => {
       body: "Choose a command.",
       actions: [
         { id: "command:resume", label: "Resume", fallbackText: "/resume" },
-        { id: "command:status", label: "Status", fallbackText: "/status" },
+        {
+          id: "command:status",
+          label: "Status",
+          description: "show the current binding and controls",
+          fallbackText: "/status",
+        },
       ],
     } satisfies MessagingConfirmationIntent;
 
@@ -185,7 +190,11 @@ describe("ModelInteractionMapper", () => {
       expect.objectContaining({
         text: "show me what thread this chat controls",
         actions: expect.arrayContaining([
-          expect.objectContaining({ id: "command:status", index: 2 }),
+          expect.objectContaining({
+            id: "command:status",
+            description: "show the current binding and controls",
+            index: 2,
+          }),
         ]),
       }),
     );
