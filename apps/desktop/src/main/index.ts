@@ -87,8 +87,11 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import {
+  cleanupBootstrapProfile,
   resolveActiveProfileName,
+  resolveProfileBootDecision,
   startProfileFocusRequestWatcher,
+  type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
 
@@ -104,6 +107,34 @@ let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
   | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
   | undefined;
+
+function logBootDecision(decision: ProfileBootDecision): void {
+  // Single structured log line on every boot so troubleshooting
+  // "why did the wizard fire / not fire" stays trivial. Production
+  // builds still log this (it's an INFO line, no sensitive data).
+  switch (decision.kind) {
+    case "open":
+      mainLog.info("boot decision: open", {
+        profileName: decision.profileName,
+        source: decision.source,
+      });
+      return;
+    case "missing-named-profile":
+      mainLog.info("boot decision: missing-named-profile — bootstrap mode", {
+        requestedName: decision.requestedName,
+        source: decision.source,
+      });
+      return;
+    case "missing-default-profile":
+      mainLog.info("boot decision: missing-default-profile — bootstrap mode", {
+        configuredName: decision.configuredName,
+      });
+      return;
+    case "no-profile-configured":
+      mainLog.info("boot decision: no-profile-configured — bootstrap mode");
+      return;
+  }
+}
 
 function prewarmInitialThreadList(): void {
   if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
@@ -293,7 +324,28 @@ export function bootstrapApp(): void {
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
     installDevelopmentDockIcon();
-    initializeAppState();
+    // Boot decision — resolves which profile (if any) this Electron
+    // instance should open into. When the decision is `open` we run
+    // the today-style flow into an existing profile dir. Anything
+    // else (no profile configured, env/CLI named a missing profile,
+    // registry pointer is dangling) means the onboarding wizard
+    // needs to run BEFORE we commit to a profile, so app state goes
+    // into "bootstrap" mode against the throwaway .bootstrap/ dir.
+    // Wizard Finish graduates the bootstrap state into a real
+    // profile and opens a new window for it (see Task E).
+    const bootDecision = resolveProfileBootDecision();
+    const bootMode: "active-profile" | "bootstrap" =
+      bootDecision.kind === "open" ? "active-profile" : "bootstrap";
+    logBootDecision(bootDecision);
+    // Clean up any stale .bootstrap/ from a prior abandoned wizard
+    // session BEFORE deciding to init in bootstrap mode for the
+    // current run. Doing this here (vs. lazily) means a crashed
+    // wizard doesn't accumulate stale state.db handles across
+    // multiple boot attempts.
+    if (bootMode === "active-profile") {
+      cleanupBootstrapProfile();
+    }
+    initializeAppState(bootMode);
     installProfileFocusRequestWatcher();
     installApplicationMenu();
     registerAppServerIpcHandlers();
