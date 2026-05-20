@@ -9949,11 +9949,14 @@ textarea,
   border-radius: 14px;
   box-shadow: var(--shadow-popover);
   display: grid;
+  /* The wizard renders the rail on every step except Welcome. We
+     keep one frame width across all steps, but the row template
+     adapts so the rail's slot collapses on Welcome instead of
+     leaving an empty band above the body. */
   grid-template-rows: auto auto 1fr auto;
   overflow: hidden;
 }
-.onboarding-wizard--narrow {
-  width: min(720px, calc(100vw - 64px));
+.onboarding-wizard:has(.onboarding-wizard__body > .onboarding-wizard__welcome) {
   grid-template-rows: auto 1fr auto;
 }
 
@@ -10149,7 +10152,14 @@ textarea,
   align-items: center;
   text-align: center;
   gap: 16px;
-  padding: 14px 22px 22px;
+  padding: 24px 22px 28px;
+}
+/* Constrain the centered prose so it doesn't sprawl across the full
+   1120px frame and lose readability. The 4-item welcome list still
+   fills the canvas — it switches to 4 columns at this width. */
+.onboarding-wizard__welcome > .onboarding-wizard__title,
+.onboarding-wizard__welcome > .onboarding-wizard__sub {
+  max-width: 680px;
 }
 .onboarding-wizard__brand {
   font: 800 26px/1 var(--font-sans, sans-serif);
@@ -10164,10 +10174,20 @@ textarea,
   padding: 0;
   margin: 6px 0 0;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /* 4 columns at the canvas width so the four steps lay out evenly
+     on one row, matching the rail beneath. Gracefully wraps to 2
+     columns on a narrower viewport (e.g. small laptop screens
+     where the canvas is clamped by `min(1120px, 100vw - 64px)`). */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 18px;
   width: 100%;
+  max-width: 920px;
   text-align: left;
+}
+@media (max-width: 880px) {
+  .onboarding-wizard__welcome-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .onboarding-wizard__welcome-list li {
   display: grid;
@@ -10810,6 +10830,11 @@ textarea,
   align-items: center;
   gap: 14px;
   padding: 12px 22px 18px;
+  /* Summary screen — center column over the full 1120px frame so
+     the check icon + title + dl stay visually anchored. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 .onboarding-wizard__done-check {
   width: 60px;
@@ -11203,6 +11228,12 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Backend gate is two stacked cards (Codex CLI, xAI key). Constrain
+     the column so they don't stretch all the way across the 1120px
+     canvas and feel like wasted white space. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 .onboarding-wizard__prereq-card {
   background: var(--bg-panel-elevated);

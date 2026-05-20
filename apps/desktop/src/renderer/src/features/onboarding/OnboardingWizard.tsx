@@ -425,9 +425,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       aria-label="First-run setup"
     >
       <div className="onboarding-wizard-overlay__scrim" />
-      <div
-        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "models-providers" ? " onboarding-wizard--narrow" : ""}`}
-      >
+      {/* Single consistent frame width across all steps. Earlier
+          iterations narrowed Welcome / Done / Models-Providers but
+          the jump between "cozy 720px" and "expansive 1120px" was
+          jarring as the operator advanced. Keep one canvas;
+          constrain inner text widths instead so short screens don't
+          look sparse. */}
+      <div className="onboarding-wizard">
         <WizardTitlebar
           step={step}
           isReplay={isReplay}
