@@ -286,6 +286,7 @@ export function buildHelpActions(params: {
     actions.push({
       id: `command:${spec.verb}`,
       label: capitalize(spec.verb),
+      description: spec.description,
       layout: {
         column: index % 2,
         row: Math.floor(index / 2),

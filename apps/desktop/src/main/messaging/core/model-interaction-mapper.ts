@@ -32,6 +32,7 @@ export type ModelInteractionMapperClient = {
 export type ModelInteractionMapperAction = {
   id: string;
   label: string;
+  description?: string;
   fallbackText?: string;
   index: number;
 };
@@ -285,6 +286,7 @@ function summarizeActions(intent: MessagingSurfaceIntent): ModelInteractionMappe
     .map((action, index) => ({
       id: action.id,
       label: action.label,
+      ...(action.description ? { description: action.description } : {}),
       ...(action.fallbackText ? { fallbackText: action.fallbackText } : {}),
       index: index + 1,
     }));
