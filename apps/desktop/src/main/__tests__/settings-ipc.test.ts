@@ -20,6 +20,9 @@ const childProcessMocks = vi.hoisted(() => ({
 const localAcpDiscoveryMock = vi.hoisted(() => ({
   discoverLocalAcpAgents: vi.fn(async () => [] as unknown[]),
 }));
+const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
+  discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
+}));
 const electronMocks = vi.hoisted(() => ({
   openExternal: vi.fn(async () => undefined),
 }));
@@ -117,6 +120,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+vi.mock("../acp/acp-runtime-discovery", () => acpRuntimeDiscoveryMock);
 
 vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
@@ -190,6 +194,8 @@ describe("settings ipc", () => {
     childProcessMocks.spawn.mockReset();
     localAcpDiscoveryMock.discoverLocalAcpAgents.mockReset();
     localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([]);
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockReset();
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({});
     electronMocks.openExternal.mockClear();
     childProcessMocks.execFile.mockImplementation(
       (
@@ -822,6 +828,25 @@ describe("settings ipc", () => {
         },
       },
     ]);
+    acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockResolvedValue({
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 2222,
+        checkedAt: 2222,
+        source: "session-new",
+        configOptions: [
+          {
+            id: "permission-mode",
+            label: "Permission mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [{ value: "default", label: "Default" }],
+          },
+        ],
+      },
+    });
     const { initializeAppState, disposeAppState } = await import("../state/app-state");
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
@@ -838,8 +863,15 @@ describe("settings ipc", () => {
       await expect(
         handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: false }),
       ).resolves.toMatchObject({
-        entries: [
-          {
+        entries: [],
+      });
+      const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true },
+      )) as { entries?: unknown[] } | undefined;
+      expect(refreshed?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
             backendId: "acp:gemini",
             registryId: "gemini",
             name: "Gemini CLI",
@@ -849,9 +881,20 @@ describe("settings ipc", () => {
             installStatus: "installed",
             installable: false,
             allowlistRuleId: "local-gemini-cli",
-          },
-        ],
-      });
+            runtime: expect.objectContaining({
+              discoveredAt: 2222,
+            }),
+          }),
+        ]),
+      );
+      expect(
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ backendId: "acp:gemini" }),
+        expect.objectContaining({
+          cwd: expect.stringContaining("acp-discovery-workspace"),
+        }),
+      );
     } finally {
       disposeAppState();
     }

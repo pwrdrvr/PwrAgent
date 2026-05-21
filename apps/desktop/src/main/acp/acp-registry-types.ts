@@ -3,6 +3,7 @@ import type {
   BackendAcpAuthStatus,
   BackendAcpDistributionKind,
   BackendAcpInstallStatus,
+  BackendAcpRuntimeCapabilities,
   BackendAcpVerificationStatus,
 } from "@pwragent/shared";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
@@ -102,6 +103,9 @@ export type AcpInstalledAgentRecord = {
   updatedAt: number;
   launchDescriptor?: AcpLaunchDescriptor;
   capabilities?: AcpAgentCapabilities;
+  runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  lastDiscoveredAt?: number;
+  lastDiscoveryError?: string;
   lastError?: string;
   registryAgent?: AcpRegistryAgent;
 };

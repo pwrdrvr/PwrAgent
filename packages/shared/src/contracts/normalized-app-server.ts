@@ -215,6 +215,13 @@ export const CODEX_ENVIRONMENT_ACTION_RUNS_MAX = 10;
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
+export type AppServerAcpSessionRuntimeState = {
+  configValues?: Record<string, string>;
+  currentModeId?: string;
+  currentModelId?: string;
+  updatedAt?: number;
+};
+
 export type AppServerThreadSummary = {
   id: ThreadIdentifier;
   title: string;
@@ -233,6 +240,7 @@ export type AppServerThreadSummary = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  acpRuntime?: AppServerAcpSessionRuntimeState;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
 };

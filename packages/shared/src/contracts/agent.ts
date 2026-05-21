@@ -11,6 +11,10 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type {
+  BackendAcpRuntimeOptionSource,
+  BackendAcpSessionRuntimeState,
+} from "./backend";
+import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
   NavigationLaunchpadDraft,
@@ -30,6 +34,7 @@ export type StartThreadRequest = {
   workMode?: LaunchpadWorkMode;
   branchName?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  acpRuntime?: BackendAcpSessionRuntimeState;
 };
 
 export type StartThreadResponse = {
@@ -51,6 +56,7 @@ export type StartTurnRequest = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  acpRuntime?: BackendAcpSessionRuntimeState;
 };
 
 export type StartTurnResponse = {
@@ -166,6 +172,20 @@ export type SetThreadModelSettingsRequest = {
 
 export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
+export type SetAcpSessionRuntimeOptionRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  source: BackendAcpRuntimeOptionSource;
+  optionId: string;
+  value: string;
+};
+
+export type SetAcpSessionRuntimeOptionResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  runtimeState?: BackendAcpSessionRuntimeState;
+};
+
 export type CheckThreadBranchDriftRequest = {
   backend: AppServerBackendKind;
   expectedBranch?: string;
@@ -260,6 +280,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "reasoningEffort"
       | "serviceTier"
       | "fastMode"
+      | "acpRuntime"
       | "workMode"
       | "branchName"
       | "codexEnvironmentId"

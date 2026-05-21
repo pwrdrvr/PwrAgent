@@ -116,6 +116,7 @@ type ComposerProps = {
         | "reasoningEffort"
         | "serviceTier"
         | "fastMode"
+        | "acpRuntime"
         | "workMode"
         | "branchName"
         | "codexEnvironmentId"
@@ -174,6 +175,13 @@ type ComposerDropdownOption = {
 };
 
 type ComposerDropdownIcon = (props: { size?: number }) => ReactNode;
+
+type AcpRuntimeModeControl = {
+  optionId: string;
+  source: "configOption" | "mode";
+  value: string;
+  options: ComposerDropdownOption[];
+};
 
 type QueuedTurnDraft = {
   id: string;
@@ -316,6 +324,55 @@ function getReasoningEffortValue(
   return reasoningEfforts.includes(currentValue ?? "")
     ? currentValue
     : getDefaultReasoningEffort(backend);
+}
+
+function getAcpRuntimeModeControl(
+  backend: BackendSummary | undefined,
+  settings: NavigationLaunchpadDraft | NavigationThreadSummary | undefined,
+): AcpRuntimeModeControl | undefined {
+  const runtime = backend?.acp?.runtime;
+  if (!runtime) {
+    return undefined;
+  }
+
+  const modeConfigOption = runtime.configOptions?.find(
+    (option) => option.category === "mode" && option.values.length > 0,
+  );
+  if (modeConfigOption) {
+    const value =
+      settings?.acpRuntime?.configValues?.[modeConfigOption.id] ??
+      modeConfigOption.currentValue ??
+      modeConfigOption.values[0]?.value ??
+      "";
+    return {
+      optionId: modeConfigOption.id,
+      source: "configOption",
+      value,
+      options: modeConfigOption.values.map((option) => ({
+        label: option.label ?? option.value,
+        value: option.value,
+      })),
+    };
+  }
+
+  const modeOptions = runtime.modes?.availableModes ?? [];
+  if (modeOptions.length === 0) {
+    return undefined;
+  }
+
+  return {
+    optionId: "mode",
+    source: "mode",
+    value:
+      settings?.acpRuntime?.currentModeId ??
+      runtime.modes?.currentModeId ??
+      modeOptions[0]?.id ??
+      "",
+    options: modeOptions.map((mode) => ({
+      label: mode.label ?? mode.id,
+      value: mode.id,
+    })),
+  };
 }
 
 function buildReviewBranchOptions(params: {
@@ -3140,6 +3197,7 @@ export function Composer(props: ComposerProps) {
         | "serviceTier"
         | "fastMode"
         | "workMode"
+        | "acpRuntime"
         | "branchName"
         | "codexEnvironmentId"
         | "codexEnvironmentExecutionTarget"
@@ -3316,6 +3374,7 @@ export function Composer(props: ComposerProps) {
       : false;
   const selectedServiceTier =
     currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
+  const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
   const providerOptions =
     props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
@@ -4533,6 +4592,37 @@ export function Composer(props: ComposerProps) {
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;
                 requestExecutionModeSelection(executionMode);
+              }}
+            />
+          ) : null}
+
+          {acpRuntimeModeControl ? (
+            <ComposerDropdown
+              ariaLabel="ACP mode"
+              compact
+              disabled={launchpadSubmitting || !props.launchpad}
+              value={acpRuntimeModeControl.value}
+              options={acpRuntimeModeControl.options}
+              onChange={(value) => {
+                if (!props.launchpad) {
+                  return;
+                }
+                handleLaunchpadPatch({
+                  acpRuntime: {
+                    ...props.launchpad.acpRuntime,
+                    configValues:
+                      acpRuntimeModeControl.source === "configOption"
+                        ? {
+                            ...(props.launchpad.acpRuntime?.configValues ?? {}),
+                            [acpRuntimeModeControl.optionId]: value,
+                          }
+                        : props.launchpad.acpRuntime?.configValues,
+                    currentModeId:
+                      acpRuntimeModeControl.source === "mode"
+                        ? value
+                        : props.launchpad.acpRuntime?.currentModeId,
+                  },
+                });
               }}
             />
           ) : null}

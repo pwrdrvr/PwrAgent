@@ -1,5 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type {
   AcpAgentSettingsEntry,
@@ -75,6 +76,7 @@ import {
 import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
+import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
 import { AcpInstaller } from "../acp/acp-installer";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
@@ -129,7 +131,9 @@ async function listAcpAgentSettings(
   }
 
   snapshot ??= store.readRegistrySnapshot();
-  const installed = await listInstalledAndLocalAcpAgents(store);
+  const installed = await listInstalledAndLocalAcpAgents(store, {
+    refreshLocal: request.refresh === true,
+  });
   const entries = snapshot
     ? registryService
         .applyAllowlist(snapshot)
@@ -159,21 +163,83 @@ async function listAcpAgentSettings(
 
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
+  options?: { refreshLocal?: boolean },
 ): Promise<AcpInstalledAgentRecord[]> {
   const installed = store.listInstalledAgents();
-  const installedBackendIds = new Set(installed.map((record) => record.backendId));
   let discovered: AcpInstalledAgentRecord[] = [];
-  try {
-    discovered = await discoverLocalAcpAgents();
-  } catch (error) {
-    settingsIpcLog.debug("local_acp_discovery_failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  if (options?.refreshLocal) {
+    try {
+      discovered = await discoverLocalAcpAgents();
+      const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
+      for (const record of discovered) {
+        const current = store.getInstalledAgent(record.backendId);
+        const nextRecord = {
+          ...record,
+          runtimeCapabilities: current?.runtimeCapabilities,
+          lastDiscoveredAt: current?.lastDiscoveredAt,
+          lastDiscoveryError: current?.lastDiscoveryError,
+          installedAt: current?.installedAt ?? record.installedAt,
+          updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
+        } satisfies AcpInstalledAgentRecord;
+        store.upsertInstalledAgent(
+          await refreshAcpRuntimeCapabilities(nextRecord, discoveryCwd),
+        );
+      }
+    } catch (error) {
+      settingsIpcLog.debug("local_acp_discovery_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
+  const refreshedInstalled = options?.refreshLocal
+    ? store.listInstalledAgents()
+    : installed;
+  const installedBackendIds = new Set(
+    refreshedInstalled.map((record) => record.backendId),
+  );
   return [
-    ...installed,
+    ...refreshedInstalled,
     ...discovered.filter((record) => !installedBackendIds.has(record.backendId)),
   ];
+}
+
+async function refreshAcpRuntimeCapabilities(
+  record: AcpInstalledAgentRecord,
+  cwd: string,
+): Promise<AcpInstalledAgentRecord> {
+  const now = Date.now();
+  try {
+    const result = await discoverAcpRuntimeCapabilities(record, { cwd });
+    return {
+      ...record,
+      ...(result.runtimeCapabilities
+        ? {
+            runtimeCapabilities: result.runtimeCapabilities,
+            lastDiscoveredAt: result.runtimeCapabilities.discoveredAt ?? now,
+            lastDiscoveryError: undefined,
+          }
+        : {
+            lastDiscoveredAt: now,
+          }),
+      updatedAt: Math.max(record.updatedAt, now),
+    };
+  } catch (error) {
+    return {
+      ...record,
+      lastDiscoveryError: error instanceof Error ? error.message : String(error),
+      updatedAt: Math.max(record.updatedAt, now),
+    };
+  }
+}
+
+async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
+  const directory = path.join(
+    resolveActiveProfileDir(),
+    "state",
+    "acp-discovery-workspace",
+  );
+  await mkdir(directory, { recursive: true });
+  return directory;
 }
 
 async function installAcpAgent(
@@ -341,6 +407,7 @@ function installedAcpAgentSettingsEntry(
     installedAt: record.installedAt,
     updatedAt: record.updatedAt,
     lastError: record.lastError,
+    runtime: record.runtimeCapabilities,
   };
 }
 

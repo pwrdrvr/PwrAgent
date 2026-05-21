@@ -2,6 +2,8 @@ import type {
   AcpBackendId,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
+  BackendAcpRuntimeCapabilities,
+  BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -9,6 +11,11 @@ import {
   readAcpTopicTitle,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
+import {
+  acpSessionRuntimeStateFromCapabilities,
+  acpSessionRuntimeStateFromUpdate,
+  normalizeAcpRuntimeCapabilities,
+} from "./acp-runtime-capabilities.js";
 import type {
   AcpPersistedTranscriptUpdate,
   AcpSessionMetadata,
@@ -34,9 +41,14 @@ export type AcpJsonRpcTransport = {
 
 const ACP_PROTOCOL_VERSION = 1;
 
+type AcpSessionStoreLike = Pick<
+  AcpSessionStore,
+  "getSession" | "listSessions" | "upsertSession"
+>;
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
-  store: AcpSessionStore;
+  store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
   onSessionUpdate?: (event: {
@@ -50,6 +62,15 @@ export type AcpAgentClientOptions = {
     sessionId: string;
     turnId: string;
     error: unknown;
+  }) => Promise<void> | void;
+  onRuntimeCapabilities?: (event: {
+    sessionId?: string;
+    runtimeCapabilities: BackendAcpRuntimeCapabilities;
+    runtimeState?: BackendAcpSessionRuntimeState;
+  }) => Promise<void> | void;
+  onSessionRuntimeStateChange?: (event: {
+    sessionId: string;
+    runtimeState: BackendAcpSessionRuntimeState;
   }) => Promise<void> | void;
   onRequest?: (
     request: AppServerPendingRequestNotification
@@ -73,6 +94,7 @@ export class AcpAgentClient {
   private readonly now: () => number;
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
+  private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
@@ -87,7 +109,7 @@ export class AcpAgentClient {
     this.unsubscribeRequest = this.options.transport.onRequest?.(
       async (method, params, id) => await this.handleAcpRequest(method, params, id),
     );
-    await this.options.transport.request("initialize", {
+    const result = await this.options.transport.request("initialize", {
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {
         auth: {
@@ -104,6 +126,10 @@ export class AcpAgentClient {
         title: "PwrAgent",
         version: "0.0.0",
       },
+    });
+    this.captureRuntimeCapabilities({
+      source: "initialize",
+      result,
     });
   }
 
@@ -126,6 +152,7 @@ export class AcpAgentClient {
     executionMode: ThreadExecutionMode;
     title?: string;
     createdAt?: number;
+    acpRuntime?: BackendAcpSessionRuntimeState;
     transcriptUpdates?: AcpPersistedTranscriptUpdate[];
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
@@ -133,7 +160,20 @@ export class AcpAgentClient {
       cwd,
       mcpServers: [],
     });
+    const now = this.now();
     const record = asRecord(result);
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
+      source: "session-new",
+      result,
+    });
+    const runtimeState = acpSessionRuntimeStateFromCapabilities(
+      runtimeCapabilities,
+      now,
+    );
+    const combinedRuntimeState =
+      params.acpRuntime || runtimeState
+        ? mergeAcpRuntimeState(params.acpRuntime, runtimeState ?? {})
+        : undefined;
     const sessionId =
       typeof record?.sessionId === "string"
         ? record.sessionId
@@ -143,9 +183,7 @@ export class AcpAgentClient {
     if (!sessionId) {
       throw new Error("ACP session/new did not return a session id");
     }
-
     const appSessionId = params.sessionId ?? sessionId;
-    const now = this.now();
     const metadata: AcpSessionMetadata = {
       backendId: this.options.backendId,
       sessionId: appSessionId,
@@ -155,12 +193,18 @@ export class AcpAgentClient {
       createdAt: params.createdAt ?? now,
       updatedAt: now,
       executionMode: params.executionMode,
+      acpRuntime: combinedRuntimeState,
       status: "idle",
       transcriptUpdates: params.transcriptUpdates,
     };
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
     this.loadedSessionCwds.set(sessionId, cwd);
+    this.notifyRuntimeCapabilities({
+      sessionId: appSessionId,
+      runtimeCapabilities,
+      runtimeState,
+    });
     return metadata;
   }
 
@@ -308,6 +352,48 @@ export class AcpAgentClient {
     });
   }
 
+  async setRuntimeOption(params: {
+    sessionId: string;
+    source: "configOption" | "mode";
+    optionId: string;
+    value: string;
+  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    const result =
+      params.source === "configOption"
+        ? await this.options.transport.request("session/set_config_option", {
+            sessionId: protocolSessionId,
+            configOptionId: params.optionId,
+            value: params.value,
+          })
+        : await this.options.transport.request("session/set_mode", {
+            sessionId: protocolSessionId,
+            modeId: params.value,
+          });
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
+      source: "session-load",
+      result,
+    });
+    const runtimeState =
+      acpSessionRuntimeStateFromCapabilities(runtimeCapabilities, this.now()) ??
+      (params.source === "configOption"
+        ? {
+            configValues: { [params.optionId]: params.value },
+            updatedAt: this.now(),
+          }
+        : {
+            currentModeId: params.value,
+            updatedAt: this.now(),
+          });
+    this.updateSessionRuntimeState(params.sessionId, runtimeState);
+    this.notifyRuntimeCapabilities({
+      sessionId: params.sessionId,
+      runtimeCapabilities,
+      runtimeState,
+    });
+    return runtimeState;
+  }
+
   readReplay(sessionId: string): AppServerThreadReplay {
     this.hydratePersistedTranscriptForSession(sessionId);
     return this.normalizerFor(sessionId).replay();
@@ -323,6 +409,14 @@ export class AcpAgentClient {
     const sessionId = this.appSessionIdFor(protocolSessionId);
     const receivedAt = this.now();
     const activeTurn = this.activeTurns.get(sessionId);
+    const runtimeState = acpSessionRuntimeStateFromUpdate(update, receivedAt);
+    if (runtimeState) {
+      this.updateSessionRuntimeState(sessionId, runtimeState);
+      void Promise.resolve(
+        this.options.onSessionRuntimeStateChange?.({ sessionId, runtimeState }),
+      ).catch(() => undefined);
+      return;
+    }
     if (this.suppressLoadReplaySessions.has(protocolSessionId)) {
       return;
     }
@@ -476,6 +570,54 @@ export class AcpAgentClient {
     });
   }
 
+  private captureRuntimeCapabilities(params: {
+    source: BackendAcpRuntimeCapabilities["source"];
+    result: unknown;
+  }): BackendAcpRuntimeCapabilities | undefined {
+    const runtimeCapabilities = normalizeAcpRuntimeCapabilities({
+      value: params.result,
+      now: this.now(),
+      source: params.source,
+      initialize: this.runtimeCapabilities,
+    });
+    if (runtimeCapabilities) {
+      this.runtimeCapabilities = runtimeCapabilities;
+    }
+    return runtimeCapabilities;
+  }
+
+  private notifyRuntimeCapabilities(event: {
+    sessionId?: string;
+    runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+    runtimeState?: BackendAcpSessionRuntimeState;
+  }): void {
+    if (!event.runtimeCapabilities) {
+      return;
+    }
+    void Promise.resolve(
+      this.options.onRuntimeCapabilities?.({
+        sessionId: event.sessionId,
+        runtimeCapabilities: event.runtimeCapabilities,
+        runtimeState: event.runtimeState,
+      }),
+    ).catch(() => undefined);
+  }
+
+  private updateSessionRuntimeState(
+    sessionId: string,
+    runtimeState: BackendAcpSessionRuntimeState,
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    this.options.store.upsertSession({
+      ...metadata,
+      acpRuntime: mergeAcpRuntimeState(metadata.acpRuntime, runtimeState),
+      updatedAt: Math.max(metadata.updatedAt, runtimeState.updatedAt ?? this.now()),
+    });
+  }
+
   private async notifySessionUpdate(event: {
     sessionId: string;
     replay: AppServerThreadReplay;
@@ -496,6 +638,22 @@ export class AcpAgentClient {
       cwd,
       mcpServers: [],
       sessionId: protocolSessionId,
+    });
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
+      source: "session-load",
+      result,
+    });
+    const runtimeState = acpSessionRuntimeStateFromCapabilities(
+      runtimeCapabilities,
+      this.now(),
+    );
+    if (runtimeState) {
+      this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
+    }
+    this.notifyRuntimeCapabilities({
+      sessionId: metadata.sessionId,
+      runtimeCapabilities,
+      runtimeState,
     });
     this.loadedSessionCwds.set(protocolSessionId, cwd);
     return result;
@@ -627,6 +785,20 @@ function acpSessionThreadStatus(
   return status === "active" || status === "idle" || status === "unknown"
     ? status
     : fallback;
+}
+
+function mergeAcpRuntimeState(
+  existing: BackendAcpSessionRuntimeState | undefined,
+  update: BackendAcpSessionRuntimeState,
+): BackendAcpSessionRuntimeState {
+  return {
+    ...existing,
+    ...update,
+    configValues: {
+      ...(existing?.configValues ?? {}),
+      ...(update.configValues ?? {}),
+    },
+  };
 }
 
 type AcpPermissionOption = {

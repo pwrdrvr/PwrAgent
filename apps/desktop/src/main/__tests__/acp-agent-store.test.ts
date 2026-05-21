@@ -51,6 +51,17 @@ describe("AcpAgentStore", () => {
       allowlistRuleId: "codex-rule",
       installedAt: 1000,
       updatedAt: 2000,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1500,
+        checkedAt: 1500,
+        source: "session-new",
+        modes: {
+          currentModeId: "default",
+          availableModes: [{ id: "default", label: "Default" }],
+        },
+      },
     };
 
     store.upsertInstalledAgent(record);

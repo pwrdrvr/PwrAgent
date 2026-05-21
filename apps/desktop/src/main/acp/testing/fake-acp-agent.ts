@@ -14,8 +14,15 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     | undefined;
   private nextSessionId = "session-1";
 
+  constructor(
+    private readonly responses: Partial<Record<string, unknown>> = {},
+  ) {}
+
   async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     this.requests.push({ method, params });
+    if (method in this.responses) {
+      return this.responses[method];
+    }
     if (method === "initialize") {
       return { protocolVersion: 1 };
     }

@@ -18,6 +18,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
+import type { BackendAcpSessionRuntimeState } from "./backend";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -158,6 +159,7 @@ export type NavigationLaunchpadDefaults = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  acpRuntime?: BackendAcpSessionRuntimeState;
 };
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {

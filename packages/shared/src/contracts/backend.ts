@@ -21,6 +21,97 @@ export type BackendAcpVerificationStatus =
   | "unverified-blocked"
   | "not-applicable";
 
+export type BackendAcpRuntimeDiscoveryStatus =
+  | "never-discovered"
+  | "discovered"
+  | "stale"
+  | "failed";
+
+export type BackendAcpRuntimeOptionSource = "configOption" | "mode";
+
+export type BackendAcpRuntimeConfigOptionValue = {
+  value: string;
+  label?: string;
+  description?: string;
+};
+
+export type BackendAcpRuntimeConfigOption = {
+  id: string;
+  label: string;
+  description?: string;
+  type: "select";
+  category?: "mode" | "model" | "thought_level" | string;
+  currentValue?: string;
+  values: BackendAcpRuntimeConfigOptionValue[];
+};
+
+export type BackendAcpRuntimeMode = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type BackendAcpRuntimeModeState = {
+  currentModeId?: string;
+  availableModes: BackendAcpRuntimeMode[];
+};
+
+export type BackendAcpRuntimeModel = {
+  id: string;
+  label?: string;
+  description?: string;
+  current?: boolean;
+};
+
+export type BackendAcpRuntimeModelState = {
+  currentModelId?: string;
+  availableModels: BackendAcpRuntimeModel[];
+};
+
+export type BackendAcpRuntimeAgentCapabilities = {
+  loadSession?: boolean;
+  session?: {
+    close?: boolean;
+    cancel?: boolean;
+  };
+  prompt?: {
+    image?: boolean;
+    audio?: boolean;
+    embeddedContext?: boolean;
+  };
+  mcp?: {
+    http?: boolean;
+    sse?: boolean;
+  };
+  raw?: unknown;
+};
+
+export type BackendAcpRuntimeCapabilities = {
+  schemaVersion: 1;
+  status: BackendAcpRuntimeDiscoveryStatus;
+  discoveredAt?: number;
+  checkedAt?: number;
+  source?: "initialize" | "session-new" | "session-load" | "local-probe";
+  protocolVersion?: number;
+  agentInfo?: {
+    name?: string;
+    title?: string;
+    version?: string;
+  };
+  agentCapabilities?: BackendAcpRuntimeAgentCapabilities;
+  configOptions?: BackendAcpRuntimeConfigOption[];
+  modes?: BackendAcpRuntimeModeState;
+  models?: BackendAcpRuntimeModelState;
+  lastError?: string;
+};
+
+export type BackendAcpSessionRuntimeState = {
+  configValues?: Record<string, string>;
+  currentModeId?: string;
+  currentModelId?: string;
+  updatedAt?: number;
+};
+
 export type BackendAcpSummary = {
   registryId: string;
   version?: string;
@@ -34,6 +125,7 @@ export type BackendAcpSummary = {
   repositoryUrl?: string;
   websiteUrl?: string;
   allowlistRuleId?: string;
+  runtime?: BackendAcpRuntimeCapabilities;
 };
 
 export type BackendCapabilities = {
@@ -145,6 +237,7 @@ export type AcpAgentSettingsEntry = {
   updatedAt?: number;
   unavailableReason?: string;
   lastError?: string;
+  runtime?: BackendAcpRuntimeCapabilities;
 };
 
 export type ListAcpAgentSettingsRequest = {

@@ -29,6 +29,8 @@ import {
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
+  type BackendAcpRuntimeCapabilities,
+  type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
   type CodexEnvironmentOption,
   type CodexEnvironmentSetupProgressEvent,
@@ -358,7 +360,8 @@ type AcpRuntimeClient = Pick<
   | "readReplay"
   | "startPrompt"
   | "startSession"
->;
+> &
+  Partial<Pick<AcpAgentClient, "setRuntimeOption">>;
 
 type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
 type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
@@ -910,26 +913,41 @@ function describeInstalledAcpBackend(agent: AcpInstalledAgentRecord): BackendSum
       websiteUrl: agent.registryAgent?.websiteUrl,
       allowlistRuleId: agent.allowlistRuleId,
       license: agent.registryAgent?.license,
+      runtime: agent.runtimeCapabilities,
     },
     methods: ["session/new", "session/load", "session/prompt", "session/cancel"],
     capabilities: buildAcpCapabilities(),
-    executionModes: [
-      {
-        mode: "default",
-        label: EXECUTION_MODE_SUMMARIES.default.label,
-        available,
-        isDefault: true,
-        unavailableReason,
-      },
-      {
-        mode: "full-access",
-        label: EXECUTION_MODE_SUMMARIES["full-access"].label,
-        available,
-        unavailableReason,
-      },
-    ],
+    executionModes: [],
+    launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
     unavailableReason,
   };
+}
+
+function buildAcpLaunchpadOptions(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+): BackendLaunchpadOptions | undefined {
+  const modelOptions = runtimeCapabilities?.models?.availableModels.map(
+    (model): BackendModelOption => ({
+      id: model.id,
+      label: model.label,
+      current: runtimeCapabilities.models?.currentModelId === model.id,
+    }),
+  ) ?? [];
+  const configModelOption = runtimeCapabilities?.configOptions
+    ?.find((option) => option.category === "model")
+    ?.values.map(
+      (value): BackendModelOption => ({
+        id: value.value,
+        label: value.label,
+        current: runtimeCapabilities.configOptions?.some(
+          (option) =>
+            option.category === "model" &&
+            option.currentValue === value.value,
+        ),
+      }),
+    ) ?? [];
+  const models = modelOptions.length > 0 ? modelOptions : configModelOption;
+  return models.length > 0 ? { models } : undefined;
 }
 
 function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
@@ -952,6 +970,7 @@ function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThread
       : [],
     source: session.backendId,
     executionMode: session.executionMode,
+    acpRuntime: session.acpRuntime,
   };
 }
 
@@ -1706,7 +1725,8 @@ function launchpadDefaultsEqual(
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
-    left.fastMode === right.fastMode
+    left.fastMode === right.fastMode &&
+    JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {})
   );
 }
 
@@ -1728,7 +1748,10 @@ export class DesktopBackendRegistry {
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
-  private readonly acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents">;
+  private readonly acpAgentStore?: Pick<
+    AcpAgentStore,
+    "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
+  >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
@@ -1828,7 +1851,10 @@ export class DesktopBackendRegistry {
     gitDirectoryService?: GitDirectoryService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
-    acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents"> | null;
+    acpAgentStore?: Pick<
+      AcpAgentStore,
+      "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
+    > | null;
     acpSessionStore?: AcpSessionStoreLike | null;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     createAcpClient?: AcpClientFactory;
@@ -2057,6 +2083,72 @@ export class DesktopBackendRegistry {
                   },
                 },
               },
+            });
+          },
+          onRuntimeCapabilities: async ({
+            runtimeCapabilities,
+            runtimeState,
+            sessionId,
+          }) => {
+            const now = Date.now();
+            const current =
+              this.acpAgentStore?.getInstalledAgent(agent.backendId) ?? agent;
+            this.acpAgentStore?.upsertInstalledAgent({
+              ...current,
+              runtimeCapabilities,
+              lastDiscoveredAt: runtimeCapabilities.discoveredAt ?? now,
+              lastDiscoveryError: runtimeCapabilities.lastError,
+              updatedAt: Math.max(current.updatedAt, now),
+            });
+            if (sessionId && runtimeState && this.acpSessionStore?.upsertSession) {
+              const metadata = this.acpSessionStore.getSession(
+                agent.backendId,
+                sessionId,
+              );
+              if (metadata) {
+                this.acpSessionStore.upsertSession({
+                  ...metadata,
+                  acpRuntime: {
+                    ...metadata.acpRuntime,
+                    ...runtimeState,
+                    configValues: {
+                      ...(metadata.acpRuntime?.configValues ?? {}),
+                      ...(runtimeState.configValues ?? {}),
+                    },
+                  },
+                  updatedAt: Math.max(
+                    metadata.updatedAt,
+                    runtimeState.updatedAt ?? now,
+                  ),
+                });
+              }
+            }
+          },
+          onSessionRuntimeStateChange: async ({ sessionId, runtimeState }) => {
+            if (!this.acpSessionStore?.upsertSession) {
+              return;
+            }
+            const metadata = this.acpSessionStore.getSession(
+              agent.backendId,
+              sessionId,
+            );
+            if (!metadata) {
+              return;
+            }
+            this.acpSessionStore.upsertSession({
+              ...metadata,
+              acpRuntime: {
+                ...metadata.acpRuntime,
+                ...runtimeState,
+                configValues: {
+                  ...(metadata.acpRuntime?.configValues ?? {}),
+                  ...(runtimeState.configValues ?? {}),
+                },
+              },
+              updatedAt: Math.max(
+                metadata.updatedAt,
+                runtimeState.updatedAt ?? Date.now(),
+              ),
             });
           },
           onRequest: async (request) =>
@@ -2636,13 +2728,16 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     cwd?: string;
     executionMode: ThreadExecutionMode;
+    acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<{ threadId: string }> {
     const client = await this.getAcpClient(params.backend);
     const session = await client.startSession({
       cwd: params.cwd,
       executionMode: params.executionMode,
+      acpRuntime: params.acpRuntime,
       title: "ACP session",
     });
+    await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
     return { threadId: session.sessionId };
   }
 
@@ -2728,6 +2823,29 @@ export class DesktopBackendRegistry {
         },
       });
       throw error;
+    }
+  }
+
+  private async applyAcpRuntimeSelection(
+    client: AcpRuntimeClient,
+    sessionId: string,
+    runtime: BackendAcpSessionRuntimeState | undefined,
+  ): Promise<void> {
+    for (const [optionId, value] of Object.entries(runtime?.configValues ?? {})) {
+      await client.setRuntimeOption?.({
+        sessionId,
+        source: "configOption",
+        optionId,
+        value,
+      });
+    }
+    if (runtime?.currentModeId) {
+      await client.setRuntimeOption?.({
+        sessionId,
+        source: "mode",
+        optionId: "mode",
+        value: runtime.currentModeId,
+      });
     }
   }
 
@@ -3299,6 +3417,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -3348,6 +3467,7 @@ export class DesktopBackendRegistry {
           backend,
           cwd,
           executionMode,
+          acpRuntime: request.acpRuntime,
         })
       : await this.getClient(backend, executionMode).startThread({
           ...request,
@@ -3371,6 +3491,7 @@ export class DesktopBackendRegistry {
         updatedAt: startedAt,
         executionMode,
         ...modelSettings,
+        acpRuntime: request.acpRuntime,
         codexEnvironmentRuntime: request.codexEnvironmentRuntime,
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)
@@ -5299,9 +5420,10 @@ export class DesktopBackendRegistry {
       model: launchpad.model,
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
-      fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
-      codexEnvironmentRuntime,
-    });
+        fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+        acpRuntime: launchpad.acpRuntime,
+        codexEnvironmentRuntime,
+      });
     pendingActionThreadId = startThreadResponse.threadId;
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
@@ -6414,6 +6536,11 @@ export class DesktopBackendRegistry {
       installedAgents.map((agent) => agent.backendId),
     );
     const discoveredAgents = await this.readLocalAcpAgentsOnce();
+    for (const agent of discoveredAgents) {
+      if (!installedBackendIds.has(agent.backendId)) {
+        this.acpAgentStore?.upsertInstalledAgent(agent);
+      }
+    }
     return [
       ...installedAgents,
       ...discoveredAgents.filter(

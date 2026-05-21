@@ -46,7 +46,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "Models" },
-  { id: "agents", label: "Agents" },
+  { id: "agents", label: "ACP Agents" },
   { id: "messaging", label: "Messaging" },
   { id: "worktrees", label: "Worktrees" },
   { id: "archived", label: "Archived Threads" },

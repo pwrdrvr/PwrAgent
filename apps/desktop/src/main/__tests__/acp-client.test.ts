@@ -195,6 +195,135 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("captures ACP runtime modes and models from session setup", async () => {
+    const runtimeEvents: unknown[] = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "gemini-session",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            {
+              id: "default",
+              name: "Default",
+              description: "Prompts for approval",
+            },
+            {
+              id: "yolo",
+              name: "YOLO",
+              description: "Auto-approves all tools",
+            },
+          ],
+        },
+        models: {
+          currentModelId: "gemini-3-flash-preview",
+          availableModels: [
+            {
+              modelId: "gemini-3-flash-preview",
+              name: "gemini-3-flash-preview",
+            },
+          ],
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onRuntimeCapabilities: (event) => {
+        runtimeEvents.push(event);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    expect(session).toMatchObject({
+      sessionId: "gemini-session",
+      acpRuntime: {
+        currentModeId: "default",
+        currentModelId: "gemini-3-flash-preview",
+      },
+    });
+    expect(store.getSession("acp:gemini", "gemini-session")).toMatchObject({
+      acpRuntime: {
+        currentModeId: "default",
+        currentModelId: "gemini-3-flash-preview",
+      },
+    });
+    expect(runtimeEvents).toMatchObject([
+      {
+        sessionId: "gemini-session",
+        runtimeCapabilities: {
+          status: "discovered",
+          source: "session-new",
+          modes: {
+            currentModeId: "default",
+            availableModes: [
+              { id: "default", label: "Default" },
+              { id: "yolo", label: "YOLO" },
+            ],
+          },
+          models: {
+            currentModelId: "gemini-3-flash-preview",
+            availableModels: [
+              {
+                id: "gemini-3-flash-preview",
+                label: "gemini-3-flash-preview",
+              },
+            ],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("updates ACP runtime state without rendering config notifications", async () => {
+    const runtimeUpdates: unknown[] = [];
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionRuntimeStateChange: (event) => {
+        runtimeUpdates.push(event);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "current_mode_update",
+      currentModeId: "yolo",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "config_option_update",
+      configOption: {
+        id: "approval-mode",
+        currentValue: "yolo",
+      },
+    });
+
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModeId: "yolo",
+        configValues: {
+          "approval-mode": "yolo",
+        },
+      },
+    });
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+    expect(runtimeUpdates).toHaveLength(2);
+  });
+
   it("hydrates persisted ACP transcripts once without replaying session/load as new messages", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

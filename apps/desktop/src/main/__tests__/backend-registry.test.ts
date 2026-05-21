@@ -958,7 +958,19 @@ function createMessagingArchiveCleanerMock(
 
 function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
   return {
+    getInstalledAgent: (backendId: AcpBackendId) =>
+      records.find((record) => record.backendId === backendId),
     listInstalledAgents: () => records,
+    upsertInstalledAgent: (record: AcpInstalledAgentRecord) => {
+      const index = records.findIndex(
+        (candidate) => candidate.backendId === record.backendId,
+      );
+      if (index >= 0) {
+        records[index] = record;
+      } else {
+        records.push(record);
+      }
+    },
   };
 }
 

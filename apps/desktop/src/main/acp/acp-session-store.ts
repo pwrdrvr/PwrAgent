@@ -1,4 +1,8 @@
-import type { AcpBackendId, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AcpBackendId,
+  BackendAcpSessionRuntimeState,
+  ThreadExecutionMode,
+} from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
 
 export type AcpSessionMetadata = {
@@ -14,6 +18,7 @@ export type AcpSessionMetadata = {
   createdAt: number;
   updatedAt: number;
   executionMode: ThreadExecutionMode;
+  acpRuntime?: BackendAcpSessionRuntimeState;
   status: "active" | "idle" | "failed" | "unknown";
   requiresAgentSessionRebind?: boolean;
   archivedAt?: number;

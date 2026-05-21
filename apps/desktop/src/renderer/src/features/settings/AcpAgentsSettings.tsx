@@ -12,6 +12,7 @@ import { acpInstallDisclosure, acpStatusLabel } from "./acp-agent-copy";
 export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirming, setConfirming] = useState<AcpAgentSettingsEntry | undefined>();
   const [installingBackend, setInstallingBackend] = useState<string | undefined>();
@@ -22,7 +23,11 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!refreshRegistry && entries.length === 0) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
     try {
       const response = await props.desktopApi.listAcpAgents({
         refresh: refreshRegistry,
@@ -33,11 +38,12 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
-    void refresh(false);
+    void refresh(false).then(() => refresh(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
@@ -69,21 +75,22 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
   return (
     <SettingsSectionStack paneId="acp-agents" aria-label="ACP agent settings">
       <SettingsPanelHead
-        eyebrow="Agents"
-        title="ACP registry"
-        help="Install allowlisted ACP coding agents as local third-party executables."
+        eyebrow="ACP"
+        title="ACP Agents"
+        help="Manage discovered ACP coding agents and their local runtime capabilities."
       />
 
-      <SettingsSection eyebrow="ACP" title="Registry agents">
+      <SettingsSection eyebrow="ACP" title="Known agents">
         <div className="settings-inline-actions">
           <button
             className="button button--secondary"
+            disabled={loading || refreshing}
             type="button"
             onClick={() => {
               void refresh(true);
             }}
           >
-            Refresh
+            {refreshing ? "Discovering..." : "Discover new"}
           </button>
         </div>
         {loading ? <p className="settings-empty">Loading ACP agents...</p> : null}
@@ -120,6 +127,22 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
                   <dt>Verification</dt>
                   <dd>{entry.verificationStatus}</dd>
                 </div>
+                {entry.runtime?.discoveredAt ? (
+                  <div>
+                    <dt>Capabilities</dt>
+                    <dd>{new Date(entry.runtime.discoveredAt).toLocaleString()}</dd>
+                  </div>
+                ) : null}
+                {entry.runtime?.modes?.availableModes.length ? (
+                  <div>
+                    <dt>Modes</dt>
+                    <dd>
+                      {entry.runtime.modes.availableModes
+                        .map((mode) => mode.label)
+                        .join(", ")}
+                    </dd>
+                  </div>
+                ) : null}
               </dl>
               {entry.repositoryUrl || entry.websiteUrl ? (
                 <p className="settings-acp-agent__links">
