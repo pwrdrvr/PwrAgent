@@ -101,6 +101,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { AcpAgentStore } from "../acp/acp-agent-store";
+import { acpAgentCapabilitiesForRegistryId } from "../acp/acp-agent-capabilities";
 import { AcpAgentClient } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
@@ -168,6 +169,8 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 5_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
+const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
+  "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -1017,6 +1020,17 @@ function acpSessionThreadStatus(
 function isAcpSessionMissingForProjectError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("No previous sessions found for this project");
+}
+
+function acpSessionHasConversationHistory(session: AcpSessionMetadata): boolean {
+  return (session.transcriptUpdates ?? []).some((item) => {
+    const kind = item.update.kind ?? item.update.type ?? item.update.sessionUpdate;
+    return (
+      kind === "pwragent_user_prompt" ||
+      kind === "user_message_chunk" ||
+      kind === "agent_message_chunk"
+    );
+  });
 }
 
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
@@ -2650,6 +2664,7 @@ export class DesktopBackendRegistry {
       sessionForTurn.requiresAgentSessionRebind ||
       (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)
     ) {
+      await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
       sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
     } else {
       try {
@@ -2658,6 +2673,7 @@ export class DesktopBackendRegistry {
         if (!isAcpSessionMissingForProjectError(error)) {
           throw error;
         }
+        await this.assertAcpSessionCanRebindForWorkspace(params.backend, sessionForTurn);
         sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
       }
     }
@@ -2749,6 +2765,19 @@ export class DesktopBackendRegistry {
       createdAt: session.createdAt,
       transcriptUpdates: session.transcriptUpdates,
     });
+  }
+
+  private async assertAcpSessionCanRebindForWorkspace(
+    backend: AcpBackendId,
+    session: AcpSessionMetadata,
+  ): Promise<void> {
+    if (!acpSessionHasConversationHistory(session)) {
+      return;
+    }
+    if (await this.acpBackendSupportsLiveWorkspaceHandoff(backend)) {
+      return;
+    }
+    throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
   }
 
   private async readAcpReplay(
@@ -3075,6 +3104,12 @@ export class DesktopBackendRegistry {
     if (request.backend === "codex" && this.threadHasActiveTurn(request.threadId)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
     }
+    if (isAcpBackendId(request.backend)) {
+      await this.assertAcpWorkspaceHandoffAllowed({
+        backend: request.backend,
+        threadId: request.threadId,
+      });
+    }
 
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: request.backend,
@@ -3124,6 +3159,30 @@ export class DesktopBackendRegistry {
     }
 
     return result;
+  }
+
+  private async assertAcpWorkspaceHandoffAllowed(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<void> {
+    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    if (!session || !acpSessionHasConversationHistory(session)) {
+      return;
+    }
+    if (await this.acpBackendSupportsLiveWorkspaceHandoff(params.backend)) {
+      return;
+    }
+    throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
+  }
+
+  private async acpBackendSupportsLiveWorkspaceHandoff(
+    backend: AcpBackendId,
+  ): Promise<boolean> {
+    const agent = await this.resolveInstalledAcpAgent(backend);
+    return (
+      agent.capabilities ??
+      acpAgentCapabilitiesForRegistryId(agent.registryId)
+    ).liveWorkspaceHandoff;
   }
 
   private updateAcpSessionWorkspaceAfterHandoff(params: {

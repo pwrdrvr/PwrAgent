@@ -8,6 +8,7 @@ import {
 import { describeDistributionSource } from "./acp-install-provenance.js";
 import { prepareAcpPackageLaunch } from "./acp-package-installer.js";
 import type { AcpPrerequisiteProbe } from "./acp-prerequisites.js";
+import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
 import type {
   AcpInstalledAgentRecord,
   AcpRegistryAgent,
@@ -108,6 +109,7 @@ function buildBaseRecord(
     allowlistRuleId: request.allowlistRuleId,
     installedAt: now,
     updatedAt: now,
+    capabilities: acpAgentCapabilitiesForRegistryId(request.agent.id),
     registryAgent: request.agent,
   };
 }

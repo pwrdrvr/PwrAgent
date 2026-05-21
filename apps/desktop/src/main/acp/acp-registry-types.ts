@@ -6,6 +6,7 @@ import type {
   BackendAcpVerificationStatus,
 } from "@pwragent/shared";
 import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
+import type { AcpAgentCapabilities } from "./acp-agent-capabilities.js";
 
 export const ACP_REGISTRY_URL =
   "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -100,6 +101,7 @@ export type AcpInstalledAgentRecord = {
   installedAt: number;
   updatedAt: number;
   launchDescriptor?: AcpLaunchDescriptor;
+  capabilities?: AcpAgentCapabilities;
   lastError?: string;
   registryAgent?: AcpRegistryAgent;
 };

@@ -7337,7 +7337,69 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("rebinds legacy ACP sessions when loading the stored cwd fails for the project", async () => {
+  it("rejects Gemini ACP workspace handoff after the first message", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const handoff = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: "ACP session",
+          cwd: "/repo/app",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+          transcriptUpdates: [
+            {
+              receivedAt: 1000,
+              update: {
+                kind: "pwragent_user_prompt",
+                prompt: "What is this project?",
+                turnId: "pending:session-1:1000",
+              },
+            },
+          ],
+        },
+      ]),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await expect(
+      registry.handoffThreadWorkspace({
+        backend: acpBackendId,
+        threadId: "session-1",
+        direction: "local-to-worktree",
+        leaveLocalBranch: "main",
+      }),
+    ).rejects.toThrow("cannot hand off a workspace after the first message");
+    expect(handoff).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("rejects rebinding legacy Gemini ACP sessions after conversation history exists", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessionStore = createAcpSessionStoreMock([
       {
@@ -7438,34 +7500,20 @@ command = "pnpm dev"
       createAcpClient: () => acpClient,
     });
 
-    await registry.startTurn({
-      backend: acpBackendId,
-      threadId: "session-1",
-      input: [{ type: "text", text: "What is the CWD now?" }],
-    });
+    await expect(
+      registry.startTurn({
+        backend: acpBackendId,
+        threadId: "session-1",
+        input: [{ type: "text", text: "What is the CWD now?" }],
+      }),
+    ).rejects.toThrow("cannot hand off a workspace after the first message");
 
     expect(ensureSession).toHaveBeenCalled();
-    expect(startSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        cwd: "/repo/app/.worktrees/app-feature-handoff",
-        transcriptUpdates: expect.arrayContaining([
-          expect.objectContaining({
-            update: expect.objectContaining({ prompt: "What is this project?" }),
-          }),
-        ]),
-      }),
-    );
+    expect(startSession).not.toHaveBeenCalled();
     expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
-      agentSessionId: "agent-session-2",
       cwd: "/repo/app/.worktrees/app-feature-handoff",
     });
-    expect(startPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        prompt: "What is the CWD now?",
-      }),
-    );
+    expect(startPrompt).not.toHaveBeenCalled();
 
     await registry.close();
   });

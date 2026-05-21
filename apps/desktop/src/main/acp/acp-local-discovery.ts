@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { AcpBackendId } from "@pwragent/shared";
+import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 const execFile = promisify(execFileCallback);
@@ -57,6 +58,7 @@ async function discoverLocalGemini(options?: {
     allowlistRuleId: "local-gemini-cli",
     installedAt: now,
     updatedAt: now,
+    capabilities: acpAgentCapabilitiesForRegistryId("gemini"),
     launchDescriptor: {
       backendId,
       registryId: "gemini",
