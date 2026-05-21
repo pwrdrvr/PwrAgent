@@ -2,7 +2,10 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
 } from "@pwragent/shared";
-import type { DesktopSecretStore } from "../settings/desktop-secret-store";
+import {
+  isSecretStorageDisabledByEnv,
+  type DesktopSecretStore,
+} from "../settings/desktop-secret-store";
 import type { StateDb } from "./state-db.js";
 
 type SafeStorageLike = {
@@ -19,6 +22,21 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
   ) {}
 
   describe(): DesktopSettingsSecretStorageState {
+    // Dev-only opt-out: lets developers run unsigned Electron dev
+    // builds on macOS without triggering the bogus "Keychain Not
+    // Found" prompt that OSCrypt generates for un-/ad-hoc-signed
+    // binaries. Reports unavailable, so callers route around any
+    // safeStorage operation; setSecret no-ops. See
+    // SECRET_STORAGE_DISABLED_ENV for the env var name.
+    if (isSecretStorageDisabledByEnv()) {
+      return {
+        available: false,
+        backend: "unavailable",
+        encrypted: false,
+        unavailableReason:
+          "Secret storage disabled via PWRAGENT_DEV_DISABLE_SECRET_STORAGE (dev-only).",
+      };
+    }
     if (!this.safeStorage.isEncryptionAvailable()) {
       return {
         available: false,
@@ -69,6 +87,14 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
     name: DesktopSettingsSecretName,
     value: string,
   ): Promise<void> {
+    // Dev-only opt-out: silent no-op when the env var is set.
+    // `assertWritable` would otherwise throw "Secret storage
+    // disabled via …" which would bubble up as a UI error. The
+    // intent of the dev opt-out is to silence the keychain UX,
+    // not to surface an alarming "couldn't save" message.
+    if (isSecretStorageDisabledByEnv()) {
+      return;
+    }
     this.assertWritable();
     const ciphertext = this.safeStorage.encryptString(value);
     this.stateDb.setSecret(name, ciphertext);

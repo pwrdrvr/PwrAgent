@@ -53,6 +53,10 @@ import {
 } from "../settings/desktop-config";
 import { discoverCodexAuthProfiles } from "../settings/codex-profiles";
 import { getAppStateMode } from "../state/app-state";
+import { isSecretStorageDisabledByEnv } from "../settings/desktop-secret-store";
+import { getMainLogger } from "../log";
+
+const profilesIpcLog = getMainLogger("pwragent:profiles");
 
 type ProfilesIpcHandlerOptions = {
   onProfilesChanged?: () => void;
@@ -349,6 +353,19 @@ export function writeDesktopSecretsToProfile(
   const profile = request.profile.trim();
   if (!isValidProfileName(profile)) {
     throw new Error(`Invalid profile name "${profile}".`);
+  }
+  // Dev-only opt-out: skip the entire write path when the env var
+  // is set. Returns success with an empty `written` list so the
+  // caller (wizard) treats it as "secrets handled" and moves on.
+  // The operator's typed values are silently dropped — they'll
+  // need to re-enter them in Settings → Models post-graduation.
+  // Acceptable in dev; production builds shouldn't set this.
+  if (isSecretStorageDisabledByEnv()) {
+    profilesIpcLog.info(
+      "writeDesktopSecretsToProfile skipped — secret storage disabled by env",
+      { profile },
+    );
+    return { profile, written: [] };
   }
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("Secret storage encryption is unavailable.");

@@ -470,6 +470,42 @@ describe("profile IPC helpers", () => {
         }),
       ).toThrow(/encryption is unavailable/);
     });
+
+    it("PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1 silently skips the keychain write", async () => {
+      // Dev-only escape hatch for unsigned Electron builds on
+      // macOS that trigger a "Keychain Not Found" prompt. With the
+      // env var set, the IPC returns success but doesn't touch
+      // safeStorage and doesn't write to state.db.
+      const root = createRoot();
+      const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+      ensureNamedProfileExists("personal", { env });
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", "1");
+
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      const result = writeDesktopSecretsToProfile({
+        profile: "personal",
+        secrets: { grokApiKey: "would-have-been-encrypted" },
+      });
+
+      expect(result).toEqual({ profile: "personal", written: [] });
+      // Crucially: safeStorage was NOT called — that's the whole
+      // point of the env var. Calling encryptString in an unsigned
+      // dev build would have prompted the operator.
+      expect(safeStorageEncryptMock).not.toHaveBeenCalled();
+
+      const { StateDb } = await import("../state/state-db");
+      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
+        profileName: "personal",
+      });
+      try {
+        // No ciphertext was written to the secrets table — the
+        // typed value was silently dropped, as documented.
+        expect(db.getSecret("grokApiKey")).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
   });
 
   it("keeps listing profiles when an inactive profile config is malformed", async () => {
