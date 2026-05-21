@@ -30,6 +30,8 @@ const disposeProfilesIpcHandlersMock = vi.fn();
 const listDesktopPwrAgentProfilesMock = vi.fn();
 const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
+const registerBootInfoIpcHandlersMock = vi.fn();
+const disposeBootInfoIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
 const registerSettingsIpcHandlersMock = vi.fn();
@@ -213,6 +215,11 @@ vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
 }));
 
+vi.mock("../ipc/boot-info", () => ({
+  registerBootInfoIpcHandlers: registerBootInfoIpcHandlersMock,
+  disposeBootInfoIpcHandlers: disposeBootInfoIpcHandlersMock,
+}));
+
 vi.mock("../ipc/runtime-identity", () => ({
   registerRuntimeIdentityIpcHandlers: registerRuntimeIdentityIpcHandlersMock,
   disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
@@ -257,6 +264,7 @@ vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   disposeAppState: disposeAppStateMock,
   isAppStateInitialized: isAppStateInitializedMock,
+  recordBootDecision: vi.fn(),
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -361,6 +369,8 @@ describe("bootstrapApp", () => {
       reason: "active",
     });
     registerRendererErrorIpcHandlersMock.mockReset();
+    registerBootInfoIpcHandlersMock.mockReset();
+    disposeBootInfoIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();
     registerSettingsIpcHandlersMock.mockReset();

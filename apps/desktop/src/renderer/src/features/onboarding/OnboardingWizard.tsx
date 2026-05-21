@@ -10,6 +10,7 @@ import {
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopBootInfo,
   DesktopCodexProfileModel,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -43,6 +44,7 @@ export type OnboardingProvider =
   | "line";
 
 type WizardStep =
+  | "bootstrap-confirm"
   | "welcome"
   | "thread-presentation"
   | "models-providers"
@@ -64,8 +66,9 @@ const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
 ];
 
 function railIndexForStep(step: WizardStep): RailIndex | -1 {
-  // `welcome` is the pre-rail intro — first-impression screen before
-  // the five numbered steps the rail tracks.
+  // `bootstrap-confirm` and `welcome` are pre-rail intro screens —
+  // shown before the five numbered steps the rail tracks.
+  if (step === "bootstrap-confirm") return -1;
   if (step === "welcome") return -1;
   if (step === "thread-presentation") return 0;
   if (step === "models-providers") return 1;
@@ -97,6 +100,13 @@ export type OnboardingWizardProps = {
   onDismiss: (persistCompleted: boolean) => void;
   /** When true, this is a Help-menu replay — do NOT persist `completed`. */
   isReplay: boolean;
+  /** Boot info from `getBootInfo` IPC. When `decisionKind ===
+   *  "missing-named-profile"` the wizard renders a slim
+   *  confirmation step first (pre-populating the requested name)
+   *  instead of going straight to the Welcome screen. `null` while
+   *  fetching, or when the renderer is running outside of a real
+   *  desktop session (e.g. in unit-test harnesses). */
+  bootInfo: DesktopBootInfo | null;
   /** Deep-link target into Settings → Messaging when the operator
    *  picks providers and clicks Set up. */
   onOpenMessagingSettings?: () => void;
@@ -109,28 +119,58 @@ export type OnboardingWizardProps = {
 };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
-  // Welcome is always the first stop. The flow is:
+  // Initial step:
+  //   - bootstrap with a CLI/env-named missing profile →
+  //     `bootstrap-confirm` ("PwrAgent doesn't know `foo` yet — set
+  //     it up, or quit?"). Pre-populates the name.
+  //   - everything else (first-run, replay, missing-default-profile,
+  //     bootstrap with no name supplied) → Welcome.
+  // The flow from Welcome onward is:
   //   Welcome → Thread presentation → Models / Providers (the backend
   //   gate) → Codex profile → optional Name profiles → Messaging
   //   warning → optional Messaging providers / Provider setup → Done.
-  // Both first-run and replay enter at Welcome — replay just doesn't
-  // persist `onboarding.completed` at Finish.
-  const [step, setStep] = useState<WizardStep>("welcome");
+  // Replay just doesn't persist `onboarding.completed` at Finish.
+  const initialStep: WizardStep =
+    props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay
+      ? "bootstrap-confirm"
+      : "welcome";
+  const [step, setStep] = useState<WizardStep>(initialStep);
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
   const [theme, setTheme] = useState<DesktopAppearanceTheme>(props.initialTheme);
+  // When the operator launched with a missing-named profile, default
+  // to Isolated mode: the requested name becomes the single profile
+  // we're setting up, paired with a Codex auth profile of the same
+  // name. They can still flip to Shared or Multiple in the wizard
+  // if they change their mind.
   const [codexProfileModel, setCodexProfileModel] =
-    useState<DesktopCodexProfileModel>(props.initialCodexProfileModel);
+    useState<DesktopCodexProfileModel>(
+      props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay
+        ? "isolated"
+        : props.initialCodexProfileModel,
+    );
   // Names for the per-profile naming step. Isolated mode shows one
   // input (default "pwragent"); Multiple shows 1–5 inputs (defaults
   // "personal" + "work"). When the user changes Step 2's selection,
   // a useEffect resets these defaults — see below.
-  const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() =>
-    props.initialCodexProfileModel === "isolated"
+  //
+  // Special-case: missing-named-profile bootstrap pre-populates the
+  // requested name (from `--profile=foo` / `PWRAGENT_PROFILE=foo`)
+  // as the Isolated default. This lets the operator confirm "yes,
+  // create `foo`" without retyping the name in the Profiles step.
+  const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() => {
+    const requested =
+      props.bootInfo?.decisionKind === "missing-named-profile"
+        ? props.bootInfo.requestedProfileName?.trim()
+        : undefined;
+    if (requested && isValidProfileName(requested)) {
+      return [requested];
+    }
+    return props.initialCodexProfileModel === "isolated"
       ? ["pwragent"]
-      : ["personal", "work"],
-  );
+      : ["personal", "work"];
+  });
   const [acknowledged, setAcknowledged] = useState(false);
   // Snapshot reported by the name-codex-profiles step: are all named
   // rows authenticated? Drives the footer Continue button's enabled
@@ -214,6 +254,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const nextStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
+        case "bootstrap-confirm":
+          // Confirmation accepted → join the standard flow at Welcome.
+          // The pre-populated name + isolated default mean the rest
+          // of the wizard naturally lands on the operator's chosen
+          // profile without extra prompting.
+          return "welcome";
         case "welcome":
           return "thread-presentation";
         case "thread-presentation":
@@ -248,11 +294,19 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     },
     [codexProfileModel, orderedProviders.length, providerSetupIndex],
   );
+  // Did this wizard session start at the bootstrap-confirm step?
+  // Only true when the boot decision named a missing profile —
+  // determines whether Back from Welcome surfaces the confirmation
+  // again (vs. being a no-op for first-run / replay entries).
+  const entryWasBootstrapConfirm =
+    props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay;
   const prevStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
-        case "welcome":
+        case "bootstrap-confirm":
           return null;
+        case "welcome":
+          return entryWasBootstrapConfirm ? "bootstrap-confirm" : null;
         case "thread-presentation":
           return "welcome";
         case "models-providers":
@@ -279,7 +333,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             : "messaging-safety";
       }
     },
-    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+    [codexProfileModel, entryWasBootstrapConfirm, orderedProviders.length, providerSetupIndex],
   );
 
   const goPrev = useCallback(() => {
@@ -469,7 +523,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           }
           onClose={() => props.onDismiss(false)}
         />
-        {step !== "welcome" ? (
+        {step !== "welcome" && step !== "bootstrap-confirm" ? (
           <WizardRail
             currentIndex={currentRailIndex}
             chosenDensity={density}
@@ -477,6 +531,28 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           />
         ) : null}
         <div className="onboarding-wizard__body">
+          {step === "bootstrap-confirm" ? (
+            <BootstrapConfirmStep
+              requestedName={props.bootInfo?.requestedProfileName ?? ""}
+              source={
+                props.bootInfo?.decisionKind === "missing-named-profile"
+                  ? "missing-named"
+                  : "no-profile"
+              }
+              onContinue={goNext}
+              onQuit={() => {
+                if (props.desktopApi?.quitApp) {
+                  void props.desktopApi.quitApp();
+                } else {
+                  // Renderer outside of a real desktop session (tests,
+                  // dev preview) — fall through to the normal dismiss
+                  // path so the wizard still closes.
+                  props.onDismiss(false);
+                }
+              }}
+              submitting={submitting}
+            />
+          ) : null}
           {step === "models-providers" ? (
             <BackendRequirementsStep
               settings={props.settings}
@@ -597,9 +673,15 @@ function WizardTitlebar(props: {
   providerPosition?: string;
   onClose: () => void;
 }) {
-  const eyebrow = props.isReplay ? "Replay" : "Welcome";
+  const eyebrow = props.isReplay
+    ? "Replay"
+    : props.step === "bootstrap-confirm"
+      ? "Set up profile"
+      : "Welcome";
   const crumb = (() => {
     switch (props.step) {
+      case "bootstrap-confirm":
+        return "Confirm new profile";
       case "welcome":
         return "First-run setup";
       case "thread-presentation":
@@ -713,11 +795,17 @@ function WizardFooter(props: {
   onFinish: () => void;
 }) {
   const showBack =
-    props.step !== "welcome" && props.step !== "done" && !props.submitting;
-  // `messaging-safety` renders its own Skip/Continue buttons in the body,
-  // so the footer doesn't show a redundant exit link there.
+    props.step !== "welcome" &&
+    props.step !== "done" &&
+    props.step !== "bootstrap-confirm" &&
+    !props.submitting;
+  // `messaging-safety` and `bootstrap-confirm` render their own
+  // Skip/Continue (or Quit/Continue) buttons in the body, so the
+  // footer doesn't show a redundant exit link on those screens.
   const showSkip =
-    props.step !== "done" && props.step !== "messaging-safety";
+    props.step !== "done" &&
+    props.step !== "messaging-safety" &&
+    props.step !== "bootstrap-confirm";
   const skipLabel = (() => {
     if (props.step === "messaging-providers") return "Skip messaging setup";
     if (props.step === "provider-setup") return `Skip ${props.currentProviderName}`;
@@ -1108,6 +1196,85 @@ function BackendRequirementsStep(props: {
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Slim confirmation step shown when the operator launched PwrAgent
+ * with `--profile=foo` or `PWRAGENT_PROFILE=foo` and `foo` doesn't
+ * exist on disk. Pre-#524 silently materialized the profile and
+ * mapped it to Codex's system default; now we pause here to confirm
+ * the operator actually wants to create it. "Set it up" continues
+ * into the standard flow with the requested name already filled in
+ * on the Profiles step. "Quit PwrAgent" exits cleanly so the
+ * operator can re-launch with the correct name.
+ */
+function BootstrapConfirmStep(props: {
+  requestedName: string;
+  source: "missing-named" | "no-profile";
+  onContinue: () => void;
+  onQuit: () => void;
+  submitting: boolean;
+}) {
+  const name = props.requestedName.trim() || "this profile";
+  return (
+    <div className="onboarding-wizard__bootstrap-confirm">
+      <div className="onboarding-wizard__brand">
+        Pwr<span>Agent</span>
+      </div>
+      <h1 className="onboarding-wizard__title onboarding-wizard__title--center">
+        Set up <code>{name}</code>?
+      </h1>
+      <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
+        PwrAgent doesn&rsquo;t know a profile named <code>{name}</code> yet.
+        You started this run via{" "}
+        {props.source === "missing-named" ? (
+          <>
+            <code>--profile</code> or <code>PWRAGENT_PROFILE</code>
+          </>
+        ) : (
+          "the launch environment"
+        )}
+        , so we can either walk you through creating it (paired with a
+        new Codex auth profile of the same name) or quit so you can
+        re-launch with a different name.
+      </p>
+      <ul className="onboarding-wizard__bootstrap-confirm-points">
+        <li>
+          <strong>What you&rsquo;ll do next:</strong> pick how PwrAgent
+          relates to your Codex install (Shared / Isolated / Multiple),
+          log into the Codex auth profile, and choose your theme +
+          messaging preferences. Takes a couple of minutes.
+        </li>
+        <li>
+          <strong>What you won&rsquo;t do:</strong> overwrite your
+          existing <code>~/.codex/</code> default session, lose any
+          threads, or commit to messaging — that part is optional.
+        </li>
+      </ul>
+      <div className="onboarding-wizard__bootstrap-confirm-actions">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={props.submitting}
+          onClick={props.onQuit}
+        >
+          Quit PwrAgent
+        </button>
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+          disabled={props.submitting}
+          onClick={props.onContinue}
+        >
+          Set up <code>{name}</code> →
+        </button>
+      </div>
+      <p className="onboarding-wizard__bootstrap-confirm-hint">
+        Tip: launch without <code>--profile</code> / <code>PWRAGENT_PROFILE</code>{" "}
+        to pick from existing profiles instead.
+      </p>
     </div>
   );
 }

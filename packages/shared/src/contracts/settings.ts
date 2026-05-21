@@ -787,6 +787,35 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
  * Splitting those responsibilities keeps the IPC purely about data
  * graduation.
  */
+/**
+ * Boot info surfaced from the main process to the renderer so the
+ * onboarding wizard can adjust its entry point. Returned by the
+ * `getBootInfo` IPC. The `mode` distinguishes "the operator's
+ * existing profile" from "the throwaway .bootstrap/ session"; the
+ * optional `requestedProfileName` is populated when the boot
+ * decision was `missing-named-profile` (CLI/env named a non-existent
+ * profile) — the wizard surfaces it as "PwrAgent doesn't know `foo`
+ * yet. Set it up, or quit?".
+ */
+export type DesktopBootInfo = {
+  mode: "active-profile" | "bootstrap";
+  /** Boot decision kind, mirrored to the renderer so the wizard can
+   *  pick the right entry mode without rebuilding the decision
+   *  tree client-side. */
+  decisionKind:
+    | "open"
+    | "missing-named-profile"
+    | "missing-default-profile"
+    | "no-profile-configured";
+  /** Populated when `decisionKind === "missing-named-profile"`. Echoes
+   *  the name from `--profile=foo` or `PWRAGENT_PROFILE=foo` so the
+   *  wizard can pre-populate the naming step. */
+  requestedProfileName?: string;
+  /** Populated for `missing-default-profile` only — the name the
+   *  registry pointed at that no longer exists on disk. */
+  configuredDefaultName?: string;
+};
+
 export type GraduateDesktopBootstrapToProfileRequest = {
   targetProfile: string;
 };

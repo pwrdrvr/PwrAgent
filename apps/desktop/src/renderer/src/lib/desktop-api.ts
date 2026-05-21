@@ -142,6 +142,7 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  DesktopBootInfo,
   GraduateDesktopBootstrapToProfileRequest,
   GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
@@ -211,6 +212,14 @@ export type DesktopApi = {
   graduateBootstrapToProfile?: (
     request: GraduateDesktopBootstrapToProfileRequest,
   ) => Promise<GraduateDesktopBootstrapToProfileResponse>;
+  /** Returns the boot decision + state mode so the wizard can pick
+   *  the right entry point (full first-run vs. slim "set up `foo`?"
+   *  confirmation for a CLI/env-named missing profile). */
+  getBootInfo?: () => Promise<DesktopBootInfo>;
+  /** Quit the application. Used by the wizard's bootstrap-named
+   *  confirmation step when the operator declines to set up the
+   *  requested profile. */
+  quitApp?: () => Promise<void>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

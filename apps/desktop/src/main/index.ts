@@ -45,6 +45,10 @@ import {
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
 import {
+  disposeBootInfoIpcHandlers,
+  registerBootInfoIpcHandlers,
+} from "./ipc/boot-info";
+import {
   disposeProfilesIpcHandlers,
   listDesktopPwrAgentProfiles,
   openDesktopPwrAgentProfile,
@@ -80,6 +84,7 @@ import {
   disposeAppState,
   initializeAppState,
   isAppStateInitialized,
+  recordBootDecision,
 } from "./state/app-state";
 import { createMainWindow } from "./window";
 import { subscribersForChannel } from "./window-channels";
@@ -181,6 +186,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeComposerDraftIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposePreloadLogIpcHandlers();
+  disposeBootInfoIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
   disposeWindowPointerIpcHandlers();
@@ -337,6 +343,11 @@ export function bootstrapApp(): void {
     const bootMode: "active-profile" | "bootstrap" =
       bootDecision.kind === "open" ? "active-profile" : "bootstrap";
     logBootDecision(bootDecision);
+    // Stash the boot decision so the renderer can read it via
+    // `getBootInfo` IPC once the wizard mounts. Specifically the
+    // missing-named-profile case needs the requested name to
+    // pre-populate the confirmation step's "set up `foo`?" prompt.
+    recordBootDecision(bootDecision);
     // Clean up any stale .bootstrap/ from a prior abandoned wizard
     // session BEFORE deciding to init in bootstrap mode for the
     // current run. Doing this here (vs. lazily) means a crashed
@@ -358,6 +369,7 @@ export function bootstrapApp(): void {
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();
+    registerBootInfoIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
         if (patch.general?.developerMode !== undefined) {

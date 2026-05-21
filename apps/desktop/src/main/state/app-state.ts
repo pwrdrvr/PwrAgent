@@ -4,6 +4,7 @@ import {
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
   startProfileRuntimeHeartbeat,
+  type ProfileBootDecision,
   type ProfileRuntimeHeartbeat,
   updateLastUsed,
 } from "../profile";
@@ -19,6 +20,12 @@ let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
 let activeMode: AppStateMode | null = null;
+// The boot decision is set once at startup and stays put for the
+// process lifetime. Stored here (vs. recomputed lazily) because the
+// wizard's entry-mode signal in the renderer needs to know what the
+// boot decision was AT BOOT — recomputing after the wizard creates a
+// profile would return `open` and the wizard would lose context.
+let currentBootDecision: ProfileBootDecision | null = null;
 
 /**
  * The two flavors of app state init:
@@ -38,6 +45,14 @@ let activeMode: AppStateMode | null = null;
  *   See `cleanupBootstrapProfile` in `../profile.ts` for cleanup.
  */
 export type AppStateMode = "active-profile" | "bootstrap";
+
+export function recordBootDecision(decision: ProfileBootDecision): void {
+  currentBootDecision = decision;
+}
+
+export function getBootDecision(): ProfileBootDecision | null {
+  return currentBootDecision;
+}
 
 export function initializeAppState(
   mode: AppStateMode = "active-profile",
@@ -156,4 +171,5 @@ export function resetAppStateForTests(): void {
   overlayStore = null;
   runtimeInstanceStore = null;
   activeMode = null;
+  currentBootDecision = null;
 }
