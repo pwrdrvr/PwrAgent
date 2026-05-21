@@ -681,11 +681,11 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
-    const headerTitleButton = screen
-      .getAllByRole("button", { name: "Build Codex client" })
-      .find((button) => button.closest(".thread-header"));
-    expect(headerTitleButton).toBeDefined();
-    fireEvent.click(headerTitleButton!);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show selected thread in thread list",
+      }),
+    );
     expect(scrollIntoView).toHaveBeenCalledWith({
       behavior: "smooth",
       block: "center",

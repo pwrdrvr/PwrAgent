@@ -38,7 +38,11 @@ describe("ThreadHeader", () => {
       screen.getByRole("heading", { level: 2, name: "AI API Rate Limiting" }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "AI API Rate Limiting" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show selected thread in thread list",
+      }),
+    );
 
     expect(onRevealSelectedThreadInList).toHaveBeenCalledOnce();
   });
