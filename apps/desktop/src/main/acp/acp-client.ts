@@ -32,6 +32,7 @@ export type AcpAgentClientOptions = {
   onSessionUpdate?: (event: {
     sessionId: string;
     replay: AppServerThreadReplay;
+    turnId?: string;
     update: Record<string, unknown>;
   }) => Promise<void> | void;
   onPromptError?: (event: {
@@ -43,6 +44,13 @@ export type AcpAgentClientOptions = {
 
 export class AcpAgentClient {
   private readonly normalizers = new Map<string, AcpSessionReplayNormalizer>();
+  private readonly activeTurns = new Map<
+    string,
+    {
+      assistantText: string;
+      turnId: string;
+    }
+  >();
   private readonly now: () => number;
   private unsubscribe?: () => void;
 
@@ -124,6 +132,7 @@ export class AcpAgentClient {
   }): Promise<{ sessionId: string; turnId: string }> {
     const turnId = `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
+    this.startTrackedTurn(params.sessionId, turnId);
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
@@ -145,10 +154,10 @@ export class AcpAgentClient {
         prompt: textPrompt(params.prompt),
       });
     } catch (error) {
-      this.normalizerFor(params.sessionId).recordTurnFinished();
+      this.finishTrackedTurn(params.sessionId);
       throw error;
     }
-    this.normalizerFor(params.sessionId).recordTurnFinished();
+    this.finishTrackedTurn(params.sessionId);
     const record = asRecord(result);
     return {
       sessionId: params.sessionId,
@@ -189,6 +198,7 @@ export class AcpAgentClient {
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
+    this.startTrackedTurn(params.sessionId, turnId);
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
@@ -209,19 +219,27 @@ export class AcpAgentClient {
         prompt: textPrompt(params.prompt),
       })
       .then(() => {
-        const replay = this.normalizerFor(params.sessionId).recordTurnFinished();
+        const finished = this.finishTrackedTurn(params.sessionId);
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
-          replay,
-          update: { kind: "turn_finished" },
+          replay: finished.replay,
+          turnId: finished.turnId,
+          update: {
+            kind: "turn_finished",
+            outputText: finished.assistantText,
+          },
         });
       })
       .catch((error) => {
-        const replay = this.normalizerFor(params.sessionId).recordTurnFinished();
+        const finished = this.finishTrackedTurn(params.sessionId);
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
-          replay,
-          update: { kind: "turn_finished" },
+          replay: finished.replay,
+          turnId: finished.turnId,
+          update: {
+            kind: "turn_finished",
+            outputText: finished.assistantText,
+          },
         });
         return Promise.resolve(
           this.options.onPromptError?.({
@@ -255,6 +273,10 @@ export class AcpAgentClient {
       return;
     }
     const receivedAt = this.now();
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
+      activeTurn.assistantText += readUpdateText(update) ?? "";
+    }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
@@ -264,7 +286,12 @@ export class AcpAgentClient {
       receivedAt,
       update,
     });
-    void this.notifySessionUpdate({ sessionId, replay, update });
+    void this.notifySessionUpdate({
+      sessionId,
+      replay,
+      turnId: activeTurn?.turnId,
+      update,
+    });
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
@@ -309,11 +336,34 @@ export class AcpAgentClient {
   private async notifySessionUpdate(event: {
     sessionId: string;
     replay: AppServerThreadReplay;
+    turnId?: string;
     update: Record<string, unknown>;
   }): Promise<void> {
     await Promise.resolve(this.options.onSessionUpdate?.(event)).catch(
       () => undefined,
     );
+  }
+
+  private startTrackedTurn(sessionId: string, turnId: string): void {
+    this.activeTurns.set(sessionId, {
+      assistantText: "",
+      turnId,
+    });
+  }
+
+  private finishTrackedTurn(sessionId: string): {
+    assistantText: string;
+    replay: AppServerThreadReplay;
+    turnId?: string;
+  } {
+    const activeTurn = this.activeTurns.get(sessionId);
+    this.activeTurns.delete(sessionId);
+    const replay = this.normalizerFor(sessionId).recordTurnFinished();
+    return {
+      assistantText: activeTurn?.assistantText ?? "",
+      replay,
+      turnId: activeTurn?.turnId,
+    };
   }
 }
 
@@ -326,6 +376,20 @@ function hasPersistedAssistantUpdate(metadata: AcpSessionMetadata): boolean {
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
   const kind = update.kind ?? update.type ?? update.sessionUpdate;
   return typeof kind === "string" ? kind : undefined;
+}
+
+function readUpdateText(update: Record<string, unknown>): string | undefined {
+  if (typeof update.text === "string") {
+    return update.text;
+  }
+  const content = update.content;
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
+    return undefined;
+  }
+  const contentRecord = content as Record<string, unknown>;
+  return contentRecord.type === "text" && typeof contentRecord.text === "string"
+    ? contentRecord.text
+    : undefined;
 }
 
 function textPrompt(text: string): Array<{ type: "text"; text: string }> {

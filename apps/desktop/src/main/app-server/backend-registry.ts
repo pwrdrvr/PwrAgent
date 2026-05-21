@@ -220,6 +220,28 @@ function assistantOutputForTurn(
   return [];
 }
 
+function readAcpUpdateKind(update: Record<string, unknown>): string | undefined {
+  const kind = update.kind ?? update.type ?? update.sessionUpdate;
+  return typeof kind === "string" ? kind : undefined;
+}
+
+function readAcpUpdateText(update: Record<string, unknown>): string | undefined {
+  if (typeof update.text === "string") {
+    return update.text;
+  }
+  if (typeof update.outputText === "string") {
+    return update.outputText;
+  }
+  const content = update.content;
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
+    return undefined;
+  }
+  const contentRecord = content as Record<string, unknown>;
+  return contentRecord.type === "text" && typeof contentRecord.text === "string"
+    ? contentRecord.text
+    : undefined;
+}
+
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
@@ -1930,7 +1952,44 @@ export class DesktopBackendRegistry {
               }),
             ]),
           }),
-          onSessionUpdate: async ({ sessionId, replay }) => {
+          onSessionUpdate: async ({ sessionId, replay, turnId, update }) => {
+            const updateKind = readAcpUpdateKind(update);
+            if (updateKind === "agent_message_chunk") {
+              const delta = readAcpUpdateText(update);
+              if (delta) {
+                await this.emit({
+                  backend: agent.backendId,
+                  notification: {
+                    method: "item/agentMessage/delta",
+                    params: {
+                      threadId: sessionId,
+                      turnId,
+                      itemId: `assistant:${sessionId}`,
+                      delta,
+                    },
+                  },
+                });
+              }
+            }
+            if (updateKind === "turn_finished" && turnId) {
+              const outputText = readAcpUpdateText(update);
+              await this.emit({
+                backend: agent.backendId,
+                notification: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: sessionId,
+                    turnId,
+                    turn: {
+                      id: turnId,
+                      status: "completed",
+                      completedAt: Date.now(),
+                      output: outputText ? [{ type: "text", text: outputText }] : [],
+                    },
+                  },
+                },
+              });
+            }
             await this.emit({
               backend: agent.backendId,
               notification: {

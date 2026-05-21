@@ -167,6 +167,97 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("reports fire-and-forget prompt chunks and completion with turn context", async () => {
+    const transport = new FakeAcpAgentTransport();
+    let resolvePrompt: ((value: unknown) => void) | undefined;
+    const updates: Array<{
+      outputText?: string;
+      text?: string;
+      turnId?: string;
+      updateKind?: string;
+    }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport: {
+        request: async (method, params) => {
+          if (method === "session/prompt") {
+            transport.requests.push({ method, params });
+            return await new Promise((resolve) => {
+              resolvePrompt = resolve;
+            });
+          }
+          return await transport.request(method, params);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1000,
+      onSessionUpdate: ({ replay, turnId, update }) => {
+        const content = update.content as { text?: string } | undefined;
+        updates.push({
+          ...(typeof update.outputText === "string"
+            ? { outputText: update.outputText }
+            : {}),
+          ...(typeof content?.text === "string" ? { text: content.text } : {}),
+          turnId,
+          updateKind:
+            typeof update.kind === "string"
+              ? update.kind
+              : typeof update.sessionUpdate === "string"
+                ? update.sessionUpdate
+                : undefined,
+        });
+        expect(replay.threadStatus).toBeDefined();
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "pending:session-1",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Hello " },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "world" },
+    });
+    resolvePrompt?.({});
+
+    await vi.waitFor(() => {
+      expect(updates.map((update) => update.updateKind)).toEqual([
+        "agent_message_chunk",
+        "agent_message_chunk",
+        "turn_finished",
+      ]);
+    });
+    expect(updates).toEqual([
+      {
+        text: "Hello ",
+        turnId: "pending:session-1",
+        updateKind: "agent_message_chunk",
+      },
+      {
+        text: "world",
+        turnId: "pending:session-1",
+        updateKind: "agent_message_chunk",
+      },
+      {
+        outputText: "Hello world",
+        turnId: "pending:session-1",
+        updateKind: "turn_finished",
+      },
+    ]);
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
