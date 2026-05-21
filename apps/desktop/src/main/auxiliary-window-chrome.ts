@@ -69,30 +69,39 @@ export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
 }
 
 export function showAuxiliaryWindowWhenReady(window: BrowserWindow): void {
+  let shown = false;
   let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
   let postLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const showAndClearFallback = (): void => {
+  const clearFirstOpenTimers = (): void => {
     if (fallbackTimer) {
       clearTimeout(fallbackTimer);
       fallbackTimer = undefined;
     }
+    if (postLoadTimer) {
+      clearTimeout(postLoadTimer);
+      postLoadTimer = undefined;
+    }
+  };
+
+  const showOnce = (): void => {
+    if (shown) return;
+
+    shown = true;
+    clearFirstOpenTimers();
     showAndFocusAuxiliaryWindow(window);
   };
 
-  window.once("ready-to-show", showAndClearFallback);
+  window.once("ready-to-show", showOnce);
   window.webContents.once("did-finish-load", () => {
-    postLoadTimer = setTimeout(showAndClearFallback, postLoadRaiseDelayMs);
+    if (shown) return;
+
+    postLoadTimer = setTimeout(showOnce, postLoadRaiseDelayMs);
   });
-  fallbackTimer = setTimeout(showAndClearFallback, firstOpenFallbackDelayMs);
+  fallbackTimer = setTimeout(showOnce, firstOpenFallbackDelayMs);
 
   window.once("closed", () => {
-    if (fallbackTimer) {
-      clearTimeout(fallbackTimer);
-    }
-    if (postLoadTimer) {
-      clearTimeout(postLoadTimer);
-    }
+    clearFirstOpenTimers();
   });
 }
 

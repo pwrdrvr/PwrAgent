@@ -134,6 +134,23 @@ describe("auxiliary window chrome", () => {
     expect(window.focus).toHaveBeenCalledTimes(1);
   });
 
+  it("does not refocus when load finishes after ready-to-show already showed the window", async () => {
+    vi.useFakeTimers();
+    setPlatform("darwin");
+    const { showAuxiliaryWindowWhenReady } = await import(
+      "../auxiliary-window-chrome"
+    );
+    const window = createWindow();
+
+    showAuxiliaryWindowWhenReady(window);
+    window.emitWindowEvent("ready-to-show");
+    window.emitWebContentsEvent("did-finish-load");
+    vi.advanceTimersByTime(100);
+
+    expect(window.show).toHaveBeenCalledTimes(1);
+    expect(window.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("shows first-open windows after load if ready-to-show is late", async () => {
     vi.useFakeTimers();
     setPlatform("darwin");
@@ -145,6 +162,23 @@ describe("auxiliary window chrome", () => {
     showAuxiliaryWindowWhenReady(window);
     window.emitWebContentsEvent("did-finish-load");
     vi.advanceTimersByTime(100);
+
+    expect(window.show).toHaveBeenCalledTimes(1);
+    expect(window.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refocus from the fallback after load already showed the window", async () => {
+    vi.useFakeTimers();
+    setPlatform("darwin");
+    const { showAuxiliaryWindowWhenReady } = await import(
+      "../auxiliary-window-chrome"
+    );
+    const window = createWindow();
+
+    showAuxiliaryWindowWhenReady(window);
+    window.emitWebContentsEvent("did-finish-load");
+    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(900);
 
     expect(window.show).toHaveBeenCalledTimes(1);
     expect(window.focus).toHaveBeenCalledTimes(1);
