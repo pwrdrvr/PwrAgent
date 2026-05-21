@@ -172,6 +172,22 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       : ["personal", "work"];
   });
   const [acknowledged, setAcknowledged] = useState(false);
+  // Buffered secrets (xAI API key + messaging tokens). The wizard
+  // collects values in renderer memory rather than writing them
+  // through `replaceSecret` on input change. At Finish, the
+  // `persistAndComplete` callback writes them to the operator's
+  // chosen target profile(s) via `writeSecretsToProfile`. This
+  // avoids stranding secrets in `.bootstrap/state.db` in bootstrap
+  // mode and supports per-profile xAI keys in Multiple mode (each
+  // profile row can override the global value below; see
+  // `bufferedSecretsPerProfile`).
+  const [bufferedSecrets, setBufferedSecrets] = useState<
+    Record<string, string>
+  >({});
+  const setBufferedSecret = useCallback((name: string, value: string): void => {
+    setBufferedSecrets((prev) => ({ ...prev, [name]: value }));
+  }, []);
+  const bufferedGrokKey = bufferedSecrets.grokApiKey ?? "";
   // Snapshot reported by the name-codex-profiles step: are all named
   // rows authenticated? Drives the footer Continue button's enabled
   // state. `codexLoginDeferred` is the operator's escape hatch — a
@@ -430,6 +446,27 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             props.desktopApi,
             codexProfileNames,
           );
+          // Per-profile secret graduation: each created profile gets
+          // its own xAI key + messaging tokens written into ITS
+          // state.db keychain (not the bootstrap/active profile's).
+          // Currently every created profile receives the same global
+          // buffer; G3 layers per-profile xAI overrides on top.
+          for (const target of created) {
+            if (props.desktopApi?.writeSecretsToProfile) {
+              try {
+                await props.desktopApi.writeSecretsToProfile({
+                  profile: target,
+                  secrets: bufferedSecrets,
+                });
+              } catch (caught) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  `Onboarding: writeSecretsToProfile failed for "${target}"`,
+                  caught,
+                );
+              }
+            }
+          }
           const switchTo = created[0];
           if (switchTo) {
             // Graduate the bootstrap profile's settings (theme,
@@ -464,6 +501,36 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               }
             }
           }
+        } else {
+          // Shared mode (and Replay): no new profile gets created.
+          // Buffered secrets graduate to the renderer's active profile
+          // — that's the operator's current session, which is where
+          // they'll keep working after Finish. In bootstrap + Shared
+          // (a deliberate "create a default profile mapped to my
+          // Codex session" choice), the active profile is `.bootstrap`
+          // itself; no graduation target exists yet. The fallback path
+          // there is `replaceSecret` against the active profile, which
+          // is what today's behavior already does — see the comment
+          // on `writeSecretsToProfile` for why this branch differs.
+          const activeProfile = props.bootInfo?.activeProfileName;
+          if (
+            activeProfile &&
+            Object.keys(bufferedSecrets).length > 0 &&
+            props.desktopApi?.writeSecretsToProfile
+          ) {
+            try {
+              await props.desktopApi.writeSecretsToProfile({
+                profile: activeProfile,
+                secrets: bufferedSecrets,
+              });
+            } catch (caught) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `Onboarding: writeSecretsToProfile failed for active profile "${activeProfile}"`,
+                caught,
+              );
+            }
+          }
         }
       } finally {
         setSubmitting(false);
@@ -471,6 +538,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     },
     [
       acknowledged,
+      bufferedSecrets,
       codexProfileModel,
       codexProfileNames,
       density,
@@ -557,6 +625,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             <BackendRequirementsStep
               settings={props.settings}
               desktopApi={props.desktopApi}
+              bufferedGrokKey={bufferedGrokKey}
+              onBufferGrokKey={(value) => setBufferedSecret("grokApiKey", value)}
             />
           ) : null}
           {step === "welcome" ? <WelcomeStep /> : null}
@@ -610,6 +680,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               provider={currentProvider}
               settings={props.settings}
               desktopApi={props.desktopApi}
+              bufferedSecrets={bufferedSecrets}
+              onBufferSecret={setBufferedSecret}
             />
           ) : null}
           {step === "done" ? (
@@ -641,6 +713,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           onDeferCodexLogin={() => setCodexLoginDeferred(true)}
           backendRequirementSatisfied={isBackendRequirementSatisfied(
             props.settings.snapshot,
+            bufferedGrokKey,
           )}
           density={density}
           codexProfileModel={codexProfileModel}
@@ -983,18 +1056,28 @@ function WizardFooter(props: {
  */
 function isBackendRequirementSatisfied(
   snapshot: DesktopSettingsSnapshot | undefined,
+  bufferedGrokKey: string,
 ): boolean {
   if (!snapshot) return false;
   const codexSelected = snapshot.models.codex.discovery.candidates.some(
     (candidate) => candidate.selected && candidate.executable,
   );
   const grokConfigured = snapshot.models.grok.apiKey.configured;
-  return codexSelected || grokConfigured;
+  // Buffered xAI key (entered in this wizard session but not yet
+  // written to a profile keychain) satisfies the gate too — the
+  // value will graduate to the chosen profile at Finish.
+  const grokBuffered = bufferedGrokKey.trim().length > 0;
+  return codexSelected || grokConfigured || grokBuffered;
 }
 
 function BackendRequirementsStep(props: {
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
+  /** Buffered xAI key value (held in wizard state, not yet
+   *  encrypted+written to the keychain). Empty string means "no
+   *  key in buffer." */
+  bufferedGrokKey: string;
+  onBufferGrokKey: (value: string) => void;
 }) {
   const snapshot = props.settings.snapshot;
   const discovery = snapshot?.models.codex.discovery;
@@ -1003,12 +1086,14 @@ function BackendRequirementsStep(props: {
     (candidate) => candidate.selected && candidate.executable,
   );
   const codexOk = Boolean(codexCandidate);
-  const grokOk = Boolean(grokKey?.configured);
+  // Buffered key counts as "Grok configured" for the wizard's gate.
+  // The actual encrypt + write to the chosen profile's state.db
+  // happens at Finish via `writeSecretsToProfile` — see the comment
+  // on `WriteDesktopSecretsToProfileRequest` for why we defer.
+  const grokOk = Boolean(grokKey?.configured) || props.bufferedGrokKey.length > 0;
 
   const [refreshing, setRefreshing] = useState(false);
   const [grokKeyInput, setGrokKeyInput] = useState("");
-  const [savingGrok, setSavingGrok] = useState(false);
-  const [grokError, setGrokError] = useState<string | undefined>(undefined);
 
   const refresh = async (): Promise<void> => {
     if (!props.desktopApi?.refreshCodexDiscovery || refreshing) return;
@@ -1023,21 +1108,14 @@ function BackendRequirementsStep(props: {
     }
   };
 
-  const saveGrokKey = async (): Promise<void> => {
+  const saveGrokKey = (): void => {
     const value = grokKeyInput.trim();
-    if (!value || savingGrok) return;
-    setSavingGrok(true);
-    setGrokError(undefined);
-    const ok = await props.settings.replaceSecret("grokApiKey", value);
-    if (ok) {
-      setGrokKeyInput("");
-    } else {
-      setGrokError(
-        props.settings.error ??
-          "Could not save the API key. Check the Settings → Models error log.",
-      );
-    }
-    setSavingGrok(false);
+    if (!value) return;
+    props.onBufferGrokKey(value);
+    setGrokKeyInput("");
+  };
+  const clearGrokKey = (): void => {
+    props.onBufferGrokKey("");
   };
 
   return (
@@ -1145,7 +1223,8 @@ function BackendRequirementsStep(props: {
           <div>
             <div className="onboarding-wizard__prereq-title">xAI API key</div>
             <div className="onboarding-wizard__prereq-sub">
-              Required for the Grok backend. Stored in your system keychain.
+              Required for the Grok backend. Encrypted with your OS keychain
+              and saved to the profile you pick on the next steps.
             </div>
           </div>
           <span
@@ -1155,7 +1234,11 @@ function BackendRequirementsStep(props: {
                 : "onboarding-wizard__prereq-status--missing"
             }`}
           >
-            {grokOk ? "✓ Configured" : "Not configured"}
+            {grokOk
+              ? props.bufferedGrokKey.length > 0
+                ? "✓ Ready"
+                : "✓ Configured"
+              : "Not configured"}
           </span>
         </div>
         {!grokOk ? (
@@ -1166,33 +1249,42 @@ function BackendRequirementsStep(props: {
                 className="onboarding-wizard__input"
                 placeholder="xai-…"
                 value={grokKeyInput}
-                disabled={savingGrok}
                 onChange={(e) => setGrokKeyInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    void saveGrokKey();
+                    saveGrokKey();
                   }
                 }}
               />
               <button
                 type="button"
                 className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                disabled={!grokKeyInput.trim() || savingGrok}
-                onClick={() => void saveGrokKey()}
+                disabled={!grokKeyInput.trim()}
+                onClick={saveGrokKey}
               >
-                {savingGrok ? "Saving…" : "Save"}
+                Use this key
               </button>
             </div>
             <div className="onboarding-wizard__prereq-link">
               Get a key at{" "}
               <code>https://console.x.ai/team/default/api-keys</code>
             </div>
-            {grokError ? (
-              <span className="onboarding-wizard__field-error">
-                {grokError}
-              </span>
-            ) : null}
+          </div>
+        ) : props.bufferedGrokKey.length > 0 ? (
+          // Buffered (entered now, not yet saved). Show a small undo so
+          // the operator can clear/replace before Finish.
+          <div className="onboarding-wizard__prereq-detail">
+            <span className="onboarding-wizard__prereq-link">
+              We&rsquo;ll save this key into the profile you pick next.
+            </span>
+            <button
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--link"
+              onClick={clearGrokKey}
+            >
+              Clear / re-enter
+            </button>
           </div>
         ) : null}
       </div>
@@ -2861,6 +2953,8 @@ function ProviderSetupStep(props: {
   provider: OnboardingProvider;
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
+  bufferedSecrets: Record<string, string>;
+  onBufferSecret: (name: string, value: string) => void;
 }) {
   const config = PROVIDER_SETUP_CONFIGS[props.provider];
   const snapshot = props.settings.snapshot;
@@ -2897,7 +2991,8 @@ function ProviderSetupStep(props: {
             provider={props.provider}
             snapshot={snapshot}
             saving={props.settings.saving}
-            replaceSecret={props.settings.replaceSecret}
+            bufferedSecrets={props.bufferedSecrets}
+            onBufferSecret={props.onBufferSecret}
             writeConfig={props.settings.writeConfig}
           />
         ))}
@@ -2919,19 +3014,21 @@ function ProviderFieldRow(props: {
   provider: OnboardingProvider;
   snapshot?: DesktopSettingsSnapshot;
   saving: boolean;
-  replaceSecret: (
-    name: DesktopSettingsSecretName,
-    value: string,
-  ) => Promise<boolean>;
+  bufferedSecrets: Record<string, string>;
+  onBufferSecret: (name: string, value: string) => void;
   writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
 }) {
   if (props.field.kind === "secret") {
+    // Capture the narrowed name into a local so the closure passed
+    // to `onBuffer` keeps type info when re-rendered. Without this
+    // step, TS widens `props.field` back to the union.
+    const secretName = props.field.name;
     return (
       <SecretFieldRow
         field={props.field}
         snapshot={props.snapshot}
-        saving={props.saving}
-        replaceSecret={props.replaceSecret}
+        bufferedValue={props.bufferedSecrets[secretName] ?? ""}
+        onBuffer={(value) => props.onBufferSecret(secretName, value)}
       />
     );
   }
@@ -2960,36 +3057,32 @@ function ProviderFieldRow(props: {
 function SecretFieldRow(props: {
   field: Extract<ProviderField, { kind: "secret" }>;
   snapshot?: DesktopSettingsSnapshot;
-  saving: boolean;
-  replaceSecret: (
-    name: DesktopSettingsSecretName,
-    value: string,
-  ) => Promise<boolean>;
+  /** Currently-buffered value (held in wizard state, encrypted +
+   *  written to the chosen profile's keychain at Finish). */
+  bufferedValue: string;
+  onBuffer: (value: string) => void;
 }) {
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
   const state = readSecretState(props.snapshot, props.field.name);
   const configured = state?.configured ?? false;
+  const buffered = props.bufferedValue.length > 0;
 
-  const save = async (): Promise<void> => {
-    if (!value || busy) return;
-    setBusy(true);
-    setError(undefined);
-    const ok = await props.replaceSecret(props.field.name, value);
-    if (ok) {
-      setValue("");
-    } else {
-      setError("Could not save the secret.");
-    }
-    setBusy(false);
+  const save = (): void => {
+    if (!value) return;
+    props.onBuffer(value);
+    setValue("");
+  };
+  const clear = (): void => {
+    props.onBuffer("");
   };
   return (
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
         <span className="onboarding-wizard__field-label">{props.field.label}</span>
         <span className="onboarding-wizard__field-status">
-          {configured ? (
+          {buffered ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ Ready</span>
+          ) : configured ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
           ) : (
             <span className="onboarding-wizard__field-pill">not set</span>
@@ -3003,29 +3096,40 @@ function SecretFieldRow(props: {
         <input
           type="password"
           className="onboarding-wizard__input"
-          placeholder={configured ? "Replace stored value" : props.field.placeholder}
+          placeholder={
+            buffered
+              ? "Replace the buffered value"
+              : configured
+                ? "Replace stored value"
+                : props.field.placeholder
+          }
           value={value}
-          disabled={props.saving || busy}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              void save();
+              save();
             }
           }}
         />
         <button
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={!value || busy || props.saving}
-          onClick={() => void save()}
+          disabled={!value}
+          onClick={save}
         >
-          {busy ? "Saving…" : configured ? "Replace" : "Save"}
+          {buffered || configured ? "Replace" : "Use this"}
         </button>
+        {buffered ? (
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--link"
+            onClick={clear}
+          >
+            Clear
+          </button>
+        ) : null}
       </div>
-      {error ? (
-        <span className="onboarding-wizard__field-error">{error}</span>
-      ) : null}
     </div>
   );
 }

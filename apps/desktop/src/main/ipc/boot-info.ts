@@ -1,6 +1,7 @@
 import { app, ipcMain } from "electron";
 import type { DesktopBootInfo } from "@pwragent/shared";
 import { APP_GET_BOOT_INFO_CHANNEL, APP_QUIT_CHANNEL } from "../../shared/ipc";
+import { resolveActiveProfileName } from "../profile";
 import { getAppStateMode, getBootDecision } from "../state/app-state";
 
 /**
@@ -23,14 +24,31 @@ import { getAppStateMode, getBootDecision } from "../state/app-state";
 export function buildBootInfo(): DesktopBootInfo {
   const mode = getAppStateMode() ?? "active-profile";
   const decision = getBootDecision();
+  // In active-profile mode the active profile name is the wizard's
+  // target for buffered-secret graduation when the operator picks
+  // Shared mode (or runs via Help → Replay Onboarding) — no new
+  // profile gets created, so we write secrets straight to the
+  // profile the renderer is already bound to. In bootstrap mode
+  // this stays undefined; the wizard picks per-profile targets
+  // through the Multiple/Isolated naming step instead.
+  const activeProfileName =
+    mode === "active-profile" ? resolveActiveProfileName() : undefined;
 
   if (!decision) {
-    return { mode, decisionKind: "open" };
+    return {
+      mode,
+      decisionKind: "open",
+      ...(activeProfileName ? { activeProfileName } : {}),
+    };
   }
 
   switch (decision.kind) {
     case "open":
-      return { mode, decisionKind: "open" };
+      return {
+        mode,
+        decisionKind: "open",
+        ...(activeProfileName ? { activeProfileName } : {}),
+      };
     case "missing-named-profile":
       return {
         mode,

@@ -843,6 +843,14 @@ export type DesktopBootInfo = {
   /** Populated for `missing-default-profile` only — the name the
    *  registry pointed at that no longer exists on disk. */
   configuredDefaultName?: string;
+  /** Populated in `active-profile` mode — the profile this renderer
+   *  is bound to. Used by the wizard's Finish path to graduate
+   *  buffered secrets (xAI key, messaging tokens) to the right
+   *  target profile when the operator picks Shared mode or runs
+   *  via Help → Replay Onboarding. Bootstrap mode leaves it
+   *  undefined; the wizard graduates per-profile through the
+   *  Multiple/Isolated path instead. */
+  activeProfileName?: string;
 };
 
 export type GraduateDesktopBootstrapToProfileRequest = {
