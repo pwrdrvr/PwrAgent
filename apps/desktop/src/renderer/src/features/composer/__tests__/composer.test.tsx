@@ -2357,6 +2357,67 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("restores a claimed queued turn when preflight blocks sending", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const onBeforeStartTurn = vi.fn(async () => false);
+    const thread = {
+      id: "thread-1",
+      title: "Blocked queue",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      onBeforeStartTurn,
+      skills: [],
+      thread,
+    };
+    const { rerender } = render(
+      <Composer
+        {...props}
+        activeTurnId="turn-1"
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Queued preflight block" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+
+    rerender(
+      <Composer
+        {...props}
+        activeTurnId={undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onBeforeStartTurn).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Queued preflight block")).toBeInTheDocument();
+    });
+    expect(
+      draftStore.getQueuedTurn("thread:codex:thread-1")?.text,
+    ).toBe("Queued preflight block");
+    expect(onBeforeStartTurn).toHaveBeenCalledTimes(1);
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
   it("updates model settings without crashing when fast-mode support changes", async () => {
     const onSetThreadModelSettings = vi.fn(async () => undefined);
 

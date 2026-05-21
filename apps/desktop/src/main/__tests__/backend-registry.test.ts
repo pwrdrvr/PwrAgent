@@ -742,10 +742,10 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string }> {
+    this.startTurnCallCount += 1;
     if (this.options.startTurnError) {
       throw this.options.startTurnError;
     }
-    this.startTurnCallCount += 1;
     this.lastStartTurnParams = params;
     return { threadId: params.threadId, turnId: "turn-1" };
   }
@@ -4230,6 +4230,70 @@ command = "pnpm dev"
       threadId: "thread-1",
       input: [{ type: "text", text: "next queued release" }],
     });
+    expect(codexClient.startTurnCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("reserves Codex turn starts before awaited pre-start work", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const firstStart = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first queued release" }],
+    });
+    const secondStart = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first queued release" }],
+    });
+
+    await expect(secondStart).rejects.toThrow(
+      "A turn is already active for this thread.",
+    );
+    await firstStart;
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("clears Codex start reservations after startTurn fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnError: new Error("codex start failed"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "first queued release" }],
+      }),
+    ).rejects.toThrow("codex start failed");
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "retry queued release" }],
+      }),
+    ).rejects.toThrow("codex start failed");
     expect(codexClient.startTurnCallCount).toBe(2);
 
     await registry.close();

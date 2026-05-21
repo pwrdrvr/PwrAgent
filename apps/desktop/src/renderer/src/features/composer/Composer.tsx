@@ -1240,6 +1240,7 @@ export function Composer(props: ComposerProps) {
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
     savedInitialQueuedTurns ?? []
   );
+  const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
   const [pendingSteer, setPendingSteerState] = useState<
     PendingSteerDraft | undefined
   >(
@@ -1709,6 +1710,14 @@ export function Composer(props: ComposerProps) {
       saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
       return nextQueuedTurns;
     });
+  };
+  const restoreQueuedTurnIfClaimed = (
+    queued: QueuedTurnDraft | undefined,
+    queueClaimed: boolean | undefined,
+  ): void => {
+    if (queued && queueClaimed) {
+      restoreClaimedQueuedTurn(queued);
+    }
   };
   const setPendingSteer = (nextPendingSteer?: PendingSteerDraft): void => {
     if (nextPendingSteer?.status === "pending") {
@@ -2253,6 +2262,7 @@ export function Composer(props: ComposerProps) {
     queued?: QueuedTurnDraft;
   }): Promise<void> => {
     if (props.disabled) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
     if (!options?.queued && imageAttachments.length > 0) {
@@ -2289,6 +2299,7 @@ export function Composer(props: ComposerProps) {
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
         props.onPendingStatusChange?.(undefined);
+        restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -2299,6 +2310,7 @@ export function Composer(props: ComposerProps) {
     if (!props.thread || !props.desktopApi?.startReview) {
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
 
@@ -2338,9 +2350,7 @@ export function Composer(props: ComposerProps) {
       setInterrupting(false);
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
-      if (options?.queued && options.queueClaimed) {
-        restoreClaimedQueuedTurn(options.queued);
-      }
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2394,6 +2404,7 @@ export function Composer(props: ComposerProps) {
     options?: { queueClaimed?: boolean },
   ): Promise<void> => {
     if (!props.thread || !props.desktopApi?.startTurn) {
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2401,6 +2412,7 @@ export function Composer(props: ComposerProps) {
       ? buildTurnPayload(queued.text, queued.imageAttachments)
       : buildTurnPayload(canonicalDraft, imageAttachments);
     if (payload.input.length === 0 || props.disabled) {
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2416,6 +2428,7 @@ export function Composer(props: ComposerProps) {
 
     if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
       updateSending(false);
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2471,9 +2484,7 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       setActiveOptimisticMessageId(undefined);
-      if (queued && options?.queueClaimed) {
-        restoreClaimedQueuedTurn(queued);
-      }
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2496,10 +2507,18 @@ export function Composer(props: ComposerProps) {
   };
 
   useEffect(() => {
+    if (activeTurnId) {
+      queuedAutoReleaseAttemptIdRef.current = undefined;
+      return;
+    }
     if (!queuedTurn || activeTurnId || sending || props.launchpad || props.disabled) {
       return;
     }
+    if (queuedAutoReleaseAttemptIdRef.current === queuedTurn.id) {
+      return;
+    }
 
+    queuedAutoReleaseAttemptIdRef.current = queuedTurn.id;
     updateSending(true);
     void sendQueuedTurn(queuedTurn).finally(() => {
       updateSending(false);
