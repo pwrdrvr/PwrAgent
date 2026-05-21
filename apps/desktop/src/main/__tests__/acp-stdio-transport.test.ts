@@ -112,4 +112,45 @@ describe("AcpStdioJsonRpcTransport", () => {
     await transport.close();
     expect(child.killCalled).toBe(true);
   });
+
+  it("forwards ACP JSON-RPC requests and writes handler responses", async () => {
+    const child = new MockAcpChildProcess();
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn: () => child,
+    });
+    const requests: Array<{
+      method: string;
+      params: Record<string, unknown>;
+      id?: string | number;
+    }> = [];
+    transport.onRequest((method, params, id) => {
+      requests.push({ method, params, id });
+      return { ok: true };
+    });
+
+    await transport.connect();
+    child.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "session/request_permission",
+        params: { sessionId: "s1" },
+      })}\n`,
+    );
+
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({
+      method: "session/request_permission",
+      params: { sessionId: "s1" },
+      id: 7,
+    });
+    await vi.waitFor(() => expect(child.writes).toHaveLength(1));
+    expect(JSON.parse(child.writes[0])).toEqual({
+      jsonrpc: "2.0",
+      id: 7,
+      result: { ok: true },
+    });
+    await transport.close();
+  });
 });

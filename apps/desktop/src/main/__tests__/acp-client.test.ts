@@ -118,6 +118,83 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
+  it("surfaces ACP permission requests and returns the selected option", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onRequest: (request) => {
+        requests.push(request);
+        return { decision: "approve" };
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Run npm view openclaw",
+      turnId: "turn-1",
+    });
+
+    const response = await transport.emitRequest(
+      "session/request_permission",
+      {
+        sessionId: session.sessionId,
+        toolCall: {
+          toolCallId: "run_shell_command_1",
+          kind: "execute",
+          title: "npm view openclaw",
+          status: "pending",
+        },
+        options: [
+          {
+            optionId: "proceed_always",
+            name: "Allow for this session",
+            kind: "allow_always",
+          },
+          {
+            optionId: "proceed_once",
+            name: "Allow",
+            kind: "allow_once",
+          },
+          {
+            optionId: "cancel",
+            name: "Reject",
+            kind: "reject_once",
+          },
+        ],
+      },
+      0,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "session-1",
+        turnId: "turn-1",
+        requestId: "0",
+        command: "npm view openclaw",
+        acpMethod: "session/request_permission",
+        acpToolCallId: "run_shell_command_1",
+        acpToolKind: "execute",
+      },
+    });
+    expect(response).toEqual({
+      outcome: {
+        outcome: "selected",
+        optionId: "proceed_once",
+      },
+    });
+  });
+
   it("can start prompts without waiting for completion and cancel sessions", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

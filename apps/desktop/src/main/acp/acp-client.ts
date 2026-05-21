@@ -1,5 +1,6 @@
 import type {
   AcpBackendId,
+  AppServerPendingRequestNotification,
   AppServerThreadReplay,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -13,6 +14,7 @@ import type {
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
+import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -20,6 +22,13 @@ export type AcpJsonRpcTransport = {
   close?(): Promise<void>;
   onNotification(
     listener: (method: string, params: Record<string, unknown>) => void,
+  ): () => void;
+  onRequest?(
+    listener: (
+      method: string,
+      params: Record<string, unknown>,
+      id?: JsonRpcId,
+    ) => Promise<unknown> | unknown,
   ): () => void;
 };
 
@@ -42,6 +51,9 @@ export type AcpAgentClientOptions = {
     turnId: string;
     error: unknown;
   }) => Promise<void> | void;
+  onRequest?: (
+    request: AppServerPendingRequestNotification
+  ) => Promise<unknown> | unknown;
 };
 
 export class AcpAgentClient {
@@ -59,6 +71,7 @@ export class AcpAgentClient {
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
   private unsubscribe?: () => void;
+  private unsubscribeRequest?: () => void;
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
@@ -70,6 +83,9 @@ export class AcpAgentClient {
         this.applySessionUpdate(params);
       }
     });
+    this.unsubscribeRequest = this.options.transport.onRequest?.(
+      async (method, params, id) => await this.handleAcpRequest(method, params, id),
+    );
     await this.options.transport.request("initialize", {
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {
@@ -93,6 +109,8 @@ export class AcpAgentClient {
   async dispose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.unsubscribeRequest?.();
+    this.unsubscribeRequest = undefined;
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
@@ -341,6 +359,65 @@ export class AcpAgentClient {
     });
   }
 
+  private async handleAcpRequest(
+    method: string,
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<unknown> {
+    if (method !== "session/request_permission") {
+      throw new Error(`Unsupported ACP request: ${method}`);
+    }
+
+    const request = this.normalizePermissionRequest(params, id);
+    if (!request || !this.options.onRequest) {
+      return cancelledPermissionOutcome();
+    }
+
+    const response = await this.options.onRequest(request);
+    return permissionOutcomeFromResponse(
+      response,
+      readPermissionOptions(params.options),
+    );
+  }
+
+  private normalizePermissionRequest(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): AppServerPendingRequestNotification | undefined {
+    const protocolSessionId =
+      typeof params.sessionId === "string" ? params.sessionId : undefined;
+    if (!protocolSessionId) {
+      return undefined;
+    }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
+    const toolCall = asRecord(params.toolCall) ?? {};
+    const title =
+      typeof toolCall.title === "string" && toolCall.title.trim()
+        ? toolCall.title.trim()
+        : "ACP tool call";
+    const toolCallId =
+      typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined;
+    const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
+    const activeTurn = this.activeTurns.get(sessionId);
+
+    return {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: sessionId,
+        ...(activeTurn?.turnId ? { turnId: activeTurn.turnId } : {}),
+        requestId,
+        prompt: permissionPrompt(title, toolCall),
+        reason: permissionPrompt(title, toolCall),
+        command: title,
+        displayCommand: title,
+        acpMethod: "session/request_permission",
+        acpToolCallId: toolCallId,
+        acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
+        acpPermissionOptions: readPermissionOptions(params.options),
+      },
+    };
+  }
+
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
     let normalizer = this.normalizers.get(sessionId);
     if (!normalizer) {
@@ -556,6 +633,111 @@ function acpSessionThreadStatus(
   return status === "active" || status === "idle" || status === "unknown"
     ? status
     : fallback;
+}
+
+type AcpPermissionOption = {
+  optionId: string;
+  name?: string;
+  kind?: string;
+};
+
+function readPermissionOptions(value: unknown): AcpPermissionOption[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((option) => {
+    const record = asRecord(option);
+    const optionId = record?.optionId;
+    if (!record || typeof optionId !== "string" || !optionId.trim()) {
+      return [];
+    }
+    const normalized: AcpPermissionOption = { optionId };
+    if (typeof record.name === "string") {
+      normalized.name = record.name;
+    }
+    if (typeof record.kind === "string") {
+      normalized.kind = record.kind;
+    }
+    return [normalized];
+  });
+}
+
+function permissionPrompt(title: string, toolCall: Record<string, unknown>): string {
+  const contentText = readToolCallText(toolCall.content);
+  if (contentText) {
+    return contentText;
+  }
+  const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
+  return kind ? `Gemini wants to run ${kind}: ${title}` : `Gemini wants to run ${title}`;
+}
+
+function readToolCallText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const text = value
+    .flatMap((item) => {
+      const record = asRecord(item);
+      return record?.type === "text" && typeof record.text === "string"
+        ? [record.text.trim()]
+        : [];
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  return text || undefined;
+}
+
+function permissionOutcomeFromResponse(
+  response: unknown,
+  options: AcpPermissionOption[],
+): { outcome: { outcome: "selected"; optionId: string } | { outcome: "cancelled" } } {
+  const decision = asRecord(response)?.decision;
+  if (typeof decision !== "string") {
+    return cancelledPermissionOutcome();
+  }
+  if (decision === "cancel") {
+    return cancelledPermissionOutcome();
+  }
+  const optionId = selectPermissionOptionId(decision, options);
+  return optionId
+    ? { outcome: { outcome: "selected", optionId } }
+    : cancelledPermissionOutcome();
+}
+
+function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {
+  return { outcome: { outcome: "cancelled" } };
+}
+
+function selectPermissionOptionId(
+  decision: string,
+  options: AcpPermissionOption[],
+): string | undefined {
+  const normalizedDecision = decision.toLowerCase();
+  const exact = options.find((option) =>
+    [option.optionId, option.name, option.kind]
+      .filter((value): value is string => typeof value === "string")
+      .some((value) => value.toLowerCase() === normalizedDecision),
+  );
+  if (exact) {
+    return exact.optionId;
+  }
+
+  if (normalizedDecision === "approve") {
+    return (
+      options.find((option) => option.kind === "allow_once") ??
+      options.find((option) => option.kind === "allow_always") ??
+      options.find((option) => option.name?.toLowerCase().includes("allow"))
+    )?.optionId;
+  }
+
+  if (normalizedDecision === "decline") {
+    return (
+      options.find((option) => option.kind === "reject_once") ??
+      options.find((option) => option.name?.toLowerCase().includes("reject"))
+    )?.optionId;
+  }
+
+  return undefined;
 }
 
 function textPrompt(text: string): Array<{ type: "text"; text: string }> {

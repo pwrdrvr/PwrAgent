@@ -5,6 +5,13 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
   readonly notifications: Array<{ method: string; params?: Record<string, unknown> }> = [];
   closeCount = 0;
   private listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
+  private requestHandler:
+    | ((
+        method: string,
+        params: Record<string, unknown>,
+        id?: string | number,
+      ) => Promise<unknown> | unknown)
+    | undefined;
   private nextSessionId = "session-1";
 
   async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -35,6 +42,21 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     return () => this.listeners.delete(listener);
   }
 
+  onRequest(
+    listener: (
+      method: string,
+      params: Record<string, unknown>,
+      id?: string | number,
+    ) => Promise<unknown> | unknown,
+  ): () => void {
+    this.requestHandler = listener;
+    return () => {
+      if (this.requestHandler === listener) {
+        this.requestHandler = undefined;
+      }
+    };
+  }
+
   async close(): Promise<void> {
     this.closeCount += 1;
   }
@@ -43,5 +65,16 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     for (const listener of this.listeners) {
       listener("session/update", { sessionId, update });
     }
+  }
+
+  async emitRequest(
+    method: string,
+    params: Record<string, unknown>,
+    id?: string | number,
+  ): Promise<unknown> {
+    if (!this.requestHandler) {
+      throw new Error("No ACP request handler registered");
+    }
+    return await this.requestHandler(method, params, id);
   }
 }

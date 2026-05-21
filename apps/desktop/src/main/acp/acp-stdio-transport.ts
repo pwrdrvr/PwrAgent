@@ -6,6 +6,7 @@ import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 import {
   JsonRpcConnection,
+  type JsonRpcId,
   type JsonRpcObserver,
   type JsonRpcTransport,
 } from "../codex-app-server/json-rpc.js";
@@ -42,6 +43,13 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   private readonly notificationListeners = new Set<
     (method: string, params: Record<string, unknown>) => void
   >();
+  private requestHandler:
+    | ((
+        method: string,
+        params: Record<string, unknown>,
+        id?: JsonRpcId,
+      ) => Promise<unknown> | unknown)
+    | undefined;
 
   constructor(options: AcpStdioJsonRpcTransportOptions) {
     this.lineTransport = new AcpLineStdioTransport({
@@ -59,6 +67,12 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       for (const listener of this.notificationListeners) {
         listener(method, normalizedParams);
       }
+    });
+    this.connection.setRequestHandler(async (method, params, id) => {
+      if (!this.requestHandler) {
+        throw new Error(`ACP request handler unavailable for ${method}`);
+      }
+      return await this.requestHandler(method, asRecord(params) ?? {}, id);
     });
   }
 
@@ -86,6 +100,21 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     this.notificationListeners.add(listener);
     return () => {
       this.notificationListeners.delete(listener);
+    };
+  }
+
+  onRequest(
+    listener: (
+      method: string,
+      params: Record<string, unknown>,
+      id?: JsonRpcId,
+    ) => Promise<unknown> | unknown,
+  ): () => void {
+    this.requestHandler = listener;
+    return () => {
+      if (this.requestHandler === listener) {
+        this.requestHandler = undefined;
+      }
     };
   }
 }

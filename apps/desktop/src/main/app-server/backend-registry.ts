@@ -2059,6 +2059,8 @@ export class DesktopBackendRegistry {
               },
             });
           },
+          onRequest: async (request) =>
+            await this.handleServerRequest(agent.backendId, request),
         });
       });
     this.messagingStore = options?.messagingStore;
