@@ -23,7 +23,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
-  extractMessagingPairingToken,
+  looksLikePairingAttempt,
   layoutMessagingActionRows,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
 } from "@pwragent/messaging-interface";
@@ -1142,8 +1142,18 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     // Username matching is case-insensitive — Telegram usernames are
     // case-insensitive.
     const mentionCandidate = message.text ?? message.caption;
+    // `isPairingMessage` uses the looser `looksLikePairingAttempt`
+    // (not `extractMessagingPairingToken`) so a typo'd or
+    // freshly-pasted-but-mangled pair-token attempt still routes
+    // through to the runtime. The runtime's `handlePairingInbound`
+    // does the strict validation downstream and either consumes
+    // the token (valid) or replies with "That PwrAgent pairing
+    // token is invalid or expired." (invalid). Silently dropping
+    // here would leave the operator staring at the wizard with no
+    // feedback — the worst possible outcome for someone trying to
+    // authorize a fresh group conversation.
     const isPairingMessage = mentionCandidate
-      ? Boolean(extractMessagingPairingToken(mentionCandidate))
+      ? looksLikePairingAttempt(mentionCandidate)
       : false;
     const mentionRemainder = mentionCandidate
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)

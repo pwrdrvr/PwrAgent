@@ -226,6 +226,7 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
+  MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
@@ -788,6 +789,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MESSAGING_REJECT_PAIRING_CHANNEL, request),
   openMessagingActivityWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
+  },
+  shutdownMessagingRuntime: async (): Promise<void> => {
+    await ipcRenderer.invoke(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
   },
   onMessagingPlatformStatusEvent: (
     callback: (event: MessagingPlatformStatusEvent) => void,

@@ -27,6 +27,7 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
+  isMessagingRuntimeSecret,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -303,17 +304,10 @@ function messagingPatchTouchesRuntime(
 function messagingSecretTouchesRuntime(
   secret: DesktopSettingsSecretName,
 ): boolean {
-  return secret === "telegramBotToken"
-    || secret === "discordBotToken"
-    || secret === "mattermostBotToken"
-    || secret === "mattermostHmacSecret"
-    || secret === "slackBotToken"
-    || secret === "slackAppToken"
-    || secret === "slackSigningSecret"
-    || secret === "feishuAppId"
-    || secret === "feishuAppSecret"
-    || secret === "feishuEncryptKey"
-    || secret === "feishuVerificationToken";
+  // Delegates to the shared predicate so the renderer's onboarding
+  // wizard and the main-process IPC layer agree on which secret
+  // names should re-evaluate the runtime when they change.
+  return isMessagingRuntimeSecret(secret);
 }
 
 async function applyLatestMessagingRuntimeConfig(

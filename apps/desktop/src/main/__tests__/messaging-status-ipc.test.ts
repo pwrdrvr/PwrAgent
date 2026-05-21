@@ -44,6 +44,9 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
     await runtime.stop();
     return { enabled: false, disabledReasonKind: "runtime_stopped" };
   }),
+  shutdown: vi.fn(async (runtime: typeof runtimeMock) => {
+    await runtime.stop();
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -124,6 +127,7 @@ describe("messaging status ipc", () => {
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     leaseCoordinatorMock.applyLatestConfig.mockClear();
     leaseCoordinatorMock.disableForSession.mockClear();
+    leaseCoordinatorMock.shutdown.mockClear();
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
@@ -338,6 +342,47 @@ describe("messaging status ipc", () => {
         },
       },
     });
+  });
+
+  it("shuts the messaging runtime down on graduation request", async () => {
+    // The wizard's graduation path calls this IPC right before it
+    // spawns the operator's chosen profile in a child Electron — the
+    // child's own adapters can't start cleanly if the bootstrap is
+    // still polling. Asserting the IPC routes through to the lease
+    // coordinator's `shutdown` (which both stops the runtime AND
+    // releases its lease, mirroring the SIGTERM cleanup).
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL)?.(),
+    ).resolves.toBeUndefined();
+
+    expect(leaseCoordinatorMock.shutdown).toHaveBeenCalledWith(runtimeMock);
+    expect(runtimeMock.stop).toHaveBeenCalled();
+  });
+
+  it("swallows shutdown errors so a failing teardown can't block the spawn", async () => {
+    // The wizard cannot recover if `shutdownMessagingRuntime`
+    // throws — it still needs to spawn the new profile. The IPC
+    // must catch internally and return success; the failure is
+    // logged but the spawn proceeds. Otherwise a stuck adapter
+    // teardown would strand the operator with no main window.
+    leaseCoordinatorMock.shutdown.mockRejectedValueOnce(new Error("boom"));
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL)?.(),
+    ).resolves.toBeUndefined();
   });
 });
 
