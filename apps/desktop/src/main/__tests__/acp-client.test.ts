@@ -175,6 +175,58 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("can keep a stable app session id while rebinding the ACP protocol session", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const updateSessionIds: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ sessionId }) => {
+        updateSessionIds.push(sessionId);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      sessionId: "app-session-1",
+      cwd: "/repo/worktree",
+      executionMode: "default",
+      title: "Stable thread",
+    });
+    client.startPrompt({
+      sessionId: "app-session-1",
+      prompt: "hello",
+      turnId: "pending:app-session-1",
+    });
+    transport.emitSessionUpdate("session-1", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Hello from rebound session." },
+    });
+    await client.cancelSession("app-session-1");
+
+    expect(session).toMatchObject({
+      sessionId: "app-session-1",
+      agentSessionId: "session-1",
+      cwd: "/repo/worktree",
+    });
+    expect(transport.requests[2]?.params).toEqual({
+      sessionId: "session-1",
+      prompt: [{ type: "text", text: "hello" }],
+    });
+    expect(updateSessionIds[0]).toBe("app-session-1");
+    expect(client.readReplay("app-session-1").lastAssistantMessage).toBe(
+      "Hello from rebound session.",
+    );
+    expect(transport.notifications).toEqual([
+      {
+        method: "session/cancel",
+        params: { sessionId: "session-1" },
+      },
+    ]);
+  });
+
   it("reports fire-and-forget prompt chunks and completion with turn context", async () => {
     const transport = new FakeAcpAgentTransport();
     let resolvePrompt: ((value: unknown) => void) | undefined;

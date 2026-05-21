@@ -55,6 +55,8 @@ export class AcpAgentClient {
   >();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   private readonly suppressLoadReplaySessions = new Set<string>();
+  private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
+  private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
   private unsubscribe?: () => void;
 
@@ -91,13 +93,20 @@ export class AcpAgentClient {
   async dispose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.agentSessionIdsByAppSessionId.clear();
+    this.appSessionIdsByAgentSessionId.clear();
+    this.loadedSessionCwds.clear();
+    this.suppressLoadReplaySessions.clear();
     await this.options.transport.close?.();
   }
 
   async startSession(params: {
+    sessionId?: string;
     cwd?: string;
     executionMode: ThreadExecutionMode;
     title?: string;
+    createdAt?: number;
+    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
     const result = await this.options.transport.request("session/new", {
@@ -115,18 +124,22 @@ export class AcpAgentClient {
       throw new Error("ACP session/new did not return a session id");
     }
 
+    const appSessionId = params.sessionId ?? sessionId;
     const now = this.now();
     const metadata: AcpSessionMetadata = {
       backendId: this.options.backendId,
-      sessionId,
+      sessionId: appSessionId,
+      ...(sessionId === appSessionId ? {} : { agentSessionId: sessionId }),
       title: params.title ?? "ACP session",
       cwd,
-      createdAt: now,
+      createdAt: params.createdAt ?? now,
       updatedAt: now,
       executionMode: params.executionMode,
       status: "idle",
+      transcriptUpdates: params.transcriptUpdates,
     };
     this.options.store.upsertSession(metadata);
+    this.rememberSessionIds(metadata);
     this.loadedSessionCwds.set(sessionId, cwd);
     return metadata;
   }
@@ -153,12 +166,13 @@ export class AcpAgentClient {
       },
     });
     let result: unknown;
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     try {
       const promptRequest = this.options.transport.request("session/prompt", {
-        sessionId: params.sessionId,
+        sessionId: protocolSessionId,
         prompt: textPrompt(params.prompt),
       });
-      this.clearLoadReplaySuppression(params.sessionId);
+      this.clearLoadReplaySuppression(protocolSessionId);
       result = await promptRequest;
     } catch (error) {
       this.finishTrackedTurn(params.sessionId);
@@ -177,6 +191,7 @@ export class AcpAgentClient {
 
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
+    this.rememberSessionIds(metadata);
     const normalizer = this.normalizerFor(metadata.sessionId);
     let replay = this.applyPersistedTranscriptUpdates(normalizer, metadata);
     if (hasPersistedAssistantUpdate(metadata)) {
@@ -198,10 +213,12 @@ export class AcpAgentClient {
 
   async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
     this.options.store.upsertSession(metadata);
+    this.rememberSessionIds(metadata);
     const cwd = metadata.cwd ?? process.cwd();
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
     if (
-      this.loadedSessionCwds.has(metadata.sessionId) &&
-      this.loadedSessionCwds.get(metadata.sessionId) === cwd
+      this.loadedSessionCwds.has(protocolSessionId) &&
+      this.loadedSessionCwds.get(protocolSessionId) === cwd
     ) {
       return;
     }
@@ -232,11 +249,12 @@ export class AcpAgentClient {
         turnId,
       },
     });
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.options.transport.request("session/prompt", {
-      sessionId: params.sessionId,
+      sessionId: protocolSessionId,
       prompt: textPrompt(params.prompt),
     });
-    this.clearLoadReplaySuppression(params.sessionId);
+    this.clearLoadReplaySuppression(protocolSessionId);
     void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
@@ -279,7 +297,9 @@ export class AcpAgentClient {
     if (!this.options.transport.notify) {
       throw new Error("ACP transport does not support notifications");
     }
-    await this.options.transport.notify("session/cancel", { sessionId });
+    await this.options.transport.notify("session/cancel", {
+      sessionId: this.protocolSessionIdFor(sessionId),
+    });
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {
@@ -287,14 +307,16 @@ export class AcpAgentClient {
   }
 
   private applySessionUpdate(params: Record<string, unknown>): void {
-    const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const protocolSessionId =
+      typeof params.sessionId === "string" ? params.sessionId : undefined;
     const update = asRecord(params.update);
-    if (!sessionId || !update) {
+    if (!protocolSessionId || !update) {
       return;
     }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
     const receivedAt = this.now();
     const activeTurn = this.activeTurns.get(sessionId);
-    if (this.suppressLoadReplaySessions.has(sessionId)) {
+    if (this.suppressLoadReplaySessions.has(protocolSessionId)) {
       return;
     }
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
@@ -383,20 +405,21 @@ export class AcpAgentClient {
     options: { suppressReplayNotifications: boolean },
   ): Promise<unknown> {
     const cwd = metadata.cwd ?? process.cwd();
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
     if (options.suppressReplayNotifications) {
-      this.suppressLoadReplaySessions.add(metadata.sessionId);
+      this.suppressLoadReplaySessions.add(protocolSessionId);
     }
     try {
       const result = await this.options.transport.request("session/load", {
         cwd,
         mcpServers: [],
-        sessionId: metadata.sessionId,
+        sessionId: protocolSessionId,
       });
-      this.loadedSessionCwds.set(metadata.sessionId, cwd);
+      this.loadedSessionCwds.set(protocolSessionId, cwd);
       return result;
     } finally {
       if (!options.suppressReplayNotifications) {
-        this.suppressLoadReplaySessions.delete(metadata.sessionId);
+        this.suppressLoadReplaySessions.delete(protocolSessionId);
       }
     }
   }
@@ -476,6 +499,29 @@ export class AcpAgentClient {
     });
     return title;
   }
+
+  private rememberSessionIds(metadata: AcpSessionMetadata): void {
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    this.agentSessionIdsByAppSessionId.set(metadata.sessionId, protocolSessionId);
+    this.appSessionIdsByAgentSessionId.set(protocolSessionId, metadata.sessionId);
+  }
+
+  private protocolSessionIdFor(sessionId: string): string {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (metadata) {
+      this.rememberSessionIds(metadata);
+      return protocolSessionIdForMetadata(metadata);
+    }
+    return this.agentSessionIdsByAppSessionId.get(sessionId) ?? sessionId;
+  }
+
+  private appSessionIdFor(protocolSessionId: string): string {
+    return this.appSessionIdsByAgentSessionId.get(protocolSessionId) ?? protocolSessionId;
+  }
+}
+
+function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
+  return metadata.agentSessionId ?? metadata.sessionId;
 }
 
 function hasPersistedAssistantUpdate(metadata: AcpSessionMetadata): boolean {

@@ -3,13 +3,19 @@ import type { StateDb } from "../state/state-db.js";
 
 export type AcpSessionMetadata = {
   backendId: AcpBackendId;
+  /**
+   * Stable PwrAgent thread id. For ACP agents whose session ids are scoped to
+   * immutable project directories, this can differ from the protocol session id.
+   */
   sessionId: string;
+  agentSessionId?: string;
   title: string;
   cwd?: string;
   createdAt: number;
   updatedAt: number;
   executionMode: ThreadExecutionMode;
   status: "active" | "idle" | "failed" | "unknown";
+  requiresAgentSessionRebind?: boolean;
   archivedAt?: number;
   lastError?: string;
   transcriptUpdates?: AcpPersistedTranscriptUpdate[];

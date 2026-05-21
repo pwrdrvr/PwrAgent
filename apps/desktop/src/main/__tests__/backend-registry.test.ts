@@ -18,6 +18,7 @@ import type {
   BackendRateLimitSummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -7071,7 +7072,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("resolves ACP turn cwd from thread workspace overlay before loading the session", async () => {
+  it("rebinds ACP protocol sessions when the thread workspace overlay changes cwd", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessionStore = createAcpSessionStoreMock([
       {
@@ -7098,6 +7099,29 @@ command = "pnpm dev"
       },
       gitBranch: "feature/handoff",
     });
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
     const ensureSession = vi.fn(async () => undefined);
     const startPrompt = vi.fn((params: {
       sessionId: string;
@@ -7110,7 +7134,7 @@ command = "pnpm dev"
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(async () => undefined),
-      startSession: vi.fn(),
+      startSession,
       ensureSession,
       startPrompt,
       cancelSession: vi.fn(),
@@ -7154,15 +7178,17 @@ command = "pnpm dev"
       input: [{ type: "text", text: "What is the CWD?" }],
     });
 
-    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
-      cwd: "/repo/app/.worktrees/app-feature-handoff",
-    });
-    expect(ensureSession).toHaveBeenCalledWith(
+    expect(startSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
         cwd: "/repo/app/.worktrees/app-feature-handoff",
       }),
     );
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "agent-session-2",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
 
     await registry.close();
   });
@@ -7181,6 +7207,29 @@ command = "pnpm dev"
         status: "idle",
       },
     ]);
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
     const ensureSession = vi.fn(async () => undefined);
     const startPrompt = vi.fn((params: {
       sessionId: string;
@@ -7193,7 +7242,7 @@ command = "pnpm dev"
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(async () => undefined),
-      startSession: vi.fn(),
+      startSession,
       ensureSession,
       startPrompt,
       cancelSession: vi.fn(),
@@ -7267,19 +7316,154 @@ command = "pnpm dev"
       input: [{ type: "text", text: "What is the CWD?" }],
     });
 
-    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
-      cwd: "/repo/app/.worktrees/app-feature-handoff",
-    });
-    expect(ensureSession).toHaveBeenCalledWith(
+    expect(startSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
         cwd: "/repo/app/.worktrees/app-feature-handoff",
       }),
     );
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "agent-session-2",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
     expect(startPrompt).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
         prompt: "What is the CWD?",
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("rebinds legacy ACP sessions when loading the stored cwd fails for the project", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+        transcriptUpdates: [
+          {
+            receivedAt: 1000,
+            update: {
+              kind: "pwragent_user_prompt",
+              prompt: "What is this project?",
+              turnId: "pending:session-1:1000",
+            },
+          },
+        ],
+      },
+    ]);
+    const ensureSession = vi.fn(async () => {
+      throw new Error(
+        'json-rpc error (-32603): Internal error: {"details":"No previous sessions found for this project."}',
+      );
+    });
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD now?" }],
+    });
+
+    expect(ensureSession).toHaveBeenCalled();
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+        transcriptUpdates: expect.arrayContaining([
+          expect.objectContaining({
+            update: expect.objectContaining({ prompt: "What is this project?" }),
+          }),
+        ]),
+      }),
+    );
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "agent-session-2",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        prompt: "What is the CWD now?",
       }),
     );
 

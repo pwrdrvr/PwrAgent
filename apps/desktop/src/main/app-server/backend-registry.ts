@@ -1014,6 +1014,11 @@ function acpSessionThreadStatus(
     : "unknown";
 }
 
+function isAcpSessionMissingForProjectError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("No previous sessions found for this project");
+}
+
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   const args = [
     "-c",
@@ -2640,8 +2645,22 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
-    const sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
-    await client.ensureSession(sessionForTurn);
+    let sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
+    if (
+      sessionForTurn.requiresAgentSessionRebind ||
+      (sessionForTurn.cwd && sessionForTurn.cwd !== session.cwd)
+    ) {
+      sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
+    } else {
+      try {
+        await client.ensureSession(sessionForTurn);
+      } catch (error) {
+        if (!isAcpSessionMissingForProjectError(error)) {
+          throw error;
+        }
+        sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
+      }
+    }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
       backend: params.backend,
@@ -2710,13 +2729,26 @@ export class DesktopBackendRegistry {
       return session;
     }
 
-    const nextSession: AcpSessionMetadata = {
+    return {
       ...session,
       cwd: workspaceCwd,
+      requiresAgentSessionRebind: true,
       updatedAt: Math.max(session.updatedAt, Date.now()),
     };
-    this.acpSessionStore?.upsertSession?.(nextSession);
-    return nextSession;
+  }
+
+  private async rebindAcpSessionForWorkspace(
+    client: AcpRuntimeClient,
+    session: AcpSessionMetadata,
+  ): Promise<AcpSessionMetadata> {
+    return await client.startSession({
+      sessionId: session.sessionId,
+      cwd: session.cwd,
+      executionMode: session.executionMode,
+      title: session.title,
+      createdAt: session.createdAt,
+      transcriptUpdates: session.transcriptUpdates,
+    });
   }
 
   private async readAcpReplay(
@@ -3109,6 +3141,7 @@ export class DesktopBackendRegistry {
     this.acpSessionStore.upsertSession({
       ...session,
       cwd: params.cwd,
+      requiresAgentSessionRebind: true,
       updatedAt: Math.max(session.updatedAt, Date.now()),
     });
   }
