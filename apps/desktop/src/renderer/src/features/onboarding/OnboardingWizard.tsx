@@ -459,6 +459,49 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     setStep("done");
   }, []);
 
+  /**
+   * Write buffered secrets to a target profile's keychain, but only
+   * if there's actually something to encrypt. Skipping the IPC when
+   * the payload is empty avoids unnecessary `safeStorage` access,
+   * which on macOS can pop a keychain-access dialog the operator
+   * didn't expect (especially the "Keychain Not Found" variant
+   * surfaced by misconfigured login keychains). Replay-style empty
+   * deletions (set a key to "") still go through — the caller
+   * filters intentional clears in.
+   */
+  const writeBufferedSecretsIfAny = useCallback(
+    async (
+      targetProfile: string,
+      secrets: Record<string, string>,
+    ): Promise<void> => {
+      const api = props.desktopApi;
+      if (!api?.writeSecretsToProfile) return;
+      // Drop keys whose value is the empty string before the IPC
+      // call. The IPC's empty-value path is intended for explicit
+      // clears (Replay-mode "wipe this stored secret"), not for
+      // "operator typed nothing during a fresh wizard." Distinguishing
+      // those at the renderer level keeps the keychain quiet for
+      // wizard sessions where the operator skipped optional fields.
+      const nonEmpty: Record<string, string> = {};
+      for (const [name, value] of Object.entries(secrets)) {
+        if (typeof value === "string" && value.length > 0) {
+          nonEmpty[name] = value;
+        }
+      }
+      if (Object.keys(nonEmpty).length === 0) return;
+      try {
+        await api.writeSecretsToProfile({ profile: targetProfile, secrets: nonEmpty });
+      } catch (caught) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Onboarding: writeSecretsToProfile failed for "${targetProfile}"`,
+          caught,
+        );
+      }
+    },
+    [props.desktopApi],
+  );
+
   // After graduation in bootstrap mode, the wizard spawns a new
   // Electron instance pointed at the operator's chosen profile (via
   // `openPwrAgentProfile`, which `spawn()`s a detached child process)
@@ -560,28 +603,15 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           // the global buffer. Messaging tokens stay global across
           // profiles (the operator usually has one bot per platform).
           for (const target of created) {
-            if (!props.desktopApi?.writeSecretsToProfile) continue;
             const override = xaiKeyByProfile[target]?.trim();
             const resolvedGrokKey =
-              override !== undefined && override.length >= 0
+              override !== undefined && override.length > 0
                 ? override
                 : bufferedSecrets.grokApiKey ?? "";
-            const secretsForTarget = {
+            await writeBufferedSecretsIfAny(target, {
               ...bufferedSecrets,
               grokApiKey: resolvedGrokKey,
-            };
-            try {
-              await props.desktopApi.writeSecretsToProfile({
-                profile: target,
-                secrets: secretsForTarget,
-              });
-            } catch (caught) {
-              // eslint-disable-next-line no-console
-              console.warn(
-                `Onboarding: writeSecretsToProfile failed for "${target}"`,
-                caught,
-              );
-            }
+            });
           }
           const switchTo = created[0];
           if (switchTo) {
@@ -625,23 +655,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           //     and open the main window for it.
           const activeProfile = props.bootInfo?.activeProfileName;
           if (activeProfile) {
-            if (
-              Object.keys(bufferedSecrets).length > 0 &&
-              props.desktopApi?.writeSecretsToProfile
-            ) {
-              try {
-                await props.desktopApi.writeSecretsToProfile({
-                  profile: activeProfile,
-                  secrets: bufferedSecrets,
-                });
-              } catch (caught) {
-                // eslint-disable-next-line no-console
-                console.warn(
-                  `Onboarding: writeSecretsToProfile failed for active profile "${activeProfile}"`,
-                  caught,
-                );
-              }
-            }
+            await writeBufferedSecretsIfAny(activeProfile, bufferedSecrets);
           } else if (props.desktopApi?.createPwrAgentProfile) {
             // Bootstrap + Shared. Provision the default profile
             // with the system-default Codex pairing implied (we
@@ -654,12 +668,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                 profile: defaultName,
                 seedOnboardingCompleted: true,
               });
-              if (props.desktopApi?.writeSecretsToProfile) {
-                await props.desktopApi.writeSecretsToProfile({
-                  profile: defaultName,
-                  secrets: bufferedSecrets,
-                });
-              }
+              await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
               if (props.desktopApi?.graduateBootstrapToProfile) {
                 await props.desktopApi.graduateBootstrapToProfile({
                   targetProfile: defaultName,
@@ -691,6 +700,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       selectedProviders,
       submitting,
       theme,
+      writeBufferedSecretsIfAny,
       xaiKeyByProfile,
     ],
   );
@@ -736,12 +746,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         profile: defaultName,
         seedOnboardingCompleted: true,
       });
-      if (props.desktopApi.writeSecretsToProfile) {
-        await props.desktopApi.writeSecretsToProfile({
-          profile: defaultName,
-          secrets: bufferedSecrets,
-        });
-      }
+      await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
       if (props.desktopApi.graduateBootstrapToProfile) {
         await props.desktopApi.graduateBootstrapToProfile({
           targetProfile: defaultName,
@@ -755,7 +760,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       setSubmitting(false);
       setDismissModalOpen(false);
     }
-  }, [bufferedSecrets, openTargetAndQuitBootstrapIfNeeded, props, submitting]);
+  }, [
+    bufferedSecrets,
+    openTargetAndQuitBootstrapIfNeeded,
+    props,
+    submitting,
+    writeBufferedSecretsIfAny,
+  ]);
 
   const exitApp = useCallback((): void => {
     if (props.desktopApi?.quitApp) {
