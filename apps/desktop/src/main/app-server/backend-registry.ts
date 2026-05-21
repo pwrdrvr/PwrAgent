@@ -326,6 +326,7 @@ type AcpRuntimeClient = Pick<
   | "cancelSession"
   | "dispose"
   | "initialize"
+  | "loadSession"
   | "readReplay"
   | "startPrompt"
   | "startSession"
@@ -2527,8 +2528,18 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
-    const client = await this.acpClients.get(backend)?.catch(() => undefined);
-    return client?.readReplay(sessionId) ?? new AcpSessionReplayNormalizer().replay();
+    const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
+    if (cachedClient) {
+      return cachedClient.readReplay(sessionId);
+    }
+
+    const session = this.acpSessionStore?.getSession(backend, sessionId);
+    if (!session) {
+      return new AcpSessionReplayNormalizer().replay();
+    }
+
+    const client = await this.getAcpClient(backend);
+    return await client.loadSession(session);
   }
 
   private async getAcpClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
@@ -4986,7 +4997,7 @@ export class DesktopBackendRegistry {
     await Promise.all(
       acpClients.map(async (clientPromise) => {
         const client = await clientPromise.catch(() => undefined);
-        client?.dispose();
+        await client?.dispose();
       }),
     );
     await this.codexClient.close();

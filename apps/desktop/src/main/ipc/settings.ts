@@ -137,6 +137,7 @@ async function listAcpAgentSettings(
           const entry = acpAgentSettingsEntry({
             agent,
             installed: installed.find((record) => record.backendId === agent.backendId),
+            registryService,
           });
           return entry ? [entry] : [];
         })
@@ -173,12 +174,23 @@ async function installAcpAgent(
   if (!distribution) {
     return { ok: false, error: "No supported distribution is available for this platform." };
   }
+  const distributionPolicy = registryService.evaluateDistribution(agent, distribution);
+  if (!distributionPolicy.installable || !distributionPolicy.allowlist.allowed) {
+    return {
+      ok: false,
+      error:
+        distributionPolicy.unavailableReason ??
+        (distributionPolicy.allowlist.allowed
+          ? "ACP distribution is not installable"
+          : distributionPolicy.allowlist.reason),
+    };
+  }
 
   const installer = new AcpInstaller({ store });
   const result = await installer.install({
     agent,
     distribution,
-    allowlistRuleId: agent.allowlist.ruleId ?? "allowlist",
+    allowlistRuleId: distributionPolicy.allowlist.ruleId,
     installRoot: path.join(resolveActiveProfileDir(), "state", "acp-agents"),
     confirmed: true,
   });
@@ -209,12 +221,15 @@ async function readAcpSnapshotForInstall(
 function acpAgentSettingsEntry(params: {
   agent: AcpRegistryAgentWithPolicy;
   installed?: AcpInstalledAgentRecord;
+  registryService: AcpRegistryService;
 }): AcpAgentSettingsEntry | undefined {
   if (params.installed) {
     return installedAcpAgentSettingsEntry(params.installed, params.agent);
   }
 
-  const distribution = selectAcpDistribution(params.agent);
+  const distribution =
+    selectInstallableAcpDistribution(params.agent, params.registryService) ??
+    selectAcpDistribution(params.agent);
   if (!distribution) {
     const displayDistribution = params.agent.distributions[0];
     if (!displayDistribution) {
@@ -243,6 +258,10 @@ function acpAgentSettingsEntry(params: {
       unavailableReason: "No supported distribution is available for this platform.",
     };
   }
+  const distributionPolicy = params.registryService.evaluateDistribution(
+    params.agent,
+    distribution,
+  );
   return {
     backendId: params.agent.backendId,
     registryId: params.agent.id,
@@ -255,15 +274,15 @@ function acpAgentSettingsEntry(params: {
     websiteUrl: params.agent.websiteUrl,
     distributionKind: distribution.kind,
     distributionSource: describeDistributionSource(distribution),
-    installable: params.agent.installable,
+    installable: distributionPolicy.installable,
     installed: false,
-    installStatus: params.agent.installable ? "not-installed" : "unavailable",
+    installStatus: distributionPolicy.installable ? "not-installed" : "unavailable",
     authStatus: params.agent.auth.required ? "required" : "not-required",
-    verificationStatus: params.agent.verificationStatus,
-    allowlistRuleId: params.agent.allowlist.allowed
-      ? params.agent.allowlist.ruleId
+    verificationStatus: distributionPolicy.verificationStatus,
+    allowlistRuleId: distributionPolicy.allowlist.allowed
+      ? distributionPolicy.allowlist.ruleId
       : undefined,
-    unavailableReason: params.agent.unavailableReason,
+    unavailableReason: distributionPolicy.unavailableReason ?? params.agent.unavailableReason,
   };
 }
 
@@ -301,6 +320,20 @@ function selectAcpDistribution(
   preferredKind?: AcpRegistryDistribution["kind"],
 ): AcpRegistryDistribution | undefined {
   return selectAcpDistributionForCurrentPlatform(agent.distributions, preferredKind);
+}
+
+function selectInstallableAcpDistribution(
+  agent: AcpRegistryAgent,
+  registryService: AcpRegistryService,
+  preferredKind?: AcpRegistryDistribution["kind"],
+): AcpRegistryDistribution | undefined {
+  return selectAcpDistributionForCurrentPlatform(
+    agent.distributions.filter(
+      (distribution) =>
+        registryService.evaluateDistribution(agent, distribution).installable,
+    ),
+    preferredKind,
+  );
 }
 
 async function resolveCodexCommandForProfileWorkflow(

@@ -56,6 +56,29 @@ export class AcpAgentAllowlist {
 
     return { allowed: false, reason: "allowlist-rule-mismatch" };
   }
+
+  evaluateDistribution(
+    agent: AcpRegistryAgent,
+    distribution: AcpRegistryDistribution,
+  ): AcpAllowlistDecision {
+    const matchingRules = this.rules.filter((rule) => rule.registryId === agent.id);
+    if (matchingRules.length === 0) {
+      return { allowed: false, reason: "not-allowlisted" };
+    }
+
+    for (const rule of matchingRules) {
+      const denial = evaluateDistributionRule(rule, agent, distribution);
+      if (!denial) {
+        return {
+          allowed: true,
+          ruleId: rule.id,
+          unverifiedBinaryAllowed: rule.allowUnverifiedBinary === true,
+        };
+      }
+    }
+
+    return { allowed: false, reason: "allowlist-rule-mismatch" };
+  }
 }
 
 export const defaultAcpAgentAllowlist = new AcpAgentAllowlist(
@@ -74,14 +97,51 @@ function evaluateRule(
     return "license-not-allowed";
   }
 
-  const distributions = agent.distributions.filter((distribution) =>
-    distributionAllowedByKind(rule, distribution),
-  );
-  if (distributions.length === 0) {
+  let distributionDeniedBySource = false;
+  for (const distribution of agent.distributions) {
+    const denial = evaluateDistributionRule(rule, agent, distribution, {
+      skipAgentChecks: true,
+    });
+    if (!denial) {
+      return undefined;
+    }
+    if (denial === "distribution-source-not-allowed") {
+      distributionDeniedBySource = true;
+    }
+  }
+
+  return distributionDeniedBySource
+    ? "distribution-source-not-allowed"
+    : "distribution-not-allowed";
+}
+
+function evaluateDistributionRule(
+  rule: AcpAgentAllowlistRule,
+  agent: AcpRegistryAgent,
+  distribution: AcpRegistryDistribution,
+  options: { skipAgentChecks?: boolean } = {},
+): string | undefined {
+  if (
+    !options.skipAgentChecks &&
+    rule.versions &&
+    (!agent.version || !rule.versions.includes(agent.version))
+  ) {
+    return "version-not-allowed";
+  }
+
+  if (
+    !options.skipAgentChecks &&
+    isGplFamilyLicense(agent.license) &&
+    !rule.allowGplFamilyLicense
+  ) {
+    return "license-not-allowed";
+  }
+
+  if (!distributionAllowedByKind(rule, distribution)) {
     return "distribution-not-allowed";
   }
 
-  if (!distributions.some((distribution) => distributionSourceAllowed(rule, distribution))) {
+  if (!distributionSourceAllowed(rule, distribution)) {
     return "distribution-source-not-allowed";
   }
 

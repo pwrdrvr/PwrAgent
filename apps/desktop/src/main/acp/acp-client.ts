@@ -12,6 +12,7 @@ import type { AcpSessionMetadata, AcpSessionStore } from "./acp-session-store.js
 export type AcpJsonRpcTransport = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
   notify?(method: string, params?: Record<string, unknown>): Promise<void>;
+  close?(): Promise<void>;
   onNotification(
     listener: (method: string, params: Record<string, unknown>) => void,
   ): () => void;
@@ -52,17 +53,18 @@ export class AcpAgentClient {
     await this.options.transport.request("initialize", {
       clientCapabilities: {
         fs: {
-          readTextFile: true,
-          writeTextFile: true,
+          readTextFile: false,
+          writeTextFile: false,
         },
-        terminals: true,
+        terminals: false,
       },
     });
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    await this.options.transport.close?.();
   }
 
   async startSession(params: {
@@ -115,6 +117,24 @@ export class AcpAgentClient {
           ? record.turnId
           : `pending:${params.sessionId}`,
     };
+  }
+
+  async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
+    this.options.store.upsertSession(metadata);
+    const result = await this.options.transport.request("session/load", {
+      sessionId: metadata.sessionId,
+    });
+    const updates = readSessionUpdates(result);
+    const normalizer = this.normalizerFor(metadata.sessionId);
+    let replay = normalizer.replay();
+    for (const update of updates) {
+      replay = normalizer.apply({
+        sessionId: metadata.sessionId,
+        update,
+        receivedAt: this.now(),
+      });
+    }
+    return replay;
   }
 
   startPrompt(params: {
@@ -188,4 +208,17 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readSessionUpdates(value: unknown): Record<string, unknown>[] {
+  const record = asRecord(value);
+  const updates = Array.isArray(record?.updates)
+    ? record.updates
+    : Array.isArray(record?.sessionUpdates)
+      ? record.sessionUpdates
+      : [];
+  return updates.flatMap((update) => {
+    const updateRecord = asRecord(update);
+    return updateRecord ? [updateRecord] : [];
+  });
 }

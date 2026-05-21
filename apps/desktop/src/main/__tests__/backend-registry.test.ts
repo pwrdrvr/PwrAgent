@@ -1387,6 +1387,15 @@ describe("DesktopBackendRegistry", () => {
           turnId: params.turnId ?? "pending:session-1:1001",
         };
       }),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
       cancelSession: vi.fn(async (sessionId: string) => {
         cancelledSessions.push(sessionId);
       }),
@@ -1513,6 +1522,108 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.close();
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads persisted ACP sessions from the agent when no client is cached", async () => {
+    const acpBackendId = "acp:codex-acp" as AcpBackendId;
+    const loadedReplay: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "assistant:loaded",
+          role: "assistant",
+          text: "Loaded from ACP session",
+          createdAt: 1002,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:loaded",
+          role: "assistant",
+          text: "Loaded from ACP session",
+          createdAt: 1002,
+        },
+      ],
+      lastAssistantMessage: "Loaded from ACP session",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(() => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      })),
+      loadSession: vi.fn(async () => loadedReplay),
+    };
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "Stored ACP Thread",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 3000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "codex-acp",
+          name: "Codex CLI",
+          distributionKind: "npx",
+          distributionSource: "@zed-industries/codex-acp@0.14.0",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "codex-rule",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "codex-acp",
+            distributionKind: "npx",
+            command: "npx",
+            args: ["--yes", "@zed-industries/codex-acp@0.14.0"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      replay: {
+        lastAssistantMessage: "Loaded from ACP session",
+      },
+    });
+    expect(acpClient.initialize).toHaveBeenCalledTimes(1);
+    expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+
+    await registry.close();
   });
 
   it("reads Codex models once from the default client and reuses them", async () => {

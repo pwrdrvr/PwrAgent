@@ -3,6 +3,7 @@ import type { AcpJsonRpcTransport } from "../acp-client.js";
 export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
   readonly requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
   readonly notifications: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  closeCount = 0;
   private listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
   private nextSessionId = "session-1";
 
@@ -17,6 +18,9 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     if (method === "session/prompt") {
       return { turnId: "turn-1" };
     }
+    if (method === "session/load") {
+      return { updates: [] };
+    }
     return {};
   }
 
@@ -29,6 +33,10 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
   ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
   }
 
   emitSessionUpdate(sessionId: string, update: Record<string, unknown>): void {

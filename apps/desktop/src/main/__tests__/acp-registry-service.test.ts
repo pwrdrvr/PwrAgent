@@ -121,10 +121,20 @@ describe("AcpRegistryService", () => {
 
     const entries = service.applyAllowlist(snapshot);
 
-    expect(entries.find((entry) => entry.id === "codex-acp")).toMatchObject({
+    const codexEntry = entries.find((entry) => entry.id === "codex-acp");
+    expect(codexEntry).toMatchObject({
+      installable: true,
+      verificationStatus: "not-applicable",
+      allowlist: { allowed: true, ruleId: "codex-rule" },
+    });
+    const binaryDistribution = codexEntry?.distributions.find(
+      (distribution) => distribution.kind === "binary",
+    );
+    expect(
+      binaryDistribution && service.evaluateDistribution(codexEntry!, binaryDistribution),
+    ).toMatchObject({
       installable: true,
       verificationStatus: "unverified-allowed",
-      allowlist: { allowed: true, ruleId: "codex-rule" },
     });
     expect(entries.find((entry) => entry.id === "blocked-gpl")).toMatchObject({
       installable: false,
@@ -174,6 +184,49 @@ describe("AcpRegistryService", () => {
     expect(service.applyAllowlist(snapshot)[0]).toMatchObject({
       installable: true,
       verificationStatus: "unverified-allowed",
+    });
+  });
+
+  it("keeps package distributions installable when an unrelated binary lacks integrity", async () => {
+    const service = new AcpRegistryService({
+      allowlist: new AcpAgentAllowlist([
+        {
+          id: "codex-npx-only",
+          registryId: "codex-acp",
+          versions: ["0.14.0"],
+          distributionKinds: ["npx"],
+          allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
+        },
+      ]),
+    });
+    const snapshot = {
+      fetchedAt: 1,
+      agents: normalizeRegistry(registryPayload),
+      raw: registryPayload,
+    };
+
+    const entry = service.applyAllowlist(snapshot)[0];
+    const binaryDistribution = entry?.distributions.find(
+      (distribution) => distribution.kind === "binary",
+    );
+    const npxDistribution = entry?.distributions.find(
+      (distribution) => distribution.kind === "npx",
+    );
+
+    expect(entry).toMatchObject({
+      installable: true,
+      verificationStatus: "not-applicable",
+    });
+    expect(npxDistribution && service.evaluateDistribution(entry!, npxDistribution)).toMatchObject({
+      installable: true,
+      verificationStatus: "not-applicable",
+      allowlist: { allowed: true, ruleId: "codex-npx-only" },
+    });
+    expect(
+      binaryDistribution && service.evaluateDistribution(entry!, binaryDistribution),
+    ).toMatchObject({
+      installable: false,
+      allowlist: { allowed: false },
     });
   });
 

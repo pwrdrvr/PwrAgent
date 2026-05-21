@@ -56,6 +56,15 @@ describe("AcpAgentClient", () => {
       "session/new",
       "session/prompt",
     ]);
+    expect(transport.requests[0]?.params).toEqual({
+      clientCapabilities: {
+        fs: {
+          readTextFile: false,
+          writeTextFile: false,
+        },
+        terminals: false,
+      },
+    });
     expect(prompt).toEqual({ sessionId: "session-1", turnId: "turn-1" });
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Test ACP",
@@ -148,5 +157,52 @@ describe("AcpAgentClient", () => {
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
     expect((errors[0]?.error as Error).message).toBe("agent exited");
+  });
+
+  it("loads stored sessions through the ACP agent and closes transports", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:codex-acp",
+      store,
+      transport: {
+        request: async (method, params) => {
+          if (method === "session/load") {
+            return {
+              updates: [
+                {
+                  kind: "agent_message_chunk",
+                  content: "Restored transcript",
+                },
+              ],
+            };
+          }
+          return await transport.request(method, params);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession({
+      backendId: "acp:codex-acp",
+      sessionId: "session-1",
+      title: "Stored ACP session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 950,
+      executionMode: "full-access",
+      status: "idle",
+    });
+    await client.dispose();
+
+    expect(replay.lastAssistantMessage).toBe("Restored transcript");
+    expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
+      title: "Stored ACP session",
+      executionMode: "full-access",
+    });
+    expect(transport.closeCount).toBe(1);
   });
 });

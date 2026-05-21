@@ -1,6 +1,7 @@
 import { buildAcpBackendId } from "@pwragent/shared";
 import {
   ACP_REGISTRY_URL,
+  type AcpAllowlistDecision,
   type AcpBinaryPlatformDistribution,
   type AcpPackageDistribution,
   type AcpRegistryAgent,
@@ -29,6 +30,13 @@ export type AcpRegistryServiceOptions = {
   fetch?: AcpRegistryFetch;
   now?: () => number;
   registryUrl?: string;
+};
+
+export type AcpDistributionPolicy = {
+  allowlist: AcpAllowlistDecision;
+  installable: boolean;
+  verificationStatus: AcpRegistryAgentWithPolicy["verificationStatus"];
+  unavailableReason?: string;
 };
 
 export class AcpRegistryService {
@@ -75,37 +83,79 @@ export class AcpRegistryService {
   applyAllowlist(snapshot: AcpRegistrySnapshot): AcpRegistryAgentWithPolicy[] {
     return snapshot.agents.map((agent) => {
       const allowlist = this.allowlist.evaluate(agent);
-      const hasBinary = agent.distributions.some(
-        (distribution) => distribution.kind === "binary",
+      const distributionPolicies = agent.distributions.map((distribution) =>
+        this.evaluateDistribution(agent, distribution),
       );
-      const binaryHasIntegrity = agent.distributions.some(
-        (distribution) =>
-          distribution.kind === "binary" && Boolean(distribution.checksum),
+      const installablePolicy = distributionPolicies.find((policy) => policy.installable);
+      const firstBlockedAllowedPolicy = distributionPolicies.find(
+        (policy) => policy.allowlist.allowed,
       );
-      const verificationStatus =
-        hasBinary && !binaryHasIntegrity
-          ? allowlist.allowed && allowlist.unverifiedBinaryAllowed
-            ? "unverified-allowed"
-            : "unverified-blocked"
-          : hasBinary
-            ? "verified"
-            : "not-applicable";
-      const installable =
-        allowlist.allowed && verificationStatus !== "unverified-blocked";
+      const installable = Boolean(installablePolicy);
 
       return {
         ...agent,
         allowlist,
         installable,
-        verificationStatus,
+        verificationStatus:
+          installablePolicy?.verificationStatus ??
+          firstBlockedAllowedPolicy?.verificationStatus ??
+          "not-applicable",
         unavailableReason: installable
           ? undefined
-          : allowlist.allowed
-            ? "binary-integrity-metadata-missing"
-            : allowlist.reason,
+          : firstBlockedAllowedPolicy?.unavailableReason ??
+            (allowlist.allowed ? "distribution-not-installable" : allowlist.reason),
       };
     });
   }
+
+  evaluateDistribution(
+    agent: AcpRegistryAgent,
+    distribution: AcpRegistryDistribution,
+  ): AcpDistributionPolicy {
+    const allowlist = this.allowlist.evaluateDistribution(agent, distribution);
+    return evaluateAcpDistributionPolicy(distribution, allowlist);
+  }
+}
+
+export function evaluateAcpDistributionPolicy(
+  distribution: AcpRegistryDistribution,
+  allowlist: AcpAllowlistDecision,
+): AcpDistributionPolicy {
+  if (!allowlist.allowed) {
+    return {
+      allowlist,
+      installable: false,
+      verificationStatus: "not-applicable",
+      unavailableReason: allowlist.reason,
+    };
+  }
+
+  if (distribution.kind !== "binary") {
+    return {
+      allowlist,
+      installable: true,
+      verificationStatus: "not-applicable",
+    };
+  }
+
+  if (distribution.checksum) {
+    return {
+      allowlist,
+      installable: true,
+      verificationStatus: "verified",
+    };
+  }
+
+  return {
+    allowlist,
+    installable: allowlist.unverifiedBinaryAllowed,
+    verificationStatus: allowlist.unverifiedBinaryAllowed
+      ? "unverified-allowed"
+      : "unverified-blocked",
+    unavailableReason: allowlist.unverifiedBinaryAllowed
+      ? undefined
+      : "binary-integrity-metadata-missing",
+  };
 }
 
 export function normalizeRegistry(raw: unknown): AcpRegistryAgent[] {
