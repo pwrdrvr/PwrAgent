@@ -21,11 +21,13 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
+const LOGS_WINDOW_TITLE = "Logs";
 
 let appLogWindow: BrowserWindow | undefined;
 
@@ -42,7 +44,7 @@ export function showAppLogWindow(): void {
     minWidth: 700,
     minHeight: 500,
     show: false,
-    title: "Logs - PwrAgent",
+    title: LOGS_WINDOW_TITLE,
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
@@ -53,6 +55,7 @@ export function showAppLogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, LOGS_WINDOW_TITLE);
   hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);

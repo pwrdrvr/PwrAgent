@@ -91,7 +91,10 @@ import { subscribersForChannel } from "./window-channels";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
-import { reapplyAuxiliaryWindowMenuBars } from "./auxiliary-window-chrome";
+import {
+  getAuxiliaryWindowMenuTitle,
+  reapplyAuxiliaryWindowMenuBars,
+} from "./auxiliary-window-chrome";
 import {
   assertUnreachableProfileBootDecision,
   cleanupBootstrapProfile,
@@ -284,7 +287,7 @@ function installApplicationMenu(): void {
     .map((window) => ({
       focused: window.isFocused(),
       id: window.id,
-      title: window.getTitle(),
+      title: getAuxiliaryWindowMenuTitle(window),
     }));
   const template = buildApplicationMenuTemplate({
     appName: APP_NAME,

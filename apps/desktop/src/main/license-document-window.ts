@@ -18,6 +18,7 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
@@ -31,7 +32,7 @@ let thirdPartyNoticesWindow: BrowserWindow | undefined;
 export function showLicenseWindow(): void {
   showLicenseDocumentWindow({
     hash: LICENSE_HASH,
-    title: "MIT License - PwrAgent",
+    title: "License",
     windowRef: () => licenseWindow,
     setWindowRef: (window) => {
       licenseWindow = window;
@@ -42,7 +43,7 @@ export function showLicenseWindow(): void {
 export function showThirdPartyNoticesWindow(): void {
   showLicenseDocumentWindow({
     hash: THIRD_PARTY_NOTICES_HASH,
-    title: "Third-Party Notices - PwrAgent",
+    title: "Third-Party Notices",
     windowRef: () => thirdPartyNoticesWindow,
     setWindowRef: (window) => {
       thirdPartyNoticesWindow = window;
@@ -80,6 +81,7 @@ function showLicenseDocumentWindow(options: {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, options.title);
   hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);

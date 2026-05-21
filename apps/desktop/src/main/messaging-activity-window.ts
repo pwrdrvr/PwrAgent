@@ -18,10 +18,12 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:activity-window");
+const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
 
 /**
  * Hash that the renderer (`main.tsx`) reads to decide whether to mount
@@ -56,7 +58,7 @@ export function showMessagingActivityWindow(): void {
     minWidth: 640,
     minHeight: 480,
     show: false,
-    title: "Messaging Activity — PwrAgent",
+    title: ACTIVITY_WINDOW_TITLE,
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
@@ -67,6 +69,7 @@ export function showMessagingActivityWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, ACTIVITY_WINDOW_TITLE);
   hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);

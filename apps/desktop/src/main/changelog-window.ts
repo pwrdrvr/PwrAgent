@@ -18,11 +18,13 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
+const CHANGELOG_WINDOW_TITLE = "Changelog";
 
 let changelogWindow: BrowserWindow | undefined;
 
@@ -39,7 +41,7 @@ export function showChangelogWindow(): void {
     minWidth: 640,
     minHeight: 480,
     show: false,
-    title: "Changelog - PwrAgent",
+    title: CHANGELOG_WINDOW_TITLE,
     ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
@@ -50,6 +52,7 @@ export function showChangelogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, CHANGELOG_WINDOW_TITLE);
   hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);

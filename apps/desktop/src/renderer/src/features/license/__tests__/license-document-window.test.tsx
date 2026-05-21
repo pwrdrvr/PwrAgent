@@ -8,6 +8,8 @@ import { LicenseDocumentWindow } from "../LicenseDocumentWindow";
 afterEach(() => {
   cleanup();
   delete (window as Window & { pwragent?: unknown }).pwragent;
+  window.history.replaceState(null, "", "/");
+  document.title = "";
 });
 
 describe("LicenseDocumentWindow", () => {
@@ -27,5 +29,27 @@ describe("LicenseDocumentWindow", () => {
       expect(readLicenseDocument).toHaveBeenCalledWith("third-party-licenses");
     });
     expect(await screen.findByText(/react@19\.2\.5/)).toBeInTheDocument();
+  });
+
+  it("uses License for the window title while keeping MIT License in the document chrome", async () => {
+    window.history.replaceState(null, "", "/#license");
+    const readLicenseDocument = vi.fn(async (kind: AppLicenseDocumentKind) => ({
+      kind,
+      title: "MIT License",
+      content: "MIT License\n\nPermission is hereby granted.",
+    }));
+    (window as Window & { pwragent?: DesktopApi }).pwragent = {
+      readLicenseDocument,
+    };
+
+    render(<LicenseDocumentWindow />);
+
+    await waitFor(() => {
+      expect(readLicenseDocument).toHaveBeenCalledWith("license");
+    });
+    await screen.findByText(/Permission is hereby granted/);
+
+    expect(document.title).toBe("License");
+    expect(screen.getByText("MIT License")).toBeInTheDocument();
   });
 });

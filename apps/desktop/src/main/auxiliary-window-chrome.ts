@@ -8,6 +8,7 @@ const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
 
 const hiddenMenuBarWindows = new Set<BrowserWindow>();
+const auxiliaryWindowTitles = new Map<number, string>();
 
 export function auxiliaryWindowChromeOptions(): Pick<
   BrowserWindowConstructorOptions,
@@ -34,6 +35,25 @@ export function hideAuxiliaryWindowMenuBar(window: BrowserWindow): void {
   window.once("closed", () => {
     hiddenMenuBarWindows.delete(window);
   });
+}
+
+export function registerAuxiliaryWindowTitle(
+  window: BrowserWindow,
+  title: string,
+): void {
+  auxiliaryWindowTitles.set(window.id, title);
+  window.setTitle(title);
+  window.webContents.on("page-title-updated", (event) => {
+    event.preventDefault();
+    window.setTitle(title);
+  });
+  window.once("closed", () => {
+    auxiliaryWindowTitles.delete(window.id);
+  });
+}
+
+export function getAuxiliaryWindowMenuTitle(window: BrowserWindow): string {
+  return auxiliaryWindowTitles.get(window.id) ?? window.getTitle();
 }
 
 export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
