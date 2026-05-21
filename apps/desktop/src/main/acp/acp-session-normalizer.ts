@@ -57,6 +57,13 @@ export class AcpSessionReplayNormalizer {
       this.status = "active";
     } else if (kind === "turn_finished") {
       this.status = "idle";
+    } else if (kind === "pwragent_user_prompt") {
+      this.recordUserPrompt({
+        sessionId: update.sessionId,
+        prompt: readString(update.update, "prompt") ?? "",
+        turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+        receivedAt: createdAt,
+      });
     } else {
       this.upsertActivity(unknownActivity(update, kind, createdAt));
     }

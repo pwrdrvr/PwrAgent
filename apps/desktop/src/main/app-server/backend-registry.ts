@@ -932,6 +932,11 @@ function acpSessionLoadFallbackReplay(
   session: AcpSessionMetadata,
   error: unknown,
 ): AppServerThreadReplay {
+  const persistedReplay = replayPersistedAcpTranscript(session);
+  if (persistedReplay.entries.length > 0 || persistedReplay.messages.length > 0) {
+    return persistedReplay;
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   return {
     entries: [
@@ -957,6 +962,21 @@ function acpSessionLoadFallbackReplay(
     },
     threadStatus: acpSessionThreadStatus(session.status),
   };
+}
+
+function replayPersistedAcpTranscript(
+  session: AcpSessionMetadata,
+): AppServerThreadReplay {
+  const normalizer = new AcpSessionReplayNormalizer();
+  let replay = normalizer.replay();
+  for (const item of session.transcriptUpdates ?? []) {
+    replay = normalizer.apply({
+      sessionId: session.sessionId,
+      update: item.update,
+      receivedAt: item.receivedAt,
+    });
+  }
+  return replay;
 }
 
 function acpSessionThreadStatus(

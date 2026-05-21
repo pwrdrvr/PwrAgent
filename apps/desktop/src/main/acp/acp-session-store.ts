@@ -11,6 +11,12 @@ export type AcpSessionMetadata = {
   executionMode: ThreadExecutionMode;
   status: "active" | "idle" | "failed" | "unknown";
   lastError?: string;
+  transcriptUpdates?: AcpPersistedTranscriptUpdate[];
+};
+
+export type AcpPersistedTranscriptUpdate = {
+  receivedAt: number;
+  update: Record<string, unknown>;
 };
 
 export class AcpSessionStore {

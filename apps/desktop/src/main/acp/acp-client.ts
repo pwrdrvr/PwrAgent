@@ -7,7 +7,11 @@ import {
   AcpSessionReplayNormalizer,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
-import type { AcpSessionMetadata, AcpSessionStore } from "./acp-session-store.js";
+import type {
+  AcpPersistedTranscriptUpdate,
+  AcpSessionMetadata,
+  AcpSessionStore,
+} from "./acp-session-store.js";
 
 export type AcpJsonRpcTransport = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -119,11 +123,20 @@ export class AcpAgentClient {
     prompt: string;
   }): Promise<{ sessionId: string; turnId: string }> {
     const turnId = `pending:${params.sessionId}:${this.now()}`;
+    const receivedAt = this.now();
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
       turnId,
-      receivedAt: this.now(),
+      receivedAt,
+    });
+    this.persistTranscriptUpdate(params.sessionId, {
+      receivedAt,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: params.prompt,
+        turnId,
+      },
     });
     let result: unknown;
     try {
@@ -148,14 +161,17 @@ export class AcpAgentClient {
 
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
+    const normalizer = this.normalizerFor(metadata.sessionId);
+    let replay = this.applyPersistedTranscriptUpdates(normalizer, metadata);
+    if (hasPersistedAssistantUpdate(metadata)) {
+      return replay;
+    }
     const result = await this.options.transport.request("session/load", {
       cwd: metadata.cwd ?? process.cwd(),
       mcpServers: [],
       sessionId: metadata.sessionId,
     });
     const updates = readSessionUpdates(result);
-    const normalizer = this.normalizerFor(metadata.sessionId);
-    let replay = normalizer.replay();
     for (const update of updates) {
       replay = normalizer.apply({
         sessionId: metadata.sessionId,
@@ -172,11 +188,20 @@ export class AcpAgentClient {
     turnId?: string;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
+    const receivedAt = this.now();
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
       turnId,
-      receivedAt: this.now(),
+      receivedAt,
+    });
+    this.persistTranscriptUpdate(params.sessionId, {
+      receivedAt,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: params.prompt,
+        turnId,
+      },
     });
     void this.options.transport
       .request("session/prompt", {
@@ -184,10 +209,20 @@ export class AcpAgentClient {
         prompt: textPrompt(params.prompt),
       })
       .then(() => {
-        this.normalizerFor(params.sessionId).recordTurnFinished();
+        const replay = this.normalizerFor(params.sessionId).recordTurnFinished();
+        void this.notifySessionUpdate({
+          sessionId: params.sessionId,
+          replay,
+          update: { kind: "turn_finished" },
+        });
       })
       .catch((error) => {
-        this.normalizerFor(params.sessionId).recordTurnFinished();
+        const replay = this.normalizerFor(params.sessionId).recordTurnFinished();
+        void this.notifySessionUpdate({
+          sessionId: params.sessionId,
+          replay,
+          update: { kind: "turn_finished" },
+        });
         return Promise.resolve(
           this.options.onPromptError?.({
             sessionId: params.sessionId,
@@ -219,18 +254,17 @@ export class AcpAgentClient {
     if (!sessionId || !update) {
       return;
     }
+    const receivedAt = this.now();
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
-      receivedAt: this.now(),
+      receivedAt,
     } satisfies AcpSessionUpdate);
-    void Promise.resolve(
-      this.options.onSessionUpdate?.({
-        sessionId,
-        replay,
-        update,
-      }),
-    ).catch(() => undefined);
+    this.persistTranscriptUpdate(sessionId, {
+      receivedAt,
+      update,
+    });
+    void this.notifySessionUpdate({ sessionId, replay, update });
   }
 
   private normalizerFor(sessionId: string): AcpSessionReplayNormalizer {
@@ -241,6 +275,57 @@ export class AcpAgentClient {
     }
     return normalizer;
   }
+
+  private applyPersistedTranscriptUpdates(
+    normalizer: AcpSessionReplayNormalizer,
+    metadata: AcpSessionMetadata,
+  ): AppServerThreadReplay {
+    let replay = normalizer.replay();
+    for (const item of metadata.transcriptUpdates ?? []) {
+      replay = normalizer.apply({
+        sessionId: metadata.sessionId,
+        update: item.update,
+        receivedAt: item.receivedAt,
+      });
+    }
+    return replay;
+  }
+
+  private persistTranscriptUpdate(
+    sessionId: string,
+    update: AcpPersistedTranscriptUpdate,
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    this.options.store.upsertSession({
+      ...metadata,
+      updatedAt: Math.max(metadata.updatedAt, update.receivedAt),
+      transcriptUpdates: [...(metadata.transcriptUpdates ?? []), update],
+    });
+  }
+
+  private async notifySessionUpdate(event: {
+    sessionId: string;
+    replay: AppServerThreadReplay;
+    update: Record<string, unknown>;
+  }): Promise<void> {
+    await Promise.resolve(this.options.onSessionUpdate?.(event)).catch(
+      () => undefined,
+    );
+  }
+}
+
+function hasPersistedAssistantUpdate(metadata: AcpSessionMetadata): boolean {
+  return (metadata.transcriptUpdates ?? []).some(
+    (item) => readUpdateKind(item.update) === "agent_message_chunk",
+  );
+}
+
+function readUpdateKind(update: Record<string, unknown>): string | undefined {
+  const kind = update.kind ?? update.type ?? update.sessionUpdate;
+  return typeof kind === "string" ? kind : undefined;
 }
 
 function textPrompt(text: string): Array<{ type: "text"; text: string }> {

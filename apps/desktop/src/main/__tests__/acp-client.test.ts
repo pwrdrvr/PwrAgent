@@ -89,6 +89,24 @@ describe("AcpAgentClient", () => {
       executionMode: "default",
     });
     expect(client.readReplay("session-1").lastAssistantMessage).toBe("Done");
+    expect(store.getSession("acp:codex-acp", "session-1")?.transcriptUpdates)
+      .toEqual([
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "hello",
+            turnId: "pending:session-1:1000",
+          },
+        },
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "agent_message_chunk",
+            content: "Done",
+          },
+        },
+      ]);
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
@@ -111,6 +129,7 @@ describe("AcpAgentClient", () => {
       prompt: "keep going",
     });
     const activeReplay = client.readReplay(session.sessionId);
+    const persistedSession = store.getSession("acp:codex-acp", session.sessionId);
     await client.cancelSession(session.sessionId);
 
     expect(prompt).toEqual({
@@ -121,6 +140,16 @@ describe("AcpAgentClient", () => {
       lastUserMessage: "keep going",
       threadStatus: "active",
     });
+    expect(persistedSession?.transcriptUpdates).toEqual([
+      {
+        receivedAt: 1000,
+        update: {
+          kind: "pwragent_user_prompt",
+          prompt: "keep going",
+          turnId: "pending:session-1:1000",
+        },
+      },
+    ]);
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
       "session/new",
