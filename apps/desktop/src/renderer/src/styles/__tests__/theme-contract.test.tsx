@@ -580,6 +580,23 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("wraps long unbroken strings inside inline `code` spans instead of forcing horizontal scroll", () => {
+    // A pasted long URL inside single backticks renders as
+    // `<code class="transcript-message__code">…</code>`. The element is
+    // `display: inline-block` for the padded chip look, which by default
+    // sizes to its intrinsic content width — so an unbroken URL stretches
+    // the inline-block past the message column and pushes the surrounding
+    // transcript into horizontal scroll.
+    //
+    // Lock `overflow-wrap: anywhere;` on the inline code chip so the
+    // browser is allowed to break the string at any character when it
+    // would otherwise overflow, and pair it with `max-width: 100%;` so
+    // the chip cannot exceed the message column.
+    const inlineCodeRule = extractRuleBody(css, ".transcript-message__code");
+    expect(inlineCodeRule).toContain("overflow-wrap: anywhere;");
+    expect(inlineCodeRule).toContain("max-width: 100%;");
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");

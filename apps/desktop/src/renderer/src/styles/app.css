@@ -5839,12 +5839,14 @@ textarea,
 
 .transcript-message__code {
   display: inline-block;
+  max-width: 100%;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-panel-elevated);
   font-size: 12px;
   font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__pre {
