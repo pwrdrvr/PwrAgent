@@ -43,6 +43,7 @@ import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
+import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
 import { LiveWorkRail, type LiveWorkRailDock } from "./LiveWorkRail";
@@ -1777,13 +1778,22 @@ export function ThreadView(props: ThreadViewProps) {
 
   if (!selectedThread && !selectedLaunchpad) {
     return (
-      <section className="thread-empty-state">
-        <p className="eyebrow">Thread detail</p>
-        <h2>Select a thread</h2>
-        <p>
-          Inbox stays above every other lens. Pick a thread to read the full
-          transcript, or open a project launchpad from Directories.
-        </p>
+      <section className="thread-view thread-view--empty">
+        <ThreadPlaceholderHeader
+          desktopApi={props.desktopApi}
+          title="Pick a Thread"
+          onOpenMessagingActivity={props.onOpenMessagingActivity}
+        />
+        <div className="thread-empty-state">
+          <div className="thread-empty-state__content">
+            <p className="eyebrow">Thread detail</p>
+            <h2>Select a thread</h2>
+            <p>
+              Inbox stays above every other lens. Pick a thread to read the full
+              transcript, or open a project launchpad from Directories.
+            </p>
+          </div>
+        </div>
       </section>
     );
   }

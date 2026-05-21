@@ -130,6 +130,10 @@ describe("App", () => {
 
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(document.querySelector(".app-main")).toHaveClass(
+      "app-main--thread-detail-pending"
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Loading..." })).toBeInTheDocument();
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
@@ -1717,11 +1721,191 @@ describe("App", () => {
 
     const transcript = screen.getByRole("region", { name: "Transcript" });
     const header = document.querySelector(".thread-header");
+    const main = document.querySelector(".app-main");
 
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(header).not.toBeNull();
+    expect(main).not.toHaveClass("app-main--thread-detail-pending");
+    expect(screen.queryByRole("heading", { level: 2, name: "Loading..." })).toBeNull();
     expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
     expect(within(header as HTMLElement).queryByText(summary)).toBeNull();
+  });
+
+  it("falls back from loading chrome when a selected thread disappears after refresh", async () => {
+    const agentEventListeners = new Set<
+      (event: {
+        backend: "codex" | "grok";
+        notification: {
+          method: string;
+          params: Record<string, unknown>;
+        };
+      }) => void
+    >();
+    let navigationSnapshot: any = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-stale"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      threads: [
+        {
+          id: "thread-stale",
+          title: "Thread that disappears",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+          updatedAt: Date.now(),
+        },
+      ],
+    };
+    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: [],
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            },
+          ],
+        }),
+        getNavigationSnapshot,
+        markThreadSeen: async () => ({
+          backend: "codex",
+          threadId: "thread-stale",
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: (
+          listener: (event: {
+            backend: "codex" | "grok";
+            notification: {
+              method: string;
+              params: Record<string, unknown>;
+            };
+          }) => void
+        ) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        onWindowFocus: () => () => undefined,
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: "thread-stale",
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+        platform: "darwin",
+        startTurn: async () => ({
+          backend: "codex",
+          threadId: "thread-stale",
+          turnId: "turn-1",
+        }),
+        versions: {
+          electron: "41.2.1",
+        },
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Thread that disappears",
+      })
+    ).toBeInTheDocument();
+
+    navigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      threads: [],
+    };
+
+    await act(async () => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-stale",
+              turnId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      screen.queryByRole("heading", { level: 2, name: "Loading..." })
+    ).toBeNull();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Pick a Thread" })
+    ).toBeInTheDocument();
+    expect(document.querySelector(".app-main")).not.toHaveClass(
+      "app-main--thread-detail-pending"
+    );
   });
 
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {

@@ -2974,6 +2974,10 @@ textarea,
   overflow: hidden;
 }
 
+.app-main--thread-detail-pending {
+  -webkit-app-region: drag;
+}
+
 .app-shell__settings-layer {
   display: flex;
   position: absolute;
@@ -9794,11 +9798,22 @@ textarea,
 
 .thread-empty-state {
   display: flex;
+  flex: 1;
   flex-direction: column;
   justify-content: center;
-  min-height: calc(100vh - 48px);
-  max-width: 520px;
+  min-height: 0;
   padding: 0 16px;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-app-region: drag;
+}
+
+.thread-empty-state * {
+  -webkit-app-region: drag;
+}
+
+.thread-empty-state__content {
+  max-width: 520px;
 }
 
 .renderer-error-boundary {

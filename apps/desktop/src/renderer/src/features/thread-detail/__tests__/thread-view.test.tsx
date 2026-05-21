@@ -33,6 +33,52 @@ describe("ThreadView", () => {
     cleanup();
   });
 
+  it("shows draggable empty thread chrome with messaging status", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+        account: "@pwragent_bot",
+      },
+    ] satisfies MessagingPlatformStatus[];
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          getMessagingPlatformStatuses: vi.fn(async () => statuses),
+          onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Pick a Thread" })
+    ).toBeInTheDocument();
+    const emptyState = screen
+      .getByRole("heading", { level: 2, name: "Select a thread" })
+      .closest(".thread-empty-state");
+    const header = document.querySelector(".thread-header--placeholder");
+
+    expect(emptyState).not.toBeNull();
+    expect(emptyState?.querySelector(".thread-empty-state__content")).not.toBeNull();
+    expect(header).not.toBeNull();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
+    });
+  });
+
   it("renders a directory-less thread with transcript history and context", () => {
     const { rerender } = render(
       <ThreadView

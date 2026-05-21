@@ -18,6 +18,7 @@ import {
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
+import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useDurableComposerDraftStore } from "./features/composer/useDurableComposerDraftStore";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -414,6 +415,13 @@ function DesktopAppShell(props: {
     removeOptimisticMessage: session.removeOptimisticMessage,
     transcriptViewport: session.viewport,
   } satisfies ThreadViewProps;
+  const selectedThreadPending =
+    Boolean(navigation.selectedThreadKey) &&
+    !navigation.selectedThread &&
+    !navigation.selectedLaunchpad &&
+    (navigation.loading || navigation.refreshing);
+  const threadDetailPending =
+    mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
   const resizeSidebar = (nextWidth: number): void => {
     setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth)));
@@ -499,8 +507,22 @@ function DesktopAppShell(props: {
         sidebarMaxWidth={sidebarMaxWidth}
       />
 
-      <main className="app-main">
-        {ThreadViewComponent ? <ThreadViewComponent {...threadViewProps} /> : null}
+      <main
+        className={`app-main${
+          threadDetailPending ? " app-main--thread-detail-pending" : ""
+        }`}
+      >
+        {threadDetailPending ? (
+          <section className="thread-view thread-view--pending">
+            <ThreadPlaceholderHeader
+              desktopApi={desktopApi}
+              title="Loading..."
+              onOpenMessagingActivity={openMessagingActivityWindow}
+            />
+          </section>
+        ) : ThreadViewComponent ? (
+          <ThreadViewComponent {...threadViewProps} />
+        ) : null}
       </main>
 
       {mainView === "settings" ? (
