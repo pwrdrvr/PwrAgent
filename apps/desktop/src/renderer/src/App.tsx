@@ -403,6 +403,10 @@ function DesktopAppShell(props: {
     removeOptimisticMessage: session.removeOptimisticMessage,
     transcriptViewport: session.viewport,
   } satisfies ThreadViewProps;
+  const threadDetailPending =
+    mainView === "thread" &&
+    (!ThreadViewComponent ||
+      (!navigation.selectedThread && !navigation.selectedLaunchpad));
 
   const resizeSidebar = (nextWidth: number): void => {
     setSidebarWidth(Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, nextWidth)));
@@ -488,7 +492,11 @@ function DesktopAppShell(props: {
         sidebarMaxWidth={sidebarMaxWidth}
       />
 
-      <main className="app-main">
+      <main
+        className={`app-main${
+          threadDetailPending ? " app-main--thread-detail-pending" : ""
+        }`}
+      >
         {ThreadViewComponent ? <ThreadViewComponent {...threadViewProps} /> : null}
       </main>
 

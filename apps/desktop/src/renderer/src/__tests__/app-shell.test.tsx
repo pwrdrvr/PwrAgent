@@ -130,6 +130,9 @@ describe("App", () => {
 
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(document.querySelector(".app-main")).toHaveClass(
+      "app-main--thread-detail-pending"
+    );
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
@@ -1702,9 +1705,11 @@ describe("App", () => {
 
     const transcript = screen.getByRole("region", { name: "Transcript" });
     const header = document.querySelector(".thread-header");
+    const main = document.querySelector(".app-main");
 
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(header).not.toBeNull();
+    expect(main).not.toHaveClass("app-main--thread-detail-pending");
     expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
     expect(within(header as HTMLElement).queryByText(summary)).toBeNull();
   });

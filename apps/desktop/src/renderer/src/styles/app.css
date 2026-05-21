@@ -2974,6 +2974,14 @@ textarea,
   overflow: hidden;
 }
 
+.app-main--thread-detail-pending {
+  -webkit-app-region: drag;
+}
+
+.app-main--thread-detail-pending * {
+  -webkit-app-region: drag;
+}
+
 .app-shell__settings-layer {
   display: flex;
   position: absolute;
