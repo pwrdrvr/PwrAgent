@@ -67,6 +67,7 @@ export class AcpAgentClient {
   >();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   private readonly suppressLoadReplaySessions = new Set<string>();
+  private readonly hydratedTranscriptSessions = new Set<string>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
@@ -115,6 +116,7 @@ export class AcpAgentClient {
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
     this.suppressLoadReplaySessions.clear();
+    this.hydratedTranscriptSessions.clear();
     await this.options.transport.close?.();
   }
 
@@ -166,6 +168,7 @@ export class AcpAgentClient {
     sessionId: string;
     prompt: string;
   }): Promise<{ sessionId: string; turnId: string }> {
+    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -210,22 +213,8 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    const normalizer = this.normalizerFor(metadata.sessionId);
-    let replay = this.applyPersistedTranscriptUpdates(normalizer, metadata);
-    if (hasPersistedAssistantUpdate(metadata)) {
-      return replay;
-    }
-    const result = await this.loadSessionFromAgent(metadata, {
-      suppressReplayNotifications: false,
-    });
-    const updates = readSessionUpdates(result);
-    for (const update of updates) {
-      replay = normalizer.apply({
-        sessionId: metadata.sessionId,
-        update,
-        receivedAt: this.now(),
-      });
-    }
+    const replay = this.hydratePersistedTranscript(metadata);
+    await this.loadSessionFromAgent(metadata);
     return replay;
   }
 
@@ -240,9 +229,7 @@ export class AcpAgentClient {
     ) {
       return;
     }
-    await this.loadSessionFromAgent(metadata, {
-      suppressReplayNotifications: true,
-    });
+    await this.loadSessionFromAgent(metadata);
   }
 
   startPrompt(params: {
@@ -250,6 +237,7 @@ export class AcpAgentClient {
     prompt: string;
     turnId?: string;
   }): { sessionId: string; turnId: string } {
+    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -321,6 +309,7 @@ export class AcpAgentClient {
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {
+    this.hydratePersistedTranscriptForSession(sessionId);
     return this.normalizerFor(sessionId).replay();
   }
 
@@ -450,6 +439,28 @@ export class AcpAgentClient {
     };
   }
 
+  private hydratePersistedTranscriptForSession(sessionId: string): AppServerThreadReplay {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return this.normalizerFor(sessionId).replay();
+    }
+    return this.hydratePersistedTranscript(metadata);
+  }
+
+  private hydratePersistedTranscript(
+    metadata: AcpSessionMetadata,
+  ): AppServerThreadReplay {
+    const normalizer = this.normalizerFor(metadata.sessionId);
+    if (!this.hydratedTranscriptSessions.has(metadata.sessionId)) {
+      this.applyPersistedTranscriptUpdates(normalizer, metadata);
+      this.hydratedTranscriptSessions.add(metadata.sessionId);
+    }
+    return {
+      ...normalizer.replay(),
+      threadStatus: acpSessionThreadStatus(metadata.status, normalizer.replay().threadStatus),
+    };
+  }
+
   private persistTranscriptUpdate(
     sessionId: string,
     update: AcpPersistedTranscriptUpdate,
@@ -477,28 +488,17 @@ export class AcpAgentClient {
     );
   }
 
-  private async loadSessionFromAgent(
-    metadata: AcpSessionMetadata,
-    options: { suppressReplayNotifications: boolean },
-  ): Promise<unknown> {
+  private async loadSessionFromAgent(metadata: AcpSessionMetadata): Promise<unknown> {
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    if (options.suppressReplayNotifications) {
-      this.suppressLoadReplaySessions.add(protocolSessionId);
-    }
-    try {
-      const result = await this.options.transport.request("session/load", {
-        cwd,
-        mcpServers: [],
-        sessionId: protocolSessionId,
-      });
-      this.loadedSessionCwds.set(protocolSessionId, cwd);
-      return result;
-    } finally {
-      if (!options.suppressReplayNotifications) {
-        this.suppressLoadReplaySessions.delete(protocolSessionId);
-      }
-    }
+    this.suppressLoadReplaySessions.add(protocolSessionId);
+    const result = await this.options.transport.request("session/load", {
+      cwd,
+      mcpServers: [],
+      sessionId: protocolSessionId,
+    });
+    this.loadedSessionCwds.set(protocolSessionId, cwd);
+    return result;
   }
 
   private clearLoadReplaySuppression(sessionId: string): void {
@@ -599,12 +599,6 @@ export class AcpAgentClient {
 
 function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
   return metadata.agentSessionId ?? metadata.sessionId;
-}
-
-function hasPersistedAssistantUpdate(metadata: AcpSessionMetadata): boolean {
-  return (metadata.transcriptUpdates ?? []).some(
-    (item) => readUpdateKind(item.update) === "agent_message_chunk",
-  );
 }
 
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
@@ -722,7 +716,11 @@ function selectPermissionOptionId(
     return exact.optionId;
   }
 
-  if (normalizedDecision === "approve") {
+  if (
+    normalizedDecision === "approve" ||
+    normalizedDecision === "accept" ||
+    normalizedDecision === "allow"
+  ) {
     return (
       options.find((option) => option.kind === "allow_once") ??
       options.find((option) => option.kind === "allow_always") ??
@@ -730,7 +728,11 @@ function selectPermissionOptionId(
     )?.optionId;
   }
 
-  if (normalizedDecision === "decline") {
+  if (
+    normalizedDecision === "decline" ||
+    normalizedDecision === "reject" ||
+    normalizedDecision === "deny"
+  ) {
     return (
       options.find((option) => option.kind === "reject_once") ??
       options.find((option) => option.name?.toLowerCase().includes("reject"))
@@ -748,17 +750,4 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function readSessionUpdates(value: unknown): Record<string, unknown>[] {
-  const record = asRecord(value);
-  const updates = Array.isArray(record?.updates)
-    ? record.updates
-    : Array.isArray(record?.sessionUpdates)
-      ? record.sessionUpdates
-      : [];
-  return updates.flatMap((update) => {
-    const updateRecord = asRecord(update);
-    return updateRecord ? [updateRecord] : [];
-  });
 }

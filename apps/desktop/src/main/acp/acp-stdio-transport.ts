@@ -12,7 +12,7 @@ import {
 } from "../codex-app-server/json-rpc.js";
 import { getMainLogger } from "../log.js";
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 const acpTransportLog = getMainLogger("pwragent:acp-transport");
 
