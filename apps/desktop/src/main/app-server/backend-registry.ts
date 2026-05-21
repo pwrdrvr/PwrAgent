@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
@@ -1545,6 +1546,17 @@ export class DesktopBackendRegistry {
    * `ONBOARDING_CODEX_GATE_ENABLED`.
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
+  /**
+   * Reports whether the registry is running inside the throwaway
+   * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
+   * hard-fails to an empty result regardless of any other gate —
+   * the bootstrap profile's `models.codex.profile` is unset and
+   * would otherwise resolve to the operator's real Codex install,
+   * leaking their real thread list into the to-be-discarded
+   * bootstrap window. Tests inject a fixed value; production wires
+   * it to `state/app-state.getAppStateMode()`.
+   */
+  private readonly isBootstrapModeFn: () => boolean;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -1559,6 +1571,7 @@ export class DesktopBackendRegistry {
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
     isCodexBootstrapDeferred?: () => boolean;
+    isBootstrapMode?: () => boolean;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -1713,6 +1726,8 @@ export class DesktopBackendRegistry {
           return false;
         }
       });
+    this.isBootstrapModeFn =
+      options?.isBootstrapMode ?? (() => getAppStateMode() === "bootstrap");
 
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
@@ -1877,6 +1892,22 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
+    // Hard gate: the bootstrap profile MUST NEVER serve thread data,
+    // regardless of what the bootstrap config.toml's onboarding
+    // flags say. Concretely this guards the post-wizard dev window:
+    // in dev we leave the bootstrap Electron alive (Vite dev-server
+    // race — see ipc/boot-info.ts), and if the operator focuses
+    // that window, `useThreadNavigation`'s focus listener triggers
+    // a `getNavigationSnapshot` → listThreads call. The bootstrap
+    // profile's `models.codex.profile` is unset, which means
+    // "use ~/.codex/" — i.e. the operator's real Codex Desktop
+    // session, with all their real threads. This check makes that
+    // contamination unreachable even if `isCodexBootstrapDeferredFn`
+    // gets misconfigured or the onboarding-completed flag gets
+    // flipped accidentally on the bootstrap profile.
+    if (this.isBootstrapModeFn()) {
+      return [];
+    }
     // Gate the deferred Codex probe. When the first-run wizard hasn't
     // picked a Codex profile model yet, an explicit codex query returns
     // empty; an unfiltered query falls through to the grok-only path so
