@@ -133,6 +133,7 @@ describe("App", () => {
     expect(document.querySelector(".app-main")).toHaveClass(
       "app-main--thread-detail-pending"
     );
+    expect(screen.getByRole("heading", { level: 2, name: "Loading..." })).toBeInTheDocument();
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
@@ -1710,6 +1711,7 @@ describe("App", () => {
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(header).not.toBeNull();
     expect(main).not.toHaveClass("app-main--thread-detail-pending");
+    expect(screen.queryByRole("heading", { level: 2, name: "Loading..." })).toBeNull();
     expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
     expect(within(header as HTMLElement).queryByText(summary)).toBeNull();
   });
