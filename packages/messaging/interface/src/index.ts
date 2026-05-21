@@ -942,6 +942,15 @@ export type MessagingBrowseSelectedProject = {
   path?: string;
 };
 
+export type MessagingBrowseReturnTarget = {
+  launchAction: "resume_thread";
+  mode: Exclude<MessagingBrowseMode, "new_project" | "new_thread_options">;
+  pageIndex: number;
+  preferences?: MessagingBindingPreferences;
+  query?: string;
+  selectedProject?: MessagingBrowseSelectedProject;
+};
+
 export type MessagingBrowseSessionRecord = {
   id: string;
   allowedActorIds: string[];
@@ -956,6 +965,7 @@ export type MessagingBrowseSessionRecord = {
   pageSize: number;
   preferences?: MessagingBindingPreferences;
   query?: string;
+  returnTo?: MessagingBrowseReturnTarget;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
   selectedProject?: MessagingBrowseSelectedProject;

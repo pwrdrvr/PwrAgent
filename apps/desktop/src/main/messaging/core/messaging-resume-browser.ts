@@ -9,6 +9,7 @@ import type {
   MessagingBindingPreferences,
   MessagingBrowseLaunchAction,
   MessagingBrowseMode,
+  MessagingBrowseReturnTarget,
   MessagingBrowseSelectedProject,
   MessagingBrowseSessionRecord,
   MessagingJsonValue,
@@ -479,6 +480,14 @@ function navigationActions(
       fallbackText: "new",
       layout: { row: FOOTER_ROW },
     });
+  } else if (session.returnTo) {
+    actions.push({
+      id: "browse:mode:resume",
+      label: "Resume",
+      style: "navigation",
+      fallbackText: "resume",
+      layout: { row: FOOTER_ROW },
+    });
   }
   actions.push({
     id: "browse:cancel",
@@ -573,6 +582,7 @@ function projectPickerFallbackText(
     page.pageIndex > 0 ? "previous" : undefined,
     page.pageIndex < page.totalPages - 1 ? "next" : undefined,
     session.launchAction === "resume_thread" ? "recent" : undefined,
+    session.returnTo ? "resume" : undefined,
     "cancel",
   ].filter(Boolean);
   return [
@@ -639,4 +649,24 @@ function normalizeOptionDashes(text: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export function resumeReturnTargetForSession(
+  session: MessagingBrowseSessionRecord,
+): MessagingBrowseReturnTarget | undefined {
+  if (session.launchAction !== "resume_thread") {
+    return session.returnTo;
+  }
+  if (session.mode === "new_project" || session.mode === "new_thread_options") {
+    return undefined;
+  }
+
+  return {
+    launchAction: "resume_thread",
+    mode: session.mode,
+    pageIndex: session.pageIndex,
+    preferences: session.preferences,
+    query: session.query,
+    selectedProject: session.selectedProject,
+  };
 }
