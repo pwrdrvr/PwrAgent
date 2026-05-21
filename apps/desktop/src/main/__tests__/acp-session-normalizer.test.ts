@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import {
+  AcpSessionReplayNormalizer,
+  readAcpTopicTitle,
+} from "../acp/acp-session-normalizer";
 
 describe("AcpSessionReplayNormalizer", () => {
   it("streams assistant message chunks into one replay message", () => {
@@ -200,6 +203,31 @@ describe("AcpSessionReplayNormalizer", () => {
       },
     });
 
+    expect(replay.entries).toEqual([]);
+  });
+
+  it("extracts ACP topic updates without rendering transcript activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "update_topic_1",
+        kind: "think",
+        title: 'Update topic to: "Exploring PwrSnap Project"',
+        status: "completed",
+      },
+    });
+
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "tool_call",
+        kind: "think",
+        title: 'Update topic to: "Exploring PwrSnap Project"',
+      }),
+    ).toBe("Exploring PwrSnap Project");
     expect(replay.entries).toEqual([]);
   });
 

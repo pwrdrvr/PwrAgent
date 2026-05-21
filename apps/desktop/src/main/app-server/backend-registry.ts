@@ -1956,8 +1956,20 @@ export class DesktopBackendRegistry {
               }),
             ]),
           }),
-          onSessionUpdate: async ({ sessionId, replay, turnId, update }) => {
+          onSessionUpdate: async ({ sessionId, replay, title, turnId, update }) => {
             const updateKind = readAcpUpdateKind(update);
+            if (title) {
+              await this.emit({
+                backend: agent.backendId,
+                notification: {
+                  method: "thread/name/updated",
+                  params: {
+                    threadId: sessionId,
+                    threadName: title,
+                  },
+                },
+              });
+            }
             if (updateKind === "agent_message_chunk") {
               const delta = readAcpUpdateText(update);
               if (delta) {

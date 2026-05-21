@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  readAcpTopicTitle,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import type {
@@ -32,6 +33,7 @@ export type AcpAgentClientOptions = {
   onSessionUpdate?: (event: {
     sessionId: string;
     replay: AppServerThreadReplay;
+    title?: string;
     turnId?: string;
     update: Record<string, unknown>;
   }) => Promise<void> | void;
@@ -277,6 +279,7 @@ export class AcpAgentClient {
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
       activeTurn.assistantText += readUpdateText(update) ?? "";
     }
+    const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
@@ -289,6 +292,7 @@ export class AcpAgentClient {
     void this.notifySessionUpdate({
       sessionId,
       replay,
+      title,
       turnId: activeTurn?.turnId,
       update,
     });
@@ -309,6 +313,11 @@ export class AcpAgentClient {
   ): AppServerThreadReplay {
     let replay = normalizer.replay();
     for (const item of metadata.transcriptUpdates ?? []) {
+      this.updateSessionTitleFromAcpUpdate(
+        metadata.sessionId,
+        item.update,
+        item.receivedAt,
+      );
       replay = normalizer.apply({
         sessionId: metadata.sessionId,
         update: item.update,
@@ -339,6 +348,7 @@ export class AcpAgentClient {
   private async notifySessionUpdate(event: {
     sessionId: string;
     replay: AppServerThreadReplay;
+    title?: string;
     turnId?: string;
     update: Record<string, unknown>;
   }): Promise<void> {
@@ -396,6 +406,27 @@ export class AcpAgentClient {
       status,
       updatedAt: Math.max(metadata.updatedAt, this.now()),
     });
+  }
+
+  private updateSessionTitleFromAcpUpdate(
+    sessionId: string,
+    update: Record<string, unknown>,
+    receivedAt: number,
+  ): string | undefined {
+    const title = readAcpTopicTitle(update);
+    if (!title) {
+      return undefined;
+    }
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata || metadata.title === title) {
+      return undefined;
+    }
+    this.options.store.upsertSession({
+      ...metadata,
+      title,
+      updatedAt: Math.max(metadata.updatedAt, receivedAt),
+    });
+    return title;
   }
 }
 

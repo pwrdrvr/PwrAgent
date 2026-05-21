@@ -266,6 +266,48 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("persists ACP topic updates as session titles", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const titleUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ title }) => {
+        if (title) {
+          titleUpdates.push(title);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "update_topic_1",
+      kind: "think",
+      title: 'Update topic to: "Exploring PwrSnap Project"',
+      status: "in_progress",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "update_topic_1",
+      kind: "think",
+      title: 'Update topic to: "Exploring PwrSnap Project"',
+      status: "completed",
+    });
+
+    expect(store.getSession("acp:gemini", session.sessionId)?.title).toBe(
+      "Exploring PwrSnap Project",
+    );
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+    expect(titleUpdates).toEqual(["Exploring PwrSnap Project"]);
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];

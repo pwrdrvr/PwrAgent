@@ -57,6 +57,8 @@ export class AcpSessionReplayNormalizer {
       this.applyAgentThoughtChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
+    } else if (readAcpTopicTitle(update.update)) {
+      // Topic updates are thread metadata, not transcript entries.
     } else if (kind === "plan") {
       this.upsertPlan(update, createdAt);
     } else if (kind === "tool_call" || kind === "tool_call_update") {
@@ -223,6 +225,31 @@ function readKind(update: Record<string, unknown>): string {
     readString(update, "type") ??
     "unknown"
   );
+}
+
+export function readAcpTopicTitle(
+  update: Record<string, unknown>,
+): string | undefined {
+  const sessionUpdate = readString(update, "sessionUpdate");
+  const kind = readString(update, "kind");
+  const isToolUpdate =
+    sessionUpdate === "tool_call" ||
+    sessionUpdate === "tool_call_update" ||
+    kind === "tool_call" ||
+    kind === "tool_call_update" ||
+    kind === "think";
+  if (!isToolUpdate) {
+    return undefined;
+  }
+
+  const title = readString(update, "title")?.trim();
+  if (!title) {
+    return undefined;
+  }
+  const quotedMatch = /^Update topic to:\s*["“](.+?)["”]\s*$/iu.exec(title);
+  const fallbackMatch = /^Update topic to:\s*(.+)$/iu.exec(title);
+  const topic = (quotedMatch?.[1] ?? fallbackMatch?.[1])?.trim();
+  return topic || undefined;
 }
 
 function readString(
