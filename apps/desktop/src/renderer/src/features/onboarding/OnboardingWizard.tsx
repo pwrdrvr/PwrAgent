@@ -561,6 +561,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           return;
         }
       }
+      // Extra grace after the heartbeat marker appears. The marker
+      // gets written during the spawned process's
+      // `initializeAppState` (main process side), but the renderer
+      // still needs to download + parse + paint after that. In dev
+      // the renderer fetches from Vite — if we quit the bootstrap
+      // and electron-vite kills the dev server WHILE the new
+      // renderer is mid-fetch, the new window ends up at
+      // chrome-error://chromewebdata/. A small fixed wait here
+      // covers the gap. Production builds load instantly from
+      // `file://`, so the delay is harmless overhead there.
+      const POST_ALIVE_GRACE_MS = 2_000;
+      await new Promise((resolve) => setTimeout(resolve, POST_ALIVE_GRACE_MS));
       if (api.quitApp) {
         try {
           await api.quitApp();
