@@ -179,6 +179,53 @@ describe("ProtocolCaptureStore", () => {
     expect(Object.values(index)[0]?.backendInstance).toBe("default");
   });
 
+  it("captures ACP traffic and indexes session ids", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    process.env.PWRAGENT_PROTOCOL_CAPTURE = "true";
+    process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT = rootDir;
+
+    const capture = createProtocolCaptureFromEnv({
+      backend: "acp:gemini",
+      backendInstance: "default",
+    });
+
+    await capture?.observer.onMessage({
+      direction: "inbound",
+      raw: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+          },
+        },
+      }),
+      envelope: {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+          },
+        },
+      },
+    });
+    await capture?.store.close();
+
+    const index = JSON.parse(
+      await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
+    ) as Record<string, { backend: string; backendInstance?: string; threadIds: string[] }>;
+    const [entry] = Object.values(index);
+    expect(entry).toMatchObject({
+      backend: "acp:gemini",
+      backendInstance: "default",
+      threadIds: ["session-1"],
+    });
+  });
+
   it("serializes index writes shared by concurrent backend captures", async () => {
     const rootDir = await createTempDir();
     cleanupPaths.push(rootDir);

@@ -1911,14 +1911,24 @@ export class DesktopBackendRegistry {
         if (!this.acpSessionStore?.upsertSession) {
           throw new Error("ACP session store is unavailable");
         }
+        const acpCapture = createProtocolCaptureFromEnv({
+          backend: agent.backendId,
+          backendInstance: "default",
+        });
+        if (acpCapture) {
+          this.captureStores.push(acpCapture.store);
+        }
         return new AcpAgentClient({
           backendId: agent.backendId,
           store: this.acpSessionStore as AcpSessionStore,
           transport: new AcpStdioJsonRpcTransport({
             launchDescriptor: agent.launchDescriptor,
-            observer: createProtocolLogObserverFromEnv({
-              backend: agent.backendId,
-            }),
+            observer: createCompositeJsonRpcObserver([
+              acpCapture?.observer,
+              createProtocolLogObserverFromEnv({
+                backend: agent.backendId,
+              }),
+            ]),
           }),
           onSessionUpdate: async ({ sessionId, replay }) => {
             await this.emit({

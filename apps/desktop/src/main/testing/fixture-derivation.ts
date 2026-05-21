@@ -17,7 +17,7 @@ import type {
 import { validateReplayFixture } from "./replay-fixture";
 
 type CaptureIndexEntry = {
-  backend: "codex" | "grok";
+  backend: string;
   captureId: string;
   createdAt: number;
   path: string;
@@ -186,7 +186,10 @@ export async function deriveReplayFixtureFromCapture(
 
   const fixture: ReplayFixture = {
     metadata: {
-      backend: options.backend ?? selectedRecords[0]?.record.backend ?? "codex",
+      backend:
+        options.backend ??
+        toReplayBackend(selectedRecords[0]?.record.backend) ??
+        "codex",
       scenario: options.scenario,
       sourceCaptureId:
         options.sourceCaptureId ?? selectedRecords[0]?.record.captureId,
@@ -207,6 +210,10 @@ export async function deriveReplayFixtureFromCapture(
     fixture,
     rawCaptureRecords: selectedRecords.map((entry) => entry.record),
   };
+}
+
+function toReplayBackend(value: string | undefined): "codex" | "grok" | undefined {
+  return value === "codex" || value === "grok" ? value : undefined;
 }
 
 export async function writeReplayFixtureArtifacts(

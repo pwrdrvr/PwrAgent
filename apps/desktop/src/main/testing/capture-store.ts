@@ -4,7 +4,7 @@ import path from "node:path";
 import { getMainLogger } from "../log";
 
 export type ProtocolCaptureEventRecord = {
-  backend: "codex" | "grok";
+  backend: string;
   backendInstance?: string;
   captureId: string;
   diagnostics?: ProtocolCaptureDiagnostics;
@@ -47,7 +47,7 @@ export type CapturedProtocolEnvelopeRecord = {
 };
 
 type CaptureIndexEntry = {
-  backend: "codex" | "grok";
+  backend: string;
   backendInstance?: string;
   captureId: string;
   createdAt: number;
@@ -103,7 +103,7 @@ export class ProtocolCaptureStore {
 
   constructor(
     private readonly params: {
-      backend: "codex" | "grok";
+      backend: string;
       backendInstance?: string;
       captureId: string;
       rootDir: string;
@@ -281,7 +281,7 @@ function validateCaptureRecord(
   filePath: string,
   lineNumber: number,
 ): ProtocolCaptureEventRecord {
-  if (value.backend !== "codex" && value.backend !== "grok") {
+  if (typeof value.backend !== "string" || !value.backend.trim()) {
     throw new Error(
       `Invalid capture record ${lineNumber} in ${filePath}: unsupported backend`,
     );
@@ -397,9 +397,11 @@ function visit(value: unknown, found: Set<string>): void {
   }
 
   const record = value as Record<string, unknown>;
-  const directThreadId = record.threadId;
-  if (typeof directThreadId === "string" && directThreadId.trim()) {
-    found.add(directThreadId.trim());
+  for (const key of ["threadId", "sessionId"]) {
+    const directId = record[key];
+    if (typeof directId === "string" && directId.trim()) {
+      found.add(directId.trim());
+    }
   }
 
   const threadRecord = record.thread;

@@ -9,7 +9,7 @@ const CAPTURE_ROOT_ENV = "PWRAGENT_PROTOCOL_CAPTURE_ROOT";
 const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
 
 export function createProtocolCaptureObserver(params: {
-  backend: "codex" | "grok";
+  backend: string;
   store: ProtocolCaptureStore;
 }): JsonRpcObserver {
   return {
@@ -25,7 +25,7 @@ export function createProtocolCaptureObserver(params: {
 }
 
 export function createProtocolCaptureFromEnv(params: {
-  backend: "codex" | "grok";
+  backend: string;
   backendInstance: string;
 }): {
   store: ProtocolCaptureStore;
@@ -62,7 +62,7 @@ export function createProtocolCaptureFromEnv(params: {
   };
 }
 
-function buildCaptureId(backend: "codex" | "grok", backendInstance: string): string {
+function buildCaptureId(backend: string, backendInstance: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   return `${timestamp}-${backend}-${sanitizeCapturePart(backendInstance)}`;
 }
