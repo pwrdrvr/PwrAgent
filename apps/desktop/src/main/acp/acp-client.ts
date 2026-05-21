@@ -374,7 +374,7 @@ function hasPersistedAssistantUpdate(metadata: AcpSessionMetadata): boolean {
 }
 
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
-  const kind = update.kind ?? update.type ?? update.sessionUpdate;
+  const kind = update.sessionUpdate ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
 }
 

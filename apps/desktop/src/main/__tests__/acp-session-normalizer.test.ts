@@ -99,6 +99,77 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("uses ACP sessionUpdate over tool kind when normalizing tool calls", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "README.md",
+        status: "completed",
+        locations: [{ path: "/repo/README.md" }],
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "read-file-1",
+        summary: "README.md",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: "README.md",
+            path: "/repo/README.md",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("ignores available command updates in transcripts", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "help" }],
+      },
+    });
+
+    expect(replay.entries).toEqual([]);
+  });
+
+  it("records thought chunks as assistant commentary", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Inspecting project files." },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        id: "thought:session-1",
+        role: "assistant",
+        phase: "commentary",
+        text: "Inspecting project files.",
+      }),
+    ]);
+  });
+
   it("preserves unknown update variants as structured activity", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

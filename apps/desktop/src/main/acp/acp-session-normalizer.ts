@@ -5,6 +5,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
+  AppServerTranscriptPhase,
 } from "@pwragent/shared";
 
 export type AcpSessionUpdate = {
@@ -47,6 +48,10 @@ export class AcpSessionReplayNormalizer {
 
     if (kind === "agent_message_chunk") {
       this.applyAgentMessageChunk(update, createdAt);
+    } else if (kind === "agent_thought_chunk") {
+      this.applyAgentThoughtChunk(update, createdAt);
+    } else if (kind === "available_commands_update") {
+      // Command metadata belongs in provider capabilities, not the transcript.
     } else if (kind === "plan") {
       this.upsertPlan(update, createdAt);
     } else if (kind === "tool_call" || kind === "tool_call_update") {
@@ -98,6 +103,24 @@ export class AcpSessionReplayNormalizer {
     this.appendMessageChunk({ id, role: "assistant", text, createdAt });
   }
 
+  private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {
+    const text =
+      readContentText(update.update, "content") ??
+      readString(update.update, "text") ??
+      "";
+    if (!text) {
+      return;
+    }
+    const id = readString(update.update, "messageId") ?? `thought:${update.sessionId}`;
+    this.appendMessageChunk({
+      id,
+      phase: "commentary",
+      role: "assistant",
+      text,
+      createdAt,
+    });
+  }
+
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
     const id = readString(update.update, "planId") ?? `plan:${update.sessionId}`;
     const steps = readPlanSteps(update.update);
@@ -146,6 +169,7 @@ export class AcpSessionReplayNormalizer {
 
   private appendMessageChunk(params: {
     id: string;
+    phase?: AppServerTranscriptPhase;
     role: "assistant" | "user";
     text: string;
     createdAt: number;
@@ -174,6 +198,7 @@ export class AcpSessionReplayNormalizer {
       this.entries.push({
         type: "message",
         id: params.id,
+        phase: params.phase,
         role: params.role,
         text: params.text,
         createdAt: params.createdAt,
@@ -184,9 +209,9 @@ export class AcpSessionReplayNormalizer {
 
 function readKind(update: Record<string, unknown>): string {
   return (
+    readString(update, "sessionUpdate") ??
     readString(update, "kind") ??
     readString(update, "type") ??
-    readString(update, "sessionUpdate") ??
     "unknown"
   );
 }
@@ -255,10 +280,14 @@ function toolActivity(
   const label =
     readString(update.update, "title") ??
     readString(update.update, "name") ??
+    readString(update.update, "kind") ??
     kind.replaceAll("_", " ");
   const status = readString(update.update, "status");
-  const path = readString(update.update, "path");
+  const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const command = readString(update.update, "command");
+  const detailKind = command
+    ? "command"
+    : toolDetailKind(readString(update.update, "kind"), path);
 
   return {
     type: "activity",
@@ -275,13 +304,46 @@ function toolActivity(
     details: [
       {
         id: `${id}:detail`,
-        kind: command ? "command" : path ? "write" : "read",
+        kind: detailKind,
         label,
         path,
         command: command ? { displayCommand: command, rawCommand: command } : undefined,
       },
     ],
   };
+}
+
+function toolDetailKind(
+  toolKind: string | undefined,
+  path: string | undefined,
+): AppServerThreadActivityEntry["details"][number]["kind"] {
+  if (toolKind === "write" || toolKind === "edit") {
+    return "write";
+  }
+  if (toolKind === "execute" || toolKind === "exec" || toolKind === "shell") {
+    return "command";
+  }
+  if (toolKind === "read" || toolKind === "search" || toolKind === "list") {
+    return "read";
+  }
+  return path ? "read" : "command";
+}
+
+function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
+  const locations = record.locations;
+  if (!Array.isArray(locations)) {
+    return undefined;
+  }
+  for (const location of locations) {
+    if (!location || typeof location !== "object" || Array.isArray(location)) {
+      continue;
+    }
+    const path = (location as Record<string, unknown>).path;
+    if (typeof path === "string" && path.trim()) {
+      return path;
+    }
+  }
+  return undefined;
 }
 
 function unknownActivity(
