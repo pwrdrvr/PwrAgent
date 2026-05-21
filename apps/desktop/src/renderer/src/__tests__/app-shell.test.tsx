@@ -93,7 +93,7 @@ describe("App", () => {
     cleanup();
   });
 
-  it("shows the thread shell while the startup settings read is pending", async () => {
+  it("shows the thread shell without starting backends while the startup settings read is pending", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),
       backends: [],
@@ -133,10 +133,8 @@ describe("App", () => {
     await waitFor(() => {
       expect(readSettings).toHaveBeenCalledTimes(1);
     });
-    await waitFor(() => {
-      expect(listBackends).toHaveBeenCalledTimes(1);
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    });
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("blocks the app shell when desktop settings config is malformed", async () => {
@@ -344,7 +342,7 @@ describe("App", () => {
     expect(screen.queryByRole("complementary", { name: "Threads" })).not.toBeInTheDocument();
   });
 
-  it("starts loading navigation before settings discovery completes", async () => {
+  it("starts loading navigation after settings discovery completes", async () => {
     const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -373,6 +371,33 @@ describe("App", () => {
     });
 
     render(<App />);
+
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settings.resolve({
+        snapshot: {
+          general: {
+            appearance: {
+              theme: { value: "system", source: "default" },
+              density: { value: "mission-control", source: "default" },
+            },
+          },
+          onboarding: {
+            completed: { value: true, source: "default" },
+          },
+          imageUploads: {
+            pastedImageMaxPatches: { value: 1536, source: "default" },
+          },
+          experimental: {
+            fullAccessRiskWarningDismissed: {
+              value: false,
+              source: "default",
+            },
+          },
+        } as DesktopSettingsSnapshot,
+      });
+    });
 
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);

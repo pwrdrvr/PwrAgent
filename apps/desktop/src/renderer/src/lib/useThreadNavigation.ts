@@ -1310,6 +1310,7 @@ function buildOptimisticUserMessage(
 }
 
 type UseThreadNavigationOptions = {
+  enabled?: boolean;
   threadViewVisible?: boolean;
 };
 
@@ -1434,6 +1435,7 @@ export function useThreadNavigation(
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
+  const enabled = options.enabled ?? true;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("inbox");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -1464,7 +1466,7 @@ export function useThreadNavigation(
   const [pickDirectoryError, setPickDirectoryError] = useState<string>();
   const [pickingDirectory, setPickingDirectory] = useState(false);
   const [state, setState] = useState<NavigationState>({
-    loading: true,
+    loading: enabled,
     refreshing: false,
   });
   const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
@@ -1523,6 +1525,16 @@ export function useThreadNavigation(
       preferredOptimisticThread?: NavigationThreadSummary,
       forcePreferredSelection = false
     ): Promise<void> => {
+      if (!enabled) {
+        setState({
+          loading: false,
+          refreshing: false,
+          error: undefined,
+          response: undefined,
+        });
+        return;
+      }
+
       if (!desktopApi?.getNavigationSnapshot) {
         setState({
           loading: false,
@@ -1613,7 +1625,7 @@ export function useThreadNavigation(
         }));
       }
     },
-    [desktopApi]
+    [desktopApi, enabled]
   );
 
   const refresh = useCallback(
@@ -1720,11 +1732,21 @@ export function useThreadNavigation(
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setState({
+        loading: false,
+        refreshing: false,
+        error: undefined,
+        response: undefined,
+      });
+      return;
+    }
+
     void refresh();
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
-    if (!desktopApi?.getNavigationSnapshot) {
+    if (!enabled || !desktopApi?.getNavigationSnapshot) {
       return;
     }
 
@@ -1735,20 +1757,20 @@ export function useThreadNavigation(
     return () => {
       clearInterval(timer);
     };
-  }, [desktopApi?.getNavigationSnapshot, scheduleRefresh]);
+  }, [desktopApi?.getNavigationSnapshot, enabled, scheduleRefresh]);
 
   useEffect(() => {
-    if (!desktopApi?.onWindowFocus) {
+    if (!enabled || !desktopApi?.onWindowFocus) {
       return;
     }
 
     return desktopApi.onWindowFocus(() => {
       scheduleRefresh();
     });
-  }, [desktopApi, scheduleRefresh]);
+  }, [desktopApi, enabled, scheduleRefresh]);
 
   useEffect(() => {
-    if (!desktopApi?.onAgentEvent) {
+    if (!enabled || !desktopApi?.onAgentEvent) {
       return;
     }
 
@@ -2086,7 +2108,7 @@ export function useThreadNavigation(
         scheduleRefresh();
       }
     });
-  }, [desktopApi, scheduleRefresh, state.response]);
+  }, [desktopApi, enabled, scheduleRefresh, state.response]);
 
   // Bindings live in the navigation snapshot but are mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
@@ -2094,13 +2116,13 @@ export function useThreadNavigation(
   // backend notifications). Without this hook the binding chip stays
   // stale until the next backend tick. See issue #191.
   useEffect(() => {
-    if (!desktopApi?.onMessagingBindingsChanged) {
+    if (!enabled || !desktopApi?.onMessagingBindingsChanged) {
       return;
     }
     return desktopApi.onMessagingBindingsChanged(() => {
       scheduleRefresh();
     });
-  }, [desktopApi, scheduleRefresh]);
+  }, [desktopApi, enabled, scheduleRefresh]);
 
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];

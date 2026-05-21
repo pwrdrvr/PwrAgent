@@ -10,12 +10,24 @@ type BackendSummaryState = {
 export const BACKEND_SUMMARIES_REFRESH_EVENT =
   "pwragent:backend-summaries-refresh";
 
-export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryState {
+export function useBackendSummaries(
+  desktopApi?: DesktopApi,
+  options: { enabled?: boolean } = {},
+): BackendSummaryState {
+  const enabled = options.enabled ?? true;
   const [state, setState] = useState<BackendSummaryState>({
     backends: []
   });
 
   const refresh = useCallback(async (): Promise<void> => {
+    if (!enabled) {
+      setState({
+        backends: [],
+        error: undefined
+      });
+      return;
+    }
+
     if (!desktopApi?.listBackends) {
       setState({
         backends: [],
@@ -38,21 +50,24 @@ export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryStat
         error: error instanceof Error ? error.message : String(error)
       });
     }
-  }, [desktopApi]);
+  }, [desktopApi, enabled]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
     return () => {
       window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   useEffect(() => {
-    if (!desktopApi?.onAgentEvent) {
+    if (!enabled || !desktopApi?.onAgentEvent) {
       return;
     }
     return desktopApi.onAgentEvent((event) => {
@@ -64,7 +79,7 @@ export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryStat
         void refresh();
       }
     });
-  }, [desktopApi, refresh]);
+  }, [desktopApi, enabled, refresh]);
 
   return state;
 }

@@ -144,12 +144,19 @@ function DesktopAppShell(props: {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
   const settings = props.settings;
+  const normalAppEnabled =
+    !desktopApi?.readSettings ||
+    (Boolean(settings.snapshot) &&
+      settings.snapshot?.onboarding?.completed.value !== false);
   const profiles = usePwrAgentProfiles(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const navigation = useThreadNavigation(desktopApi, {
+    enabled: normalAppEnabled,
     threadViewVisible: mainView === "thread",
   });
-  const backendSummaries = useBackendSummaries(desktopApi);
+  const backendSummaries = useBackendSummaries(desktopApi, {
+    enabled: normalAppEnabled,
+  });
   const pullRequests = usePullRequestRefresh({
     desktopApi,
     onRefreshNavigation: navigation.refresh,
@@ -516,6 +523,7 @@ function DesktopAppShell(props: {
               await desktopApi.completeOnboardingCodexBootstrap({
                 connect: true,
               });
+              await settings.refresh();
             }
             setOnboardingOpen(null);
           }}
@@ -528,7 +536,7 @@ function DesktopAppShell(props: {
               // restart) will surface them.
               void desktopApi?.completeOnboardingCodexBootstrap?.({
                 connect: false,
-              });
+              }).then(() => settings.refresh());
             }
             setOnboardingOpen(null);
           }}
