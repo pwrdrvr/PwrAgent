@@ -15,6 +15,10 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
@@ -69,8 +73,7 @@ function showLicenseDocumentWindow(options: {
     minHeight: 480,
     show: false,
     title: options.title,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -80,6 +83,7 @@ function showLicenseDocumentWindow(options: {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_LICENSE_DOCUMENT, [

@@ -15,6 +15,10 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
@@ -39,8 +43,7 @@ export function showChangelogWindow(): void {
     minHeight: 480,
     show: false,
     title: "Changelog - PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -50,6 +53,7 @@ export function showChangelogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_CHANGELOG, [

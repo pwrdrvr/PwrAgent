@@ -18,6 +18,10 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
@@ -42,8 +46,7 @@ export function showAppLogWindow(): void {
     minHeight: 500,
     show: false,
     title: "Logs - PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -53,6 +56,7 @@ export function showAppLogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_APP_LOGS, [

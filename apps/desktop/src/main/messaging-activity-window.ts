@@ -15,6 +15,10 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:activity-window");
 
@@ -56,8 +60,7 @@ export function showMessagingActivityWindow(): void {
     minHeight: 480,
     show: false,
     title: "Messaging Activity — PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -67,6 +70,7 @@ export function showMessagingActivityWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   // The activity window does not subscribe to any push events today
