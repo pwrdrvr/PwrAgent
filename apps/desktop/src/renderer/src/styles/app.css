@@ -9961,6 +9961,65 @@ textarea,
   grid-template-rows: auto 1fr auto;
 }
 
+/* Dismiss-confirmation modal — rendered on top of the wizard
+   itself when the operator tries to bail out in bootstrap mode.
+   Three actions: Cancel / Skip-and-default / Exit. The X close
+   button on the titlebar and the Skip link in the footer both
+   route through this; ESC opens/closes it too. */
+.onboarding-wizard__dismiss-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.onboarding-wizard__dismiss-modal-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-strong);
+  border-radius: inherit;
+}
+.onboarding-wizard__dismiss-modal-body {
+  position: relative;
+  width: min(560px, calc(100% - 64px));
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-popover);
+  padding: 24px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-wizard__dismiss-modal-title {
+  font: 650 18px/1.3 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0;
+}
+.onboarding-wizard__dismiss-modal-prose {
+  font: 400 13px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.onboarding-wizard__dismiss-modal-prose code {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font: 600 90% var(--font-mono);
+  color: var(--accent);
+}
+.onboarding-wizard__dismiss-modal-prose strong {
+  color: var(--text-primary);
+}
+.onboarding-wizard__dismiss-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .onboarding-wizard__titlebar {
   display: flex;
   align-items: center;

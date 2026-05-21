@@ -249,13 +249,26 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // has no working backend configured. The user's #467 follow-up
   // explicitly called this out: "don't write anything to the config
   // saying we succeeded with the wizard until we really truly did."
-  // Now: ESC + Skip both leave `completed` unchanged (false for fresh
-  // profiles → wizard auto-fires again next launch). Only the Done
-  // step's "Open my workspace" persists completion.
+  //
+  // Now:
+  //   - In active-profile mode (Replay): ESC dismisses immediately.
+  //   - In bootstrap mode: ESC opens the dismiss-confirmation modal
+  //     so the operator gets the explicit fork (Cancel / Skip and
+  //     use default / Exit) instead of silently bailing into a
+  //     half-state. If the modal is already open, ESC closes it.
+  //
+  // `bootInfoModeRef` lets the keydown handler read the current mode
+  // without re-binding on every render — the handler closes over it
+  // by ref so we don't churn `addEventListener` calls.
+  const bootInfoModeRef = useRef(props.bootInfo?.mode);
+  bootInfoModeRef.current = props.bootInfo?.mode;
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !submitting) {
-        event.preventDefault();
+      if (event.key !== "Escape" || submitting) return;
+      event.preventDefault();
+      if (bootInfoModeRef.current === "bootstrap") {
+        setDismissModalOpen((prev) => !prev ? true : prev);
+      } else {
         props.onDismiss(false);
       }
     };
@@ -567,31 +580,72 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             }
           }
         } else {
-          // Shared mode (and Replay): no new profile gets created.
-          // Buffered secrets graduate to the renderer's active profile
-          // — that's the operator's current session, which is where
-          // they'll keep working after Finish. In bootstrap + Shared
-          // (a deliberate "create a default profile mapped to my
-          // Codex session" choice), the active profile is `.bootstrap`
-          // itself; no graduation target exists yet. The fallback path
-          // there is `replaceSecret` against the active profile, which
-          // is what today's behavior already does — see the comment
-          // on `writeSecretsToProfile` for why this branch differs.
+          // Shared mode. Two sub-paths depending on whether the
+          // wizard is running in active-profile or bootstrap mode:
+          //
+          //   - Active-profile (Replay / Help → Replay Onboarding):
+          //     the operator is already in a real profile. Buffered
+          //     secrets graduate to that profile, full stop.
+          //
+          //   - Bootstrap: there's no real profile yet. "Shared"
+          //     means "create a default profile that reuses my
+          //     existing Codex install at `~/.codex/`." We create
+          //     a PwrAgent profile named `default` (or pick a
+          //     unique name if `default/` is somehow already
+          //     occupied), leave its Codex pairing empty (= system
+          //     default), graduate the bootstrap config onto it,
+          //     and open the main window for it.
           const activeProfile = props.bootInfo?.activeProfileName;
-          if (
-            activeProfile &&
-            Object.keys(bufferedSecrets).length > 0 &&
-            props.desktopApi?.writeSecretsToProfile
-          ) {
+          if (activeProfile) {
+            if (
+              Object.keys(bufferedSecrets).length > 0 &&
+              props.desktopApi?.writeSecretsToProfile
+            ) {
+              try {
+                await props.desktopApi.writeSecretsToProfile({
+                  profile: activeProfile,
+                  secrets: bufferedSecrets,
+                });
+              } catch (caught) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  `Onboarding: writeSecretsToProfile failed for active profile "${activeProfile}"`,
+                  caught,
+                );
+              }
+            }
+          } else if (props.desktopApi?.createPwrAgentProfile) {
+            // Bootstrap + Shared. Provision the default profile
+            // with the system-default Codex pairing implied (we
+            // skip `setPwrAgentProfileCodexProfile`; an unset
+            // codex.profile in the new profile's config.toml means
+            // "use ~/.codex/" — i.e. Shared).
+            const defaultName = "default";
             try {
-              await props.desktopApi.writeSecretsToProfile({
-                profile: activeProfile,
-                secrets: bufferedSecrets,
+              await props.desktopApi.createPwrAgentProfile({
+                profile: defaultName,
+                seedOnboardingCompleted: true,
               });
+              if (props.desktopApi?.writeSecretsToProfile) {
+                await props.desktopApi.writeSecretsToProfile({
+                  profile: defaultName,
+                  secrets: bufferedSecrets,
+                });
+              }
+              if (props.desktopApi?.graduateBootstrapToProfile) {
+                await props.desktopApi.graduateBootstrapToProfile({
+                  targetProfile: defaultName,
+                });
+              }
+              if (props.desktopApi?.openPwrAgentProfile) {
+                await props.desktopApi.openPwrAgentProfile({
+                  profile: defaultName,
+                });
+              }
             } catch (caught) {
               // eslint-disable-next-line no-console
               console.warn(
-                `Onboarding: writeSecretsToProfile failed for active profile "${activeProfile}"`,
+                "Onboarding: shared-default provisioning failed",
                 caught,
               );
             }
@@ -616,13 +670,78 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     ],
   );
 
+  // Dismiss-confirmation modal state. The wizard shows the modal
+  // instead of dismissing immediately when running in bootstrap mode,
+  // because dismissing-from-bootstrap is irreversible-ish: either we
+  // create a `default` profile mapped to the operator's Codex system
+  // session (and they see all their existing Codex Desktop threads),
+  // or we quit the app entirely. The modal makes that fork explicit.
+  // In active-profile mode (Replay), dismiss is benign — wizard just
+  // closes — so we skip the modal there.
+  const [dismissModalOpen, setDismissModalOpen] = useState(false);
+  const inBootstrapMode = props.bootInfo?.mode === "bootstrap";
+
   const handleSkip = useCallback((): void => {
-    // Skip never persists `onboarding.completed = true`. Anything else
-    // would let the operator end up with a "completed" profile that
-    // doesn't actually have a working backend. The wizard re-fires on
-    // the next launch — see the docs on the ESC keydown handler above
-    // for the full reasoning.
+    if (inBootstrapMode) {
+      setDismissModalOpen(true);
+      return;
+    }
+    // Active-profile (Replay) skip: close the wizard, no profile
+    // mutation. Skip never persists `onboarding.completed = true`.
     props.onDismiss(false);
+  }, [inBootstrapMode, props]);
+
+  // "Skip and use default" path from the dismiss modal: reuses the
+  // same Shared-mode bootstrap provisioning logic as
+  // `persistAndComplete` — create a `default` profile mapped to
+  // Codex system default, graduate bootstrap, open main window.
+  // Settings + secrets get applied even though the operator skipped
+  // the rest of the wizard, so the operator's theme/density choices
+  // (if any) aren't lost just because they bailed early.
+  const skipAndUseDefault = useCallback(async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const defaultName = "default";
+      if (!props.desktopApi?.createPwrAgentProfile) {
+        props.onDismiss(false);
+        return;
+      }
+      await props.desktopApi.createPwrAgentProfile({
+        profile: defaultName,
+        seedOnboardingCompleted: true,
+      });
+      if (props.desktopApi.writeSecretsToProfile) {
+        await props.desktopApi.writeSecretsToProfile({
+          profile: defaultName,
+          secrets: bufferedSecrets,
+        });
+      }
+      if (props.desktopApi.graduateBootstrapToProfile) {
+        await props.desktopApi.graduateBootstrapToProfile({
+          targetProfile: defaultName,
+        });
+      }
+      if (props.desktopApi.openPwrAgentProfile) {
+        await props.desktopApi.openPwrAgentProfile({ profile: defaultName });
+      }
+    } catch (caught) {
+      // eslint-disable-next-line no-console
+      console.warn("Onboarding: skipAndUseDefault failed", caught);
+    } finally {
+      setSubmitting(false);
+      setDismissModalOpen(false);
+    }
+  }, [bufferedSecrets, props, submitting]);
+
+  const exitApp = useCallback((): void => {
+    if (props.desktopApi?.quitApp) {
+      void props.desktopApi.quitApp();
+    } else {
+      // Renderer outside of a real desktop session (tests, preview)
+      // — fall through to the normal dismiss path.
+      props.onDismiss(false);
+    }
   }, [props]);
 
   const currentRailIndex = railIndexForStep(step);
@@ -655,7 +774,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               ? `${providerSetupIndex + 1} of ${orderedProviders.length}`
               : undefined
           }
-          onClose={() => props.onDismiss(false)}
+          onClose={handleSkip}
         />
         {step !== "welcome" && step !== "bootstrap-confirm" ? (
           <WizardRail
@@ -800,6 +919,94 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           onNext={goNext}
           onFinish={() => void persistAndComplete()}
         />
+        {dismissModalOpen ? (
+          <DismissConfirmModal
+            submitting={submitting}
+            onCancel={() => setDismissModalOpen(false)}
+            onSkipAndUseDefault={() => void skipAndUseDefault()}
+            onExit={exitApp}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Confirmation modal rendered when the operator tries to dismiss the
+ * wizard while running in bootstrap mode (via the X close button,
+ * the Skip link in the footer, or ESC). Bootstrap dismiss is
+ * irreversible-ish — either we create a `default` profile mapped to
+ * the operator's existing Codex install (and they see all of their
+ * existing Codex Desktop threads on the next launch) or we quit the
+ * app — so the fork has to be explicit, not silent.
+ *
+ * The middle button ("Skip and use default") runs the same
+ * provisioning path that picking Shared mode + clicking Finish
+ * would. The settings buffer (theme/density/messaging ack, plus
+ * any xAI key the operator typed) still graduates onto the new
+ * default profile, so they don't lose what they already typed.
+ */
+function DismissConfirmModal(props: {
+  submitting: boolean;
+  onCancel: () => void;
+  onSkipAndUseDefault: () => void;
+  onExit: () => void;
+}) {
+  return (
+    <div
+      className="onboarding-wizard__dismiss-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-dismiss-modal-heading"
+    >
+      <div className="onboarding-wizard__dismiss-modal-scrim" />
+      <div className="onboarding-wizard__dismiss-modal-body">
+        <h2
+          id="onboarding-dismiss-modal-heading"
+          className="onboarding-wizard__dismiss-modal-title"
+        >
+          Skip setup?
+        </h2>
+        <p className="onboarding-wizard__dismiss-modal-prose">
+          If you skip, PwrAgent will create a <code>default</code> profile
+          that <strong>reuses your existing Codex login</strong> at{" "}
+          <code>~/.codex/</code> — which probably means you&rsquo;ll see all
+          your existing Codex Desktop threads in the sidebar.
+        </p>
+        <p className="onboarding-wizard__dismiss-modal-prose">
+          If that&rsquo;s not what you want — for example, you wanted an
+          isolated PwrAgent profile separate from your Codex account —
+          click <strong>Exit PwrAgent</strong> instead, then relaunch and
+          walk through the wizard with Isolated or Multiple selected.
+        </p>
+        <div className="onboarding-wizard__dismiss-modal-actions">
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--link"
+            disabled={props.submitting}
+            onClick={props.onExit}
+          >
+            Exit PwrAgent
+          </button>
+          <span className="onboarding-wizard__spacer" />
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            disabled={props.submitting}
+            onClick={props.onCancel}
+          >
+            Cancel — back to setup
+          </button>
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+            disabled={props.submitting}
+            onClick={props.onSkipAndUseDefault}
+          >
+            Skip and use default →
+          </button>
+        </div>
       </div>
     </div>
   );
