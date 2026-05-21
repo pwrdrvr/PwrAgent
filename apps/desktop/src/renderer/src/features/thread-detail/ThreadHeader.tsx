@@ -49,7 +49,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 </span>
               </>
             ) : null}
-            <h2 className="thread-header__compact-title" title={props.thread.title}>
+            <h2
+              aria-label={props.thread.title}
+              className="thread-header__compact-title"
+              title={props.thread.title}
+            >
               {props.onRevealSelectedThreadInList ? (
                 <button
                   aria-label="Show selected thread in thread list"
