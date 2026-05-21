@@ -32,6 +32,12 @@ import type { WorktreeArchiveService } from "../app-server/worktree-archive-serv
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 
+const localAcpDiscoveryMock = vi.hoisted(() => ({
+  discoverLocalAcpAgents: vi.fn(async () => [] as AcpInstalledAgentRecord[]),
+}));
+
+vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+
 const execFileAsync = promisify(execFileCallback);
 
 async function flushAsync(): Promise<void> {
@@ -1275,6 +1281,60 @@ describe("DesktopBackendRegistry", () => {
             createThread: true,
             readThread: true,
             startTurn: true,
+          }),
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("reports locally discovered ACP agents as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      discoverLocalAcpAgents: async () => [
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          version: "0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          launchDescriptor: {
+            backendId: "acp:gemini",
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ],
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "acp:gemini",
+          source: "acp",
+          label: "Gemini CLI",
+          available: true,
+          acp: expect.objectContaining({
+            registryId: "gemini",
+            distributionKinds: ["local"],
+            installStatus: "installed",
+            allowlistRuleId: "local-gemini-cli",
           }),
         }),
       ]),

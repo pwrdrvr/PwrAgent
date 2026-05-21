@@ -101,6 +101,7 @@ import {
 } from "@pwragent/shared";
 import type { AcpAgentStore } from "../acp/acp-agent-store";
 import { AcpAgentClient } from "../acp/acp-client";
+import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -333,6 +334,7 @@ type AcpRuntimeClient = Pick<
 >;
 
 type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
+type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 
 type AcpSessionStoreLike =
   Pick<AcpSessionStore, "getSession" | "listSessions"> &
@@ -1622,6 +1624,8 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents">;
   private readonly acpSessionStore?: AcpSessionStoreLike;
+  private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
+  private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
   private readonly createAcpClient: AcpClientFactory;
   private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
@@ -1720,6 +1724,7 @@ export class DesktopBackendRegistry {
     worktreeArchiveService?: WorktreeArchiveService;
     acpAgentStore?: Pick<AcpAgentStore, "listInstalledAgents"> | null;
     acpSessionStore?: AcpSessionStoreLike | null;
+    discoverLocalAcpAgents?: LocalAcpDiscovery;
     createAcpClient?: AcpClientFactory;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
@@ -1835,6 +1840,8 @@ export class DesktopBackendRegistry {
           (isAppStateInitialized()
             ? new SqliteAcpSessionStore(getAppStateDb())
             : undefined);
+    this.discoverLocalAcpAgents =
+      options?.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
     this.createAcpClient =
       options?.createAcpClient ??
       ((agent) => {
@@ -2131,7 +2138,7 @@ export class DesktopBackendRegistry {
       this.describeCodexBackend(),
       this.describeSingleBackend("grok", this.grokClient),
     ]);
-    const acpSummaries = this.describeInstalledAcpBackends();
+    const acpSummaries = await this.describeInstalledAcpBackends();
 
     return {
       fetchedAt: Date.now(),
@@ -2317,7 +2324,7 @@ export class DesktopBackendRegistry {
         enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }).catch(() => []),
-      Promise.resolve(this.listAllInstalledAcpThreads(params.filter)),
+      this.listAllInstalledAcpThreads(params.filter),
     ]);
 
     return threadLists
@@ -2404,8 +2411,10 @@ export class DesktopBackendRegistry {
     return { data };
   }
 
-  private listAllInstalledAcpThreads(filter?: string): AppServerThreadSummary[] {
-    return (this.acpAgentStore?.listInstalledAgents() ?? []).flatMap((agent) =>
+  private async listAllInstalledAcpThreads(
+    filter?: string,
+  ): Promise<AppServerThreadSummary[]> {
+    return (await this.listAvailableAcpAgents()).flatMap((agent) =>
       this.listInstalledAcpThreads(agent.backendId, filter),
     );
   }
@@ -2548,7 +2557,7 @@ export class DesktopBackendRegistry {
       return await cached;
     }
 
-    const agent = this.resolveInstalledAcpAgent(backend);
+    const agent = await this.resolveInstalledAcpAgent(backend);
     const clientPromise = (async () => {
       const client = this.createAcpClient(agent);
       await client.initialize();
@@ -2563,8 +2572,10 @@ export class DesktopBackendRegistry {
     return await clientPromise;
   }
 
-  private resolveInstalledAcpAgent(backend: AcpBackendId): AcpInstalledAgentRecord {
-    const agent = (this.acpAgentStore?.listInstalledAgents() ?? []).find(
+  private async resolveInstalledAcpAgent(
+    backend: AcpBackendId,
+  ): Promise<AcpInstalledAgentRecord> {
+    const agent = (await this.listAvailableAcpAgents()).find(
       (candidate) => candidate.backendId === backend,
     );
     if (!agent) {
@@ -6003,9 +6014,33 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private describeInstalledAcpBackends(): BackendSummary[] {
-    const installedAgents = this.acpAgentStore?.listInstalledAgents() ?? [];
+  private async describeInstalledAcpBackends(): Promise<BackendSummary[]> {
+    const installedAgents = await this.listAvailableAcpAgents();
     return installedAgents.map((agent) => describeInstalledAcpBackend(agent));
+  }
+
+  private async listAvailableAcpAgents(): Promise<AcpInstalledAgentRecord[]> {
+    const installedAgents = this.acpAgentStore?.listInstalledAgents() ?? [];
+    const installedBackendIds = new Set(
+      installedAgents.map((agent) => agent.backendId),
+    );
+    const discoveredAgents = await this.readLocalAcpAgentsOnce();
+    return [
+      ...installedAgents,
+      ...discoveredAgents.filter(
+        (agent) => !installedBackendIds.has(agent.backendId),
+      ),
+    ];
+  }
+
+  private async readLocalAcpAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
+    this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch((error) => {
+      backendRegistryLog.debug("local_acp_discovery_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    });
+    return await this.localAcpAgentsPromise;
   }
 
   private async describeSingleBackend(

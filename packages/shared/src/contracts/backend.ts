@@ -2,7 +2,7 @@ import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app
 
 export type BackendSourceKind = "builtin" | "acp";
 
-export type BackendAcpDistributionKind = "npx" | "uvx" | "binary";
+export type BackendAcpDistributionKind = "npx" | "uvx" | "binary" | "local";
 export type BackendAcpInstallStatus =
   | "not-installed"
   | "installed"

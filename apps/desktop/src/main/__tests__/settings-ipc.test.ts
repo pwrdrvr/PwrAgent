@@ -17,6 +17,9 @@ const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   spawn: vi.fn(),
 }));
+const localAcpDiscoveryMock = vi.hoisted(() => ({
+  discoverLocalAcpAgents: vi.fn(async () => [] as unknown[]),
+}));
 const electronMocks = vi.hoisted(() => ({
   openExternal: vi.fn(async () => undefined),
 }));
@@ -113,6 +116,8 @@ vi.mock("node:child_process", () => ({
   spawn: childProcessMocks.spawn,
 }));
 
+vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
+
 vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
   getDesktopBackendRegistry: getDesktopBackendRegistryMock,
@@ -183,6 +188,8 @@ describe("settings ipc", () => {
     runtimeMock.requestCredentialValidation.mockReset();
     childProcessMocks.execFile.mockReset();
     childProcessMocks.spawn.mockReset();
+    localAcpDiscoveryMock.discoverLocalAcpAgents.mockReset();
+    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([]);
     electronMocks.openExternal.mockClear();
     childProcessMocks.execFile.mockImplementation(
       (
@@ -782,6 +789,69 @@ describe("settings ipc", () => {
         error: "allowlist-rule-mismatch",
       });
       expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("lists locally discovered ACP agents without a registry install", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    localAcpDiscoveryMock.discoverLocalAcpAgents.mockResolvedValue([
+      {
+        backendId: "acp:gemini",
+        registryId: "gemini",
+        name: "Gemini CLI",
+        version: "0.42.0",
+        distributionKind: "local",
+        distributionSource: "gemini --acp",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-gemini-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        launchDescriptor: {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--acp"],
+          env: {},
+        },
+      },
+    ]);
+    const { initializeAppState, disposeAppState } = await import("../state/app-state");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState();
+    try {
+      registerSettingsIpcHandlers(service);
+      await expect(
+        handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: false }),
+      ).resolves.toMatchObject({
+        entries: [
+          {
+            backendId: "acp:gemini",
+            registryId: "gemini",
+            name: "Gemini CLI",
+            distributionKind: "local",
+            distributionSource: "gemini --acp",
+            installed: true,
+            installStatus: "installed",
+            installable: false,
+            allowlistRuleId: "local-gemini-cli",
+          },
+        ],
+      });
     } finally {
       disposeAppState();
     }

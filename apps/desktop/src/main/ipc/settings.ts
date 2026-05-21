@@ -74,6 +74,7 @@ import {
 } from "../settings/codex-profiles";
 import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
+import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { AcpInstaller } from "../acp/acp-installer";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
@@ -128,7 +129,7 @@ async function listAcpAgentSettings(
   }
 
   snapshot ??= store.readRegistrySnapshot();
-  const installed = store.listInstalledAgents();
+  const installed = await listInstalledAndLocalAcpAgents(store);
   const entries = snapshot
     ? registryService
         .applyAllowlist(snapshot)
@@ -141,13 +142,38 @@ async function listAcpAgentSettings(
           });
           return entry ? [entry] : [];
         })
-    : installed.map((record) => installedAcpAgentSettingsEntry(record));
+    : [];
+  const listedBackendIds = new Set(entries.map((entry) => entry.backendId));
+  for (const record of installed) {
+    if (!listedBackendIds.has(record.backendId)) {
+      entries.push(installedAcpAgentSettingsEntry(record));
+    }
+  }
 
   return {
     fetchedAt: snapshot?.fetchedAt ?? Date.now(),
     entries,
     ...(error ? { error } : {}),
   };
+}
+
+async function listInstalledAndLocalAcpAgents(
+  store: AcpAgentStore,
+): Promise<AcpInstalledAgentRecord[]> {
+  const installed = store.listInstalledAgents();
+  const installedBackendIds = new Set(installed.map((record) => record.backendId));
+  let discovered: AcpInstalledAgentRecord[] = [];
+  try {
+    discovered = await discoverLocalAcpAgents();
+  } catch (error) {
+    settingsIpcLog.debug("local_acp_discovery_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return [
+    ...installed,
+    ...discovered.filter((record) => !installedBackendIds.has(record.backendId)),
+  ];
 }
 
 async function installAcpAgent(
@@ -168,6 +194,9 @@ async function installAcpAgent(
       ok: false,
       error: agent?.unavailableReason ?? "ACP agent is not installable",
     };
+  }
+  if (request.distributionKind === "local") {
+    return { ok: false, error: "Local ACP agents do not require installation." };
   }
 
   const distribution = selectAcpDistribution(agent, request.distributionKind);
