@@ -503,12 +503,22 @@ describe("Tangerine Terminal theme contract", () => {
     expect(activityCurrent).toContain("color: var(--text-primary);");
   });
 
-  it("drops the auxiliary titlebar stoplight gutter outside macOS and Windows", () => {
+  it("drops titlebar stoplight gutters outside macOS and Windows", () => {
     const activityTitlebar = extractRuleBody(css, ".activity-titlebar");
+    const sidebarMasthead = extractRuleBody(css, ".sidebar__masthead");
+    const settingsMasthead = extractRuleBody(css, ".settings-nav__masthead");
 
     expect(activityTitlebar).toContain("padding: 10px 14px 0 96px;");
+    expect(sidebarMasthead).toContain("padding: 10px 0 0 80px;");
+    expect(settingsMasthead).toContain("padding: 10px 0 0 80px;");
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.sidebar__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
     );
   });
 

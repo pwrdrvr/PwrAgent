@@ -2,7 +2,6 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
 } from "electron";
-import { app } from "electron";
 
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
@@ -61,8 +60,8 @@ export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
     window.restore();
   }
   window.show();
+  window.moveTop();
   window.focus();
-  app.focus({ steal: true });
 }
 
 export function reapplyAuxiliaryWindowMenuBars(): void {

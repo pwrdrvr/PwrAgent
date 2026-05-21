@@ -159,8 +159,6 @@ function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOp
   const windowItems: MenuItemConstructorOptions[] = options.windows.length
     ? options.windows.map((window) => ({
         label: window.title || "Untitled Window",
-        type: "checkbox",
-        checked: window.focused,
         click: () => {
           options.actions.focusWindow(window.id);
         },

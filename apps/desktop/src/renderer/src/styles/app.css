@@ -501,6 +501,11 @@ textarea,
   border-bottom: none;
 }
 
+:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
+  .sidebar__masthead {
+  padding-left: 0;
+}
+
 /* .sidebar__identity removed — brand is direct child of masthead */
 
 .sidebar__masthead-actions {
@@ -3224,6 +3229,11 @@ textarea,
   min-height: 44px;
   padding: 10px 0 0 80px;
   -webkit-app-region: drag;
+}
+
+:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
+  .settings-nav__masthead {
+  padding-left: 0;
 }
 
 .settings-nav__masthead * {

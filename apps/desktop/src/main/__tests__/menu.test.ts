@@ -258,9 +258,10 @@ describe("buildApplicationMenuTemplate", () => {
         "PwrAgent",
         "Logs",
       ]);
-      expect(items[3]?.type).toBe("checkbox");
-      expect(items[3]?.checked).toBe(true);
-      expect(items[4]?.checked).toBe(false);
+      expect(items[3]?.type).toBeUndefined();
+      expect(items[3]?.checked).toBeUndefined();
+      expect(items[4]?.type).toBeUndefined();
+      expect(items[4]?.checked).toBeUndefined();
     });
 
     it("shows an empty state when no windows are open on non-Mac platforms", () => {
