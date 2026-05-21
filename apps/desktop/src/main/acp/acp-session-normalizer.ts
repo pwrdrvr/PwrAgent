@@ -18,6 +18,7 @@ export class AcpSessionReplayNormalizer {
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
+  private currentTurnId?: string;
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -27,6 +28,7 @@ export class AcpSessionReplayNormalizer {
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     const id = `user:${params.turnId}`;
+    this.currentTurnId = params.turnId;
     this.upsertMessage({
       id,
       role: "user",
@@ -37,7 +39,10 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
-  recordTurnFinished(): AppServerThreadReplay {
+  recordTurnFinished(turnId?: string): AppServerThreadReplay {
+    if (!turnId || this.currentTurnId === turnId) {
+      this.currentTurnId = undefined;
+    }
     this.status = "idle";
     return this.replay();
   }
@@ -61,7 +66,7 @@ export class AcpSessionReplayNormalizer {
     } else if (kind === "turn_started") {
       this.status = "active";
     } else if (kind === "turn_finished") {
-      this.status = "idle";
+      this.recordTurnFinished(readString(update.update, "turnId"));
     } else if (kind === "pwragent_user_prompt") {
       this.recordUserPrompt({
         sessionId: update.sessionId,
@@ -99,7 +104,9 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    const id = readString(update.update, "messageId") ?? `assistant:${update.sessionId}`;
+    const id =
+      readString(update.update, "messageId") ??
+      `assistant:${this.currentTurnId ?? update.sessionId}`;
     this.appendMessageChunk({ id, role: "assistant", text, createdAt });
   }
 
@@ -111,7 +118,9 @@ export class AcpSessionReplayNormalizer {
     if (!text) {
       return;
     }
-    const id = readString(update.update, "messageId") ?? `thought:${update.sessionId}`;
+    const id =
+      readString(update.update, "messageId") ??
+      `thought:${this.currentTurnId ?? update.sessionId}`;
     this.appendMessageChunk({
       id,
       phase: "commentary",

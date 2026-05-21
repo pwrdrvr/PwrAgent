@@ -1530,16 +1530,15 @@ describe("DesktopBackendRegistry", () => {
       threadId: "session-1",
       executionMode: "full-access",
     });
-    await expect(
-      registry.startTurn({
-        backend: acpBackendId,
-        threadId: "session-1",
-        input: [{ type: "text", text: "hello ACP" }],
-      }),
-    ).resolves.toEqual({
+    const startedTurn = await registry.startTurn({
       backend: acpBackendId,
       threadId: "session-1",
-      turnId: "pending:session-1",
+      input: [{ type: "text", text: "hello ACP" }],
+    });
+    expect(startedTurn).toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      turnId: expect.stringMatching(/^pending:session-1:\d+$/),
     });
     await expect(
       registry.readThread({
@@ -1557,12 +1556,12 @@ describe("DesktopBackendRegistry", () => {
       registry.interruptTurn({
         backend: acpBackendId,
         threadId: "session-1",
-        turnId: "pending:session-1",
+        turnId: startedTurn.turnId,
       }),
     ).resolves.toEqual({
       backend: acpBackendId,
       threadId: "session-1",
-      turnId: "pending:session-1",
+      turnId: startedTurn.turnId,
     });
 
     expect(acpClient.initialize).toHaveBeenCalledTimes(1);
@@ -1572,7 +1571,7 @@ describe("DesktopBackendRegistry", () => {
       title: "ACP session",
     });
     expect(startedPrompts).toEqual([
-      { sessionId: "session-1", prompt: "hello ACP", turnId: "pending:session-1" },
+      { sessionId: "session-1", prompt: "hello ACP", turnId: startedTurn.turnId },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
@@ -1844,6 +1843,7 @@ describe("DesktopBackendRegistry", () => {
       replay: {
         lastUserMessage: "What is this project?",
         lastAssistantMessage: "It is PwrSnap.",
+        threadStatus: "idle",
         messages: [
           expect.objectContaining({ role: "user", text: "What is this project?" }),
           expect.objectContaining({ role: "assistant", text: "It is PwrSnap." }),

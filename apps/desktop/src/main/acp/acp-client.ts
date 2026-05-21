@@ -315,7 +315,10 @@ export class AcpAgentClient {
         receivedAt: item.receivedAt,
       });
     }
-    return replay;
+    return {
+      ...replay,
+      threadStatus: acpSessionThreadStatus(metadata.status, replay.threadStatus),
+    };
   }
 
   private persistTranscriptUpdate(
@@ -349,6 +352,7 @@ export class AcpAgentClient {
       assistantText: "",
       turnId,
     });
+    this.updateSessionStatus(sessionId, "active");
   }
 
   private finishTrackedTurn(sessionId: string): {
@@ -358,12 +362,40 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
-    const replay = this.normalizerFor(sessionId).recordTurnFinished();
+    const replay = this.normalizerFor(sessionId).recordTurnFinished(
+      activeTurn?.turnId,
+    );
+    this.updateSessionStatus(sessionId, "idle");
+    if (activeTurn) {
+      this.persistTranscriptUpdate(sessionId, {
+        receivedAt: this.now(),
+        update: {
+          kind: "turn_finished",
+          outputText: activeTurn.assistantText,
+          turnId: activeTurn.turnId,
+        },
+      });
+    }
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
       turnId: activeTurn?.turnId,
     };
+  }
+
+  private updateSessionStatus(
+    sessionId: string,
+    status: AcpSessionMetadata["status"],
+  ): void {
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (!metadata) {
+      return;
+    }
+    this.options.store.upsertSession({
+      ...metadata,
+      status,
+      updatedAt: Math.max(metadata.updatedAt, this.now()),
+    });
   }
 }
 
@@ -390,6 +422,15 @@ function readUpdateText(update: Record<string, unknown>): string | undefined {
   return contentRecord.type === "text" && typeof contentRecord.text === "string"
     ? contentRecord.text
     : undefined;
+}
+
+function acpSessionThreadStatus(
+  status: AcpSessionMetadata["status"],
+  fallback: AppServerThreadReplay["threadStatus"],
+): AppServerThreadReplay["threadStatus"] {
+  return status === "active" || status === "idle" || status === "unknown"
+    ? status
+    : fallback;
 }
 
 function textPrompt(text: string): Array<{ type: "text"; text: string }> {

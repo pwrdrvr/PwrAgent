@@ -102,6 +102,14 @@ describe("AcpAgentClient", () => {
         {
           receivedAt: 1000,
           update: {
+            kind: "turn_finished",
+            outputText: "",
+            turnId: "pending:session-1:1000",
+          },
+        },
+        {
+          receivedAt: 1000,
+          update: {
             kind: "agent_message_chunk",
             content: "Done",
           },

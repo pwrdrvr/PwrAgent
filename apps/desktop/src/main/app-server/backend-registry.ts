@@ -998,7 +998,10 @@ function replayPersistedAcpTranscript(
       receivedAt: item.receivedAt,
     });
   }
-  return replay;
+  return {
+    ...replay,
+    threadStatus: acpSessionThreadStatus(session.status),
+  };
 }
 
 function acpSessionThreadStatus(
@@ -1964,7 +1967,7 @@ export class DesktopBackendRegistry {
                     params: {
                       threadId: sessionId,
                       turnId,
-                      itemId: `assistant:${sessionId}`,
+                      itemId: `assistant:${turnId ?? sessionId}`,
                       delta,
                     },
                   },
@@ -2613,7 +2616,7 @@ export class DesktopBackendRegistry {
     }
 
     const client = await this.getAcpClient(params.backend);
-    const syntheticStartedTurnId = `pending:${params.threadId}`;
+    const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
       backend: params.backend,
       notification: {

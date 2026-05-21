@@ -62,6 +62,62 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(idleReplay.threadStatus).toBe("idle");
   });
 
+  it("keeps repeated ACP turns in durable order", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "What is this project?",
+        turnId: "pending:session-1:1000",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "It is PwrSnap." },
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1200,
+      update: {
+        kind: "turn_finished",
+        turnId: "pending:session-1:1000",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 2000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "What is the CWD?",
+        turnId: "pending:session-1:2000",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 2100,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "/repo/project" },
+      },
+    });
+
+    expect(replay.messages.map((message) => [message.id, message.text])).toEqual([
+      ["user:pending:session-1:1000", "What is this project?"],
+      ["assistant:pending:session-1:1000", "It is PwrSnap."],
+      ["user:pending:session-1:2000", "What is the CWD?"],
+      ["assistant:pending:session-1:2000", "/repo/project"],
+    ]);
+    expect(replay.lastUserMessage).toBe("What is the CWD?");
+    expect(replay.lastAssistantMessage).toBe("/repo/project");
+  });
+
   it("upserts plans and tool activities", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
