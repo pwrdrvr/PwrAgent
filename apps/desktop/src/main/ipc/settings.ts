@@ -59,7 +59,9 @@ import { getRuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease"
 import { validateGhCommand } from "../settings/gh-discovery";
 import {
   createCodexAuthProfile,
+  readCodexAuthInfo,
   resolveCodexHomeForProfile,
+  resolveDefaultCodexHome,
 } from "../settings/codex-profiles";
 import { getMainLogger } from "../log";
 
@@ -96,7 +98,19 @@ async function resolveCodexCommandForProfileWorkflow(
   return command;
 }
 
+/**
+ * Resolve the `CODEX_HOME` path for a profile name. Empty string is
+ * treated as "the Codex system default" (`~/.codex/`) — used by the
+ * Shared-mode auth status check on the onboarding wizard, where the
+ * operator's chosen path is "reuse the existing Codex login" and the
+ * wizard needs to verify that login exists before letting them Finish.
+ * Any other invalid name still throws — the caller passes either a
+ * valid profile name (`personal`, `work`, …) or the empty sentinel.
+ */
 function resolveRequiredCodexProfileHome(profile: string): string {
+  if (profile === "") {
+    return resolveDefaultCodexHome();
+  }
   const codexHome = resolveCodexHomeForProfile(profile);
   if (!codexHome) {
     throw new Error("A named Codex profile is required.");
@@ -143,6 +157,11 @@ async function checkCodexProfileAuthStatus(
   const command = await resolveCodexCommandForProfileWorkflow(service);
   const result = await collectCodexStatus(command, codexHome);
   const authenticated = result.code === 0;
+  // When the CLI reports authenticated, surface the JWT-derived identity
+  // fields too — the onboarding wizard's name+login step renders them
+  // inline so the operator can confirm they signed in with the right
+  // account (and at the expected plan tier) before moving on.
+  const authInfo = authenticated ? readCodexAuthInfo(codexHome) : {};
   return {
     profile,
     codexHome,
@@ -154,6 +173,8 @@ async function checkCodexProfileAuthStatus(
           ? "authenticated"
           : "unauthenticated",
     ...(result.detail ? { detail: result.detail } : {}),
+    ...(authInfo.email ? { email: authInfo.email } : {}),
+    ...(authInfo.planType ? { planType: authInfo.planType } : {}),
   };
 }
 

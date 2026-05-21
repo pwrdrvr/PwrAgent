@@ -142,8 +142,15 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  DesktopBootInfo,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
+  WaitForDesktopProfileAliveRequest,
+  WaitForDesktopProfileAliveResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -203,6 +210,40 @@ export type DesktopApi = {
   setPwrAgentProfileCodexProfile?: (
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ) => Promise<SetDesktopPwrAgentProfileCodexProfileResponse>;
+  /** Graduate ONLY the bootstrap profile's `config.toml` to the
+   *  target real profile (theme, density, messaging acknowledgment,
+   *  etc). Does NOT graduate secrets — call `writeSecretsToProfile`
+   *  separately for those. The wizard's Finish path calls
+   *  `writeSecretsToProfile` THEN this IPC; reversing the order
+   *  strands secrets in `.bootstrap/`. No-op when the main process
+   *  isn't in bootstrap mode (safe to call unconditionally). */
+  graduateBootstrapConfigToProfile?: (
+    request: GraduateDesktopBootstrapConfigToProfileRequest,
+  ) => Promise<GraduateDesktopBootstrapConfigToProfileResponse>;
+  /** Write secrets directly to a specific profile's keychain. The
+   *  wizard uses this on Finish to graduate in-memory secret values
+   *  (xAI API key, messaging tokens) to the operator's chosen
+   *  profile — avoids stranding them in `.bootstrap/state.db` and
+   *  enables per-profile xAI keys in Multiple mode. */
+  writeSecretsToProfile?: (
+    request: WriteDesktopSecretsToProfileRequest,
+  ) => Promise<WriteDesktopSecretsToProfileResponse>;
+  /** Returns the boot decision + state mode so the wizard can pick
+   *  the right entry point (full first-run vs. slim "set up `foo`?"
+   *  confirmation for a CLI/env-named missing profile). */
+  getBootInfo?: () => Promise<DesktopBootInfo>;
+  /** Quit the application. Used by the wizard's bootstrap-named
+   *  confirmation step when the operator declines to set up the
+   *  requested profile. */
+  quitApp?: () => Promise<void>;
+  /** Wait for another PwrAgent process to be alive on a target
+   *  profile. The wizard's graduation path uses this to delay its
+   *  own quit until the new profile's window has fully loaded —
+   *  critical in dev mode where the Vite dev server dies with the
+   *  bootstrap process. */
+  waitForProfileAlive?: (
+    request: WaitForDesktopProfileAliveRequest,
+  ) => Promise<WaitForDesktopProfileAliveResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

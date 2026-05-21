@@ -10,6 +10,7 @@ import {
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopBootInfo,
   DesktopCodexProfileModel,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
@@ -21,6 +22,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
+import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
   isValidProfileName,
   provisionPairedProfiles,
@@ -43,39 +45,48 @@ export type OnboardingProvider =
   | "line";
 
 type WizardStep =
-  | "backend-requirements"
+  | "bootstrap-confirm"
   | "welcome"
   | "thread-presentation"
+  | "models-providers"
   | "codex-profile"
   | "name-codex-profiles"
+  | "shared-codex-login"
   | "messaging-safety"
   | "messaging-providers"
   | "provider-setup"
   | "done";
 
-type RailIndex = 0 | 1 | 2 | 3;
+type RailIndex = 0 | 1 | 2 | 3 | 4;
 
 const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
   { label: "Thread presentation" },
-  { label: "Codex profile" },
+  { label: "Models / Providers" },
+  { label: "Profiles" },
   { label: "Messaging" },
   { label: "Review" },
 ];
 
 function railIndexForStep(step: WizardStep): RailIndex | -1 {
-  // `backend-requirements` and `welcome` are pre-rail screens —
-  // prerequisite + intro, before the four numbered steps the rail
-  // tracks.
-  if (step === "backend-requirements" || step === "welcome") return -1;
+  // `bootstrap-confirm` and `welcome` are pre-rail intro screens —
+  // shown before the five numbered steps the rail tracks.
+  if (step === "bootstrap-confirm") return -1;
+  if (step === "welcome") return -1;
   if (step === "thread-presentation") return 0;
-  if (step === "codex-profile" || step === "name-codex-profiles") return 1;
+  if (step === "models-providers") return 1;
+  if (
+    step === "codex-profile" ||
+    step === "name-codex-profiles" ||
+    step === "shared-codex-login"
+  )
+    return 2;
   if (
     step === "messaging-safety" ||
     step === "messaging-providers" ||
     step === "provider-setup"
   )
-    return 2;
-  if (step === "done") return 3;
+    return 3;
+  if (step === "done") return 4;
   return -1;
 }
 
@@ -96,6 +107,13 @@ export type OnboardingWizardProps = {
   onDismiss: (persistCompleted: boolean) => void;
   /** When true, this is a Help-menu replay — do NOT persist `completed`. */
   isReplay: boolean;
+  /** Boot info from `getBootInfo` IPC. When `decisionKind ===
+   *  "missing-named-profile"` the wizard renders a slim
+   *  confirmation step first (pre-populating the requested name)
+   *  instead of going straight to the Welcome screen. `null` while
+   *  fetching, or when the renderer is running outside of a real
+   *  desktop session (e.g. in unit-test harnesses). */
+  bootInfo: DesktopBootInfo | null;
   /** Deep-link target into Settings → Messaging when the operator
    *  picks providers and clicks Set up. */
   onOpenMessagingSettings?: () => void;
@@ -108,31 +126,108 @@ export type OnboardingWizardProps = {
 };
 
 export function OnboardingWizard(props: OnboardingWizardProps) {
-  // Backend requirements is the first stop. If the operator opens the
-  // wizard with neither Codex CLI nor an xAI key configured, we have to
-  // resolve that before any of the downstream steps make sense. Replays
-  // (Help → Replay Onboarding) skip straight to Welcome since the user
-  // is presumably already past the backend gate — they're re-running to
-  // change settings, not bootstrap.
-  const [step, setStep] = useState<WizardStep>(
-    props.isReplay ? "welcome" : "backend-requirements",
-  );
+  // Initial step:
+  //   - bootstrap with a CLI/env-named missing profile →
+  //     `bootstrap-confirm` ("PwrAgent doesn't know `foo` yet — set
+  //     it up, or quit?"). Pre-populates the name.
+  //   - everything else (first-run, replay, missing-default-profile,
+  //     bootstrap with no name supplied) → Welcome.
+  // The flow from Welcome onward is:
+  //   Welcome → Thread presentation → Models / Providers (the backend
+  //   gate) → Codex profile → optional Name profiles → Messaging
+  //   warning → optional Messaging providers / Provider setup → Done.
+  // Replay just doesn't persist `onboarding.completed` at Finish.
+  const initialStep: WizardStep =
+    props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay
+      ? "bootstrap-confirm"
+      : "welcome";
+  const [step, setStep] = useState<WizardStep>(initialStep);
   const [density, setDensity] = useState<DesktopAppearanceDensity>(
     props.initialDensity,
   );
   const [theme, setTheme] = useState<DesktopAppearanceTheme>(props.initialTheme);
+  // When the operator launched with a missing-named profile, default
+  // to Isolated mode: the requested name becomes the single profile
+  // we're setting up, paired with a Codex auth profile of the same
+  // name. They can still flip to Shared or Multiple in the wizard
+  // if they change their mind.
   const [codexProfileModel, setCodexProfileModel] =
-    useState<DesktopCodexProfileModel>(props.initialCodexProfileModel);
+    useState<DesktopCodexProfileModel>(
+      props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay
+        ? "isolated"
+        : props.initialCodexProfileModel,
+    );
   // Names for the per-profile naming step. Isolated mode shows one
   // input (default "pwragent"); Multiple shows 1–5 inputs (defaults
   // "personal" + "work"). When the user changes Step 2's selection,
   // a useEffect resets these defaults — see below.
-  const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() =>
-    props.initialCodexProfileModel === "isolated"
+  //
+  // Special-case: missing-named-profile bootstrap pre-populates the
+  // requested name (from `--profile=foo` / `PWRAGENT_PROFILE=foo`)
+  // as the Isolated default. This lets the operator confirm "yes,
+  // create `foo`" without retyping the name in the Profiles step.
+  const [codexProfileNames, setCodexProfileNames] = useState<string[]>(() => {
+    const requested =
+      props.bootInfo?.decisionKind === "missing-named-profile"
+        ? props.bootInfo.requestedProfileName?.trim()
+        : undefined;
+    if (requested && isValidProfileName(requested)) {
+      return [requested];
+    }
+    return props.initialCodexProfileModel === "isolated"
       ? ["pwragent"]
-      : ["personal", "work"],
-  );
+      : ["personal", "work"];
+  });
   const [acknowledged, setAcknowledged] = useState(false);
+  // Buffered secrets (xAI API key + messaging tokens). The wizard
+  // collects values in renderer memory rather than writing them
+  // through `replaceSecret` on input change. At Finish, the
+  // `persistAndComplete` callback writes them to the operator's
+  // chosen target profile(s) via `writeSecretsToProfile`. This
+  // avoids stranding secrets in `.bootstrap/state.db` in bootstrap
+  // mode and supports per-profile xAI keys in Multiple mode (each
+  // profile row can override the global value below; see
+  // `bufferedSecretsPerProfile`).
+  const [bufferedSecrets, setBufferedSecrets] = useState<
+    Record<string, string>
+  >({});
+  const setBufferedSecret = useCallback((name: string, value: string): void => {
+    setBufferedSecrets((prev) => ({ ...prev, [name]: value }));
+  }, []);
+  const bufferedGrokKey = bufferedSecrets.grokApiKey ?? "";
+  // Per-profile xAI key overrides keyed by the profile's committed
+  // name in the naming step. In Multiple mode the operator can keep
+  // some profiles on the global key (from Models / Providers) and
+  // override others — e.g. "personal profile uses my personal xAI
+  // key, work profile uses the work xAI key." A row without an
+  // entry here inherits the global `bufferedGrokKey` at graduation.
+  const [xaiKeyByProfile, setXaiKeyByProfile] = useState<Record<string, string>>(
+    {},
+  );
+  const setXaiKeyForProfile = useCallback(
+    (profileName: string, value: string): void => {
+      setXaiKeyByProfile((prev) => ({ ...prev, [profileName]: value }));
+    },
+    [],
+  );
+  // Snapshot reported by the name-codex-profiles step: are all named
+  // rows authenticated? Drives the footer Continue button's enabled
+  // state. `codexLoginDeferred` is the operator's escape hatch — a
+  // subtle "I'll log in later" link lifts the gate without finishing
+  // the logins. We intentionally don't persist `codexLoginDeferred`
+  // anywhere; backing out and re-entering the step recomputes the
+  // gate from the on-disk auth state.
+  const [codexAuthSnapshot, setCodexAuthSnapshot] = useState<{
+    allAuthed: boolean;
+    namedRows: number;
+  }>({ allAuthed: false, namedRows: 0 });
+  const [codexLoginDeferred, setCodexLoginDeferred] = useState(false);
+  // Shared-mode Codex login state. Mirrors the per-row state in
+  // `name-codex-profiles` but for the system default Codex profile —
+  // the wizard only routes here when the operator's existing Codex
+  // install isn't already authenticated AND they picked Shared mode.
+  const [sharedAuthed, setSharedAuthed] = useState(false);
+  const [sharedLoginDeferred, setSharedLoginDeferred] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<
     ReadonlySet<OnboardingProvider>
   >(new Set(["telegram"]));
@@ -155,13 +250,26 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // has no working backend configured. The user's #467 follow-up
   // explicitly called this out: "don't write anything to the config
   // saying we succeeded with the wizard until we really truly did."
-  // Now: ESC + Skip both leave `completed` unchanged (false for fresh
-  // profiles → wizard auto-fires again next launch). Only the Done
-  // step's "Open my workspace" persists completion.
+  //
+  // Now:
+  //   - In active-profile mode (Replay): ESC dismisses immediately.
+  //   - In bootstrap mode: ESC opens the dismiss-confirmation modal
+  //     so the operator gets the explicit fork (Cancel / Skip and
+  //     use default / Exit) instead of silently bailing into a
+  //     half-state. If the modal is already open, ESC closes it.
+  //
+  // `bootInfoModeRef` lets the keydown handler read the current mode
+  // without re-binding on every render — the handler closes over it
+  // by ref so we don't churn `addEventListener` calls.
+  const bootInfoModeRef = useRef(props.bootInfo?.mode);
+  bootInfoModeRef.current = props.bootInfo?.mode;
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !submitting) {
-        event.preventDefault();
+      if (event.key !== "Escape" || submitting) return;
+      event.preventDefault();
+      if (bootInfoModeRef.current === "bootstrap") {
+        setDismissModalOpen((prev) => !prev ? true : prev);
+      } else {
         props.onDismiss(false);
       }
     };
@@ -196,6 +304,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     }
   }, [codexProfileModel]);
 
+  // Does the Codex system default need a login before we can ship the
+  // operator into Shared mode? `auth.json` missing means the operator
+  // has never logged into Codex Desktop on this machine — picking
+  // Shared without addressing that gives them a non-working profile.
+  // The wizard routes them through `shared-codex-login` first; if
+  // they're already logged in, that step is skipped.
+  const codexDefaultProfile = props.settings.snapshot?.models.codex.profiles.profiles.find(
+    (entry) => entry.name === "",
+  );
+  const sharedNeedsLogin =
+    codexProfileModel === "shared" && !codexDefaultProfile?.hasAuthFile;
+
   // Conditional step graph — codexProfileModel="multiple" inserts the
   // name-codex-profiles step between codex-profile and messaging-safety;
   // empty selectedProviders skips provider-setup; etc. Centralizing the
@@ -203,22 +323,39 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   const nextStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
-        case "backend-requirements":
+        case "bootstrap-confirm":
+          // Confirmation accepted → join the standard flow at Welcome.
+          // The pre-populated name + isolated default mean the rest
+          // of the wizard naturally lands on the operator's chosen
+          // profile without extra prompting.
           return "welcome";
         case "welcome":
           return "thread-presentation";
         case "thread-presentation":
+          return "models-providers";
+        case "models-providers":
           return "codex-profile";
         case "codex-profile":
           // Both Isolated (single new profile) and Multiple (1–5)
           // route through the naming step — they both need paired
           // PwrAgent + Codex profile names to create after Finish.
-          return codexProfileModel === "shared"
-            ? "messaging-safety"
-            : "name-codex-profiles";
+          // Shared mode only inserts `shared-codex-login` when the
+          // operator's existing Codex install ISN'T already logged
+          // in; otherwise it goes straight to messaging-safety.
+          if (codexProfileModel === "shared") {
+            return sharedNeedsLogin ? "shared-codex-login" : "messaging-safety";
+          }
+          return "name-codex-profiles";
         case "name-codex-profiles":
           return "messaging-safety";
+        case "shared-codex-login":
+          return "messaging-safety";
         case "messaging-safety":
+          // The body of `messaging-safety` renders an explicit
+          // Skip-messaging vs. Continue choice. `goNext` only fires
+          // for Continue, which always advances to the provider
+          // picker. The Skip path uses `skipMessaging` to jump to
+          // Done with `selectedProviders` cleared.
           return "messaging-providers";
         case "messaging-providers":
           return orderedProviders.length > 0 ? "provider-setup" : "done";
@@ -230,32 +367,40 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           return null;
       }
     },
-    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+    [codexProfileModel, orderedProviders.length, providerSetupIndex, sharedNeedsLogin],
   );
+  // Did this wizard session start at the bootstrap-confirm step?
+  // Only true when the boot decision named a missing profile —
+  // determines whether Back from Welcome surfaces the confirmation
+  // again (vs. being a no-op for first-run / replay entries).
+  const entryWasBootstrapConfirm =
+    props.bootInfo?.decisionKind === "missing-named-profile" && !props.isReplay;
   const prevStep = useCallback(
     (current: WizardStep): WizardStep | null => {
       switch (current) {
-        case "backend-requirements":
+        case "bootstrap-confirm":
           return null;
         case "welcome":
-          // Replay path doesn't include backend-requirements, so back
-          // from welcome goes nowhere. First-run path could go back to
-          // backend-requirements but the operator already satisfied
-          // that to leave it — make Back from welcome a no-op too so
-          // the gate doesn't get re-checked midway.
-          return null;
+          return entryWasBootstrapConfirm ? "bootstrap-confirm" : null;
         case "thread-presentation":
           return "welcome";
-        case "codex-profile":
+        case "models-providers":
           return "thread-presentation";
+        case "codex-profile":
+          return "models-providers";
         case "name-codex-profiles":
+          return "codex-profile";
+        case "shared-codex-login":
           return "codex-profile";
         case "messaging-safety":
           // Back-out symmetry with `nextStep`: Shared bypasses the
-          // naming step, anything else routes through it.
-          return codexProfileModel === "shared"
-            ? "codex-profile"
-            : "name-codex-profiles";
+          // naming step, anything else routes through it. Within
+          // Shared, the login step only sits in the back chain when
+          // the operator actually saw it (i.e. needed the login).
+          if (codexProfileModel === "shared") {
+            return sharedNeedsLogin ? "shared-codex-login" : "codex-profile";
+          }
+          return "name-codex-profiles";
         case "messaging-providers":
           return "messaging-safety";
         case "provider-setup":
@@ -265,10 +410,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "done":
           return orderedProviders.length > 0
             ? "provider-setup"
-            : "messaging-providers";
+            : "messaging-safety";
       }
     },
-    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+    [
+      codexProfileModel,
+      entryWasBootstrapConfirm,
+      orderedProviders.length,
+      providerSetupIndex,
+      sharedNeedsLogin,
+    ],
   );
 
   const goPrev = useCallback(() => {
@@ -298,6 +449,134 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     const next = nextStep(step);
     if (next !== null) setStep(next);
   }, [nextStep, orderedProviders.length, providerSetupIndex, step]);
+
+  // Inline "Skip messaging setup" button on the messaging-safety step.
+  // Different from the footer skip link (which exits the wizard entirely
+  // without persisting completion). This one CLEARS provider selection,
+  // marks the operator as having decided to skip, and jumps to the Done
+  // step so they can land their other choices.
+  const skipMessaging = useCallback(() => {
+    setSelectedProviders(new Set());
+    setStep("done");
+  }, []);
+
+  /**
+   * Write buffered secrets to a target profile's keychain, but only
+   * if there's actually something to encrypt. Skipping the IPC when
+   * the payload is empty avoids unnecessary `safeStorage` access,
+   * which on macOS can pop a keychain-access dialog the operator
+   * didn't expect (especially the "Keychain Not Found" variant
+   * surfaced by misconfigured login keychains). Replay-style empty
+   * deletions (set a key to "") still go through — the caller
+   * filters intentional clears in.
+   */
+  const writeBufferedSecretsIfAny = useCallback(
+    async (
+      targetProfile: string,
+      secrets: Record<string, string>,
+    ): Promise<void> => {
+      const api = props.desktopApi;
+      if (!api?.writeSecretsToProfile) return;
+      // Trim + drop empties via the pure filter — see
+      // `filterBufferedSecrets` for the rationale (clipboard newlines,
+      // half-typed input, etc).
+      const nonEmpty = filterBufferedSecrets(secrets);
+      if (Object.keys(nonEmpty).length === 0) return;
+      try {
+        await api.writeSecretsToProfile({ profile: targetProfile, secrets: nonEmpty });
+      } catch (caught) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Onboarding: writeSecretsToProfile failed for "${targetProfile}"`,
+          caught,
+        );
+      }
+    },
+    [props.desktopApi],
+  );
+
+  // After graduation in bootstrap mode, the wizard spawns a new
+  // Electron instance pointed at the operator's chosen profile (via
+  // `openPwrAgentProfile`, which `spawn()`s a detached child process)
+  // and then quits the current (bootstrap) instance so the operator
+  // isn't left with two windows.
+  //
+  // The dev-server gotcha: in dev mode, the parent `electron-vite`
+  // process owns the Vite dev server. When the bootstrap Electron
+  // exits, the dev server dies with it. If we quit before the
+  // spawned process has loaded its renderer assets from Vite, the
+  // new window ends up at `chrome-error://chromewebdata/`. So we
+  // wait for the spawned process's runtime heartbeat marker to
+  // appear (proving its app state initialized and renderer mounted)
+  // before issuing the quit. By that point the new process has its
+  // renderer cached in memory; Vite's lifecycle no longer matters.
+  //
+  // In active-profile mode (Replay), we don't quit — the operator
+  // is still in their real profile and that window IS their session.
+  const openTargetAndQuitBootstrapIfNeeded = useCallback(
+    async (targetProfile: string): Promise<void> => {
+      const api = props.desktopApi;
+      if (!api?.openPwrAgentProfile) return;
+      try {
+        await api.openPwrAgentProfile({ profile: targetProfile });
+      } catch (caught) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Onboarding: failed to auto-switch into "${targetProfile}"`,
+          caught,
+        );
+        return;
+      }
+      if (props.bootInfo?.mode !== "bootstrap") return;
+      if (api.waitForProfileAlive) {
+        try {
+          const result = await api.waitForProfileAlive({
+            profile: targetProfile,
+            timeoutMs: 10_000,
+          });
+          if (!result.alive) {
+            // Don't quit the bootstrap on timeout — leaving it
+            // alive gives the operator a fallback window if the
+            // spawn never came up. Bad outcome, but better than
+            // both windows gone.
+            // eslint-disable-next-line no-console
+            console.warn(
+              `Onboarding: spawned "${targetProfile}" didn't report alive within timeout; keeping bootstrap window open`,
+            );
+            return;
+          }
+        } catch (caught) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "Onboarding: waitForProfileAlive failed; skipping quit",
+            caught,
+          );
+          return;
+        }
+      }
+      // Extra grace after the heartbeat marker appears. The marker
+      // gets written during the spawned process's
+      // `initializeAppState` (main process side), but the renderer
+      // still needs to download + parse + paint after that. In dev
+      // the renderer fetches from Vite — if we quit the bootstrap
+      // and electron-vite kills the dev server WHILE the new
+      // renderer is mid-fetch, the new window ends up at
+      // chrome-error://chromewebdata/. A small fixed wait here
+      // covers the gap. Production builds load instantly from
+      // `file://`, so the delay is harmless overhead there.
+      const POST_ALIVE_GRACE_MS = 2_000;
+      await new Promise((resolve) => setTimeout(resolve, POST_ALIVE_GRACE_MS));
+      if (api.quitApp) {
+        try {
+          await api.quitApp();
+        } catch (caught) {
+          // eslint-disable-next-line no-console
+          console.warn("Onboarding: quitApp after graduation failed", caught);
+        }
+      }
+    },
+    [props.bootInfo?.mode, props.desktopApi],
+  );
 
   const persistAndComplete = useCallback(
     async (extra?: DesktopSettingsConfigPatch): Promise<void> => {
@@ -355,14 +634,89 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             props.desktopApi,
             codexProfileNames,
           );
+          // Per-profile secret graduation: each created profile gets
+          // its own xAI key + messaging tokens written into ITS
+          // state.db keychain (not the bootstrap/active profile's).
+          // xAI key resolution per profile: a per-row override beats
+          // the global buffer. Messaging tokens stay global across
+          // profiles (the operator usually has one bot per platform).
+          for (const target of created) {
+            const override = xaiKeyByProfile[target]?.trim();
+            const resolvedGrokKey =
+              override !== undefined && override.length > 0
+                ? override
+                : bufferedSecrets.grokApiKey ?? "";
+            await writeBufferedSecretsIfAny(target, {
+              ...bufferedSecrets,
+              grokApiKey: resolvedGrokKey,
+            });
+          }
           const switchTo = created[0];
-          if (switchTo && props.desktopApi?.openPwrAgentProfile) {
+          if (switchTo) {
+            // Graduate the bootstrap profile's settings (theme,
+            // density, messaging acknowledgment, etc.) onto the
+            // operator's chosen real profile. The IPC is a no-op
+            // when the main process isn't actually in bootstrap
+            // mode (e.g. Help → Replay Onboarding, where the
+            // wizard runs against an existing real profile), so
+            // the wizard calls it unconditionally.
+            if (props.desktopApi?.graduateBootstrapConfigToProfile) {
+              try {
+                await props.desktopApi.graduateBootstrapConfigToProfile({
+                  targetProfile: switchTo,
+                });
+              } catch (caught) {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  `Onboarding: graduateBootstrapConfigToProfile failed for "${switchTo}"`,
+                  caught,
+                );
+              }
+            }
+            await openTargetAndQuitBootstrapIfNeeded(switchTo);
+          }
+        } else {
+          // Shared mode. Two sub-paths depending on whether the
+          // wizard is running in active-profile or bootstrap mode:
+          //
+          //   - Active-profile (Replay / Help → Replay Onboarding):
+          //     the operator is already in a real profile. Buffered
+          //     secrets graduate to that profile, full stop.
+          //
+          //   - Bootstrap: there's no real profile yet. "Shared"
+          //     means "create a default profile that reuses my
+          //     existing Codex install at `~/.codex/`." We create
+          //     a PwrAgent profile named `default` (or pick a
+          //     unique name if `default/` is somehow already
+          //     occupied), leave its Codex pairing empty (= system
+          //     default), graduate the bootstrap config onto it,
+          //     and open the main window for it.
+          const activeProfile = props.bootInfo?.activeProfileName;
+          if (activeProfile) {
+            await writeBufferedSecretsIfAny(activeProfile, bufferedSecrets);
+          } else if (props.desktopApi?.createPwrAgentProfile) {
+            // Bootstrap + Shared. Provision the default profile
+            // with the system-default Codex pairing implied (we
+            // skip `setPwrAgentProfileCodexProfile`; an unset
+            // codex.profile in the new profile's config.toml means
+            // "use ~/.codex/" — i.e. Shared).
+            const defaultName = "default";
             try {
-              await props.desktopApi.openPwrAgentProfile({ profile: switchTo });
+              await props.desktopApi.createPwrAgentProfile({
+                profile: defaultName,
+                seedOnboardingCompleted: true,
+              });
+              await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
+              if (props.desktopApi?.graduateBootstrapConfigToProfile) {
+                await props.desktopApi.graduateBootstrapConfigToProfile({
+                  targetProfile: defaultName,
+                });
+              }
+              await openTargetAndQuitBootstrapIfNeeded(defaultName);
             } catch (caught) {
               // eslint-disable-next-line no-console
               console.warn(
-                `Onboarding: failed to auto-switch into "${switchTo}"`,
+                "Onboarding: shared-default provisioning failed",
                 caught,
               );
             }
@@ -374,24 +728,92 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     },
     [
       acknowledged,
+      bufferedSecrets,
       codexProfileModel,
       codexProfileNames,
       density,
       isReplay,
+      openTargetAndQuitBootstrapIfNeeded,
       props,
       selectedProviders,
       submitting,
       theme,
+      writeBufferedSecretsIfAny,
+      xaiKeyByProfile,
     ],
   );
 
+  // Dismiss-confirmation modal state. The wizard shows the modal
+  // instead of dismissing immediately when running in bootstrap mode,
+  // because dismissing-from-bootstrap is irreversible-ish: either we
+  // create a `default` profile mapped to the operator's Codex system
+  // session (and they see all their existing Codex Desktop threads),
+  // or we quit the app entirely. The modal makes that fork explicit.
+  // In active-profile mode (Replay), dismiss is benign — wizard just
+  // closes — so we skip the modal there.
+  const [dismissModalOpen, setDismissModalOpen] = useState(false);
+  const inBootstrapMode = props.bootInfo?.mode === "bootstrap";
+
   const handleSkip = useCallback((): void => {
-    // Skip never persists `onboarding.completed = true`. Anything else
-    // would let the operator end up with a "completed" profile that
-    // doesn't actually have a working backend. The wizard re-fires on
-    // the next launch — see the docs on the ESC keydown handler above
-    // for the full reasoning.
+    if (inBootstrapMode) {
+      setDismissModalOpen(true);
+      return;
+    }
+    // Active-profile (Replay) skip: close the wizard, no profile
+    // mutation. Skip never persists `onboarding.completed = true`.
     props.onDismiss(false);
+  }, [inBootstrapMode, props]);
+
+  // "Skip and use default" path from the dismiss modal: reuses the
+  // same Shared-mode bootstrap provisioning logic as
+  // `persistAndComplete` — create a `default` profile mapped to
+  // Codex system default, graduate bootstrap, open main window.
+  // Settings + secrets get applied even though the operator skipped
+  // the rest of the wizard, so the operator's theme/density choices
+  // (if any) aren't lost just because they bailed early.
+  const skipAndUseDefault = useCallback(async (): Promise<void> => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const defaultName = "default";
+      if (!props.desktopApi?.createPwrAgentProfile) {
+        props.onDismiss(false);
+        return;
+      }
+      await props.desktopApi.createPwrAgentProfile({
+        profile: defaultName,
+        seedOnboardingCompleted: true,
+      });
+      await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
+      if (props.desktopApi.graduateBootstrapConfigToProfile) {
+        await props.desktopApi.graduateBootstrapConfigToProfile({
+          targetProfile: defaultName,
+        });
+      }
+      await openTargetAndQuitBootstrapIfNeeded(defaultName);
+    } catch (caught) {
+      // eslint-disable-next-line no-console
+      console.warn("Onboarding: skipAndUseDefault failed", caught);
+    } finally {
+      setSubmitting(false);
+      setDismissModalOpen(false);
+    }
+  }, [
+    bufferedSecrets,
+    openTargetAndQuitBootstrapIfNeeded,
+    props,
+    submitting,
+    writeBufferedSecretsIfAny,
+  ]);
+
+  const exitApp = useCallback((): void => {
+    if (props.desktopApi?.quitApp) {
+      void props.desktopApi.quitApp();
+    } else {
+      // Renderer outside of a real desktop session (tests, preview)
+      // — fall through to the normal dismiss path.
+      props.onDismiss(false);
+    }
   }, [props]);
 
   const currentRailIndex = railIndexForStep(step);
@@ -404,9 +826,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       aria-label="First-run setup"
     >
       <div className="onboarding-wizard-overlay__scrim" />
-      <div
-        className={`onboarding-wizard${step === "welcome" || step === "done" || step === "backend-requirements" ? " onboarding-wizard--narrow" : ""}`}
-      >
+      {/* Single consistent frame width across all steps. Earlier
+          iterations narrowed Welcome / Done / Models-Providers but
+          the jump between "cozy 720px" and "expansive 1120px" was
+          jarring as the operator advanced. Keep one canvas;
+          constrain inner text widths instead so short screens don't
+          look sparse. */}
+      <div className="onboarding-wizard">
         <WizardTitlebar
           step={step}
           isReplay={isReplay}
@@ -420,9 +846,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               ? `${providerSetupIndex + 1} of ${orderedProviders.length}`
               : undefined
           }
-          onClose={() => props.onDismiss(false)}
+          onClose={handleSkip}
         />
-        {step !== "welcome" ? (
+        {step !== "welcome" && step !== "bootstrap-confirm" ? (
           <WizardRail
             currentIndex={currentRailIndex}
             chosenDensity={density}
@@ -430,10 +856,34 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           />
         ) : null}
         <div className="onboarding-wizard__body">
-          {step === "backend-requirements" ? (
+          {step === "bootstrap-confirm" ? (
+            <BootstrapConfirmStep
+              requestedName={props.bootInfo?.requestedProfileName ?? ""}
+              source={
+                props.bootInfo?.decisionKind === "missing-named-profile"
+                  ? "missing-named"
+                  : "no-profile"
+              }
+              onContinue={goNext}
+              onQuit={() => {
+                if (props.desktopApi?.quitApp) {
+                  void props.desktopApi.quitApp();
+                } else {
+                  // Renderer outside of a real desktop session (tests,
+                  // dev preview) — fall through to the normal dismiss
+                  // path so the wizard still closes.
+                  props.onDismiss(false);
+                }
+              }}
+              submitting={submitting}
+            />
+          ) : null}
+          {step === "models-providers" ? (
             <BackendRequirementsStep
               settings={props.settings}
               desktopApi={props.desktopApi}
+              bufferedGrokKey={bufferedGrokKey}
+              onBufferGrokKey={(value) => setBufferedSecret("grokApiKey", value)}
             />
           ) : null}
           {step === "welcome" ? <WelcomeStep /> : null}
@@ -462,12 +912,26 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               mode={codexProfileModel === "isolated" ? "isolated" : "multiple"}
               names={codexProfileNames}
               onChange={setCodexProfileNames}
+              desktopApi={props.desktopApi}
+              onAuthStateChange={setCodexAuthSnapshot}
+              globalXaiKey={bufferedGrokKey}
+              xaiKeyByProfile={xaiKeyByProfile}
+              onSetXaiKeyForProfile={setXaiKeyForProfile}
+            />
+          ) : null}
+          {step === "shared-codex-login" ? (
+            <SharedCodexLoginStep
+              desktopApi={props.desktopApi}
+              onAuthStateChange={setSharedAuthed}
             />
           ) : null}
           {step === "messaging-safety" ? (
             <MessagingSafetyStep
               acknowledged={acknowledged}
               onAcknowledgedChange={setAcknowledged}
+              onSkipMessaging={skipMessaging}
+              onContinue={goNext}
+              submitting={submitting}
             />
           ) : null}
           {step === "messaging-providers" ? (
@@ -482,6 +946,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               provider={currentProvider}
               settings={props.settings}
               desktopApi={props.desktopApi}
+              bufferedSecrets={bufferedSecrets}
+              onBufferSecret={setBufferedSecret}
             />
           ) : null}
           {step === "done" ? (
@@ -507,8 +973,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             currentProvider ? providerName(currentProvider) : undefined
           }
           codexProfileNamesValid={validateProfileNames(codexProfileNames)}
+          codexAuthAllAuthed={codexAuthSnapshot.allAuthed}
+          codexAuthNamedRows={codexAuthSnapshot.namedRows}
+          codexLoginDeferred={codexLoginDeferred}
+          onDeferCodexLogin={() => setCodexLoginDeferred(true)}
+          sharedAuthed={sharedAuthed}
+          sharedLoginDeferred={sharedLoginDeferred}
+          onDeferSharedLogin={() => setSharedLoginDeferred(true)}
           backendRequirementSatisfied={isBackendRequirementSatisfied(
             props.settings.snapshot,
+            bufferedGrokKey,
           )}
           density={density}
           codexProfileModel={codexProfileModel}
@@ -517,6 +991,94 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           onNext={goNext}
           onFinish={() => void persistAndComplete()}
         />
+        {dismissModalOpen ? (
+          <DismissConfirmModal
+            submitting={submitting}
+            onCancel={() => setDismissModalOpen(false)}
+            onSkipAndUseDefault={() => void skipAndUseDefault()}
+            onExit={exitApp}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Confirmation modal rendered when the operator tries to dismiss the
+ * wizard while running in bootstrap mode (via the X close button,
+ * the Skip link in the footer, or ESC). Bootstrap dismiss is
+ * irreversible-ish — either we create a `default` profile mapped to
+ * the operator's existing Codex install (and they see all of their
+ * existing Codex Desktop threads on the next launch) or we quit the
+ * app — so the fork has to be explicit, not silent.
+ *
+ * The middle button ("Skip and use default") runs the same
+ * provisioning path that picking Shared mode + clicking Finish
+ * would. The settings buffer (theme/density/messaging ack, plus
+ * any xAI key the operator typed) still graduates onto the new
+ * default profile, so they don't lose what they already typed.
+ */
+function DismissConfirmModal(props: {
+  submitting: boolean;
+  onCancel: () => void;
+  onSkipAndUseDefault: () => void;
+  onExit: () => void;
+}) {
+  return (
+    <div
+      className="onboarding-wizard__dismiss-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-dismiss-modal-heading"
+    >
+      <div className="onboarding-wizard__dismiss-modal-scrim" />
+      <div className="onboarding-wizard__dismiss-modal-body">
+        <h2
+          id="onboarding-dismiss-modal-heading"
+          className="onboarding-wizard__dismiss-modal-title"
+        >
+          Skip setup?
+        </h2>
+        <p className="onboarding-wizard__dismiss-modal-prose">
+          If you skip, PwrAgent will create a <code>default</code> profile
+          that <strong>reuses your existing Codex login</strong> at{" "}
+          <code>~/.codex/</code> — which probably means you&rsquo;ll see all
+          your existing Codex Desktop threads in the sidebar.
+        </p>
+        <p className="onboarding-wizard__dismiss-modal-prose">
+          If that&rsquo;s not what you want — for example, you wanted an
+          isolated PwrAgent profile separate from your Codex account —
+          click <strong>Exit PwrAgent</strong> instead, then relaunch and
+          walk through the wizard with Isolated or Multiple selected.
+        </p>
+        <div className="onboarding-wizard__dismiss-modal-actions">
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--link"
+            disabled={props.submitting}
+            onClick={props.onExit}
+          >
+            Exit PwrAgent
+          </button>
+          <span className="onboarding-wizard__spacer" />
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            disabled={props.submitting}
+            onClick={props.onCancel}
+          >
+            Cancel — back to setup
+          </button>
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+            disabled={props.submitting}
+            onClick={props.onSkipAndUseDefault}
+          >
+            Skip and use default →
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -543,29 +1105,33 @@ function WizardTitlebar(props: {
 }) {
   const eyebrow = props.isReplay
     ? "Replay"
-    : props.step === "backend-requirements"
-      ? "Prerequisites"
+    : props.step === "bootstrap-confirm"
+      ? "Set up profile"
       : "Welcome";
   const crumb = (() => {
     switch (props.step) {
-      case "backend-requirements":
-        return "Backend requirements";
+      case "bootstrap-confirm":
+        return "Confirm new profile";
       case "welcome":
         return "First-run setup";
       case "thread-presentation":
         return "Step 1 — Thread presentation";
+      case "models-providers":
+        return "Step 2 — Models / Providers";
       case "codex-profile":
-        return "Step 2 — Codex profile";
+        return "Step 3 — Codex profile";
       case "name-codex-profiles":
-        return "Step 2 — Name your profiles";
+        return "Step 3 — Name your profiles";
+      case "shared-codex-login":
+        return "Step 3 — Log in to Codex";
       case "messaging-safety":
-        return "Step 3 — Messaging — Before you connect";
+        return "Step 4 — Messaging — Before you connect";
       case "messaging-providers":
-        return "Step 3 — Messaging — Pick providers";
+        return "Step 4 — Messaging — Pick providers";
       case "provider-setup":
         return props.providerName
-          ? `Step 3 — ${props.providerName}${props.providerPosition ? ` (${props.providerPosition})` : ""}`
-          : "Step 3 — Provider setup";
+          ? `Step 4 — ${props.providerName}${props.providerPosition ? ` (${props.providerPosition})` : ""}`
+          : "Step 4 — Provider setup";
       case "done":
         return "Done";
     }
@@ -595,11 +1161,13 @@ function WizardRail(props: {
 }) {
   const labelOverrides: Record<number, string> = {
     0: props.currentIndex > 0 ? densityLabel(props.chosenDensity) : "Thread presentation",
-    1:
-      props.currentIndex > 1
+    1: "Models / Providers",
+    2:
+      props.currentIndex > 2
         ? codexProfileLabel(props.chosenCodexProfileModel)
-        : "Codex profile",
-    2: "Messaging",
+        : "Profiles",
+    3: "Messaging",
+    4: "Review",
   };
   return (
     <nav className="onboarding-wizard__rail" aria-label="Setup progress">
@@ -611,7 +1179,7 @@ function WizardRail(props: {
               ? "current"
               : "pending";
         const numLabel =
-          state === "done" ? `Step ${idx + 1} ✓` : idx === 3 ? "Done" : `Step ${idx + 1}`;
+          state === "done" ? `Step ${idx + 1} ✓` : idx === 4 ? "Done" : `Step ${idx + 1}`;
         return (
           <div
             key={idx}
@@ -638,6 +1206,24 @@ function WizardFooter(props: {
   providerSetupTotal: number;
   currentProviderName?: string;
   codexProfileNamesValid: boolean;
+  /** True when every named row on `name-codex-profiles` has finished
+   *  the Codex OAuth flow. Combined with `codexLoginDeferred`, drives
+   *  the Continue button's enabled state on that step. */
+  codexAuthAllAuthed: boolean;
+  /** Count of non-blank profile-name rows. Used to differentiate
+   *  "no names entered yet" (disable Continue for name validity) from
+   *  "names entered but not logged in" (show the deferral link). */
+  codexAuthNamedRows: number;
+  /** Operator clicked "I'll log in later" — lift the auth gate on
+   *  Continue without forcing them to finish. */
+  codexLoginDeferred: boolean;
+  onDeferCodexLogin: () => void;
+  /** Shared-mode counterpart to `codexAuthAllAuthed`: true when the
+   *  Codex system default has reported authenticated via the
+   *  `shared-codex-login` step. */
+  sharedAuthed: boolean;
+  sharedLoginDeferred: boolean;
+  onDeferSharedLogin: () => void;
   backendRequirementSatisfied: boolean;
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
@@ -647,34 +1233,41 @@ function WizardFooter(props: {
   onFinish: () => void;
 }) {
   const showBack =
-    props.step !== "welcome" && props.step !== "done" && !props.submitting;
-  const showSkip = props.step !== "done";
+    props.step !== "welcome" &&
+    props.step !== "done" &&
+    props.step !== "bootstrap-confirm" &&
+    !props.submitting;
+  // `messaging-safety` and `bootstrap-confirm` render their own
+  // Skip/Continue (or Quit/Continue) buttons in the body, so the
+  // footer doesn't show a redundant exit link on those screens.
+  const showSkip =
+    props.step !== "done" &&
+    props.step !== "messaging-safety" &&
+    props.step !== "bootstrap-confirm";
   const skipLabel = (() => {
-    if (
-      props.step === "messaging-safety" ||
-      props.step === "messaging-providers"
-    )
-      return "Skip messaging setup";
+    if (props.step === "messaging-providers") return "Skip messaging setup";
     if (props.step === "provider-setup") return `Skip ${props.currentProviderName}`;
     return "Skip setup";
   })();
 
   let hint: string | undefined;
   if (props.step === "thread-presentation") {
-    hint = `${densityLabel(props.density)} selected · 1 of 3`;
+    hint = `${densityLabel(props.density)} selected`;
   } else if (props.step === "codex-profile") {
-    hint = `${codexProfileLabel(props.codexProfileModel)} selected · 2 of 3`;
+    hint = `${codexProfileLabel(props.codexProfileModel)} selected`;
   } else if (props.step === "name-codex-profiles") {
     const isSingle = props.codexProfileModel === "isolated";
-    hint = props.codexProfileNamesValid
-      ? isSingle
-        ? "Name looks good"
-        : "Names look good"
-      : isSingle
+    if (!props.codexProfileNamesValid) {
+      hint = isSingle
         ? "Lowercase letters, digits, _ , -. 1–31 chars."
         : "1–5 unique lowercase names (letters, digits, _ , -)";
-  } else if (props.step === "messaging-safety") {
-    hint = props.acknowledged ? "Acknowledgement recorded" : undefined;
+    } else if (props.codexAuthAllAuthed) {
+      hint = isSingle ? "Logged in" : "All profiles logged in";
+    } else if (props.codexLoginDeferred) {
+      hint = "Logins deferred — finish from Settings → Profiles later";
+    } else {
+      hint = isSingle ? "Log in to continue" : "Log in to each profile to continue";
+    }
   } else if (props.step === "messaging-providers") {
     hint =
       props.providerCount > 0
@@ -682,14 +1275,22 @@ function WizardFooter(props: {
         : "No providers selected";
   } else if (props.step === "provider-setup") {
     hint = `Provider ${props.providerSetupIndex + 1} of ${props.providerSetupTotal}`;
-  } else if (props.step === "backend-requirements") {
+  } else if (props.step === "models-providers") {
     hint = props.backendRequirementSatisfied
       ? "Ready"
       : "Install Codex CLI or paste an xAI API key to continue";
+  } else if (props.step === "shared-codex-login") {
+    if (props.sharedAuthed) {
+      hint = "Codex logged in";
+    } else if (props.sharedLoginDeferred) {
+      hint = "Login deferred — finish from Settings → Profiles later";
+    } else {
+      hint = "Log in to your Codex account to continue";
+    }
   }
 
   let primary: ReactNode = null;
-  if (props.step === "backend-requirements") {
+  if (props.step === "models-providers") {
     primary = (
       <button
         type="button"
@@ -723,23 +1324,27 @@ function WizardFooter(props: {
         Continue →
       </button>
     );
-  } else if (props.step === "name-codex-profiles") {
+  } else if (props.step === "shared-codex-login") {
+    const sharedGateLifted = props.sharedAuthed || props.sharedLoginDeferred;
     primary = (
       <button
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-        disabled={!props.codexProfileNamesValid || props.submitting}
+        disabled={!sharedGateLifted || props.submitting}
         onClick={props.onNext}
       >
         Continue →
       </button>
     );
-  } else if (props.step === "messaging-safety") {
+  } else if (props.step === "name-codex-profiles") {
+    const authGateLifted = props.codexAuthAllAuthed || props.codexLoginDeferred;
     primary = (
       <button
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
-        disabled={!props.acknowledged || props.submitting}
+        disabled={
+          !props.codexProfileNamesValid || !authGateLifted || props.submitting
+        }
         onClick={props.onNext}
       >
         Continue →
@@ -803,6 +1408,29 @@ function WizardFooter(props: {
         </button>
       ) : null}
       <span className="onboarding-wizard__spacer" />
+      {props.step === "name-codex-profiles" &&
+      !props.codexLoginDeferred &&
+      !props.codexAuthAllAuthed &&
+      props.codexAuthNamedRows > 0 ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
+          onClick={props.onDeferCodexLogin}
+        >
+          I&rsquo;ll log in later
+        </button>
+      ) : null}
+      {props.step === "shared-codex-login" &&
+      !props.sharedLoginDeferred &&
+      !props.sharedAuthed ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
+          onClick={props.onDeferSharedLogin}
+        >
+          I&rsquo;ll log in later
+        </button>
+      ) : null}
       {hint ? <span className="onboarding-wizard__hint">{hint}</span> : null}
       {primary}
     </footer>
@@ -824,18 +1452,28 @@ function WizardFooter(props: {
  */
 function isBackendRequirementSatisfied(
   snapshot: DesktopSettingsSnapshot | undefined,
+  bufferedGrokKey: string,
 ): boolean {
   if (!snapshot) return false;
   const codexSelected = snapshot.models.codex.discovery.candidates.some(
     (candidate) => candidate.selected && candidate.executable,
   );
   const grokConfigured = snapshot.models.grok.apiKey.configured;
-  return codexSelected || grokConfigured;
+  // Buffered xAI key (entered in this wizard session but not yet
+  // written to a profile keychain) satisfies the gate too — the
+  // value will graduate to the chosen profile at Finish.
+  const grokBuffered = bufferedGrokKey.trim().length > 0;
+  return codexSelected || grokConfigured || grokBuffered;
 }
 
 function BackendRequirementsStep(props: {
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
+  /** Buffered xAI key value (held in wizard state, not yet
+   *  encrypted+written to the keychain). Empty string means "no
+   *  key in buffer." */
+  bufferedGrokKey: string;
+  onBufferGrokKey: (value: string) => void;
 }) {
   const snapshot = props.settings.snapshot;
   const discovery = snapshot?.models.codex.discovery;
@@ -844,12 +1482,14 @@ function BackendRequirementsStep(props: {
     (candidate) => candidate.selected && candidate.executable,
   );
   const codexOk = Boolean(codexCandidate);
-  const grokOk = Boolean(grokKey?.configured);
+  // Buffered key counts as "Grok configured" for the wizard's gate.
+  // The actual encrypt + write to the chosen profile's state.db
+  // happens at Finish via `writeSecretsToProfile` — see the comment
+  // on `WriteDesktopSecretsToProfileRequest` for why we defer.
+  const grokOk = Boolean(grokKey?.configured) || props.bufferedGrokKey.length > 0;
 
   const [refreshing, setRefreshing] = useState(false);
   const [grokKeyInput, setGrokKeyInput] = useState("");
-  const [savingGrok, setSavingGrok] = useState(false);
-  const [grokError, setGrokError] = useState<string | undefined>(undefined);
 
   const refresh = async (): Promise<void> => {
     if (!props.desktopApi?.refreshCodexDiscovery || refreshing) return;
@@ -864,33 +1504,26 @@ function BackendRequirementsStep(props: {
     }
   };
 
-  const saveGrokKey = async (): Promise<void> => {
+  const saveGrokKey = (): void => {
     const value = grokKeyInput.trim();
-    if (!value || savingGrok) return;
-    setSavingGrok(true);
-    setGrokError(undefined);
-    const ok = await props.settings.replaceSecret("grokApiKey", value);
-    if (ok) {
-      setGrokKeyInput("");
-    } else {
-      setGrokError(
-        props.settings.error ??
-          "Could not save the API key. Check the Settings → Models error log.",
-      );
-    }
-    setSavingGrok(false);
+    if (!value) return;
+    props.onBufferGrokKey(value);
+    setGrokKeyInput("");
+  };
+  const clearGrokKey = (): void => {
+    props.onBufferGrokKey("");
   };
 
   return (
     <div className="onboarding-wizard__prereqs">
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
-          Pick at least one backend to continue
+          Pick at least one model backend to continue
         </h1>
         <p className="onboarding-wizard__sub">
-          PwrAgent runs on top of one or both of these backends. You only
+          PwrAgent runs on top of one or both of these providers. You only
           need one to get started — the rest of the wizard configures
-          profiles and messaging on top.
+          profiles and (optionally) messaging on top.
         </p>
       </header>
 
@@ -986,7 +1619,8 @@ function BackendRequirementsStep(props: {
           <div>
             <div className="onboarding-wizard__prereq-title">xAI API key</div>
             <div className="onboarding-wizard__prereq-sub">
-              Required for the Grok backend. Stored in your system keychain.
+              Required for the Grok backend. Encrypted with your OS keychain
+              and saved to the profile you pick on the next steps.
             </div>
           </div>
           <span
@@ -996,7 +1630,11 @@ function BackendRequirementsStep(props: {
                 : "onboarding-wizard__prereq-status--missing"
             }`}
           >
-            {grokOk ? "✓ Configured" : "Not configured"}
+            {grokOk
+              ? props.bufferedGrokKey.length > 0
+                ? "✓ Ready"
+                : "✓ Configured"
+              : "Not configured"}
           </span>
         </div>
         {!grokOk ? (
@@ -1007,36 +1645,124 @@ function BackendRequirementsStep(props: {
                 className="onboarding-wizard__input"
                 placeholder="xai-…"
                 value={grokKeyInput}
-                disabled={savingGrok}
                 onChange={(e) => setGrokKeyInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    void saveGrokKey();
+                    saveGrokKey();
                   }
                 }}
               />
               <button
                 type="button"
                 className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                disabled={!grokKeyInput.trim() || savingGrok}
-                onClick={() => void saveGrokKey()}
+                disabled={!grokKeyInput.trim()}
+                onClick={saveGrokKey}
               >
-                {savingGrok ? "Saving…" : "Save"}
+                Use this key
               </button>
             </div>
             <div className="onboarding-wizard__prereq-link">
               Get a key at{" "}
               <code>https://console.x.ai/team/default/api-keys</code>
             </div>
-            {grokError ? (
-              <span className="onboarding-wizard__field-error">
-                {grokError}
-              </span>
-            ) : null}
+          </div>
+        ) : props.bufferedGrokKey.length > 0 ? (
+          // Buffered (entered now, not yet saved). Show a small undo so
+          // the operator can clear/replace before Finish.
+          <div className="onboarding-wizard__prereq-detail">
+            <span className="onboarding-wizard__prereq-link">
+              We&rsquo;ll save this key into the profile you pick next.
+            </span>
+            <button
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--link"
+              onClick={clearGrokKey}
+            >
+              Clear / re-enter
+            </button>
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Slim confirmation step shown when the operator launched PwrAgent
+ * with `--profile=foo` or `PWRAGENT_PROFILE=foo` and `foo` doesn't
+ * exist on disk. Pre-#524 silently materialized the profile and
+ * mapped it to Codex's system default; now we pause here to confirm
+ * the operator actually wants to create it. "Set it up" continues
+ * into the standard flow with the requested name already filled in
+ * on the Profiles step. "Quit PwrAgent" exits cleanly so the
+ * operator can re-launch with the correct name.
+ */
+function BootstrapConfirmStep(props: {
+  requestedName: string;
+  source: "missing-named" | "no-profile";
+  onContinue: () => void;
+  onQuit: () => void;
+  submitting: boolean;
+}) {
+  const name = props.requestedName.trim() || "this profile";
+  return (
+    <div className="onboarding-wizard__bootstrap-confirm">
+      <div className="onboarding-wizard__brand">
+        Pwr<span>Agent</span>
+      </div>
+      <h1 className="onboarding-wizard__title onboarding-wizard__title--center">
+        Set up <code>{name}</code>?
+      </h1>
+      <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
+        PwrAgent doesn&rsquo;t know a profile named <code>{name}</code> yet.
+        You started this run via{" "}
+        {props.source === "missing-named" ? (
+          <>
+            <code>--profile</code> or <code>PWRAGENT_PROFILE</code>
+          </>
+        ) : (
+          "the launch environment"
+        )}
+        , so we can either walk you through creating it (paired with a
+        new Codex auth profile of the same name) or quit so you can
+        re-launch with a different name.
+      </p>
+      <ul className="onboarding-wizard__bootstrap-confirm-points">
+        <li>
+          <strong>What you&rsquo;ll do next:</strong> pick how PwrAgent
+          relates to your Codex install (Shared / Isolated / Multiple),
+          log into the Codex auth profile, and choose your theme +
+          messaging preferences. Takes a couple of minutes.
+        </li>
+        <li>
+          <strong>What you won&rsquo;t do:</strong> overwrite your
+          existing <code>~/.codex/</code> default session, lose any
+          threads, or commit to messaging — that part is optional.
+        </li>
+      </ul>
+      <div className="onboarding-wizard__bootstrap-confirm-actions">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={props.submitting}
+          onClick={props.onQuit}
+        >
+          Quit PwrAgent
+        </button>
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+          disabled={props.submitting}
+          onClick={props.onContinue}
+        >
+          Set up <code>{name}</code> →
+        </button>
+      </div>
+      <p className="onboarding-wizard__bootstrap-confirm-hint">
+        Tip: launch without <code>--profile</code> / <code>PWRAGENT_PROFILE</code>{" "}
+        to pick from existing profiles instead.
+      </p>
     </div>
   );
 }
@@ -1048,12 +1774,13 @@ function WelcomeStep() {
         Pwr<span>Agent</span>
       </div>
       <h1 className="onboarding-wizard__title">
-        Three short choices, then you&rsquo;re operating.
+        A few short choices, then you&rsquo;re operating.
       </h1>
       <p className="onboarding-wizard__sub">
-        Pick how your thread list looks, how PwrAgent relates to your Codex
-        install, and which messaging platform you want — if any. Every choice
-        persists in Settings → General and is reversible at any time.
+        Pick how your thread list looks, which model backend you&rsquo;ll run
+        on, how PwrAgent relates to your Codex install, and (optionally) a
+        messaging platform. Every choice persists in Settings and is
+        reversible at any time.
       </p>
       <ol className="onboarding-wizard__welcome-list">
         <li>
@@ -1063,7 +1790,7 @@ function WelcomeStep() {
               Thread presentation
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Compact rows or Mission Control chips.
+              Compact rows or Mission Control chips. Light, dark, or follow OS.
             </div>
           </div>
         </li>
@@ -1071,10 +1798,11 @@ function WelcomeStep() {
           <span className="onboarding-wizard__welcome-num">2</span>
           <div>
             <div className="onboarding-wizard__welcome-row-title">
-              Codex profile
+              Models / Providers
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Share, isolate, or run multiple identities.
+              Confirm Codex CLI is installed, or paste an xAI API key — one is
+              enough.
             </div>
           </div>
         </li>
@@ -1082,10 +1810,23 @@ function WelcomeStep() {
           <span className="onboarding-wizard__welcome-num">3</span>
           <div>
             <div className="onboarding-wizard__welcome-row-title">
+              Profiles
+            </div>
+            <div className="onboarding-wizard__welcome-row-sub">
+              Share your existing Codex login, isolate a fresh one, or set up
+              several at once.
+            </div>
+          </div>
+        </li>
+        <li>
+          <span className="onboarding-wizard__welcome-num">4</span>
+          <div>
+            <div className="onboarding-wizard__welcome-row-title">
               Messaging
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Optional. Telegram-first; others available.
+              Optional. Skip and stay on the desktop, or connect Telegram /
+              Discord / Slack / others.
             </div>
           </div>
         </li>
@@ -1223,6 +1964,9 @@ function CodexProfileStep(props: {
 function MessagingSafetyStep(props: {
   acknowledged: boolean;
   onAcknowledgedChange: (next: boolean) => void;
+  onSkipMessaging: () => void;
+  onContinue: () => void;
+  submitting: boolean;
 }) {
   return (
     <div className="onboarding-wizard__safety">
@@ -1230,11 +1974,12 @@ function MessagingSafetyStep(props: {
         <ShieldIcon />
       </div>
       <h1 className="onboarding-wizard__title onboarding-wizard__title--center">
-        Before you connect a messaging platform
+        Messaging is optional — and worth thinking about first
       </h1>
       <p className="onboarding-wizard__sub onboarding-wizard__sub--center">
-        A short pause to think this through. Three principles, then one
-        acknowledgement.
+        Connecting a chat platform lets you drive PwrAgent from your phone.
+        You can also skip this and stay on the desktop. Either way, three
+        principles to read before you decide.
       </p>
       <ul className="onboarding-wizard__safety-list">
         <li>
@@ -1273,6 +2018,28 @@ function MessagingSafetyStep(props: {
           outcomes of any actions I take here.
         </span>
       </label>
+      <div className="onboarding-wizard__safety-fork">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+          disabled={props.submitting}
+          onClick={props.onSkipMessaging}
+        >
+          Skip messaging for now
+        </button>
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+          disabled={!props.acknowledged || props.submitting}
+          onClick={props.onContinue}
+        >
+          Continue to messaging setup →
+        </button>
+      </div>
+      <p className="onboarding-wizard__safety-fork-hint">
+        You can always add or change messaging providers later from
+        Settings → Messaging.
+      </p>
     </div>
   );
 }
@@ -1834,20 +2601,72 @@ function CodexNode(props: {
    Step: Name your Codex profiles (Step 2b — only when "Multiple")
    ---------------------------------------------------------------- */
 
+/**
+ * Per-row login state for the inline Codex login UX on the
+ * name-codex-profiles step. Keyed by the row's *committed* name (the
+ * name at the moment the operator clicked "Log in" — name edits after
+ * that point are blocked by `isRowLocked`). `ok` carries email/plan
+ * from the JWT so the row can display them inline as confirmation.
+ */
+type RowLoginState =
+  | { kind: "idle" }
+  | { kind: "starting" }
+  | { kind: "waiting"; url?: string; detail?: string }
+  | { kind: "checking"; url?: string }
+  | { kind: "ok"; email?: string; planType?: string }
+  | { kind: "error"; detail: string; url?: string };
+
 function NameCodexProfilesStep(props: {
   /** Isolated = single profile (max 1). Multiple = 1–5 profiles. */
   mode: "isolated" | "multiple";
   names: string[];
   onChange: (next: string[]) => void;
+  desktopApi?: DesktopApi;
+  /** Called whenever the per-row login states change, so the wizard
+   *  root can gate the footer Continue button on "all named rows
+   *  authenticated". `namedRows` excludes blank inputs. */
+  onAuthStateChange: (snapshot: { allAuthed: boolean; namedRows: number }) => void;
+  /** Global xAI key from Models / Providers step (renderer buffer,
+   *  not yet written to a keychain). When a row's per-profile
+   *  override is unset, this value graduates to that profile. */
+  globalXaiKey: string;
+  /** Per-profile xAI key overrides keyed by the row's committed
+   *  name. Empty string = "no override; inherit global". */
+  xaiKeyByProfile: Record<string, string>;
+  onSetXaiKeyForProfile: (profileName: string, value: string) => void;
 }) {
   const maxCount = props.mode === "isolated" ? 1 : 5;
   const isSingle = props.mode === "isolated";
+  // Login state keyed by the *committed* row name, so name edits before
+  // Login is clicked don't carry orphan state, and so a Back-out and
+  // re-entry to this step preserves authenticated rows.
+  const [loginStates, setLoginStates] = useState<Record<string, RowLoginState>>({});
+  const apiRef = useRef(props.desktopApi);
+  apiRef.current = props.desktopApi;
+
+  const stateFor = (name: string): RowLoginState =>
+    loginStates[name] ?? { kind: "idle" };
+  const setStateFor = (name: string, next: RowLoginState): void => {
+    setLoginStates((prev) => ({ ...prev, [name]: next }));
+  };
+
+  const isRowLocked = (name: string): boolean => {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    const state = stateFor(trimmed).kind;
+    return state === "starting" || state === "waiting" || state === "checking" || state === "ok";
+  };
+
   const setAt = (idx: number, value: string): void => {
+    const current = props.names[idx]?.trim() ?? "";
+    if (isRowLocked(current)) return;
     const next = [...props.names];
     next[idx] = value;
     props.onChange(next);
   };
   const removeAt = (idx: number): void => {
+    const current = props.names[idx]?.trim() ?? "";
+    if (isRowLocked(current)) return;
     const next = [...props.names];
     next.splice(idx, 1);
     props.onChange(next);
@@ -1856,34 +2675,202 @@ function NameCodexProfilesStep(props: {
     if (props.names.length >= maxCount) return;
     props.onChange([...props.names, ""]);
   };
+
+  /**
+   * Kick off (or re-kick) login for one row. Creates the Codex auth
+   * profile shell if it doesn't exist (idempotent — the IPC returns
+   * `created: false` if it was already there), spawns `codex login`,
+   * and surfaces the login URL so the operator can either let the
+   * default browser open it or copy/paste into a different browser
+   * with the right SSO session.
+   */
+  const startLogin = useCallback(
+    async (name: string): Promise<void> => {
+      const api = apiRef.current;
+      if (
+        !api?.createCodexAuthProfile ||
+        !api.startCodexAuthProfileLogin ||
+        !isValidProfileName(name)
+      ) {
+        return;
+      }
+      setStateFor(name, { kind: "starting" });
+      try {
+        await api.createCodexAuthProfile({ profile: name });
+        const result = await api.startCodexAuthProfileLogin({ profile: name });
+        if (result.authenticated) {
+          // The shell reused an existing token — finish immediately
+          // by re-reading identity via checkCodexAuthProfileStatus
+          // (which extracts email + plan from the JWT).
+          await refreshStatus(name);
+          return;
+        }
+        setStateFor(name, {
+          kind: "waiting",
+          url: result.loginUrl,
+          detail: result.detail,
+        });
+      } catch (caught) {
+        setStateFor(name, {
+          kind: "error",
+          detail: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
+    },
+    // refreshStatus is defined below — it's stable because it closes
+    // over apiRef (which is mutable but read at call-time).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const refreshStatus = useCallback(async (name: string): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus || !isValidProfileName(name)) return;
+    setLoginStates((prev) => {
+      const existing = prev[name];
+      // Only show a "checking" indicator if the row had something in
+      // flight already; auto-recheck on focus shouldn't flash idle
+      // rows into a checking state.
+      if (!existing || existing.kind === "ok") return prev;
+      return {
+        ...prev,
+        [name]: {
+          kind: "checking",
+          url: "url" in existing ? existing.url : undefined,
+        },
+      };
+    });
+    try {
+      const result = await api.checkCodexAuthProfileStatus({ profile: name });
+      if (result.authenticated) {
+        setStateFor(name, {
+          kind: "ok",
+          email: result.email,
+          planType: result.planType,
+        });
+      } else {
+        setLoginStates((prev) => {
+          const previousUrl =
+            prev[name] && "url" in prev[name]! ? (prev[name] as { url?: string }).url : undefined;
+          return {
+            ...prev,
+            [name]: {
+              kind: "waiting",
+              url: previousUrl,
+              detail: result.detail,
+            },
+          };
+        });
+      }
+    } catch (caught) {
+      setStateFor(name, {
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, []);
+
+  const copyLoginUrl = useCallback(async (url: string | undefined): Promise<void> => {
+    const api = apiRef.current;
+    if (!url || !api?.copyText) return;
+    try {
+      await api.copyText(url);
+    } catch {
+      // Best-effort; nothing to recover.
+    }
+  }, []);
+
+  // Auto-recheck on window focus: when the operator finishes the OAuth
+  // dance in a browser, focus returns to PwrAgent. Re-poll every row
+  // that's in a non-terminal state.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.onWindowFocus) return undefined;
+    return api.onWindowFocus(() => {
+      for (const [name, state] of Object.entries(loginStates)) {
+        if (state.kind === "waiting" || state.kind === "checking") {
+          void refreshStatus(name);
+        }
+      }
+    });
+  }, [loginStates, refreshStatus]);
+
+  // On mount, probe each valid name for an already-authenticated state
+  // so back-nav doesn't lose login progress. Runs once per name → ok
+  // transition, idempotent against reordering.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus) return;
+    for (const raw of props.names) {
+      const name = raw.trim();
+      if (!isValidProfileName(name)) continue;
+      if (stateFor(name).kind !== "idle") continue;
+      void (async () => {
+        try {
+          const result = await api.checkCodexAuthProfileStatus!({ profile: name });
+          if (result.authenticated) {
+            setStateFor(name, {
+              kind: "ok",
+              email: result.email,
+              planType: result.planType,
+            });
+          }
+        } catch {
+          // Silent — idle rows where the auth profile doesn't exist
+          // yet legitimately fail this check. Showing an error here
+          // would scream at the operator before they've even clicked
+          // Log in.
+        }
+      })();
+    }
+    // We deliberately depend on names only — adding loginStates would
+    // re-fire after every state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.names]);
+
+  // Propagate auth completion to the wizard root for Continue gating.
+  useEffect(() => {
+    const validNames = props.names
+      .map((name) => name.trim())
+      .filter((name) => isValidProfileName(name));
+    const allAuthed =
+      validNames.length > 0 &&
+      validNames.every((name) => stateFor(name).kind === "ok");
+    props.onAuthStateChange({ allAuthed, namedRows: validNames.length });
+    // stateFor is derived from loginStates; depending on names + loginStates
+    // is sufficient to drive the snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginStates, props.names]);
+
   return (
     <div>
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
           {isSingle
-            ? "Name your isolated PwrAgent profile"
-            : "Name your PwrAgent + Codex profiles"}
+            ? "Name and log in to your isolated profile"
+            : "Name and log in to your PwrAgent + Codex profiles"}
         </h1>
         <p className="onboarding-wizard__sub">
           {isSingle ? (
             <>
-              The name applies to <strong>both sides</strong>: PwrAgent creates
-              a new profile under <code>~/.pwragent/profiles/</code> and a
-              matching Codex auth profile under{" "}
-              <code>~/.codex/auth-profiles/</code>. Your existing PwrAgent{" "}
-              <code>default</code> profile and your Codex default both stay
-              untouched. Lowercase letters, digits, underscores, and hyphens —
-              1 to 31 characters. Codex login happens after the wizard from
-              Settings → Profiles.
+              The name applies to <strong>both sides</strong>: a new PwrAgent
+              profile under <code>~/.pwragent/profiles/</code> and a matching
+              Codex auth profile under <code>~/.codex/auth-profiles/</code>.
+              Click <strong>Log in</strong> to start the Codex OAuth flow for
+              that profile. Tip: focus the browser window that&rsquo;s already
+              signed in to the right account first, or use{" "}
+              <strong>Copy URL</strong> to paste the login link into the
+              browser you want.
             </>
           ) : (
             <>
               Up to 5. Each name becomes <strong>both</strong> a new PwrAgent
-              profile and a matching Codex auth profile of the same name. Your
-              existing <code>default</code> profile on either side stays
-              untouched. Lowercase letters, digits, underscores, and hyphens —
-              1 to 31 characters. Codex login for each happens after the
-              wizard from Settings → Profiles.
+              profile and a matching Codex auth profile of the same name.
+              Click <strong>Log in</strong> on each row to start the Codex
+              OAuth flow for that profile. Tip: focus the browser window
+              that&rsquo;s already signed in to the right account first, or
+              use <strong>Copy URL</strong> to paste the link into the browser
+              you want.
             </>
           )}
         </p>
@@ -1892,26 +2879,54 @@ function NameCodexProfilesStep(props: {
         {props.names.map((name, idx) => {
           const trimmed = name.trim();
           const valid = trimmed === "" || isValidProfileName(trimmed);
+          const state = trimmed ? stateFor(trimmed) : { kind: "idle" as const };
+          const locked = isRowLocked(trimmed);
           return (
-            <div key={idx} className="onboarding-wizard__profile-row">
-              <span className="onboarding-wizard__profile-num">{idx + 1}</span>
-              <input
-                type="text"
-                className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
-                placeholder={isSingle ? "pwragent" : "profile-name"}
-                value={name}
-                onChange={(e) => setAt(idx, e.target.value)}
-                aria-invalid={!valid}
-              />
-              {!isSingle && props.names.length > 1 ? (
-                <button
-                  type="button"
-                  className="onboarding-wizard__btn onboarding-wizard__btn--link"
-                  onClick={() => removeAt(idx)}
-                  aria-label={`Remove profile ${idx + 1}`}
-                >
-                  Remove
-                </button>
+            <div
+              key={idx}
+              className={`onboarding-wizard__profile-row onboarding-wizard__profile-row--has-login is-${state.kind}`}
+            >
+              <div className="onboarding-wizard__profile-row-top">
+                <span className="onboarding-wizard__profile-num">{idx + 1}</span>
+                <input
+                  type="text"
+                  className={`onboarding-wizard__profile-input${valid ? "" : " is-invalid"}`}
+                  placeholder={isSingle ? "pwragent" : "profile-name"}
+                  value={name}
+                  onChange={(e) => setAt(idx, e.target.value)}
+                  aria-invalid={!valid}
+                  readOnly={locked}
+                />
+                <ProfileRowLoginControls
+                  name={trimmed}
+                  valid={valid && trimmed.length > 0}
+                  state={state}
+                  onLogin={() => void startLogin(trimmed)}
+                  onCheck={() => void refreshStatus(trimmed)}
+                  onCopyUrl={() => void copyLoginUrl("url" in state ? state.url : undefined)}
+                />
+                {!isSingle && props.names.length > 1 ? (
+                  <button
+                    type="button"
+                    className="onboarding-wizard__btn onboarding-wizard__btn--link"
+                    onClick={() => removeAt(idx)}
+                    aria-label={`Remove profile ${idx + 1}`}
+                    disabled={locked}
+                  >
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+              <ProfileRowLoginStatus state={state} />
+              {trimmed ? (
+                <ProfileRowXaiKey
+                  profileName={trimmed}
+                  globalKey={props.globalXaiKey}
+                  override={props.xaiKeyByProfile[trimmed] ?? ""}
+                  onChange={(value) =>
+                    props.onSetXaiKeyForProfile(trimmed, value)
+                  }
+                />
               ) : null}
             </div>
           );
@@ -1926,6 +2941,378 @@ function NameCodexProfilesStep(props: {
           </button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function ProfileRowLoginControls(props: {
+  name: string;
+  valid: boolean;
+  state: RowLoginState;
+  onLogin: () => void;
+  onCheck: () => void;
+  onCopyUrl: () => void;
+}) {
+  if (props.state.kind === "ok") {
+    return (
+      <span className="onboarding-wizard__profile-row-status onboarding-wizard__profile-row-status--ok">
+        ✓ Logged in
+      </span>
+    );
+  }
+  const hasUrl = "url" in props.state && Boolean(props.state.url);
+  const inFlight =
+    props.state.kind === "starting" || props.state.kind === "checking";
+  const loginLabel = (() => {
+    if (props.state.kind === "starting") return "Starting…";
+    if (props.state.kind === "waiting") return "Re-open browser";
+    if (props.state.kind === "error") return "Try again";
+    if (props.state.kind === "checking") return "Checking…";
+    return "Log in";
+  })();
+  return (
+    <div className="onboarding-wizard__profile-row-actions">
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+        disabled={!props.valid || inFlight}
+        onClick={props.onLogin}
+      >
+        {loginLabel}
+      </button>
+      {hasUrl ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={props.onCopyUrl}
+        >
+          Copy URL
+        </button>
+      ) : null}
+      {props.state.kind === "waiting" ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={props.onCheck}
+        >
+          Check status
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileRowLoginStatus(props: { state: RowLoginState }) {
+  if (props.state.kind === "ok") {
+    const bits = [props.state.email, props.state.planType].filter(Boolean);
+    return (
+      <div className="onboarding-wizard__profile-row-detail onboarding-wizard__profile-row-detail--ok">
+        {bits.length > 0 ? bits.join(" · ") : "Authenticated"}
+      </div>
+    );
+  }
+  if (props.state.kind === "waiting") {
+    return (
+      <div className="onboarding-wizard__profile-row-detail">
+        Browser opened. Complete the Codex sign-in, then return here — we
+        re-check automatically when this window regains focus.
+      </div>
+    );
+  }
+  if (props.state.kind === "error") {
+    return (
+      <div className="onboarding-wizard__profile-row-detail onboarding-wizard__profile-row-detail--error">
+        {props.state.detail}
+      </div>
+    );
+  }
+  return null;
+}
+
+/**
+ * Shared-mode login step. Only rendered when the operator picked
+ * "Shared" on the Codex profile step AND their existing Codex
+ * install hasn't been logged in yet (no `~/.codex/auth.json`). Reuses
+ * the same row-status sub-components as the Multiple/Isolated naming
+ * step, but operates on the Codex *system default* profile (empty
+ * profile name on the IPC calls) rather than a named per-row entry.
+ *
+ * Why a dedicated step (vs. inline on the codex-profile step): the
+ * Codex profile step is the operator's choice of *strategy*. The
+ * login UX needs space for status + URL copy + retry controls; a
+ * standalone step keeps both screens focused. The step is skipped
+ * entirely when the system default is already authenticated.
+ */
+function SharedCodexLoginStep(props: {
+  desktopApi?: DesktopApi;
+  onAuthStateChange: (authed: boolean) => void;
+}) {
+  const [state, setState] = useState<RowLoginState>({ kind: "idle" });
+  const apiRef = useRef(props.desktopApi);
+  apiRef.current = props.desktopApi;
+  // Empty string is the sentinel for the Codex system default; the
+  // main-process IPC handlers resolve it to `~/.codex/` (see
+  // `resolveRequiredCodexProfileHome`).
+  const SYSTEM_DEFAULT = "";
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus) return;
+    setState((prev) => {
+      if (prev.kind === "ok") return prev;
+      const url = "url" in prev ? prev.url : undefined;
+      return { kind: "checking", url };
+    });
+    try {
+      const result = await api.checkCodexAuthProfileStatus({
+        profile: SYSTEM_DEFAULT,
+      });
+      if (result.authenticated) {
+        setState({
+          kind: "ok",
+          email: result.email,
+          planType: result.planType,
+        });
+      } else {
+        setState((prev) => {
+          const url = "url" in prev ? prev.url : undefined;
+          return { kind: "waiting", url, detail: result.detail };
+        });
+      }
+    } catch (caught) {
+      setState({
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, []);
+
+  const startLogin = useCallback(async (): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.startCodexAuthProfileLogin) return;
+    setState({ kind: "starting" });
+    try {
+      // Intentionally skip `createCodexAuthProfile` — the system
+      // default `~/.codex/` already exists (or `codex login` will
+      // create the dir). Creating a profile-dir-under-`profiles/`
+      // would side-step the operator's choice to share, not
+      // isolate.
+      const result = await api.startCodexAuthProfileLogin({
+        profile: SYSTEM_DEFAULT,
+      });
+      if (result.authenticated) {
+        await refreshStatus();
+        return;
+      }
+      setState({
+        kind: "waiting",
+        url: result.loginUrl,
+        detail: result.detail,
+      });
+    } catch (caught) {
+      setState({
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, [refreshStatus]);
+
+  const copyLoginUrl = useCallback(
+    async (url: string | undefined): Promise<void> => {
+      const api = apiRef.current;
+      if (!url || !api?.copyText) return;
+      try {
+        await api.copyText(url);
+      } catch {
+        // best-effort
+      }
+    },
+    [],
+  );
+
+  // Probe on mount — the operator could have logged in via another
+  // path between picking Shared and arriving here. Auto-recheck on
+  // window focus too: returning from a browser SSO flow triggers
+  // it without the operator clicking "Check status."
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.onWindowFocus) return undefined;
+    return api.onWindowFocus(() => {
+      if (state.kind === "waiting" || state.kind === "checking") {
+        void refreshStatus();
+      }
+    });
+  }, [state, refreshStatus]);
+
+  useEffect(() => {
+    props.onAuthStateChange(state.kind === "ok");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  return (
+    <div>
+      <header className="onboarding-wizard__head">
+        <h1 className="onboarding-wizard__title">
+          Log in to your Codex account
+        </h1>
+        <p className="onboarding-wizard__sub">
+          You picked <strong>Shared</strong> — PwrAgent will reuse your
+          existing Codex install at <code>~/.codex/</code>. We just need to
+          confirm you&rsquo;re signed in. If you&rsquo;ve already logged in
+          via Codex Desktop or the <code>codex</code> CLI, this step is
+          probably already green; otherwise click <strong>Log in</strong>{" "}
+          below.
+        </p>
+      </header>
+      <div className="onboarding-wizard__profile-list">
+        <div
+          className={`onboarding-wizard__profile-row onboarding-wizard__profile-row--has-login is-${state.kind}`}
+        >
+          <div className="onboarding-wizard__profile-row-top">
+            <span className="onboarding-wizard__profile-num">↻</span>
+            <span
+              className="onboarding-wizard__profile-input"
+              style={{ display: "inline-flex", alignItems: "center" }}
+            >
+              <code style={{ fontWeight: 500 }}>System default</code>
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                }}
+              >
+                ~/.codex/
+              </span>
+            </span>
+            <ProfileRowLoginControls
+              name="system-default"
+              valid={true}
+              state={state}
+              onLogin={() => void startLogin()}
+              onCheck={() => void refreshStatus()}
+              onCopyUrl={() =>
+                void copyLoginUrl("url" in state ? state.url : undefined)
+              }
+            />
+          </div>
+          <ProfileRowLoginStatus state={state} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Inline xAI API key control per profile row. Three states:
+ *   - Hidden chip ("Add xAI key (optional)"): default when no global
+ *     key set and no override. Expanding shows the input.
+ *   - "Uses global xAI key" chip: rendered when the operator typed
+ *     a global key on Models / Providers but didn't override here.
+ *     Expanding shows the input with the global value pre-filled
+ *     (operator can replace).
+ *   - "Override active" chip: rendered when an override is set.
+ *     Always shows the input collapsed-style with Clear button.
+ *
+ * Override values flow into the wizard's `xaiKeyByProfile` map and
+ * graduate to the matching profile's keychain at Finish. Per-row
+ * keys NEVER write to `replaceSecret` — same defer-and-graduate
+ * pattern as the global key on Models / Providers.
+ */
+function ProfileRowXaiKey(props: {
+  profileName: string;
+  globalKey: string;
+  override: string;
+  onChange: (value: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [value, setValue] = useState("");
+  const hasGlobal = props.globalKey.length > 0;
+  const hasOverride = props.override.length > 0;
+
+  const save = (): void => {
+    if (!value.trim()) return;
+    props.onChange(value.trim());
+    setValue("");
+    setExpanded(false);
+  };
+  const clear = (): void => {
+    props.onChange("");
+    setValue("");
+  };
+
+  if (!expanded && !hasOverride) {
+    return (
+      <div className="onboarding-wizard__profile-row-xai is-collapsed">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={() => setExpanded(true)}
+        >
+          {hasGlobal
+            ? "Override xAI key for this profile"
+            : "+ Add xAI key (optional)"}
+        </button>
+        {hasGlobal ? (
+          <span className="onboarding-wizard__profile-row-xai-hint">
+            Uses global xAI key
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="onboarding-wizard__profile-row-xai">
+      <input
+        type="password"
+        className="onboarding-wizard__input"
+        placeholder={
+          hasOverride
+            ? "Replace stored override (already set)"
+            : hasGlobal
+              ? "Override global xAI key"
+              : "xai-…"
+        }
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+        disabled={!value.trim()}
+        onClick={save}
+      >
+        {hasOverride ? "Replace" : "Use this"}
+      </button>
+      {hasOverride ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={clear}
+        >
+          Clear override
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--link"
+        onClick={() => {
+          setExpanded(false);
+          setValue("");
+        }}
+      >
+        Cancel
+      </button>
     </div>
   );
 }
@@ -2268,6 +3655,8 @@ function ProviderSetupStep(props: {
   provider: OnboardingProvider;
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
+  bufferedSecrets: Record<string, string>;
+  onBufferSecret: (name: string, value: string) => void;
 }) {
   const config = PROVIDER_SETUP_CONFIGS[props.provider];
   const snapshot = props.settings.snapshot;
@@ -2304,7 +3693,8 @@ function ProviderSetupStep(props: {
             provider={props.provider}
             snapshot={snapshot}
             saving={props.settings.saving}
-            replaceSecret={props.settings.replaceSecret}
+            bufferedSecrets={props.bufferedSecrets}
+            onBufferSecret={props.onBufferSecret}
             writeConfig={props.settings.writeConfig}
           />
         ))}
@@ -2326,19 +3716,21 @@ function ProviderFieldRow(props: {
   provider: OnboardingProvider;
   snapshot?: DesktopSettingsSnapshot;
   saving: boolean;
-  replaceSecret: (
-    name: DesktopSettingsSecretName,
-    value: string,
-  ) => Promise<boolean>;
+  bufferedSecrets: Record<string, string>;
+  onBufferSecret: (name: string, value: string) => void;
   writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
 }) {
   if (props.field.kind === "secret") {
+    // Capture the narrowed name into a local so the closure passed
+    // to `onBuffer` keeps type info when re-rendered. Without this
+    // step, TS widens `props.field` back to the union.
+    const secretName = props.field.name;
     return (
       <SecretFieldRow
         field={props.field}
         snapshot={props.snapshot}
-        saving={props.saving}
-        replaceSecret={props.replaceSecret}
+        bufferedValue={props.bufferedSecrets[secretName] ?? ""}
+        onBuffer={(value) => props.onBufferSecret(secretName, value)}
       />
     );
   }
@@ -2367,36 +3759,32 @@ function ProviderFieldRow(props: {
 function SecretFieldRow(props: {
   field: Extract<ProviderField, { kind: "secret" }>;
   snapshot?: DesktopSettingsSnapshot;
-  saving: boolean;
-  replaceSecret: (
-    name: DesktopSettingsSecretName,
-    value: string,
-  ) => Promise<boolean>;
+  /** Currently-buffered value (held in wizard state, encrypted +
+   *  written to the chosen profile's keychain at Finish). */
+  bufferedValue: string;
+  onBuffer: (value: string) => void;
 }) {
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
   const state = readSecretState(props.snapshot, props.field.name);
   const configured = state?.configured ?? false;
+  const buffered = props.bufferedValue.length > 0;
 
-  const save = async (): Promise<void> => {
-    if (!value || busy) return;
-    setBusy(true);
-    setError(undefined);
-    const ok = await props.replaceSecret(props.field.name, value);
-    if (ok) {
-      setValue("");
-    } else {
-      setError("Could not save the secret.");
-    }
-    setBusy(false);
+  const save = (): void => {
+    if (!value) return;
+    props.onBuffer(value);
+    setValue("");
+  };
+  const clear = (): void => {
+    props.onBuffer("");
   };
   return (
     <div className="onboarding-wizard__field">
       <div className="onboarding-wizard__field-head">
         <span className="onboarding-wizard__field-label">{props.field.label}</span>
         <span className="onboarding-wizard__field-status">
-          {configured ? (
+          {buffered ? (
+            <span className="onboarding-wizard__field-pill is-ok">✓ Ready</span>
+          ) : configured ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ saved</span>
           ) : (
             <span className="onboarding-wizard__field-pill">not set</span>
@@ -2410,29 +3798,40 @@ function SecretFieldRow(props: {
         <input
           type="password"
           className="onboarding-wizard__input"
-          placeholder={configured ? "Replace stored value" : props.field.placeholder}
+          placeholder={
+            buffered
+              ? "Replace the buffered value"
+              : configured
+                ? "Replace stored value"
+                : props.field.placeholder
+          }
           value={value}
-          disabled={props.saving || busy}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              void save();
+              save();
             }
           }}
         />
         <button
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={!value || busy || props.saving}
-          onClick={() => void save()}
+          disabled={!value}
+          onClick={save}
         >
-          {busy ? "Saving…" : configured ? "Replace" : "Save"}
+          {buffered || configured ? "Replace" : "Use this"}
         </button>
+        {buffered ? (
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--link"
+            onClick={clear}
+          >
+            Clear
+          </button>
+        ) : null}
       </div>
-      {error ? (
-        <span className="onboarding-wizard__field-error">{error}</span>
-      ) : null}
     </div>
   );
 }

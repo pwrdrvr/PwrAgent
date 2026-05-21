@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
@@ -1545,6 +1546,17 @@ export class DesktopBackendRegistry {
    * `ONBOARDING_CODEX_GATE_ENABLED`.
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
+  /**
+   * Reports whether the registry is running inside the throwaway
+   * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
+   * hard-fails to an empty result regardless of any other gate —
+   * the bootstrap profile's `models.codex.profile` is unset and
+   * would otherwise resolve to the operator's real Codex install,
+   * leaking their real thread list into the to-be-discarded
+   * bootstrap window. Tests inject a fixed value; production wires
+   * it to `state/app-state.getAppStateMode()`.
+   */
+  private readonly isBootstrapModeFn: () => boolean;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -1559,6 +1571,7 @@ export class DesktopBackendRegistry {
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
     isCodexBootstrapDeferred?: () => boolean;
+    isBootstrapMode?: () => boolean;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
@@ -1713,6 +1726,8 @@ export class DesktopBackendRegistry {
           return false;
         }
       });
+    this.isBootstrapModeFn =
+      options?.isBootstrapMode ?? (() => getAppStateMode() === "bootstrap");
 
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
@@ -1870,6 +1885,26 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Throw if any method that reads or writes Codex thread data is
+   * reached in bootstrap mode. Companion to the silent empty-return
+   * in `listThreads` — that path needs to keep the sidebar quiet
+   * for the focus listener, but explicit operator actions
+   * (readThread, startThread, startTurn, startReview,
+   * submitServerRequest, repairCodexThreadDirectoryRelationship)
+   * should never reach the registry from a bootstrap window. The
+   * wizard occupies the entire renderer in bootstrap mode; if any
+   * of these fire, it's a code bug and we want a loud failure, not
+   * silent contamination of the operator's real Codex install.
+   */
+  private assertNotBootstrap(method: string): void {
+    if (this.isBootstrapModeFn()) {
+      throw new Error(
+        `backend-registry.${method} is forbidden in bootstrap mode`,
+      );
+    }
+  }
+
   async listThreads(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
@@ -1877,6 +1912,22 @@ export class DesktopBackendRegistry {
     enrichDirectories?: boolean;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
+    // Hard gate: the bootstrap profile MUST NEVER serve thread data,
+    // regardless of what the bootstrap config.toml's onboarding
+    // flags say. Concretely this guards the post-wizard dev window:
+    // in dev we leave the bootstrap Electron alive (Vite dev-server
+    // race — see ipc/boot-info.ts), and if the operator focuses
+    // that window, `useThreadNavigation`'s focus listener triggers
+    // a `getNavigationSnapshot` → listThreads call. The bootstrap
+    // profile's `models.codex.profile` is unset, which means
+    // "use ~/.codex/" — i.e. the operator's real Codex Desktop
+    // session, with all their real threads. This check makes that
+    // contamination unreachable even if `isCodexBootstrapDeferredFn`
+    // gets misconfigured or the onboarding-completed flag gets
+    // flipped accidentally on the bootstrap profile.
+    if (this.isBootstrapModeFn()) {
+      return [];
+    }
     // Gate the deferred Codex probe. When the first-run wizard hasn't
     // picked a Codex profile model yet, an explicit codex query returns
     // empty; an unfiltered query falls through to the grok-only path so
@@ -2350,6 +2401,7 @@ export class DesktopBackendRegistry {
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
+    this.assertNotBootstrap("readThread");
     const backend = request.backend ?? "codex";
     const replay =
       backend === "codex"
@@ -2408,6 +2460,7 @@ export class DesktopBackendRegistry {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
+    this.assertNotBootstrap("startThread");
     const {
       backend,
       executionMode = "default",
@@ -2537,6 +2590,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertNotBootstrap("startTurn");
     // Race-safe flush: if a queued permission-mode change is still
     // pending when the user fires off the next turn (e.g. submit
     // immediately after the previous turn ended), apply it before
@@ -2741,6 +2795,7 @@ export class DesktopBackendRegistry {
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    this.assertNotBootstrap("startReview");
     if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
       throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
     }
@@ -3605,6 +3660,7 @@ export class DesktopBackendRegistry {
   async submitServerRequest(
     params: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> {
+    this.assertNotBootstrap("submitServerRequest");
     const key = buildPendingRequestKey(params);
     const pending = this.pendingServerRequests.get(key);
     if (!pending) {

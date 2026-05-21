@@ -45,6 +45,10 @@ import {
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
 import {
+  disposeBootInfoIpcHandlers,
+  registerBootInfoIpcHandlers,
+} from "./ipc/boot-info";
+import {
   disposeProfilesIpcHandlers,
   listDesktopPwrAgentProfiles,
   openDesktopPwrAgentProfile,
@@ -80,6 +84,7 @@ import {
   disposeAppState,
   initializeAppState,
   isAppStateInitialized,
+  recordBootDecision,
 } from "./state/app-state";
 import { createMainWindow } from "./window";
 import { subscribersForChannel } from "./window-channels";
@@ -87,10 +92,16 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import {
+  assertUnreachableProfileBootDecision,
+  cleanupBootstrapProfile,
+  PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   resolveActiveProfileName,
+  resolveProfileBootDecision,
   startProfileFocusRequestWatcher,
+  type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
+import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -104,6 +115,39 @@ let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
   | NonNullable<Parameters<typeof createMainWindow>[0]>["startupCpuProfiler"]
   | undefined;
+
+function logBootDecision(decision: ProfileBootDecision): void {
+  // Single structured log line on every boot so troubleshooting
+  // "why did the wizard fire / not fire" stays trivial. Production
+  // builds still log this (it's an INFO line, no sensitive data).
+  switch (decision.kind) {
+    case "open":
+      mainLog.info("boot decision: open", {
+        profileName: decision.profileName,
+        source: decision.source,
+      });
+      return;
+    case "missing-named-profile":
+      mainLog.info("boot decision: missing-named-profile — bootstrap mode", {
+        requestedName: decision.requestedName,
+        source: decision.source,
+      });
+      return;
+    case "missing-default-profile":
+      mainLog.info("boot decision: missing-default-profile — bootstrap mode", {
+        configuredName: decision.configuredName,
+      });
+      return;
+    case "no-profile-configured":
+      mainLog.info("boot decision: no-profile-configured — bootstrap mode");
+      return;
+    default:
+      // Adding a new ProfileBootDecision variant without handling it
+      // here is a compile error. Replace this throw with an info()
+      // log + the right decision behavior in the boot pipeline.
+      assertUnreachableProfileBootDecision(decision);
+  }
+}
 
 function prewarmInitialThreadList(): void {
   if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
@@ -150,6 +194,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeComposerDraftIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposePreloadLogIpcHandlers();
+  disposeBootInfoIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
   disposeWindowPointerIpcHandlers();
@@ -278,7 +323,38 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/**
+ * In packaged builds, refuse to honor dev-only env vars even if the
+ * operator has set them in their shell. These vars have privacy /
+ * security implications (silent profile creation, dropped secrets)
+ * that are acceptable in dev but never in production.
+ *
+ * The trick is `delete process.env.X` — any subsequent reader will
+ * see undefined and behave as if it was never set. Logging at error
+ * level surfaces the misuse loudly in the app log (which the
+ * support flow already collects). Called once at process start,
+ * before `initializeMainLogger` so the log file the operator picks
+ * up records the rejection.
+ */
+function rejectDevOnlyEnvVarsInProduction(): void {
+  if (!app.isPackaged) return;
+  const devOnlyVars = [
+    PWRAGENT_PROFILE_AUTO_CREATE_ENV,
+    SECRET_STORAGE_DISABLED_ENV,
+  ];
+  for (const name of devOnlyVars) {
+    if (process.env[name] !== undefined) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[pwragent] Refusing to honor dev-only env var ${name} in a packaged build. Unsetting.`,
+      );
+      delete process.env[name];
+    }
+  }
+}
+
 export function bootstrapApp(): void {
+  rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
@@ -293,8 +369,58 @@ export function bootstrapApp(): void {
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
     installDevelopmentDockIcon();
-    initializeAppState();
-    installProfileFocusRequestWatcher();
+    // Boot decision — resolves which profile (if any) this Electron
+    // instance should open into. When the decision is `open` we run
+    // the today-style flow into an existing profile dir. Anything
+    // else (no profile configured, env/CLI named a missing profile,
+    // registry pointer is dangling) means the onboarding wizard
+    // needs to run BEFORE we commit to a profile, so app state goes
+    // into "bootstrap" mode against the throwaway .bootstrap/ dir.
+    // Wizard Finish graduates the bootstrap state into a real
+    // profile and opens a new window for it (see Task E).
+    const bootDecision = resolveProfileBootDecision();
+    // Reduce the 4-variant decision to a 2-variant app-state mode.
+    // The explicit switch (vs. a bare `kind === "open" ? … : …`)
+    // forces a compile error if a future variant is added — the
+    // missing case will fall through to `assertUnreachable…` and
+    // fail typecheck rather than silently fall into bootstrap mode.
+    const bootMode: "active-profile" | "bootstrap" = (() => {
+      switch (bootDecision.kind) {
+        case "open":
+          return "active-profile";
+        case "missing-named-profile":
+        case "missing-default-profile":
+        case "no-profile-configured":
+          return "bootstrap";
+        default:
+          assertUnreachableProfileBootDecision(bootDecision);
+      }
+    })();
+    logBootDecision(bootDecision);
+    // Stash the boot decision so the renderer can read it via
+    // `getBootInfo` IPC once the wizard mounts. Specifically the
+    // missing-named-profile case needs the requested name to
+    // pre-populate the confirmation step's "set up `foo`?" prompt.
+    recordBootDecision(bootDecision);
+    // Clean up any stale .bootstrap/ from a prior abandoned wizard
+    // session BEFORE deciding to init in bootstrap mode for the
+    // current run. Doing this here (vs. lazily) means a crashed
+    // wizard doesn't accumulate stale state.db handles across
+    // multiple boot attempts.
+    if (bootMode === "active-profile") {
+      cleanupBootstrapProfile();
+    }
+    initializeAppState(bootMode);
+    // Skip the focus-request watcher in bootstrap mode. The watcher
+    // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
+    // catch "focus existing window" requests from sibling PwrAgent
+    // instances — but in bootstrap mode there's no sibling and the
+    // active profile resolver falls back to literal "default",
+    // materializing a `default/` directory that #524 specifically
+    // promised would never appear silently.
+    if (bootMode === "active-profile") {
+      installProfileFocusRequestWatcher();
+    }
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
@@ -306,6 +432,7 @@ export function bootstrapApp(): void {
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();
+    registerBootInfoIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
         if (patch.general?.developerMode !== undefined) {

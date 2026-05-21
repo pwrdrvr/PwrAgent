@@ -10034,12 +10034,75 @@ textarea,
   border-radius: 14px;
   box-shadow: var(--shadow-popover);
   display: grid;
+  /* The wizard renders the rail on every step except Welcome. We
+     keep one frame width across all steps, but the row template
+     adapts so the rail's slot collapses on Welcome instead of
+     leaving an empty band above the body. */
   grid-template-rows: auto auto 1fr auto;
   overflow: hidden;
 }
-.onboarding-wizard--narrow {
-  width: min(720px, calc(100vw - 64px));
+.onboarding-wizard:has(.onboarding-wizard__body > .onboarding-wizard__welcome),
+.onboarding-wizard:has(.onboarding-wizard__body > .onboarding-wizard__bootstrap-confirm) {
   grid-template-rows: auto 1fr auto;
+}
+
+/* Dismiss-confirmation modal — rendered on top of the wizard
+   itself when the operator tries to bail out in bootstrap mode.
+   Three actions: Cancel / Skip-and-default / Exit. The X close
+   button on the titlebar and the Skip link in the footer both
+   route through this; ESC opens/closes it too. */
+.onboarding-wizard__dismiss-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.onboarding-wizard__dismiss-modal-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-strong);
+  border-radius: inherit;
+}
+.onboarding-wizard__dismiss-modal-body {
+  position: relative;
+  width: min(560px, calc(100% - 64px));
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-popover);
+  padding: 24px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-wizard__dismiss-modal-title {
+  font: 650 18px/1.3 var(--font-sans, sans-serif);
+  color: var(--text-primary);
+  margin: 0;
+}
+.onboarding-wizard__dismiss-modal-prose {
+  font: 400 13px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.onboarding-wizard__dismiss-modal-prose code {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font: 600 90% var(--font-mono);
+  color: var(--accent);
+}
+.onboarding-wizard__dismiss-modal-prose strong {
+  color: var(--text-primary);
+}
+.onboarding-wizard__dismiss-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .onboarding-wizard__titlebar {
@@ -10227,6 +10290,69 @@ textarea,
   color: var(--text-primary);
 }
 
+/* Bootstrap-confirm — slim "set up `foo`?" screen shown when the
+   operator launched with --profile=foo / PWRAGENT_PROFILE=foo and
+   `foo` doesn't exist. Mirrors Welcome's centered layout so the
+   visual jump from confirm → Welcome stays gentle. */
+.onboarding-wizard__bootstrap-confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  padding: 24px 22px 28px;
+}
+.onboarding-wizard__bootstrap-confirm > .onboarding-wizard__title,
+.onboarding-wizard__bootstrap-confirm > .onboarding-wizard__sub {
+  max-width: 680px;
+}
+.onboarding-wizard__bootstrap-confirm code {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font: 600 90% var(--font-mono);
+  color: var(--accent);
+}
+.onboarding-wizard__bootstrap-confirm-points {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 680px;
+  text-align: left;
+}
+.onboarding-wizard__bootstrap-confirm-points li {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font: 400 13px/1.55 var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.onboarding-wizard__bootstrap-confirm-points li strong {
+  color: var(--text-primary);
+}
+.onboarding-wizard__bootstrap-confirm-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 680px;
+  margin-top: 6px;
+}
+.onboarding-wizard__bootstrap-confirm-hint {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  text-align: center;
+  margin: 4px 0 0 0;
+  max-width: 680px;
+}
+
 /* Welcome */
 .onboarding-wizard__welcome {
   display: flex;
@@ -10234,7 +10360,14 @@ textarea,
   align-items: center;
   text-align: center;
   gap: 16px;
-  padding: 14px 22px 22px;
+  padding: 24px 22px 28px;
+}
+/* Constrain the centered prose so it doesn't sprawl across the full
+   1120px frame and lose readability. The 4-item welcome list still
+   fills the canvas — it switches to 4 columns at this width. */
+.onboarding-wizard__welcome > .onboarding-wizard__title,
+.onboarding-wizard__welcome > .onboarding-wizard__sub {
+  max-width: 680px;
 }
 .onboarding-wizard__brand {
   font: 800 26px/1 var(--font-sans, sans-serif);
@@ -10249,10 +10382,20 @@ textarea,
   padding: 0;
   margin: 6px 0 0;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /* 4 columns at the canvas width so the four steps lay out evenly
+     on one row, matching the rail beneath. Gracefully wraps to 2
+     columns on a narrower viewport (e.g. small laptop screens
+     where the canvas is clamped by `min(1120px, 100vw - 64px)`). */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 18px;
   width: 100%;
+  max-width: 920px;
   text-align: left;
+}
+@media (max-width: 880px) {
+  .onboarding-wizard__welcome-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .onboarding-wizard__welcome-list li {
   display: grid;
@@ -10758,6 +10901,25 @@ textarea,
 .onboarding-wizard__safety-ack-text strong {
   color: var(--text-primary);
 }
+.onboarding-wizard__safety-fork {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  margin-top: 4px;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__safety-fork .onboarding-wizard__btn--primary {
+  margin-left: auto;
+}
+.onboarding-wizard__safety-fork-hint {
+  font: 400 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  width: 100%;
+  text-align: center;
+  margin: 4px 0 0 0;
+}
 
 /* Provider table */
 .onboarding-wizard__provider-table {
@@ -10876,6 +11038,11 @@ textarea,
   align-items: center;
   gap: 14px;
   padding: 12px 22px 18px;
+  /* Summary screen — center column over the full 1120px frame so
+     the check icon + title + dl stay visually anchored. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 .onboarding-wizard__done-check {
   width: 60px;
@@ -10975,9 +11142,116 @@ textarea,
 .onboarding-wizard__profile-input.is-invalid {
   border-color: var(--status-error);
 }
+.onboarding-wizard__profile-input[readonly] {
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
 .onboarding-wizard__profile-add {
   align-self: flex-start;
   margin-top: 6px;
+}
+
+/* Rows with inline login controls — wider layout, expand to fit
+   per-row Log in / Copy URL / Check status buttons next to the name
+   input, plus a second row underneath for status text (email +
+   plan or error detail). */
+.onboarding-wizard__profile-row--has-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  align-items: stretch;
+}
+.onboarding-wizard__profile-row--has-login.is-ok {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.onboarding-wizard__profile-row--has-login.is-error {
+  border-color: var(--status-error);
+}
+.onboarding-wizard__profile-row-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__profile-row-top .onboarding-wizard__profile-input {
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+.onboarding-wizard__profile-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.onboarding-wizard__profile-row-status--ok {
+  display: inline-flex;
+  align-items: center;
+  font: 600 13px/1 var(--font-sans, sans-serif);
+  color: var(--accent);
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.onboarding-wizard__profile-row-detail {
+  font: 400 12px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+  padding-left: 42px;
+}
+.onboarding-wizard__profile-row-detail--ok {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.onboarding-wizard__profile-row-detail--error {
+  color: var(--status-error);
+}
+
+/* Per-row xAI key control on Multiple/Isolated name step. Collapsed
+   state is a single subtle link (so a row without an override stays
+   visually quiet); expanding reveals an inline password input that
+   commits to the operator's per-profile override map at wizard
+   state level, then graduates at Finish. */
+.onboarding-wizard__profile-row-xai {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 42px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__profile-row-xai.is-collapsed {
+  gap: 10px;
+}
+.onboarding-wizard__profile-row-xai .onboarding-wizard__input {
+  flex: 1 1 200px;
+  min-width: 200px;
+  font: 500 12px/1 var(--font-mono);
+}
+.onboarding-wizard__profile-row-xai-hint {
+  font: 400 11px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+
+/* "I'll log in later" deferral link — intentionally low-affordance,
+   sits between the spacer and the hint so the operator's eye still
+   goes to the disabled Continue button first. */
+.onboarding-wizard__btn--microlink {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: 400 11px/1.2 var(--font-sans, sans-serif);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.onboarding-wizard__btn--microlink:hover {
+  color: var(--text-secondary);
 }
 
 /* ============================================================
@@ -11188,6 +11462,12 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* Backend gate is two stacked cards (Codex CLI, xAI key). Constrain
+     the column so they don't stretch all the way across the 1120px
+     canvas and feel like wasted white space. */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 .onboarding-wizard__prereq-card {
   background: var(--bg-panel-elevated);

@@ -687,6 +687,15 @@ export type CheckDesktopCodexAuthProfileStatusResponse = {
   authenticated: boolean;
   status: "authenticated" | "unauthenticated" | "failed";
   detail?: string;
+  /** ChatGPT account email extracted from the JWT in `auth.json`,
+   *  when present. The onboarding wizard surfaces this after login so
+   *  the operator can confirm they signed in with the right account. */
+  email?: string;
+  /** ChatGPT plan type ("free", "plus", "pro", "team", "enterprise", …)
+   *  pulled from the JWT's OpenAI-namespaced auth claim. Best-effort —
+   *  if the claim shape changes we fall back to `undefined` rather than
+   *  surfacing wrong info. */
+  planType?: string;
 };
 
 export type PickGhCommandResponse = {
@@ -755,6 +764,145 @@ export type SetDefaultDesktopPwrAgentProfileRequest = {
 
 export type SetDefaultDesktopPwrAgentProfileResponse = {
   profile: string;
+};
+
+/**
+ * Graduate ONLY THE CONFIG of the bootstrap profile (`.bootstrap/`)
+ * into a real profile — the `config.toml` payload (theme, density,
+ * messaging acknowledgment, etc) plus the registry's
+ * `default_profile` pointer.
+ *
+ * **Does NOT graduate secrets.** The wizard buffers secrets in
+ * renderer memory and graduates them via the separate
+ * `writeSecretsToProfile` IPC. This IPC's name is intentionally
+ * scoped (`Config`, not just `Bootstrap`) so a future caller can't
+ * accidentally graduate config and lose secrets by calling only
+ * this primitive. The wizard's Finish path calls
+ * `writeSecretsToProfile` THEN `graduateBootstrapConfigToProfile`
+ * in that order; reverse it and secrets land in `.bootstrap/`
+ * before it gets reaped.
+ *
+ * **Does NOT close the bootstrap window or open a new window for the
+ * target profile** — the caller still does that via
+ * `openPwrAgentProfile`. Splitting those responsibilities keeps
+ * the IPC purely about data graduation.
+ *
+ * Semantics:
+ *   - When the main process is NOT in bootstrap mode, this is a
+ *     no-op (`graduated: false`, `reason: "not-bootstrap-mode"`).
+ *     The wizard can safely call it unconditionally on Finish.
+ *   - When in bootstrap mode: copy the bootstrap profile's
+ *     `config.toml` into `<targetProfile>/config.toml` (replacing
+ *     bootstrap-only fields like `onboarding.completed`), set
+ *     `profiles.toml::default_profile = targetProfile`, and mark
+ *     the `.bootstrap/` dir for cleanup on the next boot.
+ */
+/**
+ * Write one or more secrets to a specific profile's keychain. Used by
+ * the onboarding wizard's Finish path in bootstrap mode: the wizard
+ * collects xAI API keys + messaging tokens in renderer memory (it
+ * doesn't write to the bootstrap profile's keychain — those values
+ * would be stranded on `.bootstrap/state.db` and never reach the
+ * operator's chosen real profile), and at graduation it writes the
+ * buffered values to each created profile's keychain via this IPC.
+ *
+ * Multiple-profile mode supports per-profile xAI keys: profile A's
+ * `secrets` record can hold a key and profile B's can be empty. The
+ * caller invokes this IPC once per profile.
+ */
+export type WriteDesktopSecretsToProfileRequest = {
+  /** Target PwrAgent profile name. Must exist (the wizard creates it
+   *  before calling this IPC) and pass `isValidProfileName`. */
+  profile: string;
+  /** Secrets to write. Empty-string values are treated as "delete the
+   *  secret" so the same payload can clear stale entries on Replay. */
+  secrets: Record<string, string>;
+};
+
+export type WriteDesktopSecretsToProfileResponse = {
+  profile: string;
+  /** Names that were actually written / cleared (skips empty noop
+   *  inputs for unknown secret names). Useful for telemetry. */
+  written: string[];
+};
+
+/**
+ * Boot info surfaced from the main process to the renderer so the
+ * onboarding wizard can adjust its entry point. Returned by the
+ * `getBootInfo` IPC. The `mode` distinguishes "the operator's
+ * existing profile" from "the throwaway .bootstrap/ session"; the
+ * optional `requestedProfileName` is populated when the boot
+ * decision was `missing-named-profile` (CLI/env named a non-existent
+ * profile) — the wizard surfaces it as "PwrAgent doesn't know `foo`
+ * yet. Set it up, or quit?".
+ */
+/**
+ * Wait for another PwrAgent process to be alive on a target profile.
+ *
+ * Used by the onboarding wizard's Finish path: after spawning the
+ * new profile's Electron via `openPwrAgentProfile`, the wizard
+ * polls this IPC until the spawned process writes its first runtime
+ * heartbeat marker — proving its app state initialized and its
+ * renderer mounted. Only then does the wizard call `quitApp` to
+ * close the bootstrap window. Critical for dev mode, where the
+ * parent `electron-vite` process kills the Vite dev server when
+ * the bootstrap Electron exits; waiting lets the new process load
+ * its renderer assets first.
+ */
+export type WaitForDesktopProfileAliveRequest = {
+  profile: string;
+  /** Maximum wait, in ms. Defaults to 10_000 in the handler.
+   *  Caller should set it tight enough that a UI hang doesn't
+   *  feel broken (the wizard's Done screen is showing). */
+  timeoutMs?: number;
+};
+
+export type WaitForDesktopProfileAliveResponse = {
+  profile: string;
+  alive: boolean;
+  /** How long we waited before the marker showed up (or the
+   *  timeout fired). For telemetry / debugging only. */
+  waitedMs: number;
+};
+
+export type DesktopBootInfo = {
+  mode: "active-profile" | "bootstrap";
+  /** Boot decision kind, mirrored to the renderer so the wizard can
+   *  pick the right entry mode without rebuilding the decision
+   *  tree client-side. */
+  decisionKind:
+    | "open"
+    | "missing-named-profile"
+    | "missing-default-profile"
+    | "no-profile-configured";
+  /** Populated when `decisionKind === "missing-named-profile"`. Echoes
+   *  the name from `--profile=foo` or `PWRAGENT_PROFILE=foo` so the
+   *  wizard can pre-populate the naming step. */
+  requestedProfileName?: string;
+  /** Populated for `missing-default-profile` only — the name the
+   *  registry pointed at that no longer exists on disk. */
+  configuredDefaultName?: string;
+  /** Populated in `active-profile` mode — the profile this renderer
+   *  is bound to. Used by the wizard's Finish path to graduate
+   *  buffered secrets (xAI key, messaging tokens) to the right
+   *  target profile when the operator picks Shared mode or runs
+   *  via Help → Replay Onboarding. Bootstrap mode leaves it
+   *  undefined; the wizard graduates per-profile through the
+   *  Multiple/Isolated path instead. */
+  activeProfileName?: string;
+};
+
+export type GraduateDesktopBootstrapConfigToProfileRequest = {
+  targetProfile: string;
+};
+
+export type GraduateDesktopBootstrapConfigToProfileResponse = {
+  graduated: boolean;
+  /** Populated when `graduated === false` to explain why. The wizard
+   *  uses this to log diagnostics; operator-facing UI just ignores
+   *  it (a no-op graduation is always recoverable). */
+  reason?: "not-bootstrap-mode" | "no-bootstrap-config";
+  targetProfile: string;
 };
 
 export type DeleteDesktopPwrAgentProfileRequest = {

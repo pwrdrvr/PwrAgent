@@ -213,3 +213,9 @@ export const PROFILES_CREATE_CHANNEL = "profiles:create";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
 export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";
+export const PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL =
+  "profiles:graduate-bootstrap-config";
+export const APP_GET_BOOT_INFO_CHANNEL = "app:get-boot-info";
+export const APP_QUIT_CHANNEL = "app:quit";
+export const APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL = "app:wait-for-profile-alive";
+export const PROFILES_WRITE_SECRETS_CHANNEL = "profiles:write-secrets";

@@ -30,6 +30,8 @@ const disposeProfilesIpcHandlersMock = vi.fn();
 const listDesktopPwrAgentProfilesMock = vi.fn();
 const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
+const registerBootInfoIpcHandlersMock = vi.fn();
+const disposeBootInfoIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
 const registerSettingsIpcHandlersMock = vi.fn();
@@ -93,6 +95,18 @@ const resolveActiveProfileNameMock = vi.fn(() => "default");
 const startProfileFocusRequestWatcherMock = vi.fn(() => ({
   stop: profileFocusRequestWatcherStopMock,
 }));
+// Default to the "happy path" boot decision so existing tests that
+// don't care about the boot-decision branching continue to exercise
+// the normal in-flight initialization. Tests that specifically want
+// to cover bootstrap mode override this mock per-case.
+type BootDecisionLike = Record<string, unknown>;
+const resolveProfileBootDecisionMock = vi.fn<() => BootDecisionLike>(() => ({
+  kind: "open",
+  profileName: "default",
+  profileDir: "/tmp/pwragent/profiles/default",
+  source: "migration",
+}));
+const cleanupBootstrapProfileMock = vi.fn();
 
 vi.mock("electron", () => ({
   app: {
@@ -201,6 +215,11 @@ vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
 }));
 
+vi.mock("../ipc/boot-info", () => ({
+  registerBootInfoIpcHandlers: registerBootInfoIpcHandlersMock,
+  disposeBootInfoIpcHandlers: disposeBootInfoIpcHandlersMock,
+}));
+
 vi.mock("../ipc/runtime-identity", () => ({
   registerRuntimeIdentityIpcHandlers: registerRuntimeIdentityIpcHandlersMock,
   disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
@@ -245,6 +264,7 @@ vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   disposeAppState: disposeAppStateMock,
   isAppStateInitialized: isAppStateInitializedMock,
+  recordBootDecision: vi.fn(),
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -254,6 +274,8 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 vi.mock("../profile", () => ({
   resolveActiveProfileName: resolveActiveProfileNameMock,
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
+  resolveProfileBootDecision: resolveProfileBootDecisionMock,
+  cleanupBootstrapProfile: cleanupBootstrapProfileMock,
 }));
 
 const runtimeMessagingLeaseCoordinatorMock = {
@@ -347,6 +369,8 @@ describe("bootstrapApp", () => {
       reason: "active",
     });
     registerRendererErrorIpcHandlersMock.mockReset();
+    registerBootInfoIpcHandlersMock.mockReset();
+    disposeBootInfoIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();
     registerSettingsIpcHandlersMock.mockReset();
@@ -408,6 +432,15 @@ describe("bootstrapApp", () => {
     profileFocusRequestWatcherStopMock.mockReset();
     resolveActiveProfileNameMock.mockReset();
     resolveActiveProfileNameMock.mockReturnValue("default");
+    resolveProfileBootDecisionMock.mockReset();
+    resolveProfileBootDecisionMock.mockReturnValue({
+      kind: "open",
+      profileName: "default",
+      profileDir: "/tmp/pwragent/profiles/default",
+      source: "migration",
+    });
+    cleanupBootstrapProfileMock.mockReset();
+    initializeAppStateMock.mockReset();
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.attachWindow.mockReset();
@@ -729,6 +762,51 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenNthCalledWith(2, {
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("initializes app state in active-profile mode when boot decision is open", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // Open decision → today's flow. No bootstrap cleanup needed
+    // mid-boot (the previous-boot's bootstrap dir, if any, gets
+    // wiped only on `open` decisions — see comment in index.ts).
+    expect(initializeAppStateMock).toHaveBeenCalledWith("active-profile");
+    expect(cleanupBootstrapProfileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("initializes app state in bootstrap mode when boot decision is no-profile-configured", async () => {
+    resolveProfileBootDecisionMock.mockReturnValue({ kind: "no-profile-configured" });
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // Bootstrap mode runs the wizard against the .bootstrap/ dir.
+    // No cleanup at boot — we ARE the bootstrap session that will
+    // own that dir; cleanup happens at graduation in Task E.
+    expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
+    expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("initializes app state in bootstrap mode when env names a missing profile", async () => {
+    resolveProfileBootDecisionMock.mockReturnValue({
+      kind: "missing-named-profile",
+      requestedName: "ghost",
+      source: "env",
+    });
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // PWRAGENT_PROFILE=ghost on a host that doesn't have a ghost
+    // profile dir: pre-#524 silently materialized one. Now we drop
+    // into bootstrap mode so the wizard can ask "set up ghost,
+    // or exit?" before committing anything to disk.
+    expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
   });
 
   it("does not register runtime identity IPC in production", async () => {

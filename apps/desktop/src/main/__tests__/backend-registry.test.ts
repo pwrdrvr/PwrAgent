@@ -7418,6 +7418,172 @@ command = "pnpm dev"
     });
   });
 
+  // Bootstrap-mode hard gate: when the registry runs inside the
+  // throwaway `.bootstrap/` profile (any post-wizard dev window that
+  // stays alive while the new profile spawns), listThreads must
+  // ALWAYS return empty — independent of `isCodexBootstrapDeferred`
+  // and the persisted `onboarding.completed` flag. Otherwise, the
+  // bootstrap profile's empty `codex.profile` would resolve to the
+  // operator's real Codex install and surface their real thread
+  // list as soon as they focused the bootstrap window.
+  describe("bootstrap mode short-circuit for listThreads", () => {
+    it("returns empty for codex-only queries in bootstrap mode", async () => {
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-codex",
+            title: "Codex thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        // Even with the secondary gate explicitly OFF, bootstrap-mode
+        // hard gate must still short-circuit. This is the key
+        // invariant the user surfaced: the dev-mode post-wizard
+        // window had `onboarding.completed = true` from a stale
+        // run, so `isCodexBootstrapDeferred` returned false — but
+        // the renderer focusing the window still triggered a thread
+        // load against the user's real Codex install. The bootstrap
+        // gate is what catches that.
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      const result = await registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+      });
+
+      expect(result).toEqual([]);
+      expect(codexClient.listThreadsCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("returns empty for grok-only queries in bootstrap mode (defense in depth)", async () => {
+      // Bootstrap profile shouldn't surface ANY thread data —
+      // including from Grok. The wizard's xAI key buffer never
+      // graduates to `.bootstrap/state.db` (we removed that path),
+      // so any Grok call from bootstrap would either fail or surface
+      // unrelated identity data. Short-circuit to empty here.
+      const grokClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-grok",
+            title: "Grok thread",
+            titleSource: "explicit",
+            source: "grok",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({}),
+        grokClient,
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      const result = await registry.listThreads({
+        backend: "grok",
+        callerReason: "navigation-snapshot",
+      });
+
+      expect(result).toEqual([]);
+      expect(grokClient.listThreadsCallCount).toBe(0);
+
+      await registry.close();
+    });
+
+    it("throws on readThread in bootstrap mode", async () => {
+      // Defense in depth: even if a renderer has a stale Codex
+      // threadId in memory and tries to read it, the registry
+      // refuses. The error surfaces as a thrown IPC reject; the
+      // wizard's only-window-is-the-wizard invariant means no
+      // operator-visible path leads here, so failing loud is the
+      // right signal that something is wrong.
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      await expect(
+        registry.readThread({
+          backend: "codex",
+          threadId: "thread-abc",
+        }),
+      ).rejects.toThrow(/readThread is forbidden in bootstrap mode/);
+
+      await registry.close();
+    });
+
+    it("throws on startThread in bootstrap mode", async () => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      await expect(
+        registry.startThread({
+          backend: "codex",
+          executionMode: "default",
+          cwd: "/tmp/example",
+        }),
+      ).rejects.toThrow(/startThread is forbidden in bootstrap mode/);
+
+      await registry.close();
+    });
+
+    it("hits the backends normally when isBootstrapMode is false", async () => {
+      // Sanity: the gate is a NO-OP outside bootstrap mode. Production
+      // boots into active-profile mode and the registry behaves
+      // exactly as it did pre-#524.
+      const codexClient = new MockBackendClient({
+        threads: [
+          {
+            id: "thread-codex",
+            title: "Codex thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => false,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      const result = await registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+      });
+
+      expect(result.map((t) => t.id)).toEqual(["thread-codex"]);
+      expect(codexClient.listThreadsCallCount).toBe(1);
+
+      await registry.close();
+    });
+  });
+
   // Deferred Codex `listThreads` probe for brand-new PwrAgent profiles.
   // The wizard flips `resolveOnboardingCompleted` to `true` after the
   // operator picks a Codex profile model; until then we must not hit the

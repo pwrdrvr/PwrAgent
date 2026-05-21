@@ -136,8 +136,15 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  DesktopBootInfo,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
+  WaitForDesktopProfileAliveRequest,
+  WaitForDesktopProfileAliveResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -237,11 +244,16 @@ import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   PRELOAD_LOG_CHANNEL,
   PROFILES_CREATE_CHANNEL,
+  APP_GET_BOOT_INFO_CHANNEL,
+  APP_QUIT_CHANNEL,
+  APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
@@ -370,6 +382,21 @@ const desktopApi = Object.freeze({
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
+  graduateBootstrapConfigToProfile: async (
+    request: GraduateDesktopBootstrapConfigToProfileRequest,
+  ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL, request),
+  writeSecretsToProfile: async (
+    request: WriteDesktopSecretsToProfileRequest,
+  ): Promise<WriteDesktopSecretsToProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_WRITE_SECRETS_CHANNEL, request),
+  getBootInfo: async (): Promise<DesktopBootInfo> =>
+    await ipcRenderer.invoke(APP_GET_BOOT_INFO_CHANNEL),
+  quitApp: async (): Promise<void> => await ipcRenderer.invoke(APP_QUIT_CHANNEL),
+  waitForProfileAlive: async (
+    request: WaitForDesktopProfileAliveRequest,
+  ): Promise<WaitForDesktopProfileAliveResponse> =>
+    await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

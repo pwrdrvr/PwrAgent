@@ -5,11 +5,51 @@ import path from "node:path";
 
 export const PWRAGENT_PROFILE_ENV = "PWRAGENT_PROFILE";
 export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
+/**
+ * Bypass the wizard for missing-profile boot decisions. Intended for
+ * E2E fixtures and replay tests where the test harness wants to spin
+ * up a fresh profile non-interactively. Production launches MUST go
+ * through the wizard so the operator never gets a silently-created
+ * profile mapped to a Codex auth profile they didn't ask for (see
+ * issue #524).
+ *
+ * **Dev-only.** `rejectDevOnlyEnvVarsInProduction()` in
+ * `index.ts` clears this env var on packaged builds before the
+ * resolver runs, so an operator who copy-pastes a Stack-Overflow
+ * tip into their shell profile can't silently disable the wizard.
+ */
+export const PWRAGENT_PROFILE_AUTO_CREATE_ENV = "PWRAGENT_PROFILE_AUTO_CREATE";
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const RESERVED_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
 const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
 const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;
+
+/**
+ * Disk location for the throwaway "bootstrap" profile the wizard
+ * runs inside when `resolveProfileBootDecision` returns a non-`open`
+ * decision. Dot-prefixed and sibling to `profiles/` on purpose:
+ *
+ *   - Dot prefix keeps it from being mistaken for a real user
+ *     profile in directory listings, and it's never enumerated by
+ *     the profiles-discovery IPC (which scans `profiles/`).
+ *   - Sibling-not-child of `profiles/` means it doesn't pollute the
+ *     "list my profiles" UX or trip on profile-name validation
+ *     (`isValidProfileName` rejects names starting with `.`).
+ *
+ * Lifecycle:
+ *   - Created on demand by `ensureBootstrapProfileDir` when the
+ *     wizard window initializes.
+ *   - Wizard reads/writes its in-flight settings here.
+ *   - On Finish, `finalizeBootstrapProfileSelection` copies settings
+ *     out of here into the real profile and best-effort removes the
+ *     directory.
+ *   - On abnormal exit (operator quits mid-wizard), the directory
+ *     remains. Next boot's `resolveProfileBootDecision` ignores it
+ *     entirely; the cleanup happens on the next successful boot via
+ *     `cleanupStaleBootstrapProfile`.
+ */
+const BOOTSTRAP_PROFILE_DIRNAME = ".bootstrap";
 
 export type ProfileEntry = {
   name: string;
@@ -54,6 +94,183 @@ export function resolvePwragentRoot(options?: {
   if (pwragentHome) return path.resolve(pwragentHome);
   const homeDir = options?.homeDir ?? os.homedir();
   return path.join(homeDir, ".pwragent");
+}
+
+/**
+ * Boot-time decision tree for "which profile should this Electron
+ * instance open into?" Returns a tagged union so the caller can
+ * branch on `kind` rather than relying on a magic `"default"` string
+ * fallback. The pre-#524 behavior was to silently mkdir a fresh
+ * `default/` profile (mapped to the operator's Codex `default` auth
+ * profile, which usually carries their real workspace threads) on
+ * every clean boot. That contaminated fresh `PWRAGENT_HOME` testbeds
+ * and silently materialized typo'd profile names — a bad surprise.
+ *
+ * Resolution order:
+ * 1. `--profile=foo` CLI flag (or `--profile foo`)
+ * 2. `PWRAGENT_PROFILE=foo` env var
+ * 3. `profiles.toml::default_profile` setting
+ * 4. Migration: pre-existing `~/.pwragent/profiles/default/` dir
+ * 5. Nothing → first-run wizard
+ *
+ * For 1–4, if the named profile dir is missing on disk the caller
+ * gets a `missing-named-profile` / `missing-default-profile`
+ * decision instead of `open`. The caller is expected to surface the
+ * onboarding wizard (with the requested name pre-populated) rather
+ * than fabricate a profile. The `PWRAGENT_PROFILE_AUTO_CREATE=1`
+ * escape hatch turns missing branches back into `open` for test
+ * fixtures and replay harnesses.
+ */
+/**
+ * Exhaustiveness check for tagged-union switches. Call from a
+ * `default:` arm to make TypeScript fail the build when a new
+ * variant is added without a handler. Pattern stolen from the
+ * standard "never type" trick documented in the TS handbook.
+ *
+ * Used by callers of `ProfileBootDecision` switches (see
+ * `logBootDecision` in `index.ts` and `buildBootInfo` in
+ * `ipc/boot-info.ts`). Lives here so the decision type and its
+ * exhaustiveness assertion stay co-located.
+ */
+export function assertUnreachableProfileBootDecision(decision: never): never {
+  throw new Error(
+    `unhandled ProfileBootDecision: ${JSON.stringify(decision)}`,
+  );
+}
+
+export type ProfileBootDecision =
+  | {
+      kind: "open";
+      profileName: string;
+      profileDir: string;
+      /** Where the profile name came from. Useful for telemetry and
+       *  for tagging migrated installs ("found existing default/") in
+       *  logs without changing semantics. */
+      source: "cli" | "env" | "registry" | "migration";
+    }
+  | {
+      /** CLI or env named a profile that doesn't exist on disk. The
+       *  wizard should pre-populate this name and ask "set up `foo`,
+       *  or exit?" rather than silently materializing it. */
+      kind: "missing-named-profile";
+      requestedName: string;
+      source: "cli" | "env";
+    }
+  | {
+      /** `profiles.toml::default_profile` points at a profile whose
+       *  directory no longer exists. Usually means the operator
+       *  manually deleted the directory but the registry wasn't
+       *  cleaned up. Treat like missing-named with the registry
+       *  pointer as the requested name. */
+      kind: "missing-default-profile";
+      configuredName: string;
+    }
+  | {
+      /** Fresh `PWRAGENT_HOME` — nothing configured, no `default/`
+       *  on disk. Pop the full first-run wizard. */
+      kind: "no-profile-configured";
+    };
+
+export function resolveProfileBootDecision(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  cliProfile?: string;
+  argv?: readonly string[];
+}): ProfileBootDecision {
+  const env = options?.env ?? process.env;
+  const autoCreate = isAutoCreateEnabled(env);
+
+  // 1. CLI flag.
+  const cliProfile =
+    options?.cliProfile?.trim() || readProfileArg(options?.argv)?.trim();
+  if (cliProfile) {
+    const name = cliProfile.trim();
+    if (!isValidProfileName(name)) {
+      throw new Error(
+        `Invalid profile name "${name}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+      );
+    }
+    return decideForRequestedName(name, "cli", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+  }
+
+  // 2. PWRAGENT_PROFILE env var.
+  const envProfile = env[PWRAGENT_PROFILE_ENV]?.trim();
+  if (envProfile) {
+    if (!isValidProfileName(envProfile)) {
+      throw new Error(
+        `Invalid PWRAGENT_PROFILE="${envProfile}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+      );
+    }
+    return decideForRequestedName(envProfile, "env", { env: options?.env, homeDir: options?.homeDir }, autoCreate);
+  }
+
+  // 3. profiles.toml::default_profile.
+  const registryDefault = readProfilesRegistry({ env: options?.env, homeDir: options?.homeDir }).default_profile?.trim();
+  if (registryDefault && isValidProfileName(registryDefault)) {
+    const profileDir = resolveProfileDir(registryDefault, { env: options?.env, homeDir: options?.homeDir });
+    if (fs.existsSync(profileDir)) {
+      return {
+        kind: "open",
+        profileName: registryDefault,
+        profileDir,
+        source: "registry",
+      };
+    }
+    if (autoCreate) {
+      return {
+        kind: "open",
+        profileName: registryDefault,
+        profileDir,
+        source: "registry",
+      };
+    }
+    return { kind: "missing-default-profile", configuredName: registryDefault };
+  }
+
+  // 4. Migration: pre-existing `default/` dir from before #524.
+  // Honor it as the implicit default so currently-fielded installs
+  // don't suddenly hit the wizard on next launch. Only the on-disk
+  // dir counts — we don't fabricate it.
+  const defaultDir = resolveProfileDir("default", { env: options?.env, homeDir: options?.homeDir });
+  if (fs.existsSync(defaultDir)) {
+    return {
+      kind: "open",
+      profileName: "default",
+      profileDir: defaultDir,
+      source: "migration",
+    };
+  }
+
+  // 5. Auto-create escape hatch for E2E.
+  if (autoCreate) {
+    return {
+      kind: "open",
+      profileName: "default",
+      profileDir: defaultDir,
+      source: "migration",
+    };
+  }
+
+  // Nothing configured, no existing profile to migrate. First-run.
+  return { kind: "no-profile-configured" };
+}
+
+function decideForRequestedName(
+  name: string,
+  source: "cli" | "env",
+  options: { env?: NodeJS.ProcessEnv; homeDir?: string },
+  autoCreate: boolean,
+): ProfileBootDecision {
+  const profileDir = resolveProfileDir(name, options);
+  if (fs.existsSync(profileDir) || autoCreate) {
+    return { kind: "open", profileName: name, profileDir, source };
+  }
+  return { kind: "missing-named-profile", requestedName: name, source };
+}
+
+function isAutoCreateEnabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env[PWRAGENT_PROFILE_AUTO_CREATE_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }
 
 export function resolveActiveProfileName(options?: {
@@ -237,6 +454,73 @@ export function ensureNamedProfileExists(
 }
 
 /**
+ * Path to the throwaway "bootstrap" profile root used by the wizard
+ * when `resolveProfileBootDecision` returns a non-`open` decision.
+ * See the `BOOTSTRAP_PROFILE_DIRNAME` comment for lifecycle notes.
+ */
+export function resolveBootstrapProfileDir(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  return path.join(resolvePwragentRoot(options), BOOTSTRAP_PROFILE_DIRNAME);
+}
+
+export function resolveBootstrapProfilePath(
+  segment: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): string {
+  return path.join(resolveBootstrapProfileDir(options), segment);
+}
+
+/**
+ * Materialize the bootstrap profile dir (idempotent). Seeds the
+ * `[onboarding]` marker exactly like a freshly created real profile
+ * so the wizard's gating logic behaves identically — the wizard sees
+ * `completed = false`, runs through the flow, and any settings it
+ * writes (theme, density, messaging ack) land in the bootstrap
+ * `config.toml`. Finish-time graduation copies them out.
+ */
+export function ensureBootstrapProfileDir(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): { profileDir: string; created: boolean } {
+  const profileDir = resolveBootstrapProfileDir(options);
+  const created = !fs.existsSync(profileDir);
+  fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
+  writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
+  return { profileDir, created };
+}
+
+export function bootstrapProfileExists(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): boolean {
+  return fs.existsSync(resolveBootstrapProfileDir(options));
+}
+
+/**
+ * Best-effort cleanup of the bootstrap profile. Called by the wizard
+ * Finish path after the operator's real profile is created and their
+ * settings have been copied out, and also at boot time when a stale
+ * bootstrap dir is detected from a prior crashed/abandoned wizard
+ * session. Swallows errors — leaving the directory around is annoying
+ * but not actively harmful.
+ */
+export function cleanupBootstrapProfile(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): void {
+  const profileDir = resolveBootstrapProfileDir(options);
+  if (!fs.existsSync(profileDir)) return;
+  try {
+    fs.rmSync(profileDir, { recursive: true, force: true });
+  } catch {
+    // Filesystem hiccups don't justify aborting a wizard graduation.
+    // The next boot's cleanupStaleBootstrapProfile retries.
+  }
+}
+
+/**
  * Seed a freshly-created profile's `config.toml` with the
  * `[onboarding]` table. The settings service reads this as the signal
  * that the first-run wizard has not yet run, which gates the initial
@@ -333,12 +617,29 @@ export function startProfileRuntimeHeartbeat(
   const markerDir = resolveProfileRuntimeMarkerDir(profileName, options);
   fs.mkdirSync(markerDir, { recursive: true });
   const markerPath = path.join(markerDir, `${processId}-${marker.instanceId}.json`);
+  let interval: ReturnType<typeof setInterval> | undefined;
   const writeMarker = (): void => {
     marker.heartbeatAt = now();
-    writeJsonAtomic(markerPath, marker);
+    try {
+      writeJsonAtomic(markerPath, marker);
+    } catch (error) {
+      // The marker directory can vanish underneath us if the
+      // profile is deleted, the `~/.pwragent` root is rm-rf'd
+      // (E2E test cleanup; user moves their data dir; etc).
+      // ENOENT here is recoverable: stop the interval rather than
+      // throw an uncaught exception that pops a fatal Electron
+      // error dialog. Re-creating the dir + retrying would just
+      // race the deleter; let the heartbeat die quietly.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+        if (interval) clearInterval(interval);
+        return;
+      }
+      throw error;
+    }
   };
   writeMarker();
-  const interval = setInterval(
+  interval = setInterval(
     writeMarker,
     options?.intervalMs ?? PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS,
   );
@@ -347,8 +648,12 @@ export function startProfileRuntimeHeartbeat(
   return {
     markerPath,
     stop: () => {
-      clearInterval(interval);
-      fs.rmSync(markerPath, { force: true });
+      if (interval) clearInterval(interval);
+      try {
+        fs.rmSync(markerPath, { force: true });
+      } catch {
+        // Heartbeat dir already cleaned up — see comment above.
+      }
     },
   };
 }

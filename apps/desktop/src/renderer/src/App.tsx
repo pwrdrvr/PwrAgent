@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type PointerEvent,
 } from "react";
+import type { DesktopBootInfo } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { OnboardingWizard } from "./features/onboarding/OnboardingWizard";
 import {
@@ -133,6 +134,13 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
+  // Boot info is fetched once on mount and is stable across the
+  // renderer's lifetime (the main process recorded it before this
+  // window opened — see `recordBootDecision` in app-state.ts). The
+  // wizard uses this to pick its entry mode: `missing-named-profile`
+  // triggers the slim "set up `foo`?" confirmation step; everything
+  // else uses the standard first-run / replay flow.
+  const [bootInfo, setBootInfo] = useState<DesktopBootInfo | null>(null);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -174,6 +182,20 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });
+  // Fetch the boot info once at mount. Stable for the renderer's
+  // lifetime — the main process records the decision before this
+  // window opens, and graduating the bootstrap profile spawns a
+  // fresh main window with its own boot decision.
+  useEffect(() => {
+    if (!desktopApi?.getBootInfo) return;
+    let cancelled = false;
+    void desktopApi.getBootInfo().then((info) => {
+      if (!cancelled) setBootInfo(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi]);
   useEffect(() => {
     if (threadViewReady || mainView !== "thread" || navigation.loading) {
       return;
@@ -487,6 +509,7 @@ function DesktopAppShell(props: {
       {onboardingOpen !== null && settings.snapshot ? (
         <OnboardingWizard
           isReplay={onboardingOpen === "replay"}
+          bootInfo={bootInfo}
           initialDensity={settings.snapshot.general.appearance.density.value}
           initialTheme={settings.snapshot.general.appearance.theme.value}
           initialCodexProfileModel={
@@ -515,9 +538,20 @@ function DesktopAppShell(props: {
             // Mark onboarding complete AND kick off the deferred Codex
             // `listThreads` prefetch in one IPC call (#500). On replay,
             // skip the call entirely — replays don't touch onboarding.
+            //
+            // In bootstrap mode (#524), skip this too. The bootstrap
+            // window is about to quit; firing
+            // `completeOnboardingCodexBootstrap` here would (a) write
+            // `[onboarding] completed = true` to `.bootstrap/config.toml`
+            // (which we're about to delete) and (b) trigger a Codex
+            // `listThreads` against the system default Codex install,
+            // contaminating the soon-to-quit window with the operator's
+            // real Codex Desktop threads. The new profile's window
+            // handles its own completion + prefetch on launch.
             if (!onboardingOpen) return;
             if (
               onboardingOpen !== "replay" &&
+              bootInfo?.mode !== "bootstrap" &&
               desktopApi?.completeOnboardingCodexBootstrap
             ) {
               await desktopApi.completeOnboardingCodexBootstrap({

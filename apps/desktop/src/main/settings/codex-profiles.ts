@@ -138,30 +138,61 @@ function fileExists(filePath: string): boolean {
   }
 }
 
+export type CodexAuthInfo = {
+  email?: string;
+  planType?: string;
+};
+
 function readCodexAuthEmail(codexHome: string): string | undefined {
+  return readCodexAuthInfo(codexHome).email;
+}
+
+/**
+ * Read the cached JWT from `auth.json` and pull out the operator-facing
+ * identity fields. The onboarding wizard renders these after a profile
+ * logs in so the operator can confirm they signed in with the right
+ * account / plan. Returns `{}` if anything fails — we never want a
+ * partially-parsed JWT to surface as a wrong email or plan label.
+ */
+export function readCodexAuthInfo(codexHome: string): CodexAuthInfo {
   try {
     const raw = fs.readFileSync(path.join(codexHome, "auth.json"), "utf8");
     const parsed = JSON.parse(raw) as unknown;
     const idToken = getNestedString(parsed, ["tokens", "id_token"]);
-    if (!idToken) return undefined;
-    return extractEmailFromJwt(idToken);
+    if (!idToken) return {};
+    return extractAuthInfoFromJwt(idToken);
   } catch {
-    return undefined;
+    return {};
   }
 }
 
-function extractEmailFromJwt(token: string): string | undefined {
+function extractAuthInfoFromJwt(token: string): CodexAuthInfo {
   const payload = token.split(".")[1];
-  if (!payload) return undefined;
+  if (!payload) return {};
 
   try {
     const decoded = Buffer.from(normalizeBase64Url(payload), "base64").toString("utf8");
     const claims = JSON.parse(decoded) as unknown;
     const email = getNestedString(claims, ["email"])?.trim();
-    if (!email || email.length > 320 || !email.includes("@")) return undefined;
-    return email;
+    const validEmail =
+      email && email.length <= 320 && email.includes("@") ? email : undefined;
+    // OpenAI's id_token nests plan info under a URL-namespaced claim.
+    // Search a few common locations — `https://api.openai.com/auth` is
+    // the documented one but downstream Codex changes have moved the
+    // shape around, so we look at `chatgpt_plan_type` at the root too.
+    const planType =
+      getNestedString(claims, ["https://api.openai.com/auth", "chatgpt_plan_type"])?.trim() ??
+      getNestedString(claims, ["chatgpt_plan_type"])?.trim() ??
+      getNestedString(claims, ["plan_type"])?.trim() ??
+      undefined;
+    const validPlan =
+      planType && planType.length > 0 && planType.length <= 64 ? planType : undefined;
+    return {
+      ...(validEmail ? { email: validEmail } : {}),
+      ...(validPlan ? { planType: validPlan } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
