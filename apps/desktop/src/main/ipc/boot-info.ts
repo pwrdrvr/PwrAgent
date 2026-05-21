@@ -1,8 +1,11 @@
 import { app, ipcMain } from "electron";
 import type { DesktopBootInfo } from "@pwragent/shared";
 import { APP_GET_BOOT_INFO_CHANNEL, APP_QUIT_CHANNEL } from "../../shared/ipc";
+import { getMainLogger } from "../log";
 import { resolveActiveProfileName } from "../profile";
 import { getAppStateMode, getBootDecision } from "../state/app-state";
+
+const bootInfoLog = getMainLogger("pwragent:boot-info");
 
 /**
  * Build the `DesktopBootInfo` snapshot for the renderer. Mirrors
@@ -73,14 +76,29 @@ export function registerBootInfoIpcHandlers(): void {
     async (): Promise<DesktopBootInfo> => buildBootInfo(),
   );
 
-  // `quitApp` is the wizard's exit hatch for the missing-named-profile
-  // confirmation screen ("Quit PwrAgent" button). The wizard is the
-  // only UI in bootstrap mode, so closing the window would just leave
-  // the operator with a system tray icon. `app.quit()` does the
-  // right thing — fires `before-quit` so app-state shutdown still
-  // runs and `.bootstrap/` cleanup happens on next boot.
+  // `quitApp` is the wizard's exit hatch — fires from the
+  // bootstrap-confirm screen's "Quit PwrAgent" button AND from the
+  // wizard's post-graduation flow (after openPwrAgentProfile spawns
+  // the new profile's window). `app.quit()` fires before-quit so
+  // app-state shutdown runs cleanly and `.bootstrap/` cleanup
+  // happens on the next boot.
+  //
+  // Dev-mode exception: skip the quit when NODE_ENV !== "production".
+  // The dev-server race is real — when the bootstrap process exits,
+  // the parent `electron-vite` (or similar dev harness) often tears
+  // down the Vite dev server too, leaving the spawned profile
+  // window's renderer with chrome-error://chromewebdata/. Production
+  // builds (signed DMG) load the renderer from `file://`, no dev
+  // server involved, so the quit is safe there. In dev the operator
+  // closes the bootstrap window manually after the new window is up.
   ipcMain.removeHandler(APP_QUIT_CHANNEL);
   ipcMain.handle(APP_QUIT_CHANNEL, async (): Promise<void> => {
+    if (process.env.NODE_ENV !== "production") {
+      bootInfoLog.info(
+        "quitApp skipped in dev — close the bootstrap window manually",
+      );
+      return;
+    }
     app.quit();
   });
 }
