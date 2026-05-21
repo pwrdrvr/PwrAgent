@@ -18,6 +18,7 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:activity-window");
@@ -44,11 +45,7 @@ let activityWindow: BrowserWindow | undefined;
  */
 export function showMessagingActivityWindow(): void {
   if (activityWindow && !activityWindow.isDestroyed()) {
-    if (activityWindow.isMinimized()) {
-      activityWindow.restore();
-    }
-    activityWindow.show();
-    activityWindow.focus();
+    showAndFocusAuxiliaryWindow(activityWindow);
     return;
   }
 
@@ -94,7 +91,7 @@ export function showMessagingActivityWindow(): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showAndFocusAuxiliaryWindow(window);
   });
 
   window.on("closed", () => {

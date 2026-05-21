@@ -18,6 +18,7 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:license-document-window");
@@ -57,11 +58,7 @@ function showLicenseDocumentWindow(options: {
 }): void {
   const existingWindow = options.windowRef();
   if (existingWindow && !existingWindow.isDestroyed()) {
-    if (existingWindow.isMinimized()) {
-      existingWindow.restore();
-    }
-    existingWindow.show();
-    existingWindow.focus();
+    showAndFocusAuxiliaryWindow(existingWindow);
     return;
   }
 
@@ -98,7 +95,7 @@ function showLicenseDocumentWindow(options: {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showAndFocusAuxiliaryWindow(window);
   });
 
   window.on("closed", () => {

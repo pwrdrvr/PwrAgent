@@ -18,6 +18,7 @@ import {
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
+  showAndFocusAuxiliaryWindow,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:changelog-window");
@@ -27,11 +28,7 @@ let changelogWindow: BrowserWindow | undefined;
 
 export function showChangelogWindow(): void {
   if (changelogWindow && !changelogWindow.isDestroyed()) {
-    if (changelogWindow.isMinimized()) {
-      changelogWindow.restore();
-    }
-    changelogWindow.show();
-    changelogWindow.focus();
+    showAndFocusAuxiliaryWindow(changelogWindow);
     return;
   }
 
@@ -68,7 +65,7 @@ export function showChangelogWindow(): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showAndFocusAuxiliaryWindow(window);
   });
 
   window.on("closed", () => {

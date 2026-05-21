@@ -2,6 +2,7 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
 } from "electron";
+import { app } from "electron";
 
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
@@ -33,6 +34,15 @@ export function hideAuxiliaryWindowMenuBar(window: BrowserWindow): void {
   window.once("closed", () => {
     hiddenMenuBarWindows.delete(window);
   });
+}
+
+export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+  app.focus({ steal: true });
 }
 
 export function reapplyAuxiliaryWindowMenuBars(): void {
