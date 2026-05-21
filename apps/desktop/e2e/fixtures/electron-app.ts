@@ -44,7 +44,11 @@ type LaunchResult = {
 };
 
 export async function launchElectronApp(params: {
-  fixturePath: string;
+  /** Path to a replay-driver fixture JSON. Required for tests that
+   *  exercise thread replay (most specs); omit it for tests that
+   *  only need wizard / pre-thread UI (set `requiresReplayDriver:
+   *  false` to skip the driver install wait too). */
+  fixturePath?: string;
   env?: Record<string, string | undefined>;
   homeRoot?: string;
   windowSize?: {
@@ -73,6 +77,23 @@ export async function launchElectronApp(params: {
     theme?: DesktopAppearanceTheme;
     density?: DesktopAppearanceDensity;
   };
+  /**
+   * Whether to seed `onboarding.completed = true` into the
+   * `default` profile's config.toml before launch. Defaults to
+   * `true` so the wizard doesn't intercept clicks in most specs.
+   * Wizard specs pass `false` to let the wizard fire — combined
+   * with NOT pre-creating any profile dir (skip the appearance
+   * seed and any preLaunchHook profile-creation), this lets the
+   * boot decision return `no-profile-configured`.
+   */
+  suppressOnboarding?: boolean;
+  /**
+   * Whether to wait for `globalThis.__PWRAGENT_REPLAY_DRIVER__` to
+   * be installed before returning. Defaults to `true` for specs
+   * that use thread replay. Wizard specs pass `false` (and omit
+   * `fixturePath`) — the replay driver isn't needed pre-thread.
+   */
+  requiresReplayDriver?: boolean;
 }): Promise<LaunchResult> {
   const homeRoot =
     params.homeRoot ??
@@ -93,24 +114,27 @@ export async function launchElectronApp(params: {
   // to land in THEIR tmp dir, not the helper's. If both are unset, fall
   // back to the helper's `homeRoot`.
   const seedHomeRoot = params.env?.HOME ?? homeRoot;
-  applyDesktopSettingsPatch(
-    path.join(seedHomeRoot, ".pwragent/profiles/default/config.toml"),
-    {
-      general: {
-        appearance: {
-          theme: params.appearance?.theme ?? "dark",
-          density: params.appearance?.density ?? "mission-control",
+  const suppressOnboarding = params.suppressOnboarding ?? true;
+  if (suppressOnboarding) {
+    applyDesktopSettingsPatch(
+      path.join(seedHomeRoot, ".pwragent/profiles/default/config.toml"),
+      {
+        general: {
+          appearance: {
+            theme: params.appearance?.theme ?? "dark",
+            density: params.appearance?.density ?? "mission-control",
+          },
         },
+        // Suppress the first-run onboarding wizard for every replay-backed
+        // test. The wizard's modal scrim auto-fires on profiles with
+        // `onboarding.completed === false` (see App.tsx), and the per-test
+        // home root is always fresh, so without this seed the wizard would
+        // intercept clicks in every spec. Wizard specs explicitly pass
+        // `suppressOnboarding: false` to let the wizard fire.
+        onboarding: { completed: true },
       },
-      // Suppress the first-run onboarding wizard for every replay-backed
-      // test. The wizard's modal scrim auto-fires on profiles with
-      // `onboarding.completed === false` (see App.tsx), and the per-test
-      // home root is always fresh, so without this seed the wizard would
-      // intercept clicks in every spec. Tests that explicitly want to
-      // exercise the wizard can override this in their preLaunchHook.
-      onboarding: { completed: true },
-    },
-  );
+    );
+  }
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
@@ -121,7 +145,9 @@ export async function launchElectronApp(params: {
     HOME: homeRoot,
     NODE_ENV: "production",
     PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
-    PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath,
+    ...(params.fixturePath
+      ? { PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath }
+      : {}),
   });
   delete env.ELECTRON_RENDERER_URL;
   for (const [key, value] of Object.entries(params.env ?? {})) {
@@ -139,13 +165,20 @@ export async function launchElectronApp(params: {
   });
   const window = await electronApp.firstWindow();
 
-  await expect
-    .poll(async () =>
-      await electronApp.evaluate(() =>
-        Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+  const requiresReplayDriver = params.requiresReplayDriver ?? true;
+  if (requiresReplayDriver) {
+    await expect
+      .poll(async () =>
+        await electronApp.evaluate(() =>
+          Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+        )
       )
-    )
-    .toBe(true);
+      .toBe(true);
+  } else {
+    // Wizard specs: just wait for the renderer to mount. We don't
+    // care about the replay driver — there's no thread to replay.
+    await window.waitForLoadState("domcontentloaded");
+  }
 
   if (params.windowSize) {
     await electronApp.evaluate(
