@@ -495,6 +495,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   };
+  startTurnCallCount = 0;
   lastSteerTurnParams?: {
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -741,6 +742,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string }> {
+    this.startTurnCallCount += 1;
     if (this.options.startTurnError) {
       throw this.options.startTurnError;
     }
@@ -4183,6 +4185,120 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rejects duplicate Codex turn starts while the thread is already active", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first queued release" }],
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "first queued release" }],
+      }),
+    ).rejects.toThrow("A turn is already active for this thread.");
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "next queued release" }],
+    });
+    expect(codexClient.startTurnCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("reserves Codex turn starts before awaited pre-start work", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const firstStart = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first queued release" }],
+    });
+    const secondStart = registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first queued release" }],
+    });
+
+    await expect(secondStart).rejects.toThrow(
+      "A turn is already active for this thread.",
+    );
+    await firstStart;
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("clears Codex start reservations after startTurn fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnError: new Error("codex start failed"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "first queued release" }],
+      }),
+    ).rejects.toThrow("codex start failed");
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "retry queued release" }],
+      }),
+    ).rejects.toThrow("codex start failed");
+    expect(codexClient.startTurnCallCount).toBe(2);
+
+    await registry.close();
+  });
+
   it("applies generated Codex thread titles after starting turns", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({
@@ -4307,6 +4423,18 @@ command = "pnpm dev"
       input: [{ type: "text", text: "Make button" }],
     });
     await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
 
     await registry.startTurn({
       backend: "codex",
@@ -6876,6 +7004,18 @@ command = "pnpm dev"
       threadId: "thread-toggle",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-toggle",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
     });
 
     await registry.setThreadExecutionMode({

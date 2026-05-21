@@ -1240,6 +1240,7 @@ export function Composer(props: ComposerProps) {
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
     savedInitialQueuedTurns ?? []
   );
+  const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
   const [pendingSteer, setPendingSteerState] = useState<
     PendingSteerDraft | undefined
   >(
@@ -1679,6 +1680,44 @@ export function Composer(props: ComposerProps) {
       saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
       return nextQueuedTurns;
     });
+  };
+  const removeLocalQueuedTurn = (queued: QueuedTurnDraft): void => {
+    setQueuedTurnsState((current) =>
+      current.filter((candidate) => candidate.id !== queued.id)
+    );
+  };
+  const claimQueuedTurn = (queued: QueuedTurnDraft): QueuedTurnDraft | undefined => {
+    if (!isQueuedTurnStoreScope(composerScopeKey)) {
+      return queued;
+    }
+
+    const claimed = draftStore.removeQueuedTurnById(composerScopeKey, queued.id);
+    if (!claimed) {
+      removeLocalQueuedTurn(queued);
+      return undefined;
+    }
+
+    removeLocalQueuedTurn(queued);
+    return claimed as QueuedTurnDraft;
+  };
+  const restoreClaimedQueuedTurn = (queued: QueuedTurnDraft): void => {
+    setQueuedTurnsState((current) => {
+      if (current.some((candidate) => candidate.id === queued.id)) {
+        return current;
+      }
+
+      const nextQueuedTurns = [queued, ...current];
+      saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
+      return nextQueuedTurns;
+    });
+  };
+  const restoreQueuedTurnIfClaimed = (
+    queued: QueuedTurnDraft | undefined,
+    queueClaimed: boolean | undefined,
+  ): void => {
+    if (queued && queueClaimed) {
+      restoreClaimedQueuedTurn(queued);
+    }
   };
   const setPendingSteer = (nextPendingSteer?: PendingSteerDraft): void => {
     if (nextPendingSteer?.status === "pending") {
@@ -2218,8 +2257,12 @@ export function Composer(props: ComposerProps) {
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
     target: AppServerReviewTarget;
-  }, options?: { queued?: QueuedTurnDraft }): Promise<void> => {
+  }, options?: {
+    queueClaimed?: boolean;
+    queued?: QueuedTurnDraft;
+  }): Promise<void> => {
     if (props.disabled) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
     if (!options?.queued && imageAttachments.length > 0) {
@@ -2256,6 +2299,7 @@ export function Composer(props: ComposerProps) {
       } catch (error) {
         unmarkComposerDraftSubmitted(submittedScopeKey);
         props.onPendingStatusChange?.(undefined);
+        restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         updateSending(false);
@@ -2266,6 +2310,7 @@ export function Composer(props: ComposerProps) {
     if (!props.thread || !props.desktopApi?.startReview) {
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       return;
     }
 
@@ -2283,7 +2328,9 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       if (options?.queued) {
-        removeQueuedTurn(options.queued);
+        if (!options.queueClaimed) {
+          removeQueuedTurn(options.queued);
+        }
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
@@ -2303,6 +2350,7 @@ export function Composer(props: ComposerProps) {
       setInterrupting(false);
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -2351,8 +2399,12 @@ export function Composer(props: ComposerProps) {
     return { displayText, imageParts, input };
   };
 
-  const sendThreadTurn = async (queued?: QueuedTurnDraft): Promise<void> => {
+  const sendThreadTurn = async (
+    queued?: QueuedTurnDraft,
+    options?: { queueClaimed?: boolean },
+  ): Promise<void> => {
     if (!props.thread || !props.desktopApi?.startTurn) {
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2360,6 +2412,7 @@ export function Composer(props: ComposerProps) {
       ? buildTurnPayload(queued.text, queued.imageAttachments)
       : buildTurnPayload(canonicalDraft, imageAttachments);
     if (payload.input.length === 0 || props.disabled) {
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2375,6 +2428,7 @@ export function Composer(props: ComposerProps) {
 
     if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
       updateSending(false);
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       return;
     }
 
@@ -2403,7 +2457,9 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       if (queued) {
-        removeQueuedTurn(queued);
+        if (!options?.queueClaimed) {
+          removeQueuedTurn(queued);
+        }
       } else {
         recordComposerDraftHistory(
           composerScopeKey,
@@ -2428,24 +2484,41 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       setActiveOptimisticMessageId(undefined);
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const sendQueuedTurn = async (queued: QueuedTurnDraft): Promise<void> => {
-    if (queued.reviewCommand) {
-      await submitReviewCommand(queued.reviewCommand, { queued });
+    const claimedQueuedTurn = claimQueuedTurn(queued);
+    if (!claimedQueuedTurn) {
       return;
     }
 
-    await sendThreadTurn(queued);
+    if (claimedQueuedTurn.reviewCommand) {
+      await submitReviewCommand(claimedQueuedTurn.reviewCommand, {
+        queueClaimed: true,
+        queued: claimedQueuedTurn,
+      });
+      return;
+    }
+
+    await sendThreadTurn(claimedQueuedTurn, { queueClaimed: true });
   };
 
   useEffect(() => {
+    if (activeTurnId) {
+      queuedAutoReleaseAttemptIdRef.current = undefined;
+      return;
+    }
     if (!queuedTurn || activeTurnId || sending || props.launchpad || props.disabled) {
       return;
     }
+    if (queuedAutoReleaseAttemptIdRef.current === queuedTurn.id) {
+      return;
+    }
 
+    queuedAutoReleaseAttemptIdRef.current = queuedTurn.id;
     updateSending(true);
     void sendQueuedTurn(queuedTurn).finally(() => {
       updateSending(false);

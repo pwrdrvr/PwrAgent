@@ -1504,6 +1504,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  private readonly reservedCodexStartThreadIds = new Set<string>();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -2591,6 +2592,13 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    const reserveCodexStart = params.backend === "codex";
+    if (reserveCodexStart) {
+      if (this.threadHasActiveTurn(params.threadId)) {
+        throw new Error("A turn is already active for this thread.");
+      }
+      this.reservedCodexStartThreadIds.add(params.threadId);
+    }
     // Race-safe flush: if a queued permission-mode change is still
     // pending when the user fires off the next turn (e.g. submit
     // immediately after the previous turn ended), apply it before
@@ -2599,41 +2607,54 @@ export class DesktopBackendRegistry {
     // faster path when no immediate user action follows; this is the
     // belt-and-suspenders guarantee. Idempotent — a no-op when no
     // queue is present.
-    if (params.backend === "codex") {
-      await this.flushQueuedExecutionModeIfPresent(params.threadId);
-    }
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
-    const turnParams = await this.resolveModelSettings(params.backend, {
-      ...params,
-      model: params.model ?? overlay?.model,
-      serviceTier: params.serviceTier ?? overlay?.serviceTier,
-      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
-      fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
-    });
-    const cwd =
-      params.backend === "codex"
-        ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
-        : undefined;
-    let activeTurnMode: ThreadExecutionMode | undefined;
     const syntheticStartedTurnId = `pending:${params.threadId}`;
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "turn/started",
-        params: {
-          threadId: params.threadId,
-          turnId: syntheticStartedTurnId,
-          turn: {
-            id: syntheticStartedTurnId,
-            status: "in_progress",
-            startedAt: Date.now(),
+    let overlay: ThreadOverlayState | undefined;
+    let turnParams!: ModelSettings;
+    let cwd: string | undefined;
+    let activeTurnMode: ThreadExecutionMode | undefined;
+    try {
+      if (params.backend === "codex") {
+        await this.flushQueuedExecutionModeIfPresent(params.threadId);
+      }
+      overlay = await this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      turnParams = await this.resolveModelSettings(params.backend, {
+        ...params,
+        model: params.model ?? overlay?.model,
+        serviceTier: params.serviceTier ?? overlay?.serviceTier,
+        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
+      });
+      cwd =
+        params.backend === "codex"
+          ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
+          : undefined;
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: params.threadId,
+            turnId: syntheticStartedTurnId,
+            turn: {
+              id: syntheticStartedTurnId,
+              status: "in_progress",
+              startedAt: Date.now(),
+            },
           },
         },
-      },
-    });
+      });
+    } catch (error) {
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
+      );
+      if (reserveCodexStart) {
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
+      throw error;
+    }
 
     let result: { threadId: string; turnId: string };
     try {
@@ -2684,11 +2705,23 @@ export class DesktopBackendRegistry {
       this.activeCodexTurnModes.delete(
         buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
       );
+      if (reserveCodexStart) {
+        this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
       throw error;
     }
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
+    if (params.backend === "codex" && activeTurnMode) {
+      this.activeCodexTurnModes.set(
+        buildActiveTurnModeKey(result.threadId, result.turnId),
+        activeTurnMode,
+      );
+    }
+    if (reserveCodexStart) {
+      this.reservedCodexStartThreadIds.delete(params.threadId);
+    }
 
     if (
       turnParams.model !== undefined ||
@@ -2709,13 +2742,6 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    if (params.backend === "codex" && activeTurnMode) {
-      this.activeCodexTurnModes.set(
-        buildActiveTurnModeKey(result.threadId, result.turnId),
-        activeTurnMode,
-      );
-    }
-
     const response = {
       backend: params.backend,
       threadId: result.threadId,
@@ -3280,6 +3306,10 @@ export class DesktopBackendRegistry {
    * `${threadId}:${turnId}`; one or more matching keys → active turn.
    */
   private threadHasActiveTurn(threadId: string): boolean {
+    if (this.reservedCodexStartThreadIds.has(threadId)) {
+      return true;
+    }
+
     const prefix = `${threadId}:`;
     for (const key of this.activeCodexTurnModes.keys()) {
       if (key.startsWith(prefix)) {
