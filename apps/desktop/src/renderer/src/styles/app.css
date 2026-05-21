@@ -11066,6 +11066,32 @@ textarea,
   color: var(--status-error);
 }
 
+/* Per-row xAI key control on Multiple/Isolated name step. Collapsed
+   state is a single subtle link (so a row without an override stays
+   visually quiet); expanding reveals an inline password input that
+   commits to the operator's per-profile override map at wizard
+   state level, then graduates at Finish. */
+.onboarding-wizard__profile-row-xai {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 42px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+.onboarding-wizard__profile-row-xai.is-collapsed {
+  gap: 10px;
+}
+.onboarding-wizard__profile-row-xai .onboarding-wizard__input {
+  flex: 1 1 200px;
+  min-width: 200px;
+  font: 500 12px/1 var(--font-mono);
+}
+.onboarding-wizard__profile-row-xai-hint {
+  font: 400 11px/1.4 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
+
 /* "I'll log in later" deferral link — intentionally low-affordance,
    sits between the spacer and the hint so the operator's eye still
    goes to the disabled Continue button first. */

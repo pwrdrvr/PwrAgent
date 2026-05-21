@@ -188,6 +188,21 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     setBufferedSecrets((prev) => ({ ...prev, [name]: value }));
   }, []);
   const bufferedGrokKey = bufferedSecrets.grokApiKey ?? "";
+  // Per-profile xAI key overrides keyed by the profile's committed
+  // name in the naming step. In Multiple mode the operator can keep
+  // some profiles on the global key (from Models / Providers) and
+  // override others — e.g. "personal profile uses my personal xAI
+  // key, work profile uses the work xAI key." A row without an
+  // entry here inherits the global `bufferedGrokKey` at graduation.
+  const [xaiKeyByProfile, setXaiKeyByProfile] = useState<Record<string, string>>(
+    {},
+  );
+  const setXaiKeyForProfile = useCallback(
+    (profileName: string, value: string): void => {
+      setXaiKeyByProfile((prev) => ({ ...prev, [profileName]: value }));
+    },
+    [],
+  );
   // Snapshot reported by the name-codex-profiles step: are all named
   // rows authenticated? Drives the footer Continue button's enabled
   // state. `codexLoginDeferred` is the operator's escape hatch — a
@@ -449,22 +464,31 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           // Per-profile secret graduation: each created profile gets
           // its own xAI key + messaging tokens written into ITS
           // state.db keychain (not the bootstrap/active profile's).
-          // Currently every created profile receives the same global
-          // buffer; G3 layers per-profile xAI overrides on top.
+          // xAI key resolution per profile: a per-row override beats
+          // the global buffer. Messaging tokens stay global across
+          // profiles (the operator usually has one bot per platform).
           for (const target of created) {
-            if (props.desktopApi?.writeSecretsToProfile) {
-              try {
-                await props.desktopApi.writeSecretsToProfile({
-                  profile: target,
-                  secrets: bufferedSecrets,
-                });
-              } catch (caught) {
-                // eslint-disable-next-line no-console
-                console.warn(
-                  `Onboarding: writeSecretsToProfile failed for "${target}"`,
-                  caught,
-                );
-              }
+            if (!props.desktopApi?.writeSecretsToProfile) continue;
+            const override = xaiKeyByProfile[target]?.trim();
+            const resolvedGrokKey =
+              override !== undefined && override.length >= 0
+                ? override
+                : bufferedSecrets.grokApiKey ?? "";
+            const secretsForTarget = {
+              ...bufferedSecrets,
+              grokApiKey: resolvedGrokKey,
+            };
+            try {
+              await props.desktopApi.writeSecretsToProfile({
+                profile: target,
+                secrets: secretsForTarget,
+              });
+            } catch (caught) {
+              // eslint-disable-next-line no-console
+              console.warn(
+                `Onboarding: writeSecretsToProfile failed for "${target}"`,
+                caught,
+              );
             }
           }
           const switchTo = created[0];
@@ -547,6 +571,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       selectedProviders,
       submitting,
       theme,
+      xaiKeyByProfile,
     ],
   );
 
@@ -657,6 +682,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               onChange={setCodexProfileNames}
               desktopApi={props.desktopApi}
               onAuthStateChange={setCodexAuthSnapshot}
+              globalXaiKey={bufferedGrokKey}
+              xaiKeyByProfile={xaiKeyByProfile}
+              onSetXaiKeyForProfile={setXaiKeyForProfile}
             />
           ) : null}
           {step === "messaging-safety" ? (
@@ -2230,6 +2258,14 @@ function NameCodexProfilesStep(props: {
    *  root can gate the footer Continue button on "all named rows
    *  authenticated". `namedRows` excludes blank inputs. */
   onAuthStateChange: (snapshot: { allAuthed: boolean; namedRows: number }) => void;
+  /** Global xAI key from Models / Providers step (renderer buffer,
+   *  not yet written to a keychain). When a row's per-profile
+   *  override is unset, this value graduates to that profile. */
+  globalXaiKey: string;
+  /** Per-profile xAI key overrides keyed by the row's committed
+   *  name. Empty string = "no override; inherit global". */
+  xaiKeyByProfile: Record<string, string>;
+  onSetXaiKeyForProfile: (profileName: string, value: string) => void;
 }) {
   const maxCount = props.mode === "isolated" ? 1 : 5;
   const isSingle = props.mode === "isolated";
@@ -2514,6 +2550,16 @@ function NameCodexProfilesStep(props: {
                 ) : null}
               </div>
               <ProfileRowLoginStatus state={state} />
+              {trimmed ? (
+                <ProfileRowXaiKey
+                  profileName={trimmed}
+                  globalKey={props.globalXaiKey}
+                  override={props.xaiKeyByProfile[trimmed] ?? ""}
+                  onChange={(value) =>
+                    props.onSetXaiKeyForProfile(trimmed, value)
+                  }
+                />
+              ) : null}
             </div>
           );
         })}
@@ -2613,6 +2659,117 @@ function ProfileRowLoginStatus(props: { state: RowLoginState }) {
     );
   }
   return null;
+}
+
+/**
+ * Inline xAI API key control per profile row. Three states:
+ *   - Hidden chip ("Add xAI key (optional)"): default when no global
+ *     key set and no override. Expanding shows the input.
+ *   - "Uses global xAI key" chip: rendered when the operator typed
+ *     a global key on Models / Providers but didn't override here.
+ *     Expanding shows the input with the global value pre-filled
+ *     (operator can replace).
+ *   - "Override active" chip: rendered when an override is set.
+ *     Always shows the input collapsed-style with Clear button.
+ *
+ * Override values flow into the wizard's `xaiKeyByProfile` map and
+ * graduate to the matching profile's keychain at Finish. Per-row
+ * keys NEVER write to `replaceSecret` — same defer-and-graduate
+ * pattern as the global key on Models / Providers.
+ */
+function ProfileRowXaiKey(props: {
+  profileName: string;
+  globalKey: string;
+  override: string;
+  onChange: (value: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [value, setValue] = useState("");
+  const hasGlobal = props.globalKey.length > 0;
+  const hasOverride = props.override.length > 0;
+
+  const save = (): void => {
+    if (!value.trim()) return;
+    props.onChange(value.trim());
+    setValue("");
+    setExpanded(false);
+  };
+  const clear = (): void => {
+    props.onChange("");
+    setValue("");
+  };
+
+  if (!expanded && !hasOverride) {
+    return (
+      <div className="onboarding-wizard__profile-row-xai is-collapsed">
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={() => setExpanded(true)}
+        >
+          {hasGlobal
+            ? "Override xAI key for this profile"
+            : "+ Add xAI key (optional)"}
+        </button>
+        {hasGlobal ? (
+          <span className="onboarding-wizard__profile-row-xai-hint">
+            Uses global xAI key
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="onboarding-wizard__profile-row-xai">
+      <input
+        type="password"
+        className="onboarding-wizard__input"
+        placeholder={
+          hasOverride
+            ? "Replace stored override (already set)"
+            : hasGlobal
+              ? "Override global xAI key"
+              : "xai-…"
+        }
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+        disabled={!value.trim()}
+        onClick={save}
+      >
+        {hasOverride ? "Replace" : "Use this"}
+      </button>
+      {hasOverride ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={clear}
+        >
+          Clear override
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--link"
+        onClick={() => {
+          setExpanded(false);
+          setValue("");
+        }}
+      >
+        Cancel
+      </button>
+    </div>
+  );
 }
 
 /* ----------------------------------------------------------------
