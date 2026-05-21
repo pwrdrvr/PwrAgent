@@ -407,7 +407,8 @@ function DesktopAppShell(props: {
   const selectedThreadPending =
     Boolean(navigation.selectedThreadKey) &&
     !navigation.selectedThread &&
-    !navigation.selectedLaunchpad;
+    !navigation.selectedLaunchpad &&
+    (navigation.loading || navigation.refreshing);
   const threadDetailPending =
     mainView === "thread" && (!ThreadViewComponent || selectedThreadPending);
 
