@@ -349,6 +349,7 @@ type AcpRuntimeClient = Pick<
   AcpAgentClient,
   | "cancelSession"
   | "dispose"
+  | "ensureSession"
   | "initialize"
   | "loadSession"
   | "readReplay"
@@ -2635,6 +2636,11 @@ export class DesktopBackendRegistry {
     }
 
     const client = await this.getAcpClient(params.backend);
+    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
+    await client.ensureSession(session);
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
       backend: params.backend,
@@ -3036,6 +3042,11 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       branch: resultBranch,
     });
+    this.updateAcpSessionWorkspaceAfterHandoff({
+      backend: request.backend,
+      threadId: request.threadId,
+      cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
+    });
     if (result.workMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
         backend: request.backend,
@@ -3055,6 +3066,25 @@ export class DesktopBackendRegistry {
     }
 
     return result;
+  }
+
+  private updateAcpSessionWorkspaceAfterHandoff(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    cwd: string;
+  }): void {
+    if (!isAcpBackendId(params.backend) || !this.acpSessionStore?.upsertSession) {
+      return;
+    }
+    const session = this.acpSessionStore.getSession(params.backend, params.threadId);
+    if (!session || session.cwd === params.cwd) {
+      return;
+    }
+    this.acpSessionStore.upsertSession({
+      ...session,
+      cwd: params.cwd,
+      updatedAt: Math.max(session.updatedAt, Date.now()),
+    });
   }
 
   async renameThread(

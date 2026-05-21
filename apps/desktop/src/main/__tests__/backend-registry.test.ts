@@ -1531,6 +1531,7 @@ describe("DesktopBackendRegistry", () => {
           turnId: params.turnId ?? "pending:session-1:1001",
         };
       }),
+      ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
         entries: [],
         messages: [],
@@ -1700,6 +1701,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(),
       startPrompt: vi.fn(),
       cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
       readReplay: vi.fn(() => ({
         entries: [],
         messages: [],
@@ -1787,6 +1789,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(),
       startPrompt: vi.fn(),
       cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
       readReplay: vi.fn(),
       loadSession: vi.fn(async () => {
         throw new Error("No previous sessions found for this project.");
@@ -1882,6 +1885,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(),
       startPrompt: vi.fn(),
       cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
       readReplay: vi.fn(),
       loadSession: vi.fn(async () => {
         throw new Error("No previous sessions found for this project.");
@@ -7063,6 +7067,125 @@ command = "pnpm dev"
         }),
       ],
     });
+
+    await registry.close();
+  });
+
+  it("updates stored ACP session cwd on workspace handoff before the next turn", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const ensureSession = vi.fn(async () => undefined);
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+    };
+    const handoff = vi.fn(async () => ({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:acp:gemini:session-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await registry.handoffThreadWorkspace({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "local-to-worktree",
+      leaveLocalBranch: "main",
+    });
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+      }),
+    );
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        prompt: "What is the CWD?",
+      }),
+    );
 
     await registry.close();
   });

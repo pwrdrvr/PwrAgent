@@ -412,4 +412,65 @@ describe("AcpAgentClient", () => {
     ]);
     expect(transport.closeCount).toBe(1);
   });
+
+  it("reloads stored sessions at a changed cwd before prompting", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const updateEvents: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ update }) => {
+        updateEvents.push(String(update.sessionUpdate ?? update.kind));
+      },
+    });
+
+    await client.initialize();
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo/worktree",
+      createdAt: 900,
+      updatedAt: 950,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 950,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Previous answer." },
+          },
+        },
+      ],
+    });
+    const ensurePromise = client.ensureSession(
+      store.getSession("acp:gemini", "session-1")!,
+    );
+    transport.emitSessionUpdate("session-1", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Replayed from load." },
+    });
+    await ensurePromise;
+    client.startPrompt({
+      sessionId: "session-1",
+      prompt: "What is the CWD?",
+      turnId: "pending:session-1:1000",
+    });
+
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+      "session/prompt",
+    ]);
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo/worktree",
+      mcpServers: [],
+      sessionId: "session-1",
+    });
+    expect(updateEvents).toEqual([]);
+    expect(client.readReplay("session-1").lastAssistantMessage).toBeUndefined();
+  });
 });

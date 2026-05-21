@@ -53,6 +53,8 @@ export class AcpAgentClient {
       turnId: string;
     }
   >();
+  private readonly loadedSessionCwds = new Map<string, string | undefined>();
+  private readonly suppressLoadReplaySessions = new Set<string>();
   private readonly now: () => number;
   private unsubscribe?: () => void;
 
@@ -125,6 +127,7 @@ export class AcpAgentClient {
       status: "idle",
     };
     this.options.store.upsertSession(metadata);
+    this.loadedSessionCwds.set(sessionId, cwd);
     return metadata;
   }
 
@@ -177,10 +180,8 @@ export class AcpAgentClient {
     if (hasPersistedAssistantUpdate(metadata)) {
       return replay;
     }
-    const result = await this.options.transport.request("session/load", {
-      cwd: metadata.cwd ?? process.cwd(),
-      mcpServers: [],
-      sessionId: metadata.sessionId,
+    const result = await this.loadSessionFromAgent(metadata, {
+      suppressReplayNotifications: false,
     });
     const updates = readSessionUpdates(result);
     for (const update of updates) {
@@ -191,6 +192,20 @@ export class AcpAgentClient {
       });
     }
     return replay;
+  }
+
+  async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
+    this.options.store.upsertSession(metadata);
+    const cwd = metadata.cwd ?? process.cwd();
+    if (
+      this.loadedSessionCwds.has(metadata.sessionId) &&
+      this.loadedSessionCwds.get(metadata.sessionId) === cwd
+    ) {
+      return;
+    }
+    await this.loadSessionFromAgent(metadata, {
+      suppressReplayNotifications: true,
+    });
   }
 
   startPrompt(params: {
@@ -276,6 +291,9 @@ export class AcpAgentClient {
     }
     const receivedAt = this.now();
     const activeTurn = this.activeTurns.get(sessionId);
+    if (this.suppressLoadReplaySessions.has(sessionId)) {
+      return;
+    }
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
       activeTurn.assistantText += readUpdateText(update) ?? "";
     }
@@ -355,6 +373,27 @@ export class AcpAgentClient {
     await Promise.resolve(this.options.onSessionUpdate?.(event)).catch(
       () => undefined,
     );
+  }
+
+  private async loadSessionFromAgent(
+    metadata: AcpSessionMetadata,
+    options: { suppressReplayNotifications: boolean },
+  ): Promise<unknown> {
+    const cwd = metadata.cwd ?? process.cwd();
+    if (options.suppressReplayNotifications) {
+      this.suppressLoadReplaySessions.add(metadata.sessionId);
+    }
+    try {
+      const result = await this.options.transport.request("session/load", {
+        cwd,
+        mcpServers: [],
+        sessionId: metadata.sessionId,
+      });
+      this.loadedSessionCwds.set(metadata.sessionId, cwd);
+      return result;
+    } finally {
+      this.suppressLoadReplaySessions.delete(metadata.sessionId);
+    }
   }
 
   private startTrackedTurn(sessionId: string, turnId: string): void {
