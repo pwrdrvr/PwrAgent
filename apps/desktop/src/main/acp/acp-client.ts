@@ -18,6 +18,8 @@ export type AcpJsonRpcTransport = {
   ): () => void;
 };
 
+const ACP_PROTOCOL_VERSION = 1;
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   store: AcpSessionStore;
@@ -51,12 +53,21 @@ export class AcpAgentClient {
       }
     });
     await this.options.transport.request("initialize", {
+      protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: {
+        auth: {
+          terminal: false,
+        },
         fs: {
           readTextFile: false,
           writeTextFile: false,
         },
-        terminals: false,
+        terminal: false,
+      },
+      clientInfo: {
+        name: "pwragent",
+        title: "PwrAgent",
+        version: "0.0.0",
       },
     });
   }
@@ -72,8 +83,10 @@ export class AcpAgentClient {
     executionMode: ThreadExecutionMode;
     title?: string;
   }): Promise<AcpSessionMetadata> {
+    const cwd = params.cwd ?? process.cwd();
     const result = await this.options.transport.request("session/new", {
-      cwd: params.cwd,
+      cwd,
+      mcpServers: [],
     });
     const record = asRecord(result);
     const sessionId =
@@ -91,7 +104,7 @@ export class AcpAgentClient {
       backendId: this.options.backendId,
       sessionId,
       title: params.title ?? "ACP session",
-      cwd: params.cwd,
+      cwd,
       createdAt: now,
       updatedAt: now,
       executionMode: params.executionMode,
@@ -122,6 +135,8 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     const result = await this.options.transport.request("session/load", {
+      cwd: metadata.cwd ?? process.cwd(),
+      mcpServers: [],
       sessionId: metadata.sessionId,
     });
     const updates = readSessionUpdates(result);

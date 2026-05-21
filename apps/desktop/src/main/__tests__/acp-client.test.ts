@@ -57,17 +57,31 @@ describe("AcpAgentClient", () => {
       "session/prompt",
     ]);
     expect(transport.requests[0]?.params).toEqual({
+      protocolVersion: 1,
       clientCapabilities: {
+        auth: {
+          terminal: false,
+        },
         fs: {
           readTextFile: false,
           writeTextFile: false,
         },
-        terminals: false,
+        terminal: false,
       },
+      clientInfo: {
+        name: "pwragent",
+        title: "PwrAgent",
+        version: "0.0.0",
+      },
+    });
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [],
     });
     expect(prompt).toEqual({ sessionId: "session-1", turnId: "turn-1" });
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Test ACP",
+      cwd: "/repo",
       executionMode: "default",
     });
     expect(client.readReplay("session-1").lastAssistantMessage).toBe("Done");
@@ -161,12 +175,14 @@ describe("AcpAgentClient", () => {
 
   it("loads stored sessions through the ACP agent and closes transports", async () => {
     const transport = new FakeAcpAgentTransport();
+    const loadRequests: Array<Record<string, unknown> | undefined> = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
       store,
       transport: {
         request: async (method, params) => {
           if (method === "session/load") {
+            loadRequests.push(params);
             return {
               updates: [
                 {
@@ -201,8 +217,16 @@ describe("AcpAgentClient", () => {
     expect(replay.lastAssistantMessage).toBe("Restored transcript");
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Stored ACP session",
+      cwd: "/repo",
       executionMode: "full-access",
     });
+    expect(loadRequests).toEqual([
+      {
+        cwd: "/repo",
+        mcpServers: [],
+        sessionId: "session-1",
+      },
+    ]);
     expect(transport.closeCount).toBe(1);
   });
 });
