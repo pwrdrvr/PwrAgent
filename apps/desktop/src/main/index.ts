@@ -92,6 +92,10 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import {
+  getAuxiliaryWindowMenuTitle,
+  reapplyAuxiliaryWindowMenuBars,
+} from "./auxiliary-window-chrome";
+import {
   assertUnreachableProfileBootDecision,
   cleanupBootstrapProfile,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
@@ -278,14 +282,34 @@ function installProfileFocusRequestWatcher(): void {
 function installApplicationMenu(): void {
   const developerMode = getDesktopSettingsService().resolveDeveloperMode();
   const profiles = listDesktopPwrAgentProfiles().profiles;
+  const windows = BrowserWindow.getAllWindows()
+    .filter((window) => !window.isDestroyed())
+    .map((window) => ({
+      focused: window.isFocused(),
+      id: window.id,
+      title: getAuxiliaryWindowMenuTitle(window),
+    }));
   const template = buildApplicationMenuTemplate({
     appName: APP_NAME,
     developerMode,
     isMac,
     profiles,
+    windows,
     actions: {
       checkForUpdates: () => {
         void checkForAppUpdatesNow("menu");
+      },
+      focusWindow: (windowId) => {
+        const window = BrowserWindow.fromId(windowId);
+        if (!window || window.isDestroyed()) {
+          installApplicationMenu();
+          return;
+        }
+        if (window.isMinimized()) {
+          window.restore();
+        }
+        window.show();
+        window.focus();
       },
       openDocumentation: async () => {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
@@ -321,6 +345,19 @@ function installApplicationMenu(): void {
   });
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  reapplyAuxiliaryWindowMenuBars();
+}
+
+function installWindowMenuRefreshHandlers(): void {
+  app.on("browser-window-created", (_event, window) => {
+    const refresh = (): void => {
+      installApplicationMenu();
+    };
+
+    window.on("focus", refresh);
+    window.on("closed", refresh);
+    window.on("page-title-updated", refresh);
+  });
 }
 
 /**
@@ -422,6 +459,7 @@ export function bootstrapApp(): void {
       installProfileFocusRequestWatcher();
     }
     installApplicationMenu();
+    installWindowMenuRefreshHandlers();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
     registerApplicationIpcHandlers();

@@ -15,19 +15,23 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
+  showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:changelog-window");
 const CHANGELOG_HASH = "changelog";
+const CHANGELOG_WINDOW_TITLE = "Changelog";
 
 let changelogWindow: BrowserWindow | undefined;
 
 export function showChangelogWindow(): void {
   if (changelogWindow && !changelogWindow.isDestroyed()) {
-    if (changelogWindow.isMinimized()) {
-      changelogWindow.restore();
-    }
-    changelogWindow.show();
-    changelogWindow.focus();
+    showAndFocusAuxiliaryWindow(changelogWindow);
     return;
   }
 
@@ -38,9 +42,8 @@ export function showChangelogWindow(): void {
     minWidth: 640,
     minHeight: 480,
     show: false,
-    title: "Changelog - PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    title: CHANGELOG_WINDOW_TITLE,
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -50,6 +53,8 @@ export function showChangelogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, CHANGELOG_WINDOW_TITLE);
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_CHANGELOG, [
@@ -63,9 +68,7 @@ export function showChangelogWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: CHANGELOG_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    window.show();
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     changelogWindow = undefined;

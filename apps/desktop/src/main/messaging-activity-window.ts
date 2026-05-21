@@ -15,8 +15,16 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
+  showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:activity-window");
+const ACTIVITY_WINDOW_TITLE = "Messaging Activity";
 
 /**
  * Hash that the renderer (`main.tsx`) reads to decide whether to mount
@@ -40,11 +48,7 @@ let activityWindow: BrowserWindow | undefined;
  */
 export function showMessagingActivityWindow(): void {
   if (activityWindow && !activityWindow.isDestroyed()) {
-    if (activityWindow.isMinimized()) {
-      activityWindow.restore();
-    }
-    activityWindow.show();
-    activityWindow.focus();
+    showAndFocusAuxiliaryWindow(activityWindow);
     return;
   }
 
@@ -55,9 +59,8 @@ export function showMessagingActivityWindow(): void {
     minWidth: 640,
     minHeight: 480,
     show: false,
-    title: "Messaging Activity — PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    title: ACTIVITY_WINDOW_TITLE,
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -67,6 +70,8 @@ export function showMessagingActivityWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, ACTIVITY_WINDOW_TITLE);
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   // The activity window does not subscribe to any push events today
@@ -89,9 +94,7 @@ export function showMessagingActivityWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: ACTIVITY_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    window.show();
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     // The top-of-function "already-open" guard prevents two activity

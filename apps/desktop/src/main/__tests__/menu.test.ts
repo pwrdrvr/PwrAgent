@@ -11,6 +11,11 @@ function buildTemplate(
     openProfilesSettings?: () => void;
     openSettings?: () => void;
     profiles?: DesktopPwrAgentProfileSummary[];
+    windows?: Array<{
+      focused: boolean;
+      id: number;
+      title: string;
+    }>;
   },
 ): MenuItemConstructorOptions[] {
   return buildApplicationMenuTemplate({
@@ -22,8 +27,13 @@ function buildTemplate(
       profile("default", { active: true, default: true }),
       profile("personal"),
     ],
+    windows: options?.windows ?? [
+      { focused: true, id: 1, title: "PwrAgent" },
+      { focused: false, id: 2, title: "Logs" },
+    ],
     actions: {
       checkForUpdates: vi.fn(),
+      focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
       openIssueReporter: vi.fn(),
       openProfile: options?.openProfile ?? vi.fn(),
@@ -226,6 +236,42 @@ describe("buildApplicationMenuTemplate", () => {
       const template = buildTemplate(false, { isMac: false });
       const appMenu = template.find((item) => item.label === "PwrAgent");
       expect(appMenu).toBeUndefined();
+    });
+  });
+
+  describe("Window menu", () => {
+    it("keeps the native Window menu role on macOS", () => {
+      const windowMenu = buildTemplate(false).find(
+        (item) => item.role === "windowMenu",
+      );
+
+      expect(windowMenu).toBeDefined();
+    });
+
+    it("lists open windows on non-Mac platforms", () => {
+      const items = submenuItems(buildTemplate(false, { isMac: false }), "Window");
+
+      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+        "minimize",
+        "close",
+        "separator",
+        "PwrAgent",
+        "Logs",
+      ]);
+      expect(items[3]?.type).toBeUndefined();
+      expect(items[3]?.checked).toBeUndefined();
+      expect(items[4]?.type).toBeUndefined();
+      expect(items[4]?.checked).toBeUndefined();
+    });
+
+    it("shows an empty state when no windows are open on non-Mac platforms", () => {
+      const items = submenuItems(
+        buildTemplate(false, { isMac: false, windows: [] }),
+        "Window",
+      );
+
+      expect(items.at(-1)?.label).toBe("No Open Windows");
+      expect(items.at(-1)?.enabled).toBe(false);
     });
   });
 });

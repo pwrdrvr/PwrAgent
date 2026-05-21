@@ -18,19 +18,23 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
+  showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:app-log-window");
 const LOGS_HASH = "logs";
+const LOGS_WINDOW_TITLE = "Logs";
 
 let appLogWindow: BrowserWindow | undefined;
 
 export function showAppLogWindow(): void {
   if (appLogWindow && !appLogWindow.isDestroyed()) {
-    if (appLogWindow.isMinimized()) {
-      appLogWindow.restore();
-    }
-    appLogWindow.show();
-    appLogWindow.focus();
+    showAndFocusAuxiliaryWindow(appLogWindow);
     return;
   }
 
@@ -41,9 +45,8 @@ export function showAppLogWindow(): void {
     minWidth: 700,
     minHeight: 500,
     show: false,
-    title: "Logs - PwrAgent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    title: LOGS_WINDOW_TITLE,
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -53,6 +56,8 @@ export function showAppLogWindow(): void {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, LOGS_WINDOW_TITLE);
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_APP_LOGS, [
@@ -67,9 +72,7 @@ export function showAppLogWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: LOGS_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    window.show();
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     appLogWindow = undefined;

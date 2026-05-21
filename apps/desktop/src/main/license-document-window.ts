@@ -15,6 +15,13 @@ import {
   themedWindowAdditionalArguments,
   themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  auxiliaryWindowChromeOptions,
+  hideAuxiliaryWindowMenuBar,
+  registerAuxiliaryWindowTitle,
+  showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
+} from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:license-document-window");
 const LICENSE_HASH = "license";
@@ -26,7 +33,7 @@ let thirdPartyNoticesWindow: BrowserWindow | undefined;
 export function showLicenseWindow(): void {
   showLicenseDocumentWindow({
     hash: LICENSE_HASH,
-    title: "MIT License - PwrAgent",
+    title: "License",
     windowRef: () => licenseWindow,
     setWindowRef: (window) => {
       licenseWindow = window;
@@ -37,7 +44,7 @@ export function showLicenseWindow(): void {
 export function showThirdPartyNoticesWindow(): void {
   showLicenseDocumentWindow({
     hash: THIRD_PARTY_NOTICES_HASH,
-    title: "Third-Party Notices - PwrAgent",
+    title: "Third-Party Notices",
     windowRef: () => thirdPartyNoticesWindow,
     setWindowRef: (window) => {
       thirdPartyNoticesWindow = window;
@@ -53,11 +60,7 @@ function showLicenseDocumentWindow(options: {
 }): void {
   const existingWindow = options.windowRef();
   if (existingWindow && !existingWindow.isDestroyed()) {
-    if (existingWindow.isMinimized()) {
-      existingWindow.restore();
-    }
-    existingWindow.show();
-    existingWindow.focus();
+    showAndFocusAuxiliaryWindow(existingWindow);
     return;
   }
 
@@ -69,8 +72,7 @@ function showLicenseDocumentWindow(options: {
     minHeight: 480,
     show: false,
     title: options.title,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 20, y: 18 },
+    ...auxiliaryWindowChromeOptions(),
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: getPreloadPath(),
@@ -80,6 +82,8 @@ function showLicenseDocumentWindow(options: {
       additionalArguments: themedWindowAdditionalArguments(appearance),
     },
   });
+  registerAuxiliaryWindowTitle(window, options.title);
+  hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_LICENSE_DOCUMENT, [
@@ -93,9 +97,7 @@ function showLicenseDocumentWindow(options: {
     void window.loadFile(rendererEntry.value, { hash: options.hash });
   }
 
-  window.once("ready-to-show", () => {
-    window.show();
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     options.setWindowRef(undefined);

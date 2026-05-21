@@ -16,14 +16,15 @@ export function LicenseDocumentWindow() {
   const documentKind = currentDocumentKind();
   const fallbackTitle =
     documentKind === "license" ? "MIT License" : "Third-Party Notices";
+  const windowTitle = documentKind === "license" ? "License" : fallbackTitle;
   const [licenseDocument, setLicenseDocument] = useState<
     AppLicenseDocument | undefined
   >();
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {
-    document.title = fallbackTitle;
-  }, [fallbackTitle]);
+    document.title = windowTitle;
+  }, [windowTitle]);
 
   useEffect(() => {
     let cancelled = false;

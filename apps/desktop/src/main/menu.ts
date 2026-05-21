@@ -3,6 +3,7 @@ import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
+  focusWindow: (windowId: number) => void;
   openDocumentation: () => void | Promise<void>;
   openIssueReporter: () => void | Promise<void>;
   openProfile: (profile: string) => void | Promise<void>;
@@ -17,11 +18,18 @@ export type ApplicationMenuActions = {
   showThirdPartyNoticesWindow: () => void;
 };
 
+export type ApplicationMenuWindow = {
+  focused: boolean;
+  id: number;
+  title: string;
+};
+
 export type ApplicationMenuOptions = {
   appName: string;
   developerMode: boolean;
   isMac: boolean;
   profiles: DesktopPwrAgentProfileSummary[];
+  windows: ApplicationMenuWindow[];
   actions: ApplicationMenuActions;
 };
 
@@ -34,7 +42,7 @@ export function buildApplicationMenuTemplate(
     { role: "editMenu" },
     buildViewMenu(options.developerMode),
     buildProfilesMenu(options),
-    { role: "windowMenu" },
+    buildWindowMenu(options),
     buildHelpMenu(options),
   ];
 }
@@ -139,6 +147,36 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
         label: "Manage Profiles…",
         click: options.actions.openProfilesSettings,
       },
+    ],
+  };
+}
+
+function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
+  if (options.isMac) {
+    return { role: "windowMenu" };
+  }
+
+  const windowItems: MenuItemConstructorOptions[] = options.windows.length
+    ? options.windows.map((window) => ({
+        label: window.title || "Untitled Window",
+        click: () => {
+          options.actions.focusWindow(window.id);
+        },
+      }))
+    : [
+        {
+          label: "No Open Windows",
+          enabled: false,
+        },
+      ];
+
+  return {
+    label: "Window",
+    submenu: [
+      { role: "minimize" },
+      { role: "close" },
+      { type: "separator" },
+      ...windowItems,
     ],
   };
 }

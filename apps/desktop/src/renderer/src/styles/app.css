@@ -501,6 +501,11 @@ textarea,
   border-bottom: none;
 }
 
+:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
+  .sidebar__masthead {
+  padding-left: 0;
+}
+
 /* .sidebar__identity removed — brand is direct child of masthead */
 
 .sidebar__masthead-actions {
@@ -750,13 +755,12 @@ textarea,
   background: var(--bg-app);
 }
 
-/* Title-bar strip — single-row chrome with stoplight clearance on
-   the left. Padding mirrors `.settings-nav__masthead` (10/0/0/96)
-   so the brand visually aligns with the macOS traffic-light center
-   on `titleBarStyle: "hiddenInset"` windows. The 96px left clearance
-   matches the effective Settings-nav left offset (16px nav padding +
-   80px masthead padding); stoplights end at ~x=72, brand lands at
-   x=96, giving 24px breathing room. */
+/* Title-bar strip — single-row chrome. Base padding keeps macOS
+   stoplight clearance on the left: `.settings-nav__masthead`
+   (10/0/0/96) alignment, stoplights end at ~x=72, brand lands at
+   x=96. Platforms without macOS/Windows chrome conventions override
+   the left padding below so auxiliary-window titles don't float
+   awkwardly away from the window edge. */
 .activity-titlebar {
   display: flex;
   align-items: center;
@@ -767,6 +771,11 @@ textarea,
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
   -webkit-app-region: drag;
+}
+
+:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
+  .activity-titlebar {
+  padding-left: 14px;
 }
 
 .activity-titlebar button,
@@ -3224,6 +3233,11 @@ textarea,
   min-height: 44px;
   padding: 10px 0 0 80px;
   -webkit-app-region: drag;
+}
+
+:root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
+  .settings-nav__masthead {
+  padding-left: 0;
 }
 
 .settings-nav__masthead * {
