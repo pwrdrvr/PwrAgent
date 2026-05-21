@@ -2591,6 +2591,9 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
+      throw new Error("A turn is already active for this thread.");
+    }
     // Race-safe flush: if a queued permission-mode change is still
     // pending when the user fires off the next turn (e.g. submit
     // immediately after the previous turn ended), apply it before
@@ -2689,6 +2692,12 @@ export class DesktopBackendRegistry {
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
+    if (params.backend === "codex" && activeTurnMode) {
+      this.activeCodexTurnModes.set(
+        buildActiveTurnModeKey(result.threadId, result.turnId),
+        activeTurnMode,
+      );
+    }
 
     if (
       turnParams.model !== undefined ||
@@ -2709,13 +2718,6 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    if (params.backend === "codex" && activeTurnMode) {
-      this.activeCodexTurnModes.set(
-        buildActiveTurnModeKey(result.threadId, result.turnId),
-        activeTurnMode,
-      );
-    }
-
     const response = {
       backend: params.backend,
       threadId: result.threadId,

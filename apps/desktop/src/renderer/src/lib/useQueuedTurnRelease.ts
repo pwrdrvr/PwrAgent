@@ -21,6 +21,7 @@ const TERMINAL_TURN_METHODS = new Set([
   "turn/cancelled",
 ]);
 const BACKGROUND_QUEUE_RELEASE_INTERVAL_MS = 30_000;
+const globalInFlightScopeKeys = new Set<string>();
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -62,6 +63,19 @@ function buildQueuedTurnInput(
       url: attachment.url,
     })),
   ];
+}
+
+function restoreQueuedTurn(
+  composerDraftStore: ComposerDraftStore,
+  scopeKey: string,
+  queuedTurn: ComposerQueuedTurnSnapshot,
+): void {
+  const current = composerDraftStore.getQueuedTurns(scopeKey);
+  if (current.some((entry) => entry.id === queuedTurn.id)) {
+    return;
+  }
+
+  composerDraftStore.setQueuedTurns(scopeKey, [queuedTurn, ...current]);
 }
 
 function readNotificationThreadId(event: AgentEvent): string | undefined {
@@ -138,7 +152,10 @@ export function useQueuedTurnRelease(params: {
   ): Promise<void> => {
     const current = paramsRef.current;
     const scopeKey = getThreadScopeKey(thread);
-    if (inFlightScopeKeysRef.current.has(scopeKey)) {
+    if (
+      inFlightScopeKeysRef.current.has(scopeKey) ||
+      globalInFlightScopeKeys.has(scopeKey)
+    ) {
       return;
     }
 
@@ -191,6 +208,7 @@ export function useQueuedTurnRelease(params: {
     }
 
     inFlightScopeKeysRef.current.add(scopeKey);
+    globalInFlightScopeKeys.add(scopeKey);
     try {
       if (options.verifyIdle) {
         const readThread = paramsRef.current.desktopApi?.readThread;
@@ -253,30 +271,63 @@ export function useQueuedTurnRelease(params: {
           return;
         }
 
-        await startReview({
-          backend: releaseThread.source,
-          threadId: releaseThread.id,
-          target: releaseQueuedSnapshot.reviewCommand.target,
-          delivery: "inline",
-        });
-        releaseState.composerDraftStore.removeQueuedTurnById(
-          scopeKey,
-          releaseQueuedSnapshot.id,
-        );
+        const claimedQueuedTurn =
+          releaseState.composerDraftStore.removeQueuedTurnById(
+            scopeKey,
+            releaseQueuedSnapshot.id,
+          );
+        if (!claimedQueuedTurn) {
+          return;
+        }
+        const reviewCommand = claimedQueuedTurn.reviewCommand;
+        if (!reviewCommand) {
+          restoreQueuedTurn(
+            releaseState.composerDraftStore,
+            scopeKey,
+            claimedQueuedTurn,
+          );
+          return;
+        }
+
+        try {
+          await startReview({
+            backend: releaseThread.source,
+            threadId: releaseThread.id,
+            target: reviewCommand.target,
+            delivery: "inline",
+          });
+        } catch (error) {
+          restoreQueuedTurn(
+            releaseState.composerDraftStore,
+            scopeKey,
+            claimedQueuedTurn,
+          );
+          throw error;
+        }
         return;
       }
 
-      const input = buildQueuedTurnInput(releaseQueuedSnapshot);
-      if (input.length === 0) {
+      const claimedQueuedTurn =
         releaseState.composerDraftStore.removeQueuedTurnById(
           scopeKey,
           releaseQueuedSnapshot.id,
         );
+      if (!claimedQueuedTurn) {
+        return;
+      }
+
+      const input = buildQueuedTurnInput(claimedQueuedTurn);
+      if (input.length === 0) {
         return;
       }
 
       const startTurn = desktopApi?.startTurn;
       if (!startTurn || !backend.capabilities.startTurn) {
+        restoreQueuedTurn(
+          releaseState.composerDraftStore,
+          scopeKey,
+          claimedQueuedTurn,
+        );
         return;
       }
 
@@ -295,31 +346,37 @@ export function useQueuedTurnRelease(params: {
             false
           : false;
 
-      await startTurn({
-        backend: releaseThread.source,
-        threadId: releaseThread.id,
-        input,
-        executionMode: releaseThread.executionMode,
-        model: selectedModelOption?.id,
-        reasoningEffort: supportsReasoning
-          ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
-          : undefined,
-        serviceTier:
-          releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
-        fastMode:
-          releaseThread.source === "codex" && supportsFast
-            ? Boolean(releaseThread.fastMode)
+      try {
+        await startTurn({
+          backend: releaseThread.source,
+          threadId: releaseThread.id,
+          input,
+          executionMode: releaseThread.executionMode,
+          model: selectedModelOption?.id,
+          reasoningEffort: supportsReasoning
+            ? getReasoningEffortValue(backend, releaseThread.reasoningEffort)
             : undefined,
-      });
-      releaseState.composerDraftStore.removeQueuedTurnById(
-        scopeKey,
-        releaseQueuedSnapshot.id,
-      );
+          serviceTier:
+            releaseThread.serviceTier ?? backend.launchpadOptions?.serviceTiers?.[0],
+          fastMode:
+            releaseThread.source === "codex" && supportsFast
+              ? Boolean(releaseThread.fastMode)
+              : undefined,
+        });
+      } catch (error) {
+        restoreQueuedTurn(
+          releaseState.composerDraftStore,
+          scopeKey,
+          claimedQueuedTurn,
+        );
+        throw error;
+      }
     } catch {
       // Keep the queued entry. The next terminal/idle notification or
       // periodic idle probe will retry without losing the user's request.
     } finally {
       inFlightScopeKeysRef.current.delete(scopeKey);
+      globalInFlightScopeKeys.delete(scopeKey);
     }
   };
 

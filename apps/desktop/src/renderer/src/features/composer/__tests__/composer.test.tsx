@@ -1237,13 +1237,6 @@ describe("Composer", () => {
       );
     });
 
-    fireEvent.click(
-      within(screen.getByLabelText("Queued message")).getByRole("button", {
-        name: "Edit",
-      })
-    );
-
-    expect(textarea).toHaveValue("First queued reply");
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Second queued reply"
     );
@@ -2305,6 +2298,63 @@ describe("Composer", () => {
     });
     expect(textarea).toHaveValue("Pending steer draft");
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
+  });
+
+  it("does not send a stale local queued turn after another release path claims it", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const thread = {
+      id: "thread-1",
+      title: "Claimed queue",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+      thread,
+    };
+    const { rerender } = render(
+      <Composer
+        {...props}
+        activeTurnId="turn-1"
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Queued elsewhere" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+
+    const scopeKey = "thread:codex:thread-1";
+    const queued = draftStore.getQueuedTurn(scopeKey);
+    expect(queued?.text).toBe("Queued elsewhere");
+    draftStore.removeQueuedTurnById(scopeKey, queued!.id);
+
+    rerender(
+      <Composer
+        {...props}
+        activeTurnId={undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Queued elsewhere")).not.toBeInTheDocument();
+    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("updates model settings without crashing when fast-mode support changes", async () => {

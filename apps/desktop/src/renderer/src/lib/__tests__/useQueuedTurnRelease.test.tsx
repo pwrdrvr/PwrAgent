@@ -205,6 +205,83 @@ describe("useQueuedTurnRelease", () => {
     ).toBe("Second background reply");
   });
 
+  it("claims a queued message once when duplicate release subscribers see the same completion", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-a",
+      turnId: "turn-next",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startTurn,
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurns("thread:codex:thread-a", [
+      {
+        id: "queued-1",
+        text: "First background reply",
+        imageAttachments: [],
+        input: [{ type: "text", text: "First background reply" }],
+      },
+      {
+        id: "queued-2",
+        text: "Second background reply",
+        imageAttachments: [],
+        input: [{ type: "text", text: "Second background reply" }],
+      },
+    ]);
+    const hookParams = {
+      backends: [backendSummary()],
+      composerDraftStore,
+      desktopApi,
+      selectedThread: thread("thread-b"),
+      threads: [thread("thread-a"), thread("thread-b")],
+    };
+
+    renderHook(() => useQueuedTurnRelease(hookParams));
+    renderHook(() => useQueuedTurnRelease(hookParams));
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-a",
+        input: [{ type: "text", text: "First background reply" }],
+      }),
+    );
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text,
+    ).toBe("Second background reply");
+  });
+
   it("releases a queued message for a non-focused thread when its status becomes idle", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn(async () => ({
@@ -496,7 +573,6 @@ describe("useQueuedTurnRelease", () => {
       );
     });
 
-    composerDraftStore.removeQueuedTurnAt("thread:codex:thread-a", 0);
     expect(
       composerDraftStore.getQueuedTurn("thread:codex:thread-a")?.text
     ).toBe("Second background reply");

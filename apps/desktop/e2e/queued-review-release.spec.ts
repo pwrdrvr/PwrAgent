@@ -173,6 +173,96 @@ async function createQueuedReviewReleaseFixture(): Promise<{
   };
 }
 
+async function createDuplicateTurnStartGuardFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  fixturePath: string;
+}> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-duplicate-turn-"));
+  const fixturePath = path.join(rootDir, "duplicate-turn-start.fixture.json");
+  const replay = {
+    entries: [],
+    messages: [],
+    pagination: {
+      supportsPagination: false,
+      hasPreviousPage: false,
+    },
+  };
+
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "duplicate-turn-start-guard",
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: { name: "Replay Codex", version: "1.0.0" },
+              methods: ["thread/list", "thread/read", "turn/start"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [
+              {
+                id: "thread-active",
+                title: "Active duplicate guard",
+                titleSource: "explicit",
+                summary: "Reject duplicate startTurn calls",
+                source: "codex",
+                executionMode: "default",
+                linkedDirectories: [],
+                updatedAt: 1_000,
+              },
+            ],
+          },
+          {
+            id: "thread-read-1",
+            kind: "response",
+            method: "thread/read",
+            result: replay,
+          },
+          {
+            id: "turn-start-1",
+            kind: "response",
+            method: "turn/start",
+            result: {
+              threadId: "thread-active",
+              turnId: "turn-active",
+            },
+          },
+          {
+            id: "turn-start-duplicate",
+            kind: "response",
+            method: "turn/start",
+            result: {
+              threadId: "thread-active",
+              turnId: "turn-duplicate",
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  return {
+    fixturePath,
+    cleanup: async () => {
+      await rm(rootDir, { recursive: true, force: true });
+    },
+  };
+}
+
 test("background queued review releases after active turn branch adoption", async () => {
   const fixture = await createQueuedReviewReleaseFixture();
   const app = await launchElectronApp({
@@ -232,6 +322,81 @@ test("background queued review releases after active turn branch adoption", asyn
         },
         delivery: "inline",
       });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("duplicate Codex turn starts are rejected while the thread is active", async () => {
+  const fixture = await createDuplicateTurnStartGuardFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    windowSize: { width: 1100, height: 760 },
+  });
+
+  try {
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Active duplicate guard",
+      }),
+    ).toBeVisible();
+
+    const first = await app.window.evaluate(async () => {
+      const api = (window as unknown as {
+        pwragent: {
+          startTurn: (request: {
+            backend: "codex";
+            executionMode: "default";
+            input: Array<{ type: "text"; text: string }>;
+            threadId: string;
+          }) => Promise<unknown>;
+        };
+      }).pwragent;
+      return await api.startTurn({
+        backend: "codex",
+        threadId: "thread-active",
+        input: [{ type: "text", text: "First queued release" }],
+        executionMode: "default",
+      });
+    });
+    expect(first).toMatchObject({
+      backend: "codex",
+      threadId: "thread-active",
+      turnId: "turn-active",
+    });
+
+    const second = await app.window.evaluate(async () => {
+      const api = (window as unknown as {
+        pwragent: {
+          startTurn: (request: {
+            backend: "codex";
+            executionMode: "default";
+            input: Array<{ type: "text"; text: string }>;
+            threadId: string;
+          }) => Promise<unknown>;
+        };
+      }).pwragent;
+      try {
+        const response = await api.startTurn({
+          backend: "codex",
+          threadId: "thread-active",
+          input: [{ type: "text", text: "First queued release" }],
+          executionMode: "default",
+        });
+        return { ok: true, response };
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+    expect(second).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("already active"),
+    });
   } finally {
     await app.close();
     await fixture.cleanup();
