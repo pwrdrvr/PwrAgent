@@ -22,6 +22,46 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("Hello world");
   });
 
+  it("reads ACP text content blocks from assistant chunks", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "OK." },
+      },
+    });
+
+    expect(replay.lastAssistantMessage).toBe("OK.");
+  });
+
+  it("records local user prompts as active replay state", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const activeReplay = normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "hello",
+      turnId: "pending:session-1",
+      receivedAt: 1000,
+    });
+    const idleReplay = normalizer.recordTurnFinished();
+
+    expect(activeReplay).toMatchObject({
+      lastUserMessage: "hello",
+      threadStatus: "active",
+    });
+    expect(activeReplay.messages).toEqual([
+      expect.objectContaining({
+        id: "user:pending:session-1",
+        role: "user",
+        text: "hello",
+      }),
+    ]);
+    expect(idleReplay.threadStatus).toBe("idle");
+  });
+
   it("upserts plans and tool activities", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

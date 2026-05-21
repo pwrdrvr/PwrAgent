@@ -18,6 +18,29 @@ export class AcpSessionReplayNormalizer {
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
 
+  recordUserPrompt(params: {
+    sessionId: string;
+    prompt: string;
+    turnId: string;
+    receivedAt?: number;
+  }): AppServerThreadReplay {
+    const createdAt = params.receivedAt ?? Date.now();
+    const id = `user:${params.turnId}`;
+    this.upsertMessage({
+      id,
+      role: "user",
+      text: params.prompt,
+      createdAt,
+    });
+    this.status = "active";
+    return this.replay();
+  }
+
+  recordTurnFinished(): AppServerThreadReplay {
+    this.status = "idle";
+    return this.replay();
+  }
+
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
@@ -45,7 +68,9 @@ export class AcpSessionReplayNormalizer {
     return {
       entries: this.entries,
       messages: this.messages,
-      lastUserMessage: undefined,
+      lastUserMessage: [...this.messages]
+        .reverse()
+        .find((message) => message.role === "user")?.text,
       lastAssistantMessage: [...this.messages]
         .reverse()
         .find((message) => message.role === "assistant")?.text,
@@ -58,35 +83,12 @@ export class AcpSessionReplayNormalizer {
   }
 
   private applyAgentMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
-    const text = readString(update.update, "content") ?? readString(update.update, "text") ?? "";
+    const text =
+      readContentText(update.update, "content") ??
+      readString(update.update, "text") ??
+      "";
     const id = readString(update.update, "messageId") ?? `assistant:${update.sessionId}`;
-    const existingMessage = this.messages.find((message) => message.id === id);
-    if (existingMessage) {
-      existingMessage.text += text;
-    } else {
-      this.messages.push({
-        id,
-        role: "assistant",
-        text,
-        createdAt,
-      });
-    }
-
-    const existingEntry = this.entries.find(
-      (entry): entry is AppServerThreadEntry & { type: "message" } =>
-        entry.type === "message" && entry.id === id,
-    );
-    if (existingEntry) {
-      existingEntry.text += text;
-    } else {
-      this.entries.push({
-        type: "message",
-        id,
-        role: "assistant",
-        text,
-        createdAt,
-      });
-    }
+    this.appendMessageChunk({ id, role: "assistant", text, createdAt });
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
@@ -115,6 +117,62 @@ export class AcpSessionReplayNormalizer {
     }
     this.entries[index] = entry;
   }
+
+  private upsertMessage(message: AppServerThreadMessage): void {
+    const existingMessageIndex = this.messages.findIndex(
+      (existing) => existing.id === message.id,
+    );
+    if (existingMessageIndex === -1) {
+      this.messages.push(message);
+    } else {
+      this.messages[existingMessageIndex] = message;
+    }
+
+    this.upsertEntry({
+      type: "message",
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+    });
+  }
+
+  private appendMessageChunk(params: {
+    id: string;
+    role: "assistant" | "user";
+    text: string;
+    createdAt: number;
+  }): void {
+    const existingMessage = this.messages.find(
+      (message) => message.id === params.id,
+    );
+    if (existingMessage) {
+      existingMessage.text += params.text;
+    } else {
+      this.messages.push({
+        id: params.id,
+        role: params.role,
+        text: params.text,
+        createdAt: params.createdAt,
+      });
+    }
+
+    const existingEntry = this.entries.find(
+      (entry): entry is AppServerThreadEntry & { type: "message" } =>
+        entry.type === "message" && entry.id === params.id,
+    );
+    if (existingEntry) {
+      existingEntry.text += params.text;
+    } else {
+      this.entries.push({
+        type: "message",
+        id: params.id,
+        role: params.role,
+        text: params.text,
+        createdAt: params.createdAt,
+      });
+    }
+  }
 }
 
 function readKind(update: Record<string, unknown>): string {
@@ -132,6 +190,23 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readContentText(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const content = value as Record<string, unknown>;
+  return content.type === "text" && typeof content.text === "string"
+    ? content.text
+    : undefined;
 }
 
 function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {

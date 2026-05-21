@@ -23,6 +23,7 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadReplay,
+  type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
@@ -925,6 +926,45 @@ function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThread
     source: session.backendId,
     executionMode: session.executionMode,
   };
+}
+
+function acpSessionLoadFallbackReplay(
+  session: AcpSessionMetadata,
+  error: unknown,
+): AppServerThreadReplay {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    entries: [
+      {
+        type: "activity",
+        id: `acp-load-failed:${session.sessionId}`,
+        createdAt: Date.now(),
+        summary: "ACP transcript unavailable",
+        status: "failed",
+        details: [
+          {
+            id: `acp-load-failed:${session.sessionId}:detail`,
+            kind: "read",
+            label: message,
+          },
+        ],
+      },
+    ],
+    messages: [],
+    pagination: {
+      supportsPagination: false,
+      hasPreviousPage: false,
+    },
+    threadStatus: acpSessionThreadStatus(session.status),
+  };
+}
+
+function acpSessionThreadStatus(
+  status: AcpSessionMetadata["status"],
+): AppServerThreadStatus {
+  return status === "active" || status === "idle" || status === "unknown"
+    ? status
+    : "unknown";
 }
 
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
@@ -2548,7 +2588,16 @@ export class DesktopBackendRegistry {
     }
 
     const client = await this.getAcpClient(backend);
-    return await client.loadSession(session);
+    try {
+      return await client.loadSession(session);
+    } catch (error) {
+      backendRegistryLog.warn("acp_session_load_failed", {
+        backend,
+        error: error instanceof Error ? error.message : String(error),
+        sessionId,
+      });
+      return acpSessionLoadFallbackReplay(session, error);
+    }
   }
 
   private async getAcpClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {

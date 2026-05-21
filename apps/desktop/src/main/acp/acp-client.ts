@@ -118,17 +118,31 @@ export class AcpAgentClient {
     sessionId: string;
     prompt: string;
   }): Promise<{ sessionId: string; turnId: string }> {
-    const result = await this.options.transport.request("session/prompt", {
+    const turnId = `pending:${params.sessionId}:${this.now()}`;
+    this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
-      prompt: textPrompt(params.prompt),
+      prompt: params.prompt,
+      turnId,
+      receivedAt: this.now(),
     });
+    let result: unknown;
+    try {
+      result = await this.options.transport.request("session/prompt", {
+        sessionId: params.sessionId,
+        prompt: textPrompt(params.prompt),
+      });
+    } catch (error) {
+      this.normalizerFor(params.sessionId).recordTurnFinished();
+      throw error;
+    }
+    this.normalizerFor(params.sessionId).recordTurnFinished();
     const record = asRecord(result);
     return {
       sessionId: params.sessionId,
       turnId:
         typeof record?.turnId === "string"
           ? record.turnId
-          : `pending:${params.sessionId}`,
+          : turnId,
     };
   }
 
@@ -158,20 +172,30 @@ export class AcpAgentClient {
     turnId?: string;
   }): { sessionId: string; turnId: string } {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
+    this.normalizerFor(params.sessionId).recordUserPrompt({
+      sessionId: params.sessionId,
+      prompt: params.prompt,
+      turnId,
+      receivedAt: this.now(),
+    });
     void this.options.transport
       .request("session/prompt", {
         sessionId: params.sessionId,
         prompt: textPrompt(params.prompt),
       })
-      .catch((error) =>
-        Promise.resolve(
+      .then(() => {
+        this.normalizerFor(params.sessionId).recordTurnFinished();
+      })
+      .catch((error) => {
+        this.normalizerFor(params.sessionId).recordTurnFinished();
+        return Promise.resolve(
           this.options.onPromptError?.({
             sessionId: params.sessionId,
             turnId,
             error,
           }),
-        ).catch(() => undefined),
-      );
+        ).catch(() => undefined);
+      });
     return {
       sessionId: params.sessionId,
       turnId,

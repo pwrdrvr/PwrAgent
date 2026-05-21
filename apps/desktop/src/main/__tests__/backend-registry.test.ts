@@ -1686,6 +1686,84 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps stored ACP sessions readable when the agent cannot reload them", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "Stored Gemini Thread",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 3000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(async () => {
+        throw new Error("No previous sessions found for this project.");
+      }),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      replay: {
+        entries: [
+          expect.objectContaining({
+            type: "activity",
+            summary: "ACP transcript unavailable",
+            status: "failed",
+          }),
+        ],
+        threadStatus: "idle",
+      },
+    });
+    expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+
+    await registry.close();
+  });
+
   it("reads Codex models once from the default client and reuses them", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

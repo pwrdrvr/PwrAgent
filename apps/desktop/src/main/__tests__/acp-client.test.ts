@@ -110,11 +110,16 @@ describe("AcpAgentClient", () => {
       sessionId: session.sessionId,
       prompt: "keep going",
     });
+    const activeReplay = client.readReplay(session.sessionId);
     await client.cancelSession(session.sessionId);
 
     expect(prompt).toEqual({
       sessionId: "session-1",
       turnId: "pending:session-1:1000",
+    });
+    expect(activeReplay).toMatchObject({
+      lastUserMessage: "keep going",
+      threadStatus: "active",
     });
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
