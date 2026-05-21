@@ -151,6 +151,16 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
+  const revealSelectedThreadInList = useCallback(() => {
+    const selectedRow = document.querySelector<HTMLElement>(
+      ".sidebar .thread-row.is-selected",
+    );
+    selectedRow?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
+    });
+  }, []);
   const settings = props.settings;
   const normalAppEnabled =
     !desktopApi?.readSettings ||
@@ -368,6 +378,7 @@ function DesktopAppShell(props: {
       }
     },
     onOpenMessagingActivity: openMessagingActivityWindow,
+    onRevealSelectedThreadInList: revealSelectedThreadInList,
     onHandoffThreadWorkspace: navigation.selectedThread
       ? async (request) =>
           await navigation.handoffThreadWorkspace(

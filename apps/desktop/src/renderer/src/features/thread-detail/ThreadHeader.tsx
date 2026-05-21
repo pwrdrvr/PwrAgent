@@ -10,9 +10,11 @@ import type { DesktopApi } from "../../lib/desktop-api";
 
 type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
+  projectLabel?: string;
   thread: NavigationThreadSummary;
   /** Forwarded to MessagingStatusBar — fires when a platform chip is clicked. */
   onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
+  onRevealSelectedThreadInList?: () => void;
 };
 
 function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
@@ -26,6 +28,7 @@ function missingDirectoryPath(thread: NavigationThreadSummary): string | undefin
 
 export function ThreadHeader(props: ThreadHeaderProps) {
   const missingPath = missingDirectoryPath(props.thread);
+  const projectLabel = props.projectLabel?.trim();
   const branchDrifted = isBranchDrifted(
     props.thread.gitBranch,
     props.thread.observedGitBranch,
@@ -35,9 +38,37 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     <header className="thread-header">
       <div className="thread-header__main">
         <div className="thread-header__eyebrow-row">
-          <h2 className="thread-header__compact-title" title={props.thread.title}>
-            {props.thread.title}
-          </h2>
+          <div className="thread-header__breadcrumb">
+            {projectLabel ? (
+              <>
+                <span className="thread-header__eyebrow" title={projectLabel}>
+                  {projectLabel}
+                </span>
+                <span aria-hidden="true" className="thread-header__separator">
+                  ›
+                </span>
+              </>
+            ) : null}
+            <h2
+              aria-label={props.thread.title}
+              className="thread-header__compact-title"
+              title={props.thread.title}
+            >
+              {props.onRevealSelectedThreadInList ? (
+                <button
+                  aria-label="Show selected thread in thread list"
+                  className="thread-header__title-button"
+                  title="Show in thread list"
+                  type="button"
+                  onClick={props.onRevealSelectedThreadInList}
+                >
+                  {props.thread.title}
+                </button>
+              ) : (
+                props.thread.title
+              )}
+            </h2>
+          </div>
           <span className="chip chip--backend">
             {formatBackendLabel(props.thread.source)}
           </span>

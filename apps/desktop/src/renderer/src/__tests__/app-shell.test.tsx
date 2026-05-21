@@ -407,6 +407,11 @@ describe("App", () => {
 
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
     const listSkills = vi.fn(async () => ({
       backend: "codex" as const,
       fetchedAt: Date.now(),
@@ -676,6 +681,16 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show selected thread in thread list",
+      }),
+    );
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+      inline: "nearest",
+    });
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(await screen.findByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();

@@ -810,6 +810,7 @@ export type ThreadViewProps = {
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader → MessagingStatusBar — opens the Activity screen. */
   onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
+  onRevealSelectedThreadInList?: () => void;
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
@@ -1989,8 +1990,10 @@ export function ThreadView(props: ThreadViewProps) {
     >
       <ThreadHeader
         desktopApi={props.desktopApi}
+        projectLabel={props.selectedDirectory?.label}
         thread={selectedThread!}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
+        onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       />
 
       <div
