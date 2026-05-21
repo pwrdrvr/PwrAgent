@@ -595,12 +595,29 @@ export function startProfileRuntimeHeartbeat(
   const markerDir = resolveProfileRuntimeMarkerDir(profileName, options);
   fs.mkdirSync(markerDir, { recursive: true });
   const markerPath = path.join(markerDir, `${processId}-${marker.instanceId}.json`);
+  let interval: ReturnType<typeof setInterval> | undefined;
   const writeMarker = (): void => {
     marker.heartbeatAt = now();
-    writeJsonAtomic(markerPath, marker);
+    try {
+      writeJsonAtomic(markerPath, marker);
+    } catch (error) {
+      // The marker directory can vanish underneath us if the
+      // profile is deleted, the `~/.pwragent` root is rm-rf'd
+      // (E2E test cleanup; user moves their data dir; etc).
+      // ENOENT here is recoverable: stop the interval rather than
+      // throw an uncaught exception that pops a fatal Electron
+      // error dialog. Re-creating the dir + retrying would just
+      // race the deleter; let the heartbeat die quietly.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+        if (interval) clearInterval(interval);
+        return;
+      }
+      throw error;
+    }
   };
   writeMarker();
-  const interval = setInterval(
+  interval = setInterval(
     writeMarker,
     options?.intervalMs ?? PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS,
   );
@@ -609,8 +626,12 @@ export function startProfileRuntimeHeartbeat(
   return {
     markerPath,
     stop: () => {
-      clearInterval(interval);
-      fs.rmSync(markerPath, { force: true });
+      if (interval) clearInterval(interval);
+      try {
+        fs.rmSync(markerPath, { force: true });
+      } catch {
+        // Heartbeat dir already cleaned up — see comment above.
+      }
     },
   };
 }

@@ -531,9 +531,20 @@ function DesktopAppShell(props: {
             // Mark onboarding complete AND kick off the deferred Codex
             // `listThreads` prefetch in one IPC call (#500). On replay,
             // skip the call entirely — replays don't touch onboarding.
+            //
+            // In bootstrap mode (#524), skip this too. The bootstrap
+            // window is about to quit; firing
+            // `completeOnboardingCodexBootstrap` here would (a) write
+            // `[onboarding] completed = true` to `.bootstrap/config.toml`
+            // (which we're about to delete) and (b) trigger a Codex
+            // `listThreads` against the system default Codex install,
+            // contaminating the soon-to-quit window with the operator's
+            // real Codex Desktop threads. The new profile's window
+            // handles its own completion + prefetch on launch.
             if (!onboardingOpen) return;
             if (
               onboardingOpen !== "replay" &&
+              bootInfo?.mode !== "bootstrap" &&
               desktopApi?.completeOnboardingCodexBootstrap
             ) {
               await desktopApi.completeOnboardingCodexBootstrap({
