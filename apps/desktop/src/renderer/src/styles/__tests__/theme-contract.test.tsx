@@ -503,6 +503,15 @@ describe("Tangerine Terminal theme contract", () => {
     expect(activityCurrent).toContain("color: var(--text-primary);");
   });
 
+  it("drops the auxiliary titlebar stoplight gutter outside macOS and Windows", () => {
+    const activityTitlebar = extractRuleBody(css, ".activity-titlebar");
+
+    expect(activityTitlebar).toContain("padding: 10px 14px 0 96px;");
+    expect(css).toMatch(
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
+    );
+  });
+
   it("mirrors thread-row drop-indicator + recents divider tokens for directory pinning", () => {
     // Plan 2026-05-09-002 Units L + P. The directory-pin CSS is
     // explicitly a steal-the-pattern of the thread-pin CSS: the

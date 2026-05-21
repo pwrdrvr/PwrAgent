@@ -33,9 +33,13 @@ const desktopApi = (
           density: DesktopAppearanceDensity;
         }) => void,
       ) => () => void;
+      platform?: string;
     };
   }
 ).pwragent;
+if (desktopApi?.platform) {
+  document.documentElement.dataset.platform = desktopApi.platform;
+}
 const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
   (appearance) => {
     applyAppearanceAttributes(
