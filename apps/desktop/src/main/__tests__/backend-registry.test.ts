@@ -963,8 +963,12 @@ function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
 
 function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
   return {
-    listSessions: (backendId: string) =>
-      records.filter((record) => record.backendId === backendId),
+    listSessions: (backendId: string, params?: { archived?: boolean }) =>
+      records.filter(
+        (record) =>
+          record.backendId === backendId &&
+          Boolean(record.archivedAt) === (params?.archived === true),
+      ),
     getSession: (backendId: string, sessionId: string) =>
       records.find(
         (record) =>
@@ -1399,6 +1403,86 @@ describe("DesktopBackendRegistry", () => {
       expect.objectContaining({
         id: "session-1",
         source: "acp:gemini",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("archives and restores persisted ACP sessions locally", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "Gemini ACP Thread",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 3000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+    });
+
+    await expect(
+      registry.archiveThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      cleanup: [],
+    });
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([]);
+    await expect(
+      registry.listThreads({ backend: acpBackendId, archived: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        archivedAt: expect.any(Number),
+      }),
+    ]);
+
+    await expect(
+      registry.restoreThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      worktrees: [],
+    });
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        archivedAt: undefined,
       }),
     ]);
 

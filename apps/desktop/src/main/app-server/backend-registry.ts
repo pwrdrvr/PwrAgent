@@ -859,8 +859,8 @@ function buildAcpCapabilities(): BackendCapabilities {
     listThreads: true,
     createThread: true,
     resumeThread: true,
-    archiveThread: false,
-    restoreThread: false,
+    archiveThread: true,
+    restoreThread: true,
     archiveWorktree: false,
     restoreWorktree: false,
     renameThread: false,
@@ -935,6 +935,7 @@ function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThread
     titleSource: "explicit",
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
+    archivedAt: session.archivedAt,
     linkedDirectories: session.cwd
       ? [
           {
@@ -2441,7 +2442,11 @@ export class DesktopBackendRegistry {
     }
 
     if (params.backend && isAcpBackendId(params.backend)) {
-      return this.listInstalledAcpThreads(params.backend, params.filter);
+      return this.listInstalledAcpThreads(
+        params.backend,
+        params.filter,
+        params.archived,
+      );
     }
 
     const threadLists = await Promise.all([
@@ -2459,7 +2464,7 @@ export class DesktopBackendRegistry {
         enrichDirectories: params.enrichDirectories,
         filter: params.filter,
       }).catch(() => []),
-      this.listAllInstalledAcpThreads(params.filter),
+      this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
     return threadLists
@@ -2548,21 +2553,23 @@ export class DesktopBackendRegistry {
 
   private async listAllInstalledAcpThreads(
     filter?: string,
+    archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
     return (await this.listAvailableAcpAgents()).flatMap((agent) =>
-      this.listInstalledAcpThreads(agent.backendId, filter),
+      this.listInstalledAcpThreads(agent.backendId, filter, archived),
     );
   }
 
   private listInstalledAcpThreads(
     backendId: AppServerBackendKind,
     filter?: string,
+    archived?: boolean,
   ): AppServerThreadSummary[] {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
     const normalizedFilter = filter?.trim().toLowerCase();
-    return (this.acpSessionStore?.listSessions(backendId) ?? [])
+    return (this.acpSessionStore?.listSessions(backendId, { archived }) ?? [])
       .map((session) => acpSessionToThreadSummary(session))
       .filter(
         (thread) =>
@@ -2738,6 +2745,12 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (isAcpBackendId(backend)) {
+      return await this.archiveAcpThread({
+        backend,
+        threadId: request.threadId,
+      });
+    }
     let thread: AppServerThreadSummary | undefined;
     let cleanupMetadataError: string | undefined;
     try {
@@ -2816,6 +2829,12 @@ export class DesktopBackendRegistry {
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (isAcpBackendId(backend)) {
+      return await this.restoreAcpThread({
+        backend,
+        threadId: request.threadId,
+      });
+    }
     const archivedThread = await this.findThreadForRestoreWorktrees({
       backend,
       threadId: request.threadId,
@@ -2842,6 +2861,70 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       restoredAt: Date.now(),
       worktrees,
+    };
+  }
+
+  private async archiveAcpThread(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<ArchiveThreadResponse> {
+    const store = this.acpSessionStore;
+    if (!store?.upsertSession) {
+      throw new Error("ACP session store is unavailable.");
+    }
+    const session = store.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP thread not found: ${params.threadId}`);
+    }
+    const archivedAt = Date.now();
+    store.upsertSession({
+      ...session,
+      archivedAt,
+      updatedAt: Math.max(session.updatedAt, archivedAt),
+    });
+    this.invalidateThreadListCache(params.backend);
+    await this.cleanupMessagingForArchivedThread({
+      backend: params.backend,
+      threadId: params.threadId,
+      origin: "thread-archive",
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      archivedAt,
+      cleanup: [],
+    };
+  }
+
+  private async restoreAcpThread(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<RestoreThreadResponse> {
+    const store = this.acpSessionStore;
+    if (!store?.upsertSession) {
+      throw new Error("ACP session store is unavailable.");
+    }
+    const session = store.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP thread not found: ${params.threadId}`);
+    }
+    const restoredAt = Date.now();
+    const restoredSession = { ...session };
+    delete restoredSession.archivedAt;
+    store.upsertSession({
+      ...restoredSession,
+      updatedAt: Math.max(session.updatedAt, restoredAt),
+    });
+    this.invalidateThreadListCache(params.backend);
+    this.clearArchivedMessagingCleanupCache({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      restoredAt,
+      worktrees: [],
     };
   }
 

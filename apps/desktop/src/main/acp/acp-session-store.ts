@@ -10,6 +10,7 @@ export type AcpSessionMetadata = {
   updatedAt: number;
   executionMode: ThreadExecutionMode;
   status: "active" | "idle" | "failed" | "unknown";
+  archivedAt?: number;
   lastError?: string;
   transcriptUpdates?: AcpPersistedTranscriptUpdate[];
 };
@@ -43,7 +44,10 @@ export class AcpSessionStore {
       );
   }
 
-  listSessions(backendId: AcpBackendId): AcpSessionMetadata[] {
+  listSessions(
+    backendId: AcpBackendId,
+    params?: { archived?: boolean },
+  ): AcpSessionMetadata[] {
     const rows = this.stateDb.raw
       .prepare(
         `SELECT payload FROM acp_sessions
@@ -51,9 +55,13 @@ export class AcpSessionStore {
          ORDER BY updated_at DESC`,
       )
       .all(backendId) as Array<{ payload: string }>;
+    const archived = params?.archived === true;
     return rows.flatMap((row) => {
       const parsed = parseJson(row.payload);
-      return isSessionMetadata(parsed) ? [parsed] : [];
+      if (!isSessionMetadata(parsed)) {
+        return [];
+      }
+      return Boolean(parsed.archivedAt) === archived ? [parsed] : [];
     });
   }
 
