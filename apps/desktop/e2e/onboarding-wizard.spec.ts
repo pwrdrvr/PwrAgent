@@ -281,7 +281,7 @@ test.describe("Onboarding wizard", () => {
       // persistAndComplete fires:
       //   - provisionPairedProfiles → personal + work
       //   - writeSecretsToProfile per profile
-      //   - graduateBootstrapToProfile(personal)
+      //   - graduateBootstrapConfigToProfile(personal)
       //   - openPwrAgentProfile(personal) — spawns new Electron
       //   - quitApp() — closes THIS Electron
       // Wait for the bootstrap process to exit. Playwright surfaces

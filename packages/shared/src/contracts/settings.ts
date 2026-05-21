@@ -767,10 +767,25 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
 };
 
 /**
- * Graduate the bootstrap profile (`.bootstrap/`) into a real profile.
- * Called by the wizard's Finish path when the boot decision routed
- * the app into bootstrap mode (no profile configured, or env/CLI
- * named a missing profile).
+ * Graduate ONLY THE CONFIG of the bootstrap profile (`.bootstrap/`)
+ * into a real profile — the `config.toml` payload (theme, density,
+ * messaging acknowledgment, etc) plus the registry's
+ * `default_profile` pointer.
+ *
+ * **Does NOT graduate secrets.** The wizard buffers secrets in
+ * renderer memory and graduates them via the separate
+ * `writeSecretsToProfile` IPC. This IPC's name is intentionally
+ * scoped (`Config`, not just `Bootstrap`) so a future caller can't
+ * accidentally graduate config and lose secrets by calling only
+ * this primitive. The wizard's Finish path calls
+ * `writeSecretsToProfile` THEN `graduateBootstrapConfigToProfile`
+ * in that order; reverse it and secrets land in `.bootstrap/`
+ * before it gets reaped.
+ *
+ * **Does NOT close the bootstrap window or open a new window for the
+ * target profile** — the caller still does that via
+ * `openPwrAgentProfile`. Splitting those responsibilities keeps
+ * the IPC purely about data graduation.
  *
  * Semantics:
  *   - When the main process is NOT in bootstrap mode, this is a
@@ -781,11 +796,6 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
  *     bootstrap-only fields like `onboarding.completed`), set
  *     `profiles.toml::default_profile = targetProfile`, and mark
  *     the `.bootstrap/` dir for cleanup on the next boot.
- *
- * Does NOT close the bootstrap window or open a new window for the
- * target profile — the caller still does that via `openPwrAgentProfile`.
- * Splitting those responsibilities keeps the IPC purely about data
- * graduation.
  */
 /**
  * Write one or more secrets to a specific profile's keychain. Used by
@@ -882,11 +892,11 @@ export type DesktopBootInfo = {
   activeProfileName?: string;
 };
 
-export type GraduateDesktopBootstrapToProfileRequest = {
+export type GraduateDesktopBootstrapConfigToProfileRequest = {
   targetProfile: string;
 };
 
-export type GraduateDesktopBootstrapToProfileResponse = {
+export type GraduateDesktopBootstrapConfigToProfileResponse = {
   graduated: boolean;
   /** Populated when `graduated === false` to explain why. The wizard
    *  uses this to log diagnostics; operator-facing UI just ignores

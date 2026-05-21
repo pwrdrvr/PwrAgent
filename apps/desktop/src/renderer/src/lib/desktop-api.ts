@@ -143,8 +143,8 @@ import type {
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
   DesktopBootInfo,
-  GraduateDesktopBootstrapToProfileRequest,
-  GraduateDesktopBootstrapToProfileResponse,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
   WaitForDesktopProfileAliveRequest,
@@ -210,12 +210,16 @@ export type DesktopApi = {
   setPwrAgentProfileCodexProfile?: (
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ) => Promise<SetDesktopPwrAgentProfileCodexProfileResponse>;
-  /** Graduate the bootstrap profile's settings to the target real
-   *  profile. No-op when the main process isn't in bootstrap mode —
-   *  the wizard calls it unconditionally on Finish. */
-  graduateBootstrapToProfile?: (
-    request: GraduateDesktopBootstrapToProfileRequest,
-  ) => Promise<GraduateDesktopBootstrapToProfileResponse>;
+  /** Graduate ONLY the bootstrap profile's `config.toml` to the
+   *  target real profile (theme, density, messaging acknowledgment,
+   *  etc). Does NOT graduate secrets — call `writeSecretsToProfile`
+   *  separately for those. The wizard's Finish path calls
+   *  `writeSecretsToProfile` THEN this IPC; reversing the order
+   *  strands secrets in `.bootstrap/`. No-op when the main process
+   *  isn't in bootstrap mode (safe to call unconditionally). */
+  graduateBootstrapConfigToProfile?: (
+    request: GraduateDesktopBootstrapConfigToProfileRequest,
+  ) => Promise<GraduateDesktopBootstrapConfigToProfileResponse>;
   /** Write secrets directly to a specific profile's keychain. The
    *  wizard uses this on Finish to graduate in-memory secret values
    *  (xAI API key, messaging tokens) to the operator's chosen

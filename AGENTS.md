@@ -64,6 +64,13 @@
 - Removed env vars (no longer honored): `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`, `GROK_APP_SERVER_STATE_ROOT`.
 - Multiple instances can share the same profile DB safely (sqlite WAL mode); no lockfile needed.
 
+### Dev-only env vars
+
+These are **dev-only escape hatches**. They are silently ignored in packaged production builds (`app.isPackaged === true`); production operators MUST NOT set them. Each is rejected at startup with a `mainLog.error` line if it appears alongside a packaged build, then treated as unset.
+
+- `PWRAGENT_PROFILE_AUTO_CREATE=1` — Bypass the onboarding wizard's "set up profile" prompt for missing-named-profile boots. Used by E2E fixtures and replay harnesses that need a profile dir materialized without operator interaction. Production launches MUST go through the wizard so an operator never gets a silently-created profile mapped to a Codex auth profile they didn't ask for (see issue #524).
+- `PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1` — Skip `safeStorage` operations entirely. Wizard typed secrets are SILENTLY DROPPED; settings-screen secret pills report "unavailable." Workaround for unsigned dev Electron builds on macOS that surface a confusing "Keychain Not Found" dialog because the binary lacks a stable code-signed identity (signed release builds don't have this problem). Operator re-enters secrets in Settings → Models on a real build afterwards.
+
 ## Frontend and Desktop UI
 
 - For renderer UI work, follow the desktop style guide before inventing local styling.

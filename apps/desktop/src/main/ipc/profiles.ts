@@ -7,8 +7,8 @@ import type {
   CreateDesktopPwrAgentProfileResponse,
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
-  GraduateDesktopBootstrapToProfileRequest,
-  GraduateDesktopBootstrapToProfileResponse,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
   ListDesktopPwrAgentProfilesResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
@@ -22,7 +22,7 @@ import type {
 import {
   PROFILES_CREATE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
-  PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
@@ -265,13 +265,17 @@ export async function deleteDesktopPwrAgentProfile(
  *     true })`, which already wrote `[onboarding] completed = true`.
  *     Copying the bootstrap profile's `completed = false` over that
  *     would re-fire the wizard on the next launch.
+ *   - **Secrets.** The wizard buffers typed secrets (xAI API key,
+ *     messaging tokens) in renderer memory and graduates them via
+ *     the separate `writeSecretsToProfile` IPC. This IPC's name is
+ *     intentionally scoped (`Config`, not `Bootstrap`) so a future
+ *     caller can't graduate config and silently lose the operator's
+ *     secrets by calling only this primitive. The wizard's order is
+ *     `writeSecretsToProfile` THEN
+ *     `graduateBootstrapConfigToProfile` — reverse it and secrets
+ *     land in `.bootstrap/` before it gets reaped.
  *   - Per-profile state (state.db rows, runtime markers). Bootstrap
- *     state.db is intentionally throwaway. Operator's wizard
- *     choices that go through `replaceSecret` (e.g. xAI API key)
- *     are stored in the keychain via DbBackedSafeStorageSecretStore,
- *     keyed on the active state.db. Graduating secrets is a Task E
- *     follow-up — for now, the operator re-enters them in the new
- *     profile's Settings → Models if needed.
+ *     state.db is intentionally throwaway.
  *
  * On success: also writes `profiles.toml::default_profile =
  * targetProfile`, so the next boot opens directly into the chosen
@@ -279,9 +283,9 @@ export async function deleteDesktopPwrAgentProfile(
  * stays on disk; the next boot's `cleanupBootstrapProfile()` call
  * removes it.
  */
-export function graduateDesktopBootstrapToProfile(
-  request: GraduateDesktopBootstrapToProfileRequest,
-): GraduateDesktopBootstrapToProfileResponse {
+export function graduateDesktopBootstrapConfigToProfile(
+  request: GraduateDesktopBootstrapConfigToProfileRequest,
+): GraduateDesktopBootstrapConfigToProfileResponse {
   const targetProfile = request.targetProfile.trim();
   if (!isValidProfileName(targetProfile)) {
     throw new Error(`Invalid profile name "${targetProfile}".`);
@@ -361,8 +365,14 @@ export function writeDesktopSecretsToProfile(
   // need to re-enter them in Settings → Models post-graduation.
   // Acceptable in dev; production builds shouldn't set this.
   if (isSecretStorageDisabledByEnv()) {
-    profilesIpcLog.info(
-      "writeDesktopSecretsToProfile skipped — secret storage disabled by env",
+    // WARN, not info — typed secrets are silently dropped here, and
+    // the operator should be made aware (via app log or support
+    // bundle) that their key paste didn't actually land in the
+    // keychain. Production builds wouldn't get here at all because
+    // `rejectDevOnlyEnvVarsInProduction()` in index.ts clears the
+    // env var on packaged launches.
+    profilesIpcLog.warn(
+      "writeDesktopSecretsToProfile SKIPPED — secret storage disabled by env (typed values dropped)",
       { profile },
     );
     return { profile, written: [] };
@@ -497,14 +507,14 @@ export function registerProfilesIpcHandlers(
       await setDesktopPwrAgentProfileCodexProfile(request),
   );
 
-  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL);
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL);
   ipcMain.handle(
-    PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
+    PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
     async (
       _event,
-      request: GraduateDesktopBootstrapToProfileRequest,
-    ): Promise<GraduateDesktopBootstrapToProfileResponse> => {
-      const response = graduateDesktopBootstrapToProfile(request);
+      request: GraduateDesktopBootstrapConfigToProfileRequest,
+    ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> => {
+      const response = graduateDesktopBootstrapConfigToProfile(request);
       if (response.graduated) {
         options.onProfilesChanged?.();
       }
@@ -530,6 +540,6 @@ export function disposeProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_SET_DEFAULT_CHANNEL);
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
-  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL);
+  ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL);
   ipcMain.removeHandler(PROFILES_WRITE_SECRETS_CHANNEL);
 }

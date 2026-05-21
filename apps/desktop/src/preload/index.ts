@@ -137,8 +137,8 @@ import type {
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
   DesktopBootInfo,
-  GraduateDesktopBootstrapToProfileRequest,
-  GraduateDesktopBootstrapToProfileResponse,
+  GraduateDesktopBootstrapConfigToProfileRequest,
+  GraduateDesktopBootstrapConfigToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
   WaitForDesktopProfileAliveRequest,
@@ -248,7 +248,7 @@ import {
   APP_QUIT_CHANNEL,
   APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
   PROFILES_DELETE_CHANNEL,
-  PROFILES_GRADUATE_BOOTSTRAP_CHANNEL,
+  PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
@@ -382,10 +382,10 @@ const desktopApi = Object.freeze({
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
-  graduateBootstrapToProfile: async (
-    request: GraduateDesktopBootstrapToProfileRequest,
-  ): Promise<GraduateDesktopBootstrapToProfileResponse> =>
-    await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL, request),
+  graduateBootstrapConfigToProfile: async (
+    request: GraduateDesktopBootstrapConfigToProfileRequest,
+  ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL, request),
   writeSecretsToProfile: async (
     request: WriteDesktopSecretsToProfileRequest,
   ): Promise<WriteDesktopSecretsToProfileResponse> =>

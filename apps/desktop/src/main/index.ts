@@ -94,12 +94,14 @@ import { buildApplicationMenuTemplate } from "./menu";
 import {
   assertUnreachableProfileBootDecision,
   cleanupBootstrapProfile,
+  PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   resolveActiveProfileName,
   resolveProfileBootDecision,
   startProfileFocusRequestWatcher,
   type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
+import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -321,7 +323,38 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/**
+ * In packaged builds, refuse to honor dev-only env vars even if the
+ * operator has set them in their shell. These vars have privacy /
+ * security implications (silent profile creation, dropped secrets)
+ * that are acceptable in dev but never in production.
+ *
+ * The trick is `delete process.env.X` — any subsequent reader will
+ * see undefined and behave as if it was never set. Logging at error
+ * level surfaces the misuse loudly in the app log (which the
+ * support flow already collects). Called once at process start,
+ * before `initializeMainLogger` so the log file the operator picks
+ * up records the rejection.
+ */
+function rejectDevOnlyEnvVarsInProduction(): void {
+  if (!app.isPackaged) return;
+  const devOnlyVars = [
+    PWRAGENT_PROFILE_AUTO_CREATE_ENV,
+    SECRET_STORAGE_DISABLED_ENV,
+  ];
+  for (const name of devOnlyVars) {
+    if (process.env[name] !== undefined) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[pwragent] Refusing to honor dev-only env var ${name} in a packaged build. Unsetting.`,
+      );
+      delete process.env[name];
+    }
+  }
+}
+
 export function bootstrapApp(): void {
+  rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
   app.setAboutPanelOptions({
     applicationName: APP_NAME,

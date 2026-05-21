@@ -12,6 +12,11 @@ export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
  * through the wizard so the operator never gets a silently-created
  * profile mapped to a Codex auth profile they didn't ask for (see
  * issue #524).
+ *
+ * **Dev-only.** `rejectDevOnlyEnvVarsInProduction()` in
+ * `index.ts` clears this env var on packaged builds before the
+ * resolver runs, so an operator who copy-pastes a Stack-Overflow
+ * tip into their shell profile can't silently disable the wizard.
  */
 export const PWRAGENT_PROFILE_AUTO_CREATE_ENV = "PWRAGENT_PROFILE_AUTO_CREATE";
 

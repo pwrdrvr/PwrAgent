@@ -27,7 +27,7 @@ const bootInfoLog = getMainLogger("pwragent:boot-info");
  *
  *   - `mode: "bootstrap"` means the wizard is running against the
  *     throwaway `.bootstrap/` profile and its Finish path must
- *     graduate to a real profile (see `graduateBootstrapToProfile`).
+ *     graduate to a real profile (see `graduateBootstrapConfigToProfile`).
  *   - `decisionKind: "missing-named-profile"` + `requestedProfileName`
  *     means the operator launched with `--profile=foo` or
  *     `PWRAGENT_PROFILE=foo` and `foo` doesn't exist. The wizard

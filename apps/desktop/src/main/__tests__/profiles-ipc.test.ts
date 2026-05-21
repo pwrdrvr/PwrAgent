@@ -44,7 +44,7 @@ const getAppStateModeMock = vi.fn<() => "active-profile" | "bootstrap" | null>(
   () => "active-profile",
 );
 vi.mock("../state/app-state", () => ({
-  // graduateDesktopBootstrapToProfile branches on this; default to
+  // graduateDesktopBootstrapConfigToProfile branches on this; default to
   // active-profile so the pre-existing tests stay no-op-only on the
   // graduation path. Tests that want to exercise the bootstrap branch
   // override this mock per-case.
@@ -264,7 +264,7 @@ describe("profile IPC helpers", () => {
     expect(contents).toContain('completed_source = "wizard"');
   });
 
-  describe("graduateDesktopBootstrapToProfile", () => {
+  describe("graduateDesktopBootstrapConfigToProfile", () => {
     afterEach(() => {
       getAppStateModeMock.mockReset();
       getAppStateModeMock.mockReturnValue("active-profile");
@@ -275,9 +275,9 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("active-profile");
 
-      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
       expect(result).toEqual({
         graduated: false,
@@ -293,9 +293,9 @@ describe("profile IPC helpers", () => {
       vi.stubEnv(PWRAGENT_HOME_ENV, root);
       getAppStateModeMock.mockReturnValue("bootstrap");
 
-      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
       expect(result).toEqual({
         graduated: false,
@@ -327,9 +327,9 @@ describe("profile IPC helpers", () => {
         "utf8",
       );
 
-      const { graduateDesktopBootstrapToProfile } = await import("../ipc/profiles");
+      const { graduateDesktopBootstrapConfigToProfile } = await import("../ipc/profiles");
 
-      const result = graduateDesktopBootstrapToProfile({ targetProfile: "personal" });
+      const result = graduateDesktopBootstrapConfigToProfile({ targetProfile: "personal" });
 
       expect(result).toEqual({ graduated: true, targetProfile: "personal" });
 

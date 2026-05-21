@@ -660,15 +660,15 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             // mode (e.g. Help → Replay Onboarding, where the
             // wizard runs against an existing real profile), so
             // the wizard calls it unconditionally.
-            if (props.desktopApi?.graduateBootstrapToProfile) {
+            if (props.desktopApi?.graduateBootstrapConfigToProfile) {
               try {
-                await props.desktopApi.graduateBootstrapToProfile({
+                await props.desktopApi.graduateBootstrapConfigToProfile({
                   targetProfile: switchTo,
                 });
               } catch (caught) {
                 // eslint-disable-next-line no-console
                 console.warn(
-                  `Onboarding: graduateBootstrapToProfile failed for "${switchTo}"`,
+                  `Onboarding: graduateBootstrapConfigToProfile failed for "${switchTo}"`,
                   caught,
                 );
               }
@@ -707,8 +707,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                 seedOnboardingCompleted: true,
               });
               await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
-              if (props.desktopApi?.graduateBootstrapToProfile) {
-                await props.desktopApi.graduateBootstrapToProfile({
+              if (props.desktopApi?.graduateBootstrapConfigToProfile) {
+                await props.desktopApi.graduateBootstrapConfigToProfile({
                   targetProfile: defaultName,
                 });
               }
@@ -785,8 +785,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         seedOnboardingCompleted: true,
       });
       await writeBufferedSecretsIfAny(defaultName, bufferedSecrets);
-      if (props.desktopApi.graduateBootstrapToProfile) {
-        await props.desktopApi.graduateBootstrapToProfile({
+      if (props.desktopApi.graduateBootstrapConfigToProfile) {
+        await props.desktopApi.graduateBootstrapConfigToProfile({
           targetProfile: defaultName,
         });
       }
