@@ -1916,6 +1916,9 @@ export class DesktopBackendRegistry {
           store: this.acpSessionStore as AcpSessionStore,
           transport: new AcpStdioJsonRpcTransport({
             launchDescriptor: agent.launchDescriptor,
+            observer: createProtocolLogObserverFromEnv({
+              backend: agent.backendId,
+            }),
           }),
           onSessionUpdate: async ({ sessionId, replay }) => {
             await this.emit({
