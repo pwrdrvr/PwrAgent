@@ -454,6 +454,10 @@ describe("AcpAgentClient", () => {
       content: { type: "text", text: "Replayed from load." },
     });
     await ensurePromise;
+    transport.emitSessionUpdate("session-1", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Late replay from load." },
+    });
     client.startPrompt({
       sessionId: "session-1",
       prompt: "What is the CWD?",

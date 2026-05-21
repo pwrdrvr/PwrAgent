@@ -19,6 +19,7 @@ export class AcpSessionReplayNormalizer {
   private messages: AppServerThreadMessage[] = [];
   private status: AppServerThreadStatus = "idle";
   private currentTurnId?: string;
+  private generatedMessageSequence = 0;
 
   recordUserPrompt(params: {
     sessionId: string;
@@ -53,6 +54,8 @@ export class AcpSessionReplayNormalizer {
 
     if (kind === "agent_message_chunk") {
       this.applyAgentMessageChunk(update, createdAt);
+    } else if (kind === "user_message_chunk") {
+      this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "agent_thought_chunk") {
       this.applyAgentThoughtChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
@@ -110,6 +113,18 @@ export class AcpSessionReplayNormalizer {
       readString(update.update, "messageId") ??
       `assistant:${this.currentTurnId ?? update.sessionId}`;
     this.appendMessageChunk({ id, role: "assistant", text, createdAt });
+  }
+
+  private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
+    const text =
+      readContentText(update.update, "content") ??
+      readString(update.update, "text") ??
+      "";
+    const id =
+      readString(update.update, "messageId") ??
+      readString(update.update, "id") ??
+      `user:${update.sessionId}:${createdAt}:${this.generatedMessageSequence++}`;
+    this.appendMessageChunk({ id, role: "user", text, createdAt });
   }
 
   private applyAgentThoughtChunk(update: AcpSessionUpdate, createdAt: number): void {

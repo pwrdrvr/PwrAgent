@@ -40,6 +40,34 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("OK.");
   });
 
+  it("renders ACP user message chunks as transcript messages", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "What is the CWD?" },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "What is the CWD?",
+      }),
+    ]);
+    expect(replay.lastUserMessage).toBe("What is the CWD?");
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "What is the CWD?",
+      }),
+    ]);
+  });
+
   it("records local user prompts as active replay state", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

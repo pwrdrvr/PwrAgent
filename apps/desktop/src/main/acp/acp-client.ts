@@ -154,10 +154,12 @@ export class AcpAgentClient {
     });
     let result: unknown;
     try {
-      result = await this.options.transport.request("session/prompt", {
+      const promptRequest = this.options.transport.request("session/prompt", {
         sessionId: params.sessionId,
         prompt: textPrompt(params.prompt),
       });
+      this.clearLoadReplaySuppression(params.sessionId);
+      result = await promptRequest;
     } catch (error) {
       this.finishTrackedTurn(params.sessionId);
       throw error;
@@ -230,11 +232,12 @@ export class AcpAgentClient {
         turnId,
       },
     });
-    void this.options.transport
-      .request("session/prompt", {
-        sessionId: params.sessionId,
-        prompt: textPrompt(params.prompt),
-      })
+    const promptRequest = this.options.transport.request("session/prompt", {
+      sessionId: params.sessionId,
+      prompt: textPrompt(params.prompt),
+    });
+    this.clearLoadReplaySuppression(params.sessionId);
+    void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
         void this.notifySessionUpdate({
@@ -392,8 +395,14 @@ export class AcpAgentClient {
       this.loadedSessionCwds.set(metadata.sessionId, cwd);
       return result;
     } finally {
-      this.suppressLoadReplaySessions.delete(metadata.sessionId);
+      if (!options.suppressReplayNotifications) {
+        this.suppressLoadReplaySessions.delete(metadata.sessionId);
+      }
     }
+  }
+
+  private clearLoadReplaySuppression(sessionId: string): void {
+    this.suppressLoadReplaySessions.delete(sessionId);
   }
 
   private startTrackedTurn(sessionId: string, turnId: string): void {

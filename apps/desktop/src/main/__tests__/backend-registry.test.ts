@@ -7071,6 +7071,102 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("resolves ACP turn cwd from thread workspace overlay before loading the session", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.replaceWorkspaceLinkedDirectory({
+      backend: acpBackendId as never,
+      threadId: "session-1",
+      directory: {
+        id: "pwragent-handoff:acp:gemini:session-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree",
+      },
+      gitBranch: "feature/handoff",
+    });
+    const ensureSession = vi.fn(async () => undefined);
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+      }),
+    );
+
+    await registry.close();
+  });
+
   it("updates stored ACP session cwd on workspace handoff before the next turn", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessionStore = createAcpSessionStoreMock([

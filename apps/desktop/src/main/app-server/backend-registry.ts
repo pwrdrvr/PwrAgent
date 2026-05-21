@@ -2640,7 +2640,8 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
-    await client.ensureSession(session);
+    const sessionForTurn = await this.resolveAcpSessionForTurn(params.backend, session);
+    await client.ensureSession(sessionForTurn);
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     await this.emit({
       backend: params.backend,
@@ -2691,6 +2692,31 @@ export class DesktopBackendRegistry {
       });
       throw error;
     }
+  }
+
+  private async resolveAcpSessionForTurn(
+    backend: AcpBackendId,
+    session: AcpSessionMetadata,
+  ): Promise<AcpSessionMetadata> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: session.sessionId,
+    });
+    const workspaceCwd = resolveThreadWorkspaceCwd(
+      acpSessionToThreadSummary(session),
+      overlay?.extraLinkedDirectories,
+    );
+    if (!workspaceCwd || workspaceCwd === session.cwd) {
+      return session;
+    }
+
+    const nextSession: AcpSessionMetadata = {
+      ...session,
+      cwd: workspaceCwd,
+      updatedAt: Math.max(session.updatedAt, Date.now()),
+    };
+    this.acpSessionStore?.upsertSession?.(nextSession);
+    return nextSession;
   }
 
   private async readAcpReplay(
