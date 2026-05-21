@@ -50,6 +50,7 @@ type WizardStep =
   | "models-providers"
   | "codex-profile"
   | "name-codex-profiles"
+  | "shared-codex-login"
   | "messaging-safety"
   | "messaging-providers"
   | "provider-setup"
@@ -72,7 +73,12 @@ function railIndexForStep(step: WizardStep): RailIndex | -1 {
   if (step === "welcome") return -1;
   if (step === "thread-presentation") return 0;
   if (step === "models-providers") return 1;
-  if (step === "codex-profile" || step === "name-codex-profiles") return 2;
+  if (
+    step === "codex-profile" ||
+    step === "name-codex-profiles" ||
+    step === "shared-codex-login"
+  )
+    return 2;
   if (
     step === "messaging-safety" ||
     step === "messaging-providers" ||
@@ -215,6 +221,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     namedRows: number;
   }>({ allAuthed: false, namedRows: 0 });
   const [codexLoginDeferred, setCodexLoginDeferred] = useState(false);
+  // Shared-mode Codex login state. Mirrors the per-row state in
+  // `name-codex-profiles` but for the system default Codex profile —
+  // the wizard only routes here when the operator's existing Codex
+  // install isn't already authenticated AND they picked Shared mode.
+  const [sharedAuthed, setSharedAuthed] = useState(false);
+  const [sharedLoginDeferred, setSharedLoginDeferred] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState<
     ReadonlySet<OnboardingProvider>
   >(new Set(["telegram"]));
@@ -278,6 +290,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     }
   }, [codexProfileModel]);
 
+  // Does the Codex system default need a login before we can ship the
+  // operator into Shared mode? `auth.json` missing means the operator
+  // has never logged into Codex Desktop on this machine — picking
+  // Shared without addressing that gives them a non-working profile.
+  // The wizard routes them through `shared-codex-login` first; if
+  // they're already logged in, that step is skipped.
+  const codexDefaultProfile = props.settings.snapshot?.models.codex.profiles.profiles.find(
+    (entry) => entry.name === "",
+  );
+  const sharedNeedsLogin =
+    codexProfileModel === "shared" && !codexDefaultProfile?.hasAuthFile;
+
   // Conditional step graph — codexProfileModel="multiple" inserts the
   // name-codex-profiles step between codex-profile and messaging-safety;
   // empty selectedProviders skips provider-setup; etc. Centralizing the
@@ -301,10 +325,16 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           // Both Isolated (single new profile) and Multiple (1–5)
           // route through the naming step — they both need paired
           // PwrAgent + Codex profile names to create after Finish.
-          return codexProfileModel === "shared"
-            ? "messaging-safety"
-            : "name-codex-profiles";
+          // Shared mode only inserts `shared-codex-login` when the
+          // operator's existing Codex install ISN'T already logged
+          // in; otherwise it goes straight to messaging-safety.
+          if (codexProfileModel === "shared") {
+            return sharedNeedsLogin ? "shared-codex-login" : "messaging-safety";
+          }
+          return "name-codex-profiles";
         case "name-codex-profiles":
+          return "messaging-safety";
+        case "shared-codex-login":
           return "messaging-safety";
         case "messaging-safety":
           // The body of `messaging-safety` renders an explicit
@@ -323,7 +353,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           return null;
       }
     },
-    [codexProfileModel, orderedProviders.length, providerSetupIndex],
+    [codexProfileModel, orderedProviders.length, providerSetupIndex, sharedNeedsLogin],
   );
   // Did this wizard session start at the bootstrap-confirm step?
   // Only true when the boot decision named a missing profile —
@@ -346,12 +376,17 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           return "models-providers";
         case "name-codex-profiles":
           return "codex-profile";
+        case "shared-codex-login":
+          return "codex-profile";
         case "messaging-safety":
           // Back-out symmetry with `nextStep`: Shared bypasses the
-          // naming step, anything else routes through it.
-          return codexProfileModel === "shared"
-            ? "codex-profile"
-            : "name-codex-profiles";
+          // naming step, anything else routes through it. Within
+          // Shared, the login step only sits in the back chain when
+          // the operator actually saw it (i.e. needed the login).
+          if (codexProfileModel === "shared") {
+            return sharedNeedsLogin ? "shared-codex-login" : "codex-profile";
+          }
+          return "name-codex-profiles";
         case "messaging-providers":
           return "messaging-safety";
         case "provider-setup":
@@ -364,7 +399,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             : "messaging-safety";
       }
     },
-    [codexProfileModel, entryWasBootstrapConfirm, orderedProviders.length, providerSetupIndex],
+    [
+      codexProfileModel,
+      entryWasBootstrapConfirm,
+      orderedProviders.length,
+      providerSetupIndex,
+      sharedNeedsLogin,
+    ],
   );
 
   const goPrev = useCallback(() => {
@@ -687,6 +728,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               onSetXaiKeyForProfile={setXaiKeyForProfile}
             />
           ) : null}
+          {step === "shared-codex-login" ? (
+            <SharedCodexLoginStep
+              desktopApi={props.desktopApi}
+              onAuthStateChange={setSharedAuthed}
+            />
+          ) : null}
           {step === "messaging-safety" ? (
             <MessagingSafetyStep
               acknowledged={acknowledged}
@@ -739,6 +786,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           codexAuthNamedRows={codexAuthSnapshot.namedRows}
           codexLoginDeferred={codexLoginDeferred}
           onDeferCodexLogin={() => setCodexLoginDeferred(true)}
+          sharedAuthed={sharedAuthed}
+          sharedLoginDeferred={sharedLoginDeferred}
+          onDeferSharedLogin={() => setSharedLoginDeferred(true)}
           backendRequirementSatisfied={isBackendRequirementSatisfied(
             props.settings.snapshot,
             bufferedGrokKey,
@@ -793,6 +843,8 @@ function WizardTitlebar(props: {
         return "Step 3 — Codex profile";
       case "name-codex-profiles":
         return "Step 3 — Name your profiles";
+      case "shared-codex-login":
+        return "Step 3 — Log in to Codex";
       case "messaging-safety":
         return "Step 4 — Messaging — Before you connect";
       case "messaging-providers":
@@ -887,6 +939,12 @@ function WizardFooter(props: {
    *  Continue without forcing them to finish. */
   codexLoginDeferred: boolean;
   onDeferCodexLogin: () => void;
+  /** Shared-mode counterpart to `codexAuthAllAuthed`: true when the
+   *  Codex system default has reported authenticated via the
+   *  `shared-codex-login` step. */
+  sharedAuthed: boolean;
+  sharedLoginDeferred: boolean;
+  onDeferSharedLogin: () => void;
   backendRequirementSatisfied: boolean;
   density: DesktopAppearanceDensity;
   codexProfileModel: DesktopCodexProfileModel;
@@ -942,6 +1000,14 @@ function WizardFooter(props: {
     hint = props.backendRequirementSatisfied
       ? "Ready"
       : "Install Codex CLI or paste an xAI API key to continue";
+  } else if (props.step === "shared-codex-login") {
+    if (props.sharedAuthed) {
+      hint = "Codex logged in";
+    } else if (props.sharedLoginDeferred) {
+      hint = "Login deferred — finish from Settings → Profiles later";
+    } else {
+      hint = "Log in to your Codex account to continue";
+    }
   }
 
   let primary: ReactNode = null;
@@ -974,6 +1040,18 @@ function WizardFooter(props: {
       <button
         type="button"
         className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        onClick={props.onNext}
+      >
+        Continue →
+      </button>
+    );
+  } else if (props.step === "shared-codex-login") {
+    const sharedGateLifted = props.sharedAuthed || props.sharedLoginDeferred;
+    primary = (
+      <button
+        type="button"
+        className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+        disabled={!sharedGateLifted || props.submitting}
         onClick={props.onNext}
       >
         Continue →
@@ -1059,6 +1137,17 @@ function WizardFooter(props: {
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
           onClick={props.onDeferCodexLogin}
+        >
+          I&rsquo;ll log in later
+        </button>
+      ) : null}
+      {props.step === "shared-codex-login" &&
+      !props.sharedLoginDeferred &&
+      !props.sharedAuthed ? (
+        <button
+          type="button"
+          className="onboarding-wizard__btn onboarding-wizard__btn--microlink"
+          onClick={props.onDeferSharedLogin}
         >
           I&rsquo;ll log in later
         </button>
@@ -2659,6 +2748,183 @@ function ProfileRowLoginStatus(props: { state: RowLoginState }) {
     );
   }
   return null;
+}
+
+/**
+ * Shared-mode login step. Only rendered when the operator picked
+ * "Shared" on the Codex profile step AND their existing Codex
+ * install hasn't been logged in yet (no `~/.codex/auth.json`). Reuses
+ * the same row-status sub-components as the Multiple/Isolated naming
+ * step, but operates on the Codex *system default* profile (empty
+ * profile name on the IPC calls) rather than a named per-row entry.
+ *
+ * Why a dedicated step (vs. inline on the codex-profile step): the
+ * Codex profile step is the operator's choice of *strategy*. The
+ * login UX needs space for status + URL copy + retry controls; a
+ * standalone step keeps both screens focused. The step is skipped
+ * entirely when the system default is already authenticated.
+ */
+function SharedCodexLoginStep(props: {
+  desktopApi?: DesktopApi;
+  onAuthStateChange: (authed: boolean) => void;
+}) {
+  const [state, setState] = useState<RowLoginState>({ kind: "idle" });
+  const apiRef = useRef(props.desktopApi);
+  apiRef.current = props.desktopApi;
+  // Empty string is the sentinel for the Codex system default; the
+  // main-process IPC handlers resolve it to `~/.codex/` (see
+  // `resolveRequiredCodexProfileHome`).
+  const SYSTEM_DEFAULT = "";
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.checkCodexAuthProfileStatus) return;
+    setState((prev) => {
+      if (prev.kind === "ok") return prev;
+      const url = "url" in prev ? prev.url : undefined;
+      return { kind: "checking", url };
+    });
+    try {
+      const result = await api.checkCodexAuthProfileStatus({
+        profile: SYSTEM_DEFAULT,
+      });
+      if (result.authenticated) {
+        setState({
+          kind: "ok",
+          email: result.email,
+          planType: result.planType,
+        });
+      } else {
+        setState((prev) => {
+          const url = "url" in prev ? prev.url : undefined;
+          return { kind: "waiting", url, detail: result.detail };
+        });
+      }
+    } catch (caught) {
+      setState({
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, []);
+
+  const startLogin = useCallback(async (): Promise<void> => {
+    const api = apiRef.current;
+    if (!api?.startCodexAuthProfileLogin) return;
+    setState({ kind: "starting" });
+    try {
+      // Intentionally skip `createCodexAuthProfile` — the system
+      // default `~/.codex/` already exists (or `codex login` will
+      // create the dir). Creating a profile-dir-under-`profiles/`
+      // would side-step the operator's choice to share, not
+      // isolate.
+      const result = await api.startCodexAuthProfileLogin({
+        profile: SYSTEM_DEFAULT,
+      });
+      if (result.authenticated) {
+        await refreshStatus();
+        return;
+      }
+      setState({
+        kind: "waiting",
+        url: result.loginUrl,
+        detail: result.detail,
+      });
+    } catch (caught) {
+      setState({
+        kind: "error",
+        detail: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, [refreshStatus]);
+
+  const copyLoginUrl = useCallback(
+    async (url: string | undefined): Promise<void> => {
+      const api = apiRef.current;
+      if (!url || !api?.copyText) return;
+      try {
+        await api.copyText(url);
+      } catch {
+        // best-effort
+      }
+    },
+    [],
+  );
+
+  // Probe on mount — the operator could have logged in via another
+  // path between picking Shared and arriving here. Auto-recheck on
+  // window focus too: returning from a browser SSO flow triggers
+  // it without the operator clicking "Check status."
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api?.onWindowFocus) return undefined;
+    return api.onWindowFocus(() => {
+      if (state.kind === "waiting" || state.kind === "checking") {
+        void refreshStatus();
+      }
+    });
+  }, [state, refreshStatus]);
+
+  useEffect(() => {
+    props.onAuthStateChange(state.kind === "ok");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  return (
+    <div>
+      <header className="onboarding-wizard__head">
+        <h1 className="onboarding-wizard__title">
+          Log in to your Codex account
+        </h1>
+        <p className="onboarding-wizard__sub">
+          You picked <strong>Shared</strong> — PwrAgent will reuse your
+          existing Codex install at <code>~/.codex/</code>. We just need to
+          confirm you&rsquo;re signed in. If you&rsquo;ve already logged in
+          via Codex Desktop or the <code>codex</code> CLI, this step is
+          probably already green; otherwise click <strong>Log in</strong>{" "}
+          below.
+        </p>
+      </header>
+      <div className="onboarding-wizard__profile-list">
+        <div
+          className={`onboarding-wizard__profile-row onboarding-wizard__profile-row--has-login is-${state.kind}`}
+        >
+          <div className="onboarding-wizard__profile-row-top">
+            <span className="onboarding-wizard__profile-num">↻</span>
+            <span
+              className="onboarding-wizard__profile-input"
+              style={{ display: "inline-flex", alignItems: "center" }}
+            >
+              <code style={{ fontWeight: 500 }}>System default</code>
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                }}
+              >
+                ~/.codex/
+              </span>
+            </span>
+            <ProfileRowLoginControls
+              name="system-default"
+              valid={true}
+              state={state}
+              onLogin={() => void startLogin()}
+              onCheck={() => void refreshStatus()}
+              onCopyUrl={() =>
+                void copyLoginUrl("url" in state ? state.url : undefined)
+              }
+            />
+          </div>
+          <ProfileRowLoginStatus state={state} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
