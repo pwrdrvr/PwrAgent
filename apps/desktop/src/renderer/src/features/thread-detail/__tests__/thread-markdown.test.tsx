@@ -248,6 +248,40 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("pre img")).toBeNull();
   });
 
+  it("copies fenced code blocks without markdown fences", async () => {
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText }}
+        text={"```ts\nconst answer = 42;\n```"}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith("const answer = 42;\n");
+    });
+  });
+
+  it("copies blockquotes without quote markers", async () => {
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText }}
+        text={"> Replay this prompt\n> exactly as written"}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy quote" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith("Replay this prompt\nexactly as written");
+    });
+  });
+
   it("renders markdown image syntax as literal text instead of an image", () => {
     const { container } = render(
       <ThreadMarkdown

@@ -15,7 +15,7 @@ type TranscriptWorkPhaseGroupProps = {
   applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
   directoryPaths?: string[];
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   entries: AppServerThreadEntry[];
   expanded: boolean;
   label: string;
@@ -75,7 +75,7 @@ TranscriptWorkPhaseGroup.displayName = "TranscriptWorkPhaseGroup";
 function renderEntry(params: {
   applications?: DesktopApplicationsSnapshot;
   directoryPaths?: string[];
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   entry: AppServerThreadEntry;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;

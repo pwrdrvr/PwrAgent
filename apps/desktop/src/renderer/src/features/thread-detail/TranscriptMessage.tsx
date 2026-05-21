@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
@@ -9,10 +9,11 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   message: AppServerThreadMessageEntry;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -25,6 +26,10 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       : props.message.text
         ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
         : [];
+  const messageCopyText = useMemo(
+    () => buildMessageCopyText(props.message, contentParts),
+    [contentParts, props.message]
+  );
   const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
 
   if (messageSegments.length === 0) {
@@ -32,7 +37,12 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       <article
         className={`transcript-message transcript-message--${props.message.role}`}
       >
-        {renderMessageHeader(props.message, false)}
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          text: messageCopyText,
+        })}
       </article>
     );
   }
@@ -54,7 +64,12 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             .join(" ")}
           key={`${props.message.id}:${index}`}
         >
-          {renderMessageHeader(props.message, index > 0)}
+          {renderMessageHeader({
+            continuation: index > 0,
+            desktopApi: props.desktopApi,
+            message: props.message,
+            text: messageCopyText,
+          })}
           <div className="transcript-message__text">
             {renderMessageSegment({
               segment,
@@ -288,7 +303,7 @@ function appendTextSegment(segments: MessagePartSegment[], text: string): void {
 
 function renderMessageSegment(params: {
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   segment: MessagePartSegment;
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -333,27 +348,40 @@ function renderMessageSegment(params: {
   );
 }
 
-function renderMessageHeader(
-  message: AppServerThreadMessageEntry,
-  continuation: boolean
-): ReactNode {
-  if (continuation) {
+function renderMessageHeader(params: {
+  continuation: boolean;
+  desktopApi?: Pick<DesktopApi, "copyText">;
+  message: AppServerThreadMessageEntry;
+  text: string;
+}): ReactNode {
+  if (params.continuation) {
     return null;
   }
 
   return (
     <header className="transcript-message__header">
-      <span className="transcript-message__role">{labelForRole(message.role)}</span>
-      {message.createdAt ? (
-        <time className="transcript-message__time">
-          {new Intl.DateTimeFormat(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          }).format(message.createdAt)}
-        </time>
-      ) : null}
+      <span className="transcript-message__role">{labelForRole(params.message.role)}</span>
+      <span className="transcript-message__header-actions">
+        {params.text ? (
+          <TranscriptCopyButton
+            className="transcript-copy-button--message"
+            copiedLabel="Copied message"
+            desktopApi={params.desktopApi}
+            label="Copy message"
+            text={params.text}
+          />
+        ) : null}
+        {params.message.createdAt ? (
+          <time className="transcript-message__time">
+            {new Intl.DateTimeFormat(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit"
+            }).format(params.message.createdAt)}
+          </time>
+        ) : null}
+      </span>
     </header>
   );
 }
@@ -363,4 +391,20 @@ function labelForRole(role: AppServerThreadMessageEntry["role"]): string {
     return "Assistant";
   }
   return "User";
+}
+
+function buildMessageCopyText(
+  message: AppServerThreadMessageEntry,
+  parts: AppServerThreadMessagePart[]
+): string {
+  if (typeof message.text === "string" && message.text.length > 0) {
+    return message.text;
+  }
+
+  return parts
+    .filter((part): part is Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> =>
+      part.type !== "image"
+    )
+    .map((part) => part.text)
+    .join("\n\n");
 }

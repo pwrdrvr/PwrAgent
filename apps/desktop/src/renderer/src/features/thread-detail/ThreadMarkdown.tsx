@@ -9,11 +9,12 @@ import remarkGfm from "remark-gfm";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SkillChip } from "../composer/SkillChip";
 import { remarkTableProfile } from "./remark-table-profile";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
   className?: string;
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   skills?: AppServerSkillSummary[];
   text: string;
   variant?: "message" | "summary";
@@ -108,8 +109,22 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       blockquote(blockquoteProps) {
+        const copyText = normalizeBlockquoteCopyText(
+          sourceForNode(props.text, blockquoteProps.node) ??
+            extractTextContent(blockquoteProps.children)
+        );
+
         return (
           <blockquote className="transcript-message__blockquote">
+            {copyText ? (
+              <TranscriptCopyButton
+                className="transcript-copy-button--section"
+                copiedLabel="Copied quote"
+                desktopApi={props.desktopApi}
+                label="Copy quote"
+                text={copyText}
+              />
+            ) : null}
             {blockquoteProps.children}
           </blockquote>
         );
@@ -166,7 +181,22 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       pre(preProps) {
-        return <pre className="transcript-message__pre">{preProps.children}</pre>;
+        const copyText = extractTextContent(preProps.children);
+
+        return (
+          <div className="transcript-message__pre-wrap">
+            {copyText ? (
+              <TranscriptCopyButton
+                className="transcript-copy-button--section"
+                copiedLabel="Copied code"
+                desktopApi={props.desktopApi}
+                label="Copy code"
+                text={copyText}
+              />
+            ) : null}
+            <pre className="transcript-message__pre">{preProps.children}</pre>
+          </div>
+        );
       },
       table(tableProps) {
         return (
@@ -377,6 +407,14 @@ function splitFileLineSuffix(filePath: string): {
     ...(Number.isInteger(line) ? { line } : {}),
     ...(Number.isInteger(column) ? { column } : {}),
   };
+}
+
+function normalizeBlockquoteCopyText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s{0,3}>\s?/, ""))
+    .join("\n")
+    .trim();
 }
 
 function extractTextContent(node: ReactNode): string {

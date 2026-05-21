@@ -45,7 +45,7 @@ type TranscriptListProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "openApplication">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];
   error?: string;
