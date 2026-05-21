@@ -23,6 +23,7 @@ import {
   hideAuxiliaryWindowMenuBar,
   registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:app-log-window");
@@ -71,9 +72,7 @@ export function showAppLogWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: LOGS_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    showAndFocusAuxiliaryWindow(window);
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     appLogWindow = undefined;

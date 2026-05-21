@@ -20,6 +20,7 @@ import {
   hideAuxiliaryWindowMenuBar,
   registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:changelog-window");
@@ -67,9 +68,7 @@ export function showChangelogWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: CHANGELOG_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    showAndFocusAuxiliaryWindow(window);
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     changelogWindow = undefined;

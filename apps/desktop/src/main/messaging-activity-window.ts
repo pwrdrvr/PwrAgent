@@ -20,6 +20,7 @@ import {
   hideAuxiliaryWindowMenuBar,
   registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:activity-window");
@@ -93,9 +94,7 @@ export function showMessagingActivityWindow(): void {
     void window.loadFile(rendererEntry.value, { hash: ACTIVITY_HASH });
   }
 
-  window.once("ready-to-show", () => {
-    showAndFocusAuxiliaryWindow(window);
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     // The top-of-function "already-open" guard prevents two activity

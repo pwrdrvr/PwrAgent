@@ -7,6 +7,8 @@ const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
 const supportsMoveTop = process.platform !== "linux";
 const linuxRaiseRetryDelaysMs = [100, 350, 800] as const;
+const firstOpenFallbackDelayMs = 1_000;
+const postLoadRaiseDelayMs = 100;
 
 const hiddenMenuBarWindows = new Set<BrowserWindow>();
 const auxiliaryWindowTitles = new Map<number, string>();
@@ -64,6 +66,34 @@ export function getAuxiliaryWindowMenuTitle(window: BrowserWindow): string {
 export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
   raiseAuxiliaryWindow(window);
   scheduleAuxiliaryWindowRaiseRetries(window);
+}
+
+export function showAuxiliaryWindowWhenReady(window: BrowserWindow): void {
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let postLoadTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const showAndClearFallback = (): void => {
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = undefined;
+    }
+    showAndFocusAuxiliaryWindow(window);
+  };
+
+  window.once("ready-to-show", showAndClearFallback);
+  window.webContents.once("did-finish-load", () => {
+    postLoadTimer = setTimeout(showAndClearFallback, postLoadRaiseDelayMs);
+  });
+  fallbackTimer = setTimeout(showAndClearFallback, firstOpenFallbackDelayMs);
+
+  window.once("closed", () => {
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+    }
+    if (postLoadTimer) {
+      clearTimeout(postLoadTimer);
+    }
+  });
 }
 
 function raiseAuxiliaryWindow(window: BrowserWindow): void {

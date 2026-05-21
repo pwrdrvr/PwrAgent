@@ -20,6 +20,7 @@ import {
   hideAuxiliaryWindowMenuBar,
   registerAuxiliaryWindowTitle,
   showAndFocusAuxiliaryWindow,
+  showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
 
 const log = getMainLogger("pwragent:license-document-window");
@@ -96,9 +97,7 @@ function showLicenseDocumentWindow(options: {
     void window.loadFile(rendererEntry.value, { hash: options.hash });
   }
 
-  window.once("ready-to-show", () => {
-    showAndFocusAuxiliaryWindow(window);
-  });
+  showAuxiliaryWindowWhenReady(window);
 
   window.on("closed", () => {
     options.setWindowRef(undefined);
