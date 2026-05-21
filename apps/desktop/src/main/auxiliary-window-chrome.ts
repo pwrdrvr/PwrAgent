@@ -5,6 +5,7 @@ import type {
 
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
+const supportsMoveTop = process.platform !== "linux";
 
 const hiddenMenuBarWindows = new Set<BrowserWindow>();
 const auxiliaryWindowTitles = new Map<number, string>();
@@ -60,8 +61,23 @@ export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
     window.restore();
   }
   window.show();
-  window.moveTop();
+  if (supportsMoveTop) {
+    window.moveTop();
+  } else {
+    pulseAuxiliaryWindowToTop(window);
+  }
   window.focus();
+}
+
+function pulseAuxiliaryWindowToTop(window: BrowserWindow): void {
+  const wasAlwaysOnTop = window.isAlwaysOnTop();
+  window.setAlwaysOnTop(true);
+  setTimeout(() => {
+    if (window.isDestroyed() || wasAlwaysOnTop) {
+      return;
+    }
+    window.setAlwaysOnTop(false);
+  }, 250);
 }
 
 export function reapplyAuxiliaryWindowMenuBars(): void {
