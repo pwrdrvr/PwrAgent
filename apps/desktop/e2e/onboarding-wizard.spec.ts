@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -227,6 +229,85 @@ test.describe("Onboarding wizard", () => {
         }),
       ).toBeVisible();
     } finally {
+      await app.close();
+    }
+  });
+
+  test("Multiple-mode finish quits the bootstrap window AND doesn't materialize a phantom 'default' profile", async () => {
+    // Reproduces the user's report: walk Multiple with personal +
+    // work. After Finish, the bootstrap Electron instance should
+    // QUIT (operator isn't left with two windows; the original
+    // window doesn't surface real Codex Desktop threads from the
+    // bootstrap-profile's empty codex.profile pairing), AND there
+    // should be NO `default/` dir under `<HOME>/.pwragent/profiles/`
+    // (only `personal/` and `work/`).
+    const app = await launchElectronApp(wizardLaunchOptions);
+    try {
+      // Walk the full wizard: Welcome → Thread → Models (xAI key) →
+      // Codex profile (Multiple) → Name profiles (personal, work) →
+      // Messaging warning (Skip).
+      await app.window.getByRole("button", { name: /Get started/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .locator('input[type="password"]')
+        .first()
+        .fill("xai-multi-key");
+      await app.window.getByRole("button", { name: /Use this key/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .getByText(/Set up several profiles at once/i)
+        .click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      // Defaults are "personal" + "work" — accept as-is.
+      // Each row's Codex login is gated; defer via "I'll log in later".
+      await app.window
+        .getByRole("button", { name: /I.ll log in later/i })
+        .click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await app.window
+        .getByRole("button", { name: /Skip messaging for now/i })
+        .click();
+
+      // Done step → click "Open my workspace" to fire
+      // persistAndComplete (this is what actually does the
+      // provisioning + graduation + quit).
+      await expect(
+        app.window.getByRole("heading", { name: /You.re operating/i }),
+      ).toBeVisible();
+      await app.window
+        .getByRole("button", { name: /Open my workspace/i })
+        .click();
+
+      // persistAndComplete fires:
+      //   - provisionPairedProfiles → personal + work
+      //   - writeSecretsToProfile per profile
+      //   - graduateBootstrapToProfile(personal)
+      //   - openPwrAgentProfile(personal) — spawns new Electron
+      //   - quitApp() — closes THIS Electron
+      // Wait for the bootstrap process to exit. Playwright surfaces
+      // this as the ElectronApplication's `process()` going away.
+      const proc = app.electronApp.process();
+      await new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) return resolve();
+        proc.once("exit", () => resolve());
+      });
+
+      // After the bootstrap window quits, inspect `HOME/.pwragent/`
+      // directly. Only `personal/` and `work/` should exist under
+      // `profiles/` — no `default/` materialized.
+      const profilesDir = path.join(app.homeRoot, ".pwragent/profiles");
+      const dirs = fs.readdirSync(profilesDir).sort();
+      expect(dirs).toEqual(["personal", "work"]);
+
+      // profiles.toml::default_profile should point at "personal".
+      const profilesToml = fs.readFileSync(
+        path.join(app.homeRoot, ".pwragent/profiles.toml"),
+        "utf8",
+      );
+      expect(profilesToml).toContain('default_profile = "personal"');
+    } finally {
+      // Even if the bootstrap process already exited, close() is
+      // safe — it just tears down handles.
       await app.close();
     }
   });

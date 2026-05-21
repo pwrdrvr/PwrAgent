@@ -459,6 +459,44 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     setStep("done");
   }, []);
 
+  // After graduation in bootstrap mode, the wizard spawns a new
+  // Electron instance pointed at the operator's chosen profile (via
+  // `openPwrAgentProfile`, which `spawn()`s a detached child process)
+  // and then quits the current (bootstrap) instance so the operator
+  // isn't left with two windows. Pre-fix the bootstrap window kept
+  // running with `.bootstrap/` active, and since the bootstrap
+  // config has no codex.profile set, it fell back to the Codex
+  // system default and surfaced the operator's real Codex Desktop
+  // threads — exactly the surprise this PR set out to avoid.
+  //
+  // In active-profile mode (Replay), we don't quit — the operator
+  // is still in their real profile and that window IS their session.
+  const openTargetAndQuitBootstrapIfNeeded = useCallback(
+    async (targetProfile: string): Promise<void> => {
+      const api = props.desktopApi;
+      if (!api?.openPwrAgentProfile) return;
+      try {
+        await api.openPwrAgentProfile({ profile: targetProfile });
+      } catch (caught) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Onboarding: failed to auto-switch into "${targetProfile}"`,
+          caught,
+        );
+        return;
+      }
+      if (props.bootInfo?.mode === "bootstrap" && api.quitApp) {
+        try {
+          await api.quitApp();
+        } catch (caught) {
+          // eslint-disable-next-line no-console
+          console.warn("Onboarding: quitApp after graduation failed", caught);
+        }
+      }
+    },
+    [props.bootInfo?.mode, props.desktopApi],
+  );
+
   const persistAndComplete = useCallback(
     async (extra?: DesktopSettingsConfigPatch): Promise<void> => {
       if (submitting) return;
@@ -567,17 +605,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                 );
               }
             }
-            if (props.desktopApi?.openPwrAgentProfile) {
-              try {
-                await props.desktopApi.openPwrAgentProfile({ profile: switchTo });
-              } catch (caught) {
-                // eslint-disable-next-line no-console
-                console.warn(
-                  `Onboarding: failed to auto-switch into "${switchTo}"`,
-                  caught,
-                );
-              }
-            }
+            await openTargetAndQuitBootstrapIfNeeded(switchTo);
           }
         } else {
           // Shared mode. Two sub-paths depending on whether the
@@ -637,11 +665,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
                   targetProfile: defaultName,
                 });
               }
-              if (props.desktopApi?.openPwrAgentProfile) {
-                await props.desktopApi.openPwrAgentProfile({
-                  profile: defaultName,
-                });
-              }
+              await openTargetAndQuitBootstrapIfNeeded(defaultName);
             } catch (caught) {
               // eslint-disable-next-line no-console
               console.warn(
@@ -662,6 +686,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       codexProfileNames,
       density,
       isReplay,
+      openTargetAndQuitBootstrapIfNeeded,
       props,
       selectedProviders,
       submitting,
@@ -722,9 +747,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           targetProfile: defaultName,
         });
       }
-      if (props.desktopApi.openPwrAgentProfile) {
-        await props.desktopApi.openPwrAgentProfile({ profile: defaultName });
-      }
+      await openTargetAndQuitBootstrapIfNeeded(defaultName);
     } catch (caught) {
       // eslint-disable-next-line no-console
       console.warn("Onboarding: skipAndUseDefault failed", caught);
@@ -732,7 +755,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       setSubmitting(false);
       setDismissModalOpen(false);
     }
-  }, [bufferedSecrets, props, submitting]);
+  }, [bufferedSecrets, openTargetAndQuitBootstrapIfNeeded, props, submitting]);
 
   const exitApp = useCallback((): void => {
     if (props.desktopApi?.quitApp) {

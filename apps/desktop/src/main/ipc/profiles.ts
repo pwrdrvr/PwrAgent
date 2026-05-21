@@ -68,10 +68,19 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
   if (!byName.has(activeProfile)) {
     byName.set(activeProfile, { name: activeProfile });
   }
-  if (!byName.has("default")) {
-    byName.set("default", { name: "default" });
-  }
-  if (!byName.has(defaultProfile)) {
+  // Pre-#524, this code unconditionally added a "default" entry
+  // because the silent boot-time mkdir guaranteed `~/.pwragent/profiles/default/`
+  // always existed. After #524, `default` is just a name — it only
+  // appears on disk when the operator explicitly chose Shared mode
+  // OR the install pre-dates the change (migration path). Listing
+  // a phantom entry misleads the operator into thinking they have
+  // a profile they didn't ask for. Only surface `default` (or any
+  // other not-in-registry profile name) when the directory is
+  // actually present.
+  if (
+    !byName.has(defaultProfile) &&
+    fs.existsSync(resolveProfileDir(defaultProfile))
+  ) {
     byName.set(defaultProfile, { name: defaultProfile });
   }
 

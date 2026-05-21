@@ -6,6 +6,7 @@ import {
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_ENV,
   ensureNamedProfileExists,
+  resetCachedActiveProfileNameForTests,
   setDefaultProfileName,
   startProfileRuntimeHeartbeat,
 } from "../profile";
@@ -69,6 +70,10 @@ vi.mock("node:child_process", () => ({
 const roots: string[] = [];
 
 afterEach(() => {
+  // `resolveActiveProfileName()` caches its first-call result for
+  // the process lifetime. Without this reset, a previous test's
+  // PWRAGENT_PROFILE stub leaks into the next test's listing calls.
+  resetCachedActiveProfileNameForTests();
   vi.unstubAllEnvs();
   spawnMock.mockClear();
   for (const root of roots.splice(0)) {
@@ -83,7 +88,45 @@ function createRoot(): string {
 }
 
 describe("profile IPC helpers", () => {
+  it("does not synthesize a phantom 'default' profile when no such profile exists on disk (#524 wizard Multiple-mode finish)", async () => {
+    // Reproduces the bug surfaced by the wizard's Multiple-mode
+    // finish: operator picks personal + work, completes the wizard,
+    // graduation creates personal/ and work/ on disk plus the
+    // registry entries. No `default/` dir gets created. But pre-fix,
+    // listDesktopPwrAgentProfiles unconditionally added a "default"
+    // entry to the listing, which surfaced as a misleading
+    // "Not launched yet" row in the Profiles UI.
+    //
+    // After the fix, the listing reflects what actually exists.
+    const root = createRoot();
+    const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+    const activeEnv = {
+      ...env,
+      [PWRAGENT_PROFILE_ENV]: "personal",
+    } as NodeJS.ProcessEnv;
+    // Wizard Multiple-mode finish provisions personal + work, sets
+    // default_profile=personal, and graduates settings. Reproduce
+    // that final on-disk state here.
+    ensureNamedProfileExists("personal", { env: activeEnv });
+    ensureNamedProfileExists("work", { env });
+    setDefaultProfileName("personal", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "personal");
+
+    const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+    const result = listDesktopPwrAgentProfiles();
+
+    expect(result.profiles.map((profile) => profile.name)).toEqual([
+      "personal",
+      "work",
+    ]);
+    expect(result.profiles.some((profile) => profile.name === "default")).toBe(false);
+  });
+
   it("does not move the startup default row when listing profiles", async () => {
+    // Variant of the test above with a `default/` dir actually
+    // present on disk — pre-#524 installs that have an upgraded
+    // `default` profile should still see it listed.
     const root = createRoot();
     const env = {
       [PWRAGENT_HOME_ENV]: root,
@@ -93,6 +136,8 @@ describe("profile IPC helpers", () => {
       [PWRAGENT_PROFILE_ENV]: "dev",
     } as NodeJS.ProcessEnv;
     ensureNamedProfileExists("dev", { env: activeEnv });
+    // Pre-existing default dir on disk: it should keep being listed.
+    ensureNamedProfileExists("default", { env });
     ensureNamedProfileExists("scratch", { env });
     ensureNamedProfileExists("work", { env });
     setDefaultProfileName("scratch", { env });
@@ -444,9 +489,12 @@ describe("profile IPC helpers", () => {
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
     const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
 
+    // Pre-#524: this assertion included "default" because the
+    // listing unconditionally synthesized it. Post-#524 fix: only
+    // real on-disk profiles surface, so "default" is absent unless
+    // a `default/` dir exists.
     expect(listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name)).toEqual([
       "dev",
-      "default",
       "scratch",
     ]);
   });

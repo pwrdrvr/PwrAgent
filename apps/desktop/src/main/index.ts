@@ -357,7 +357,16 @@ export function bootstrapApp(): void {
       cleanupBootstrapProfile();
     }
     initializeAppState(bootMode);
-    installProfileFocusRequestWatcher();
+    // Skip the focus-request watcher in bootstrap mode. The watcher
+    // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
+    // catch "focus existing window" requests from sibling PwrAgent
+    // instances — but in bootstrap mode there's no sibling and the
+    // active profile resolver falls back to literal "default",
+    // materializing a `default/` directory that #524 specifically
+    // promised would never appear silently.
+    if (bootMode === "active-profile") {
+      installProfileFocusRequestWatcher();
+    }
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
