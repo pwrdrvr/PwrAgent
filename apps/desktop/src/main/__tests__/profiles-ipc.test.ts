@@ -14,6 +14,12 @@ const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
 }));
 
+const safeStorageEncryptMock = vi.fn((value: string) => Buffer.from(`enc:${value}`));
+const safeStorageDecryptMock = vi.fn((buf: Buffer) =>
+  buf.toString("utf8").replace(/^enc:/, ""),
+);
+const safeStorageIsAvailableMock = vi.fn(() => true);
+
 vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn(),
@@ -21,6 +27,11 @@ vi.mock("electron", () => ({
   },
   shell: {
     trashItem: vi.fn(async () => undefined),
+  },
+  safeStorage: {
+    encryptString: safeStorageEncryptMock,
+    decryptString: safeStorageDecryptMock,
+    isEncryptionAvailable: safeStorageIsAvailableMock,
   },
 }));
 
@@ -297,6 +308,122 @@ describe("profile IPC helpers", () => {
       // path is exercised in production.
       const profilesToml = fs.readFileSync(path.join(root, "profiles.toml"), "utf8");
       expect(profilesToml).toContain('default_profile = "personal"');
+    });
+  });
+
+  describe("writeDesktopSecretsToProfile", () => {
+    afterEach(() => {
+      safeStorageEncryptMock.mockClear();
+      safeStorageIsAvailableMock.mockReset();
+      safeStorageIsAvailableMock.mockReturnValue(true);
+    });
+
+    it("encrypts and writes each secret to the target profile's keychain", async () => {
+      const root = createRoot();
+      const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+      ensureNamedProfileExists("personal", { env });
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+
+      const result = writeDesktopSecretsToProfile({
+        profile: "personal",
+        secrets: {
+          grokApiKey: "xai-fake-key",
+          telegramBotToken: "111:bot",
+        },
+      });
+
+      expect(result).toEqual({
+        profile: "personal",
+        written: ["grokApiKey", "telegramBotToken"],
+      });
+      expect(safeStorageEncryptMock).toHaveBeenCalledWith("xai-fake-key");
+      expect(safeStorageEncryptMock).toHaveBeenCalledWith("111:bot");
+
+      // Sanity-check that the encrypted values landed in the target
+      // profile's state.db — open it fresh and verify the secrets
+      // table holds the ciphertext we encrypted.
+      const { StateDb } = await import("../state/state-db");
+      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
+        profileName: "personal",
+      });
+      try {
+        expect(db.getSecret("grokApiKey")?.toString("utf8")).toBe("enc:xai-fake-key");
+        expect(db.getSecret("telegramBotToken")?.toString("utf8")).toBe("enc:111:bot");
+      } finally {
+        db.close();
+      }
+    });
+
+    it("empty-string values delete the secret instead of writing", async () => {
+      const root = createRoot();
+      const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+      ensureNamedProfileExists("personal", { env });
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      writeDesktopSecretsToProfile({
+        profile: "personal",
+        secrets: { grokApiKey: "first-value" },
+      });
+      // Replay-style clear: empty string deletes.
+      writeDesktopSecretsToProfile({
+        profile: "personal",
+        secrets: { grokApiKey: "" },
+      });
+
+      const { StateDb } = await import("../state/state-db");
+      const db = StateDb.open(path.join(root, "profiles", "personal", "state", "state.db"), {
+        profileName: "personal",
+      });
+      try {
+        expect(db.getSecret("grokApiKey")).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("rejects invalid profile names without opening any DB", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      expect(() =>
+        writeDesktopSecretsToProfile({
+          profile: "Bad Name",
+          secrets: { grokApiKey: "x" },
+        }),
+      ).toThrow(/Invalid profile name/);
+      expect(safeStorageEncryptMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects when the target profile dir doesn't exist", async () => {
+      const root = createRoot();
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      expect(() =>
+        writeDesktopSecretsToProfile({
+          profile: "ghost",
+          secrets: { grokApiKey: "x" },
+        }),
+      ).toThrow(/does not exist/);
+    });
+
+    it("throws when safeStorage encryption is unavailable rather than writing plaintext", async () => {
+      const root = createRoot();
+      const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+      ensureNamedProfileExists("personal", { env });
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      safeStorageIsAvailableMock.mockReturnValue(false);
+
+      const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
+      expect(() =>
+        writeDesktopSecretsToProfile({
+          profile: "personal",
+          secrets: { grokApiKey: "x" },
+        }),
+      ).toThrow(/encryption is unavailable/);
     });
   });
 

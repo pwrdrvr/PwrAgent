@@ -141,6 +141,8 @@ import type {
   GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -248,6 +250,7 @@ import {
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
@@ -380,6 +383,10 @@ const desktopApi = Object.freeze({
     request: GraduateDesktopBootstrapToProfileRequest,
   ): Promise<GraduateDesktopBootstrapToProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL, request),
+  writeSecretsToProfile: async (
+    request: WriteDesktopSecretsToProfileRequest,
+  ): Promise<WriteDesktopSecretsToProfileResponse> =>
+    await ipcRenderer.invoke(PROFILES_WRITE_SECRETS_CHANNEL, request),
   getBootInfo: async (): Promise<DesktopBootInfo> =>
     await ipcRenderer.invoke(APP_GET_BOOT_INFO_CHANNEL),
   quitApp: async (): Promise<void> => await ipcRenderer.invoke(APP_QUIT_CHANNEL),

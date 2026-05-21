@@ -147,6 +147,8 @@ import type {
   GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -212,6 +214,14 @@ export type DesktopApi = {
   graduateBootstrapToProfile?: (
     request: GraduateDesktopBootstrapToProfileRequest,
   ) => Promise<GraduateDesktopBootstrapToProfileResponse>;
+  /** Write secrets directly to a specific profile's keychain. The
+   *  wizard uses this on Finish to graduate in-memory secret values
+   *  (xAI API key, messaging tokens) to the operator's chosen
+   *  profile — avoids stranding them in `.bootstrap/state.db` and
+   *  enables per-profile xAI keys in Multiple mode. */
+  writeSecretsToProfile?: (
+    request: WriteDesktopSecretsToProfileRequest,
+  ) => Promise<WriteDesktopSecretsToProfileResponse>;
   /** Returns the boot decision + state mode so the wizard can pick
    *  the right entry point (full first-run vs. slim "set up `foo`?"
    *  confirmation for a CLI/env-named missing profile). */

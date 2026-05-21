@@ -1,6 +1,7 @@
-import { ipcMain, shell } from "electron";
+import { ipcMain, safeStorage, shell } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import type {
   CreateDesktopPwrAgentProfileRequest,
   CreateDesktopPwrAgentProfileResponse,
@@ -15,6 +16,8 @@ import type {
   SetDesktopPwrAgentProfileCodexProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
+  WriteDesktopSecretsToProfileRequest,
+  WriteDesktopSecretsToProfileResponse,
 } from "@pwragent/shared";
 import {
   PROFILES_CREATE_CHANNEL,
@@ -24,7 +27,9 @@ import {
   PROFILES_OPEN_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_WRITE_SECRETS_CHANNEL,
 } from "../../shared/ipc";
+import { StateDb } from "../state/state-db";
 import {
   PWRAGENT_PROFILE_ENV,
   assertProfileCanBeDeleted,
@@ -308,6 +313,73 @@ export function graduateDesktopBootstrapToProfile(
   return { graduated: true, targetProfile };
 }
 
+/**
+ * Write secrets directly to a specific PwrAgent profile's keychain
+ * (its state.db `secrets` table), encrypting each value via
+ * `safeStorage` first. Used by the wizard's Finish path to graduate
+ * in-memory secret values (xAI API key, messaging tokens) collected
+ * during the wizard to the operator's chosen real profile —
+ * specifically to support per-profile xAI keys in Multiple mode and
+ * to avoid stranding secrets in `.bootstrap/state.db` when the
+ * wizard runs in bootstrap mode.
+ *
+ * Implementation notes:
+ *   - Opens the target profile's state.db transiently (not via the
+ *     singleton) so this can run in any app-state mode, including
+ *     bootstrap mode where the singleton is bound to `.bootstrap/`.
+ *   - Closes the transient DB even on error to avoid leaking
+ *     better-sqlite3 handles.
+ *   - Empty string values delete the secret (clears stale entries).
+ *   - Unencrypted-storage edge cases (basic_text / unavailable) are
+ *     surfaced as a thrown error rather than silently writing
+ *     plaintext — caller decides whether to retry or warn.
+ */
+export function writeDesktopSecretsToProfile(
+  request: WriteDesktopSecretsToProfileRequest,
+): WriteDesktopSecretsToProfileResponse {
+  const profile = request.profile.trim();
+  if (!isValidProfileName(profile)) {
+    throw new Error(`Invalid profile name "${profile}".`);
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("Secret storage encryption is unavailable.");
+  }
+
+  const profileDir = resolveProfileDir(profile);
+  if (!fs.existsSync(profileDir)) {
+    throw new Error(`Profile "${profile}" does not exist.`);
+  }
+
+  const dbPath = path.join(profileDir, "state", "state.db");
+  // Ensure the state dir exists. For a freshly-created paired profile
+  // the wizard just called ensureNamedProfileExists which seeded
+  // `<profile>/state/`, so this is normally a no-op — but graduating
+  // to an existing profile that's never been opened (rare, but
+  // possible via Settings → Profiles "Create") needs it.
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  const stateDb = StateDb.open(dbPath, { profileName: profile });
+  const written: string[] = [];
+  try {
+    for (const [name, value] of Object.entries(request.secrets)) {
+      if (typeof name !== "string" || name.length === 0) continue;
+      if (typeof value !== "string") continue;
+      if (value.length === 0) {
+        stateDb.deleteSecret(name);
+        written.push(name);
+        continue;
+      }
+      const ciphertext = safeStorage.encryptString(value);
+      stateDb.setSecret(name, ciphertext);
+      written.push(name);
+    }
+  } finally {
+    stateDb.close();
+  }
+
+  return { profile, written };
+}
+
 export async function setDesktopPwrAgentProfileCodexProfile(
   request: SetDesktopPwrAgentProfileCodexProfileRequest,
 ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> {
@@ -413,6 +485,16 @@ export function registerProfilesIpcHandlers(
       return response;
     },
   );
+
+  ipcMain.removeHandler(PROFILES_WRITE_SECRETS_CHANNEL);
+  ipcMain.handle(
+    PROFILES_WRITE_SECRETS_CHANNEL,
+    async (
+      _event,
+      request: WriteDesktopSecretsToProfileRequest,
+    ): Promise<WriteDesktopSecretsToProfileResponse> =>
+      writeDesktopSecretsToProfile(request),
+  );
 }
 
 export function disposeProfilesIpcHandlers(): void {
@@ -423,4 +505,5 @@ export function disposeProfilesIpcHandlers(): void {
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
   ipcMain.removeHandler(PROFILES_SET_CODEX_PROFILE_CHANNEL);
   ipcMain.removeHandler(PROFILES_GRADUATE_BOOTSTRAP_CHANNEL);
+  ipcMain.removeHandler(PROFILES_WRITE_SECRETS_CHANNEL);
 }

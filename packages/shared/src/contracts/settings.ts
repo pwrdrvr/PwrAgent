@@ -788,6 +788,35 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
  * graduation.
  */
 /**
+ * Write one or more secrets to a specific profile's keychain. Used by
+ * the onboarding wizard's Finish path in bootstrap mode: the wizard
+ * collects xAI API keys + messaging tokens in renderer memory (it
+ * doesn't write to the bootstrap profile's keychain — those values
+ * would be stranded on `.bootstrap/state.db` and never reach the
+ * operator's chosen real profile), and at graduation it writes the
+ * buffered values to each created profile's keychain via this IPC.
+ *
+ * Multiple-profile mode supports per-profile xAI keys: profile A's
+ * `secrets` record can hold a key and profile B's can be empty. The
+ * caller invokes this IPC once per profile.
+ */
+export type WriteDesktopSecretsToProfileRequest = {
+  /** Target PwrAgent profile name. Must exist (the wizard creates it
+   *  before calling this IPC) and pass `isValidProfileName`. */
+  profile: string;
+  /** Secrets to write. Empty-string values are treated as "delete the
+   *  secret" so the same payload can clear stale entries on Replay. */
+  secrets: Record<string, string>;
+};
+
+export type WriteDesktopSecretsToProfileResponse = {
+  profile: string;
+  /** Names that were actually written / cleared (skips empty noop
+   *  inputs for unknown secret names). Useful for telemetry. */
+  written: string[];
+};
+
+/**
  * Boot info surfaced from the main process to the renderer so the
  * onboarding wizard can adjust its entry point. Returned by the
  * `getBootInfo` IPC. The `mode` distinguishes "the operator's
