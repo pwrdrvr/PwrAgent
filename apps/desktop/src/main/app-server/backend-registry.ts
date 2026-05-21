@@ -1885,6 +1885,26 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Throw if any method that reads or writes Codex thread data is
+   * reached in bootstrap mode. Companion to the silent empty-return
+   * in `listThreads` — that path needs to keep the sidebar quiet
+   * for the focus listener, but explicit operator actions
+   * (readThread, startThread, startTurn, startReview,
+   * submitServerRequest, repairCodexThreadDirectoryRelationship)
+   * should never reach the registry from a bootstrap window. The
+   * wizard occupies the entire renderer in bootstrap mode; if any
+   * of these fire, it's a code bug and we want a loud failure, not
+   * silent contamination of the operator's real Codex install.
+   */
+  private assertNotBootstrap(method: string): void {
+    if (this.isBootstrapModeFn()) {
+      throw new Error(
+        `backend-registry.${method} is forbidden in bootstrap mode`,
+      );
+    }
+  }
+
   async listThreads(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
@@ -2381,6 +2401,7 @@ export class DesktopBackendRegistry {
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
+    this.assertNotBootstrap("readThread");
     const backend = request.backend ?? "codex";
     const replay =
       backend === "codex"
@@ -2439,6 +2460,7 @@ export class DesktopBackendRegistry {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
+    this.assertNotBootstrap("startThread");
     const {
       backend,
       executionMode = "default",
@@ -2568,6 +2590,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    this.assertNotBootstrap("startTurn");
     // Race-safe flush: if a queued permission-mode change is still
     // pending when the user fires off the next turn (e.g. submit
     // immediately after the previous turn ended), apply it before
@@ -2772,6 +2795,7 @@ export class DesktopBackendRegistry {
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    this.assertNotBootstrap("startReview");
     if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
       throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
     }
@@ -3636,6 +3660,7 @@ export class DesktopBackendRegistry {
   async submitServerRequest(
     params: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> {
+    this.assertNotBootstrap("submitServerRequest");
     const key = buildPendingRequestKey(params);
     const pending = this.pendingServerRequests.get(key);
     if (!pending) {

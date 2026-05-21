@@ -116,6 +116,23 @@ export function resolvePwragentRoot(options?: {
  * escape hatch turns missing branches back into `open` for test
  * fixtures and replay harnesses.
  */
+/**
+ * Exhaustiveness check for tagged-union switches. Call from a
+ * `default:` arm to make TypeScript fail the build when a new
+ * variant is added without a handler. Pattern stolen from the
+ * standard "never type" trick documented in the TS handbook.
+ *
+ * Used by callers of `ProfileBootDecision` switches (see
+ * `logBootDecision` in `index.ts` and `buildBootInfo` in
+ * `ipc/boot-info.ts`). Lives here so the decision type and its
+ * exhaustiveness assertion stay co-located.
+ */
+export function assertUnreachableProfileBootDecision(decision: never): never {
+  throw new Error(
+    `unhandled ProfileBootDecision: ${JSON.stringify(decision)}`,
+  );
+}
+
 export type ProfileBootDecision =
   | {
       kind: "open";

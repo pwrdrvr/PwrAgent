@@ -22,6 +22,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
+import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
   isValidProfileName,
   provisionPairedProfiles,
@@ -476,18 +477,10 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     ): Promise<void> => {
       const api = props.desktopApi;
       if (!api?.writeSecretsToProfile) return;
-      // Drop keys whose value is the empty string before the IPC
-      // call. The IPC's empty-value path is intended for explicit
-      // clears (Replay-mode "wipe this stored secret"), not for
-      // "operator typed nothing during a fresh wizard." Distinguishing
-      // those at the renderer level keeps the keychain quiet for
-      // wizard sessions where the operator skipped optional fields.
-      const nonEmpty: Record<string, string> = {};
-      for (const [name, value] of Object.entries(secrets)) {
-        if (typeof value === "string" && value.length > 0) {
-          nonEmpty[name] = value;
-        }
-      }
+      // Trim + drop empties via the pure filter — see
+      // `filterBufferedSecrets` for the rationale (clipboard newlines,
+      // half-typed input, etc).
+      const nonEmpty = filterBufferedSecrets(secrets);
       if (Object.keys(nonEmpty).length === 0) return;
       try {
         await api.writeSecretsToProfile({ profile: targetProfile, secrets: nonEmpty });

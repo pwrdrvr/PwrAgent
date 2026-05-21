@@ -11,6 +11,7 @@ import {
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
 import {
+  assertUnreachableProfileBootDecision,
   findLiveProfileRuntimeMarkers,
   isValidProfileName,
   resolveActiveProfileName,
@@ -78,6 +79,11 @@ export function buildBootInfo(): DesktopBootInfo {
       };
     case "no-profile-configured":
       return { mode, decisionKind: "no-profile-configured" };
+    default:
+      // See note on `assertUnreachableProfileBootDecision`. Adding
+      // a new ProfileBootDecision variant without extending
+      // `DesktopBootInfo['decisionKind']` is a compile error here.
+      return assertUnreachableProfileBootDecision(decision);
   }
 }
 

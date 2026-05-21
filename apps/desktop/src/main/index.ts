@@ -92,6 +92,7 @@ import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { buildApplicationMenuTemplate } from "./menu";
 import {
+  assertUnreachableProfileBootDecision,
   cleanupBootstrapProfile,
   resolveActiveProfileName,
   resolveProfileBootDecision,
@@ -138,6 +139,11 @@ function logBootDecision(decision: ProfileBootDecision): void {
     case "no-profile-configured":
       mainLog.info("boot decision: no-profile-configured — bootstrap mode");
       return;
+    default:
+      // Adding a new ProfileBootDecision variant without handling it
+      // here is a compile error. Replace this throw with an info()
+      // log + the right decision behavior in the boot pipeline.
+      assertUnreachableProfileBootDecision(decision);
   }
 }
 
@@ -340,8 +346,23 @@ export function bootstrapApp(): void {
     // Wizard Finish graduates the bootstrap state into a real
     // profile and opens a new window for it (see Task E).
     const bootDecision = resolveProfileBootDecision();
-    const bootMode: "active-profile" | "bootstrap" =
-      bootDecision.kind === "open" ? "active-profile" : "bootstrap";
+    // Reduce the 4-variant decision to a 2-variant app-state mode.
+    // The explicit switch (vs. a bare `kind === "open" ? … : …`)
+    // forces a compile error if a future variant is added — the
+    // missing case will fall through to `assertUnreachable…` and
+    // fail typecheck rather than silently fall into bootstrap mode.
+    const bootMode: "active-profile" | "bootstrap" = (() => {
+      switch (bootDecision.kind) {
+        case "open":
+          return "active-profile";
+        case "missing-named-profile":
+        case "missing-default-profile":
+        case "no-profile-configured":
+          return "bootstrap";
+        default:
+          assertUnreachableProfileBootDecision(bootDecision);
+      }
+    })();
     logBootDecision(bootDecision);
     // Stash the boot decision so the renderer can read it via
     // `getBootInfo` IPC once the wizard mounts. Specifically the

@@ -7502,6 +7502,53 @@ command = "pnpm dev"
       await registry.close();
     });
 
+    it("throws on readThread in bootstrap mode", async () => {
+      // Defense in depth: even if a renderer has a stale Codex
+      // threadId in memory and tries to read it, the registry
+      // refuses. The error surfaces as a thrown IPC reject; the
+      // wizard's only-window-is-the-wizard invariant means no
+      // operator-visible path leads here, so failing loud is the
+      // right signal that something is wrong.
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      await expect(
+        registry.readThread({
+          backend: "codex",
+          threadId: "thread-abc",
+        }),
+      ).rejects.toThrow(/readThread is forbidden in bootstrap mode/);
+
+      await registry.close();
+    });
+
+    it("throws on startThread in bootstrap mode", async () => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({}),
+        overlayStore: createOverlayStoreMock(),
+        isBootstrapMode: () => true,
+        isCodexBootstrapDeferred: () => false,
+      });
+
+      await expect(
+        registry.startThread({
+          backend: "codex",
+          executionMode: "default",
+          cwd: "/tmp/example",
+        }),
+      ).rejects.toThrow(/startThread is forbidden in bootstrap mode/);
+
+      await registry.close();
+    });
+
     it("hits the backends normally when isBootstrapMode is false", async () => {
       // Sanity: the gate is a NO-OP outside bootstrap mode. Production
       // boots into active-profile mode and the registry behaves
