@@ -4866,6 +4866,58 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("releases queued turns for Grok terminal events", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const first = await registry.submitTurn({
+      backend: "grok",
+      threadId: "thread-1",
+      origin: "manual",
+      input: [{ type: "text", text: "first" }],
+    });
+    const second = await registry.submitTurn({
+      backend: "grok",
+      threadId: "thread-1",
+      origin: "manual",
+      input: [{ type: "text", text: "second" }],
+    });
+
+    expect(first.status).toBe("started");
+    expect(second.status).toBe("queued");
+    expect(grokClient.lastStartTurnParams?.input).toEqual([
+      { type: "text", text: "first" },
+    ]);
+
+    await grokClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    await waitForCondition(() =>
+      grokClient.lastStartTurnParams?.input.some(
+        (item) => item.type === "text" && item.text === "second",
+      ) ?? false,
+    );
+    expect(grokClient.lastStartTurnParams?.input).toEqual([
+      { type: "text", text: "second" },
+    ]);
+
+    await registry.close();
+  });
+
   it("emits local turn lifecycle events for registry-started Codex turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/read"] },

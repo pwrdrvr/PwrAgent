@@ -189,4 +189,43 @@ describe("DesktopAutomationService", () => {
       },
     });
   });
+
+  it("cancels every queued automation turn when deleting an automation", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+
+    for (let index = 1; index <= 55; index += 1) {
+      const run = store.createRun({
+        id: `run-${index}`,
+        automationId: created.automation.id,
+        trigger: "manual",
+        now: 1_000 + index,
+      });
+      expect(run).toBeDefined();
+      store.markRunQueued({
+        runId: `run-${index}`,
+        queueEntryId: `queue-${index}`,
+        queuedAt: 2_000 + index,
+        now: 2_000 + index,
+      });
+    }
+
+    await service.delete({ automationId: created.automation.id });
+
+    expect(registry.cancelQueuedTurn).toHaveBeenCalledTimes(55);
+    expect(
+      (registry.cancelQueuedTurn as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([entryId]) => entryId,
+      ),
+    ).toEqual(Array.from({ length: 55 }, (_, index) => `queue-${55 - index}`));
+  });
 });

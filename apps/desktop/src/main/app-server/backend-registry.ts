@@ -6526,10 +6526,9 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      event.backend === "codex" &&
-      (event.notification.method === "turn/completed" ||
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled")
+      event.notification.method === "turn/completed" ||
+      event.notification.method === "turn/failed" ||
+      event.notification.method === "turn/cancelled"
     ) {
       const notification = event.notification as {
         params: {
@@ -6541,7 +6540,7 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
-      if (turnId) {
+      if (event.backend === "codex" && turnId) {
         const activeTurnModeKey = buildActiveTurnModeKey(
           notification.params.threadId,
           turnId,
@@ -6566,9 +6565,11 @@ export class DesktopBackendRegistry {
       // Turn-end is the resume boundary — flush any queued mode change
       // now. Fire-and-forget; failures are logged + retried inside
       // flushQueuedExecutionModeIfPresent.
-      void this.flushQueuedExecutionModeIfPresent(
-        notification.params.threadId,
-      );
+      if (event.backend === "codex") {
+        void this.flushQueuedExecutionModeIfPresent(
+          notification.params.threadId,
+        );
+      }
     }
 
     if (

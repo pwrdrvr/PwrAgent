@@ -215,8 +215,7 @@ export class DesktopAutomationService {
 
   async delete(request: AutomationIdRequest): Promise<AutomationMutationResponse> {
     const pendingQueueEntryIds = this.options.store
-      .listRunsForAutomation(request.automationId)
-      .filter((run) => run.status === "pending" || run.status === "queued")
+      .listPendingOrQueuedRunsForAutomation(request.automationId)
       .map((run) => run.queueEntryId)
       .filter((entryId): entryId is string => Boolean(entryId));
     const automation = this.options.store.deleteAutomation(request.automationId);
