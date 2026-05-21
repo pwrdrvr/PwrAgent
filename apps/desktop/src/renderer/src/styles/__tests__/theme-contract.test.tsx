@@ -597,6 +597,29 @@ describe("Tangerine Terminal theme contract", () => {
     expect(inlineCodeRule).toContain("max-width: 100%;");
   });
 
+  it("wraps fenced code blocks the same way the composer does", () => {
+    // The composer's `<pre>` uses `white-space: pre-wrap` so a pasted
+    // long line wraps inside the input rather than scrolling. The
+    // transcript previously rendered fenced blocks with
+    // `overflow-x: auto` + `white-space: pre`, which meant the same
+    // text the user typed in the composer rendered with horizontal
+    // scroll once it landed in the transcript. Mirror the composer:
+    // `pre-wrap` preserves newlines + indentation but lets soft lines
+    // wrap, and `overflow-wrap: anywhere` lets unbroken strings (URLs,
+    // long identifiers) break at any character. The inner `<code>`
+    // inherits both so its `white-space: pre` default doesn't override
+    // the pre's wrap.
+    const preRule = extractRuleBody(css, ".transcript-message__pre");
+    expect(preRule).toContain("white-space: pre-wrap;");
+    expect(preRule).toContain("overflow-wrap: anywhere;");
+    expect(preRule).not.toContain("overflow-x: auto;");
+
+    const preCodeRule = extractRuleBody(css, ".transcript-message__pre code");
+    expect(preCodeRule).toContain("white-space: inherit;");
+    expect(preCodeRule).toContain("overflow-wrap: inherit;");
+    expect(preCodeRule).not.toContain("white-space: pre;");
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");

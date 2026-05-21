@@ -5850,11 +5850,12 @@ textarea,
 }
 
 .transcript-message__pre {
-  overflow-x: auto;
   padding: 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-app);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .transcript-message__pre code {
@@ -5865,7 +5866,8 @@ textarea,
   font-size: 12px;
   line-height: 1.6;
   font-family: var(--font-mono);
-  white-space: pre;
+  white-space: inherit;
+  overflow-wrap: inherit;
 }
 
 .transcript-message__link {
