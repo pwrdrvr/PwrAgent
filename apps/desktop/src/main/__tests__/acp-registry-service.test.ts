@@ -230,6 +230,36 @@ describe("AcpRegistryService", () => {
     });
   });
 
+  it("allows the pinned Gemini CLI ACP package from the default allowlist", () => {
+    const service = new AcpRegistryService();
+    const snapshot = {
+      fetchedAt: 1,
+      agents: normalizeRegistry({
+        agents: [
+          {
+            id: "gemini",
+            name: "Gemini CLI",
+            version: "0.42.0",
+            license: "Apache-2.0",
+            distribution: {
+              npx: {
+                package: "@google/gemini-cli@0.42.0",
+                args: ["--acp"],
+              },
+            },
+          },
+        ],
+      }),
+      raw: {},
+    };
+
+    expect(service.applyAllowlist(snapshot)[0]).toMatchObject({
+      installable: true,
+      verificationStatus: "not-applicable",
+      allowlist: { allowed: true, ruleId: "gemini-v0.42.0-npx" },
+    });
+  });
+
   it("rejects registry HTTP failures", async () => {
     const service = new AcpRegistryService({
       fetch: async () => ({

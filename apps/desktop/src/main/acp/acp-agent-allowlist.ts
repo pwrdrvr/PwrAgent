@@ -27,10 +27,11 @@ export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
     allowUnverifiedBinary: true,
   },
   {
-    id: "gemini-npx",
+    id: "gemini-v0.42.0-npx",
     registryId: "gemini",
+    versions: ["0.42.0"],
     distributionKinds: ["npx"],
-    allowedPackageNames: ["@google/gemini-cli"],
+    allowedPackageNames: ["@google/gemini-cli@0.42.0"],
   },
 ];
 
