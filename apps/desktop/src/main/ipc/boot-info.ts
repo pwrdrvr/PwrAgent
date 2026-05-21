@@ -1,8 +1,20 @@
 import { app, ipcMain } from "electron";
-import type { DesktopBootInfo } from "@pwragent/shared";
-import { APP_GET_BOOT_INFO_CHANNEL, APP_QUIT_CHANNEL } from "../../shared/ipc";
+import type {
+  DesktopBootInfo,
+  WaitForDesktopProfileAliveRequest,
+  WaitForDesktopProfileAliveResponse,
+} from "@pwragent/shared";
+import {
+  APP_GET_BOOT_INFO_CHANNEL,
+  APP_QUIT_CHANNEL,
+  APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
+} from "../../shared/ipc";
 import { getMainLogger } from "../log";
-import { resolveActiveProfileName } from "../profile";
+import {
+  findLiveProfileRuntimeMarkers,
+  isValidProfileName,
+  resolveActiveProfileName,
+} from "../profile";
 import { getAppStateMode, getBootDecision } from "../state/app-state";
 
 const bootInfoLog = getMainLogger("pwragent:boot-info");
@@ -76,34 +88,58 @@ export function registerBootInfoIpcHandlers(): void {
     async (): Promise<DesktopBootInfo> => buildBootInfo(),
   );
 
-  // `quitApp` is the wizard's exit hatch — fires from the
-  // bootstrap-confirm screen's "Quit PwrAgent" button AND from the
-  // wizard's post-graduation flow (after openPwrAgentProfile spawns
-  // the new profile's window). `app.quit()` fires before-quit so
-  // app-state shutdown runs cleanly and `.bootstrap/` cleanup
-  // happens on the next boot.
-  //
-  // Dev-mode exception: skip the quit when NODE_ENV !== "production".
-  // The dev-server race is real — when the bootstrap process exits,
-  // the parent `electron-vite` (or similar dev harness) often tears
-  // down the Vite dev server too, leaving the spawned profile
-  // window's renderer with chrome-error://chromewebdata/. Production
-  // builds (signed DMG) load the renderer from `file://`, no dev
-  // server involved, so the quit is safe there. In dev the operator
-  // closes the bootstrap window manually after the new window is up.
+  // `quitApp` fires from the wizard's bootstrap-confirm "Quit
+  // PwrAgent" button AND from the post-graduation flow (after
+  // `openPwrAgentProfile` spawns the new profile's window and
+  // `waitForProfileAlive` confirms it loaded). `app.quit()` fires
+  // before-quit so app-state shutdown runs cleanly. The dev-mode
+  // Vite-dev-server race that earlier motivated a no-op quit is
+  // now sidestepped by `waitForProfileAlive`: the wizard doesn't
+  // call quit until the new process has fully loaded its renderer,
+  // by which point the dev server's lifecycle no longer matters.
   ipcMain.removeHandler(APP_QUIT_CHANNEL);
   ipcMain.handle(APP_QUIT_CHANNEL, async (): Promise<void> => {
-    if (process.env.NODE_ENV !== "production") {
-      bootInfoLog.info(
-        "quitApp skipped in dev — close the bootstrap window manually",
-      );
-      return;
-    }
     app.quit();
   });
+
+  // Wait for another PwrAgent process to be alive on a given profile.
+  // The spawned Electron writes a runtime-instance heartbeat marker
+  // shortly after `initializeAppState` runs — usually within ~500ms
+  // of `spawn()` returning. This IPC polls every 200ms and resolves
+  // as soon as the marker shows up. The wizard's graduation path
+  // uses this to delay its own quit until the new window is up.
+  ipcMain.removeHandler(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL);
+  ipcMain.handle(
+    APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
+    async (
+      _event,
+      request: WaitForDesktopProfileAliveRequest,
+    ): Promise<WaitForDesktopProfileAliveResponse> => {
+      const profile = request.profile.trim();
+      if (!isValidProfileName(profile)) {
+        throw new Error(`Invalid profile name "${profile}".`);
+      }
+      const timeoutMs = request.timeoutMs ?? 10_000;
+      const pollIntervalMs = 200;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (findLiveProfileRuntimeMarkers(profile).length > 0) {
+          return {
+            profile,
+            alive: true,
+            waitedMs: Date.now() - startedAt,
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+      bootInfoLog.warn("waitForProfileAlive timeout", { profile, timeoutMs });
+      return { profile, alive: false, waitedMs: Date.now() - startedAt };
+    },
+  );
 }
 
 export function disposeBootInfoIpcHandlers(): void {
   ipcMain.removeHandler(APP_GET_BOOT_INFO_CHANNEL);
   ipcMain.removeHandler(APP_QUIT_CHANNEL);
+  ipcMain.removeHandler(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL);
 }

@@ -826,6 +826,35 @@ export type WriteDesktopSecretsToProfileResponse = {
  * profile) — the wizard surfaces it as "PwrAgent doesn't know `foo`
  * yet. Set it up, or quit?".
  */
+/**
+ * Wait for another PwrAgent process to be alive on a target profile.
+ *
+ * Used by the onboarding wizard's Finish path: after spawning the
+ * new profile's Electron via `openPwrAgentProfile`, the wizard
+ * polls this IPC until the spawned process writes its first runtime
+ * heartbeat marker — proving its app state initialized and its
+ * renderer mounted. Only then does the wizard call `quitApp` to
+ * close the bootstrap window. Critical for dev mode, where the
+ * parent `electron-vite` process kills the Vite dev server when
+ * the bootstrap Electron exits; waiting lets the new process load
+ * its renderer assets first.
+ */
+export type WaitForDesktopProfileAliveRequest = {
+  profile: string;
+  /** Maximum wait, in ms. Defaults to 10_000 in the handler.
+   *  Caller should set it tight enough that a UI hang doesn't
+   *  feel broken (the wizard's Done screen is showing). */
+  timeoutMs?: number;
+};
+
+export type WaitForDesktopProfileAliveResponse = {
+  profile: string;
+  alive: boolean;
+  /** How long we waited before the marker showed up (or the
+   *  timeout fired). For telemetry / debugging only. */
+  waitedMs: number;
+};
+
 export type DesktopBootInfo = {
   mode: "active-profile" | "bootstrap";
   /** Boot decision kind, mirrored to the renderer so the wizard can

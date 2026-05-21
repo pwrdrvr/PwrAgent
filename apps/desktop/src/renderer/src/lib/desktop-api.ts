@@ -147,6 +147,8 @@ import type {
   GraduateDesktopBootstrapToProfileResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
+  WaitForDesktopProfileAliveRequest,
+  WaitForDesktopProfileAliveResponse,
   WriteDesktopSecretsToProfileRequest,
   WriteDesktopSecretsToProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
@@ -230,6 +232,14 @@ export type DesktopApi = {
    *  confirmation step when the operator declines to set up the
    *  requested profile. */
   quitApp?: () => Promise<void>;
+  /** Wait for another PwrAgent process to be alive on a target
+   *  profile. The wizard's graduation path uses this to delay its
+   *  own quit until the new profile's window has fully loaded —
+   *  critical in dev mode where the Vite dev server dies with the
+   *  bootstrap process. */
+  waitForProfileAlive?: (
+    request: WaitForDesktopProfileAliveRequest,
+  ) => Promise<WaitForDesktopProfileAliveResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

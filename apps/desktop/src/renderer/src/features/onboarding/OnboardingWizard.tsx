@@ -506,11 +506,17 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // Electron instance pointed at the operator's chosen profile (via
   // `openPwrAgentProfile`, which `spawn()`s a detached child process)
   // and then quits the current (bootstrap) instance so the operator
-  // isn't left with two windows. Pre-fix the bootstrap window kept
-  // running with `.bootstrap/` active, and since the bootstrap
-  // config has no codex.profile set, it fell back to the Codex
-  // system default and surfaced the operator's real Codex Desktop
-  // threads — exactly the surprise this PR set out to avoid.
+  // isn't left with two windows.
+  //
+  // The dev-server gotcha: in dev mode, the parent `electron-vite`
+  // process owns the Vite dev server. When the bootstrap Electron
+  // exits, the dev server dies with it. If we quit before the
+  // spawned process has loaded its renderer assets from Vite, the
+  // new window ends up at `chrome-error://chromewebdata/`. So we
+  // wait for the spawned process's runtime heartbeat marker to
+  // appear (proving its app state initialized and renderer mounted)
+  // before issuing the quit. By that point the new process has its
+  // renderer cached in memory; Vite's lifecycle no longer matters.
   //
   // In active-profile mode (Replay), we don't quit — the operator
   // is still in their real profile and that window IS their session.
@@ -528,7 +534,34 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         );
         return;
       }
-      if (props.bootInfo?.mode === "bootstrap" && api.quitApp) {
+      if (props.bootInfo?.mode !== "bootstrap") return;
+      if (api.waitForProfileAlive) {
+        try {
+          const result = await api.waitForProfileAlive({
+            profile: targetProfile,
+            timeoutMs: 10_000,
+          });
+          if (!result.alive) {
+            // Don't quit the bootstrap on timeout — leaving it
+            // alive gives the operator a fallback window if the
+            // spawn never came up. Bad outcome, but better than
+            // both windows gone.
+            // eslint-disable-next-line no-console
+            console.warn(
+              `Onboarding: spawned "${targetProfile}" didn't report alive within timeout; keeping bootstrap window open`,
+            );
+            return;
+          }
+        } catch (caught) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "Onboarding: waitForProfileAlive failed; skipping quit",
+            caught,
+          );
+          return;
+        }
+      }
+      if (api.quitApp) {
         try {
           await api.quitApp();
         } catch (caught) {
