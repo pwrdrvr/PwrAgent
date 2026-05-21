@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -253,7 +253,71 @@ export async function launchElectronApp(params: {
     },
     close: async () => {
       await electronApp.close();
+      // The wizard's graduation path can spawn a detached child
+      // Electron process for the operator's chosen profile (see
+      // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
+      // outlives the test's bootstrap Electron and keeps writing
+      // to `<homeRoot>/.pwragent/profiles/<name>/` (state.db
+      // heartbeats, Codex plugin clones, etc.). If we rm the
+      // tmpdir while the child is mid-write, rm races and ENOTEMPTYs.
+      //
+      // Find any live PwrAgent instances under this tmpdir via
+      // their runtime-instance heartbeat markers, kill them, then
+      // proceed with cleanup. Each marker file is a JSON blob
+      // containing the process's PID; the marker dir layout matches
+      // `startProfileRuntimeHeartbeat` in `main/profile.ts`.
+      await killSpawnedProfileProcessesUnder(homeRoot);
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void> {
+  const profilesDir = path.join(homeRoot, ".pwragent", "profiles");
+  let profileEntries: string[];
+  try {
+    profileEntries = await readdir(profilesDir);
+  } catch {
+    return; // No profiles ever created; nothing to clean up.
+  }
+  const pids = new Set<number>();
+  for (const profile of profileEntries) {
+    const markerDir = path.join(
+      profilesDir,
+      profile,
+      "state",
+      "runtime-instances",
+    );
+    let markers: string[];
+    try {
+      markers = await readdir(markerDir);
+    } catch {
+      continue;
+    }
+    for (const marker of markers) {
+      try {
+        const raw = await readFile(path.join(markerDir, marker), "utf8");
+        const parsed = JSON.parse(raw) as { processId?: number };
+        if (typeof parsed.processId === "number" && parsed.processId > 0) {
+          pids.add(parsed.processId);
+        }
+      } catch {
+        // Markers can be mid-write (atomic rename in progress) or
+        // already removed; skip.
+      }
+    }
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process already dead — that's fine.
+    }
+  }
+  // Give the killed processes a moment to release their open file
+  // handles before we attempt the rm. SIGTERM is async; without
+  // this sleep we still race against the OS.
+  if (pids.size > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
