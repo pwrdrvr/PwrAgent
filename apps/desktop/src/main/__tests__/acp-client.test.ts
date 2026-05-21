@@ -78,6 +78,10 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       mcpServers: [],
     });
+    expect(transport.requests[2]?.params).toEqual({
+      sessionId: "session-1",
+      prompt: [{ type: "text", text: "hello" }],
+    });
     expect(prompt).toEqual({ sessionId: "session-1", turnId: "turn-1" });
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Test ACP",
@@ -117,6 +121,10 @@ describe("AcpAgentClient", () => {
       "session/new",
       "session/prompt",
     ]);
+    expect(transport.requests[2]?.params).toEqual({
+      sessionId: "session-1",
+      prompt: [{ type: "text", text: "keep going" }],
+    });
     expect(transport.notifications).toEqual([
       {
         method: "session/cancel",

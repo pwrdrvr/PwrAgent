@@ -120,7 +120,7 @@ export class AcpAgentClient {
   }): Promise<{ sessionId: string; turnId: string }> {
     const result = await this.options.transport.request("session/prompt", {
       sessionId: params.sessionId,
-      prompt: params.prompt,
+      prompt: textPrompt(params.prompt),
     });
     const record = asRecord(result);
     return {
@@ -161,7 +161,7 @@ export class AcpAgentClient {
     void this.options.transport
       .request("session/prompt", {
         sessionId: params.sessionId,
-        prompt: params.prompt,
+        prompt: textPrompt(params.prompt),
       })
       .catch((error) =>
         Promise.resolve(
@@ -217,6 +217,10 @@ export class AcpAgentClient {
     }
     return normalizer;
   }
+}
+
+function textPrompt(text: string): Array<{ type: "text"; text: string }> {
+  return [{ type: "text", text }];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
