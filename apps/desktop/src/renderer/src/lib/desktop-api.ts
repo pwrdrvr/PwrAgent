@@ -505,6 +505,14 @@ export type DesktopApi = {
   ) => () => void;
   /** Spawns or focuses the dedicated Messaging Activity window. */
   openMessagingActivityWindow?: () => Promise<void>;
+  /** Shut down the messaging runtime in *this* process and release
+   *  its lease. The wizard calls this right before spawning the
+   *  operator's chosen profile in a child Electron, so the bootstrap
+   *  process releases adapter resources (Telegram long-poll, Discord
+   *  gateway, etc.) before the child starts up — otherwise the two
+   *  processes race and the upstream returns 409 / "another shard
+   *  connected" / similar exclusivity errors. Idempotent. */
+  shutdownMessagingRuntime?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;
   /**
    * Main → renderer push: fires when the user invokes the app's

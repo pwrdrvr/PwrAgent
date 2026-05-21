@@ -18,7 +18,10 @@ import type {
   DesktopSettingsSnapshot,
   MessagingChannelKind,
   MessagingPairingScope,
+  SettingsCredentialTestKind,
+  SettingsCredentialTestResult,
 } from "@pwragent/shared";
+import { isMessagingRuntimeSecret } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
@@ -517,6 +520,31 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     async (targetProfile: string): Promise<void> => {
       const api = props.desktopApi;
       if (!api?.openPwrAgentProfile) return;
+      // Release any messaging adapters this process is holding before
+      // we spawn the operator's chosen profile in a new Electron.
+      // Adapters like Telegram long-poll and Discord gateway hold
+      // exclusive resources upstream; without this release the child
+      // process's runtime collides with ours and the upstream returns
+      // 409 / "another shard already connected" / similar — leaving
+      // the operator with a *visually* online runtime in the new
+      // window's titlebar but broken inbound delivery.
+      //
+      // We only need this in bootstrap mode (where we're about to
+      // quit anyway), but calling it unconditionally is safe — the
+      // IPC is idempotent and the active-profile path will restart
+      // the runtime on the same process on the next config write.
+      if (api.shutdownMessagingRuntime) {
+        try {
+          await api.shutdownMessagingRuntime();
+        } catch (caught) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "Onboarding: shutdownMessagingRuntime failed before spawn — "
+              + "child process may collide with stale adapters",
+            caught,
+          );
+        }
+      }
       try {
         await api.openPwrAgentProfile({ profile: targetProfile });
       } catch (caught) {
@@ -932,6 +960,20 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               onSkipMessaging={skipMessaging}
               onContinue={goNext}
               submitting={submitting}
+              // Multi-profile context: in Multiple / Isolated modes the
+              // wizard provisions N profiles and lands the operator
+              // inside the first one. Messaging is configured for that
+              // first profile only; the others need their own
+              // post-launch Settings trip. Shared mode collapses to a
+              // single profile so we skip the notice.
+              multiProfileTarget={
+                codexProfileModel !== "shared" && codexProfileNames.length >= 1
+                  ? {
+                      firstProfileName: codexProfileNames[0]!,
+                      otherProfileNames: codexProfileNames.slice(1),
+                    }
+                  : undefined
+              }
             />
           ) : null}
           {step === "messaging-providers" ? (
@@ -948,6 +990,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               desktopApi={props.desktopApi}
               bufferedSecrets={bufferedSecrets}
               onBufferSecret={setBufferedSecret}
+              targetProfileName={
+                codexProfileModel !== "shared"
+                  ? codexProfileNames[0]
+                  : undefined
+              }
             />
           ) : null}
           {step === "done" ? (
@@ -1967,6 +2014,18 @@ function MessagingSafetyStep(props: {
   onSkipMessaging: () => void;
   onContinue: () => void;
   submitting: boolean;
+  /**
+   * In Multiple / Isolated modes, identifies the profile messaging
+   * will be configured for during this wizard (always the first
+   * named profile — they're created in order, and we land the
+   * operator inside the first one at Finish). When set, the safety
+   * step prepends a notice so the operator knows the other profiles
+   * stay messaging-free until they configure each one from Settings.
+   *
+   * `undefined` for Shared mode (only one profile exists — no
+   * disambiguation needed).
+   */
+  multiProfileTarget?: { firstProfileName: string; otherProfileNames: readonly string[] };
 }) {
   return (
     <div className="onboarding-wizard__safety">
@@ -1981,6 +2040,26 @@ function MessagingSafetyStep(props: {
         You can also skip this and stay on the desktop. Either way, three
         principles to read before you decide.
       </p>
+      {props.multiProfileTarget
+      && props.multiProfileTarget.otherProfileNames.length > 0 ? (
+        <div className="onboarding-wizard__safety-multi-notice" role="note">
+          <strong>Heads up:</strong> we'll set up messaging for{" "}
+          <code>{props.multiProfileTarget.firstProfileName}</code> here. The
+          other profile{props.multiProfileTarget.otherProfileNames.length === 1 ? "" : "s"}{" "}
+          (
+          {props.multiProfileTarget.otherProfileNames.map((name, i) => (
+            <span key={name}>
+              {i > 0 ? ", " : ""}
+              <code>{name}</code>
+            </span>
+          ))}
+          ) start without messaging. To configure messaging for{" "}
+          {props.multiProfileTarget.otherProfileNames.length === 1 ? "it" : "them"},
+          open each profile after the wizard finishes and use{" "}
+          <strong>Settings → Messaging</strong>. Each profile needs its own
+          bot — one bot token can only be polled by one process at a time.
+        </div>
+      ) : null}
       <ul className="onboarding-wizard__safety-list">
         <li>
           <strong>Try personal first.</strong> Use a personal computer and
@@ -3399,10 +3478,36 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         label: "Pair a Supergroup / Forum (just you + the bot)",
         help: (
           <>
-            Add the bot to a supergroup or forum that contains only you and
-            it, then send the pairing message inside any topic. Threads will
-            land in that topic. Best for keeping the bot conversation in its
-            own room separate from your DMs.
+            <p>
+              Add the bot to a supergroup or forum that contains only you and
+              it, then send the pairing message inside any topic. Threads will
+              land in that topic. Best for keeping the bot conversation in its
+              own room separate from your DMs.
+            </p>
+            <p className="onboarding-wizard__pairing-warning">
+              <strong>⚠ Telegram bot privacy:</strong> by default BotFather
+              ships new bots with <em>privacy mode on</em>, which means the
+              bot can&rsquo;t see plain messages in groups — only commands,
+              @mentions, and replies. If your pairing message never gets a
+              reply from the bot, you need to do <strong>one</strong> of:
+            </p>
+            <ul className="onboarding-wizard__pairing-warning-list">
+              <li>
+                <strong>@mention the bot</strong> in your pair message — e.g.{" "}
+                <code>@yourbot pair &lt;token&gt;</code>. You&rsquo;ll need to
+                @mention it on every message you want the bot to see.
+              </li>
+              <li>
+                <strong>Make the bot an admin</strong> in the group. Admins
+                always see all messages regardless of privacy mode.
+              </li>
+              <li>
+                <strong>Turn privacy mode off</strong> in BotFather:{" "}
+                <code>/mybots</code> → pick your bot → Bot Settings → Group
+                Privacy → Turn off. The bot then sees every message in groups
+                it&rsquo;s a member of.
+              </li>
+            </ul>
           </>
         ),
       },
@@ -3657,6 +3762,15 @@ function ProviderSetupStep(props: {
   desktopApi?: DesktopApi;
   bufferedSecrets: Record<string, string>;
   onBufferSecret: (name: string, value: string) => void;
+  /**
+   * In Multiple / Isolated modes, the profile name that will receive
+   * this messaging config at Finish. Surfaced as an eyebrow on the
+   * step header so the operator knows which profile they're
+   * pasting tokens for — important when the operator has two or
+   * more bot tokens in their head ("personal Telegram on this one,
+   * work Telegram on the other"). `undefined` in Shared mode.
+   */
+  targetProfileName?: string;
 }) {
   const config = PROVIDER_SETUP_CONFIGS[props.provider];
   const snapshot = props.settings.snapshot;
@@ -3677,6 +3791,11 @@ function ProviderSetupStep(props: {
   return (
     <div className="onboarding-wizard__provider-setup">
       <header className="onboarding-wizard__head">
+        {props.targetProfileName ? (
+          <span className="onboarding-wizard__provider-setup-eyebrow">
+            For profile <code>{props.targetProfileName}</code>
+          </span>
+        ) : null}
         <h1 className="onboarding-wizard__title">
           <span className="onboarding-wizard__provider-setup-icon">
             {providerIcon(props.provider, 22)}
@@ -3696,9 +3815,16 @@ function ProviderSetupStep(props: {
             bufferedSecrets={props.bufferedSecrets}
             onBufferSecret={props.onBufferSecret}
             writeConfig={props.settings.writeConfig}
+            replaceSecret={props.settings.replaceSecret}
+            clearSecret={props.settings.clearSecret}
           />
         ))}
       </div>
+      <ProviderIdentityProbe
+        provider={props.provider}
+        snapshot={snapshot}
+        desktopApi={props.desktopApi}
+      />
       {config.pairingOptions && config.pairingOptions.length > 0 ? (
         <PairingBlock
           platform={props.provider}
@@ -3719,6 +3845,11 @@ function ProviderFieldRow(props: {
   bufferedSecrets: Record<string, string>;
   onBufferSecret: (name: string, value: string) => void;
   writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
+  replaceSecret: (
+    secret: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
+  clearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
 }) {
   if (props.field.kind === "secret") {
     // Capture the narrowed name into a local so the closure passed
@@ -3731,6 +3862,8 @@ function ProviderFieldRow(props: {
         snapshot={props.snapshot}
         bufferedValue={props.bufferedSecrets[secretName] ?? ""}
         onBuffer={(value) => props.onBufferSecret(secretName, value)}
+        replaceSecret={props.replaceSecret}
+        clearSecret={props.clearSecret}
       />
     );
   }
@@ -3756,26 +3889,216 @@ function ProviderFieldRow(props: {
   );
 }
 
-function SecretFieldRow(props: {
+/**
+ * Probe the provider's credentials and surface the bot identity
+ * inline (e.g. "Connected as @pwragent_bot · api.telegram.org") so
+ * the operator immediately sees the token landed on the right bot
+ * account. Mirrors the Settings → Messaging "test connection"
+ * affordance, but runs *automatically* once the underlying secret
+ * is configured — the wizard's step is already a setup moment, so
+ * the operator shouldn't need a separate Test click.
+ *
+ * Probe trigger: re-runs whenever the snapshot's primary-secret
+ * `configured` flips from false → true, or the snapshot's
+ * fetchedAt advances after a live secret replace. Failure surfaces
+ * a short error line; the snapshot's "✓ saved" pill on the field
+ * row still indicates the token *was* persisted.
+ */
+function ProviderIdentityProbe(props: {
+  provider: OnboardingProvider;
+  snapshot?: DesktopSettingsSnapshot;
+  desktopApi?: DesktopApi;
+}) {
+  const [result, setResult] = useState<SettingsCredentialTestResult | undefined>(
+    undefined,
+  );
+  const [running, setRunning] = useState(false);
+  const configured = isPlatformPrimarySecretConfigured(props.provider, props.snapshot);
+  const desktopApi = props.desktopApi;
+  const probeKind: SettingsCredentialTestKind = props.provider;
+
+  useEffect(() => {
+    if (!configured || !desktopApi?.testSettingsCredentials) {
+      // Nothing to probe — clear stale result when the secret is
+      // unconfigured (e.g. operator pressed Clear).
+      setResult(undefined);
+      return;
+    }
+    let cancelled = false;
+    setRunning(true);
+    void desktopApi
+      .testSettingsCredentials({ kind: probeKind })
+      .then((next) => {
+        if (!cancelled) setResult(next);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setResult({
+          kind: probeKind,
+          status: "failed",
+          testedAt: Date.now(),
+          durationMs: 0,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setRunning(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configured, desktopApi, probeKind]);
+
+  if (!configured && !running && !result) return null;
+
+  const status = running ? "testing" : (result?.status ?? "idle");
+  return (
+    <div
+      className="onboarding-wizard__provider-identity"
+      data-status={status}
+      aria-live="polite"
+    >
+      {running ? (
+        <span className="onboarding-wizard__provider-identity-text">
+          Checking the bot account…
+        </span>
+      ) : result?.status === "ok" ? (
+        <span className="onboarding-wizard__provider-identity-text">
+          <span className="onboarding-wizard__provider-identity-pill is-ok">
+            ✓ Connected
+          </span>
+          {result.account ? (
+            <strong className="onboarding-wizard__provider-identity-account">
+              {result.account}
+            </strong>
+          ) : null}
+          {result.detail ? (
+            <span className="onboarding-wizard__provider-identity-detail">
+              {result.detail}
+            </span>
+          ) : null}
+        </span>
+      ) : result?.status === "failed" ? (
+        <span className="onboarding-wizard__provider-identity-text">
+          <span className="onboarding-wizard__provider-identity-pill is-err">
+            ✕ Could not reach the bot
+          </span>
+          {result.errorMessage ? (
+            <span className="onboarding-wizard__provider-identity-detail">
+              {result.errorMessage}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Read the configured state of a platform's *primary* identity-bearing
+ * secret. Used by `ProviderIdentityProbe` to know when to run the
+ * `testSettingsCredentials` probe. Each platform's identity-revealing
+ * probe needs its own primary secret to be set — Telegram needs the
+ * bot token, Slack needs both bot + signing secret, etc. We pick the
+ * single most-load-bearing one per platform and call that the trigger.
+ *
+ * (We don't try to gate on EVERY secret being present — that would
+ * silently hide the probe for multi-field providers like Slack until
+ * all 3 are entered. Better to attempt the probe once the primary
+ * token is present; the probe surfaces its own "missing X" message
+ * for the rest.)
+ */
+function isPlatformPrimarySecretConfigured(
+  provider: OnboardingProvider,
+  snapshot?: DesktopSettingsSnapshot,
+): boolean {
+  if (!snapshot) return false;
+  switch (provider) {
+    case "telegram":
+      return snapshot.messaging?.telegram?.botToken?.configured === true;
+    case "discord":
+      return snapshot.messaging?.discord?.botToken?.configured === true;
+    case "mattermost":
+      return snapshot.messaging?.mattermost?.botToken?.configured === true;
+    case "slack":
+      return snapshot.messaging?.slack?.botToken?.configured === true;
+    case "feishu":
+      return snapshot.messaging?.feishu?.appSecret?.configured === true;
+    case "line":
+      return snapshot.messaging?.line?.channelAccessToken?.configured === true;
+  }
+}
+
+/**
+ * Exported for unit tests in `__tests__/secret-field-row.test.tsx`.
+ * Not intended to be imported from outside the onboarding feature.
+ */
+export function SecretFieldRow(props: {
   field: Extract<ProviderField, { kind: "secret" }>;
   snapshot?: DesktopSettingsSnapshot;
   /** Currently-buffered value (held in wizard state, encrypted +
    *  written to the chosen profile's keychain at Finish). */
   bufferedValue: string;
   onBuffer: (value: string) => void;
+  /** Live-write a secret to the *current* profile's keychain (in
+   *  bootstrap mode that's `.bootstrap`; otherwise the active
+   *  profile). Used for messaging-runtime secrets so the runtime
+   *  can actually start mid-wizard and the operator can complete
+   *  pairing without leaving the wizard. The buffer still tracks
+   *  the value too — at graduation `writeBufferedSecretsIfAny`
+   *  copies it onto the target profile. */
+  replaceSecret: (
+    secret: DesktopSettingsSecretName,
+    value: string,
+  ) => Promise<boolean>;
+  clearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [liveError, setLiveError] = useState<string | undefined>(undefined);
   const state = readSecretState(props.snapshot, props.field.name);
   const configured = state?.configured ?? false;
   const buffered = props.bufferedValue.length > 0;
+  const isRuntimeSecret = isMessagingRuntimeSecret(props.field.name);
 
-  const save = (): void => {
-    if (!value) return;
+  const save = async (): Promise<void> => {
+    if (!value || busy) return;
+    setLiveError(undefined);
+    // Always buffer first — graduation reads from the buffer when
+    // copying secrets onto the target profile.
     props.onBuffer(value);
+    if (isRuntimeSecret) {
+      // Messaging-runtime secrets must also land in the *current*
+      // profile's keychain *now* so the runtime can start and the
+      // operator's pairing message gets observed. In bootstrap mode
+      // this writes to `.bootstrap/state.db`, which is fine — the
+      // throwaway profile is torn down on graduation, and we
+      // re-write the value onto the target profile from the buffer.
+      setBusy(true);
+      try {
+        const ok = await props.replaceSecret(props.field.name, value);
+        if (!ok) {
+          setLiveError("Could not enable this provider — try again.");
+          return;
+        }
+      } finally {
+        setBusy(false);
+      }
+    }
     setValue("");
   };
-  const clear = (): void => {
+  const clear = async (): Promise<void> => {
+    if (busy) return;
     props.onBuffer("");
+    if (isRuntimeSecret && configured) {
+      setBusy(true);
+      setLiveError(undefined);
+      try {
+        await props.clearSecret(props.field.name);
+      } finally {
+        setBusy(false);
+      }
+    }
   };
   return (
     <div className="onboarding-wizard__field">
@@ -3806,32 +4129,37 @@ function SecretFieldRow(props: {
                 : props.field.placeholder
           }
           value={value}
+          disabled={busy}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              save();
+              void save();
             }
           }}
         />
         <button
           type="button"
           className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={!value}
-          onClick={save}
+          disabled={!value || busy}
+          onClick={() => void save()}
         >
-          {buffered || configured ? "Replace" : "Use this"}
+          {busy ? "Saving…" : buffered || configured ? "Replace" : "Use this"}
         </button>
-        {buffered ? (
+        {buffered || (isRuntimeSecret && configured) ? (
           <button
             type="button"
             className="onboarding-wizard__btn onboarding-wizard__btn--link"
-            onClick={clear}
+            disabled={busy}
+            onClick={() => void clear()}
           >
             Clear
           </button>
         ) : null}
       </div>
+      {liveError ? (
+        <span className="onboarding-wizard__field-error">{liveError}</span>
+      ) : null}
     </div>
   );
 }
@@ -3959,6 +4287,30 @@ function SegmentedFieldRow(props: {
    and watches onMessagingPairingChanged for live status updates
    ---------------------------------------------------------------- */
 
+/**
+ * A pairing the operator approved during *this* wizard session.
+ * Used to render a compact "you paired X, Y, Z" summary after the
+ * pairing flow completes, so the operator can see what they've
+ * authorized without leaving the step. Multiple entries accumulate
+ * when the operator clicks "Pair another" — Telegram in particular
+ * commonly wants both a DM pairing and one or more supergroup
+ * pairings on the same bot.
+ *
+ * `actor`/`chat` are display labels resolved from the
+ * pairing-changed event's `observedActor` / `observedChat` (handle
+ * / displayName falling back to id). Kept as plain strings here
+ * because this list is purely cosmetic — the authoritative source
+ * is the per-platform `authorizedUserIds` / `authorizedSupergroups`
+ * snapshot, which the new spawned profile's main window will
+ * pick up after graduation.
+ */
+type SessionPairing = {
+  entryId: string;
+  scope: MessagingPairingScope;
+  actor?: string;
+  chat?: string;
+};
+
 function PairingBlock(props: {
   platform: MessagingChannelKind;
   title: string;
@@ -3975,6 +4327,26 @@ function PairingBlock(props: {
   const [resolution, setResolution] = useState<"observed" | "approved" | undefined>(
     undefined,
   );
+  // Captured display info for the observed actor/chat — used to render
+  // the inline "Approve @huntharo …" affordance and to seed the
+  // session pairing list on approval.
+  const [observedActorLabel, setObservedActorLabel] = useState<string | undefined>(
+    undefined,
+  );
+  const [observedChatLabel, setObservedChatLabel] = useState<string | undefined>(
+    undefined,
+  );
+  const [approving, setApproving] = useState(false);
+  // Pairings approved during this wizard session, in order. Rendered
+  // as a compact summary once at least one pairing has been approved.
+  // Survives the "Pair another" reset (which only clears the *current*
+  // in-flight token, not the running list).
+  const [paired, setPaired] = useState<readonly SessionPairing[]>([]);
+  // Set by "+ Pair another" — re-arms the active flow (Generate code
+  // button, scope picker) without clearing the `paired` summary above.
+  // Cleared on approval so the next approval falls back into compact
+  // mode unless the operator re-clicks "Pair another".
+  const [pairingAnother, setPairingAnother] = useState(false);
   const entryIdRef = useRef<string | undefined>(undefined);
   entryIdRef.current = entryId;
 
@@ -3987,9 +4359,63 @@ function PairingBlock(props: {
       if (event.entry.id !== entryIdRef.current) return;
       if (event.entry.status === "observed" || event.entry.status === "approved") {
         setResolution(event.entry.status);
+        setObservedActorLabel(
+          event.entry.observedActor?.displayName
+            ?? event.entry.observedActor?.id,
+        );
+        setObservedChatLabel(
+          event.entry.observedChat?.title ?? event.entry.observedChat?.id,
+        );
       }
     });
   }, [props.desktopApi, props.platform]);
+
+  const approve = async (): Promise<void> => {
+    const id = entryIdRef.current;
+    if (!id || approving || !props.desktopApi?.approveMessagingPairing) return;
+    setApproving(true);
+    setError(undefined);
+    try {
+      await props.desktopApi.approveMessagingPairing({ entryId: id });
+      setResolution("approved");
+      setPaired((prev) => [
+        ...prev,
+        {
+          entryId: id,
+          scope,
+          actor: observedActorLabel,
+          chat: observedChatLabel,
+        },
+      ]);
+      // Clear the pairing-token surface — the approved entry is now
+      // captured in `paired`. The "Pair another" button (rendered
+      // below when `paired.length > 0`) re-arms the flow.
+      setMessage(undefined);
+      setEntryId(undefined);
+      setObservedActorLabel(undefined);
+      setObservedChatLabel(undefined);
+      setResolution(undefined);
+      setPairingAnother(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const pairAnother = (): void => {
+    // Re-arm the active-flow surface (Generate-code button, scope
+    // picker) so the operator can issue another pairing token.
+    // Keeps the `paired` list intact above the surface so the
+    // previously-approved entities stay visible.
+    setMessage(undefined);
+    setEntryId(undefined);
+    setResolution(undefined);
+    setObservedActorLabel(undefined);
+    setObservedChatLabel(undefined);
+    setError(undefined);
+    setPairingAnother(true);
+  };
 
   const generate = async (): Promise<void> => {
     if (!props.desktopApi?.generateMessagingPairingToken || busy) return;
@@ -4031,12 +4457,33 @@ function PairingBlock(props: {
     setError(undefined);
   };
 
+  // Active-flow gate: when the operator hasn't approved anything
+  // yet (or has clicked "+ Pair another"), render the full
+  // token-generate / approve UI. After the first approval we
+  // collapse to the compact "paired list + Pair another" layout —
+  // surfacing exactly what the operator has authorized rather than
+  // leaving the stale pairing code on screen.
+  //
+  // Note: an in-flight `message` or `resolution === "observed"`
+  // also force active mode — this handles the rare case where a
+  // pairing-changed event arrives *after* approval has already
+  // cleared the surface (we want to react, not get stuck).
+  const isActiveFlow =
+    paired.length === 0
+    || pairingAnother
+    || message !== undefined
+    || resolution === "observed";
+
   return (
     <div className="onboarding-wizard__pairing">
       <div className="onboarding-wizard__pairing-head">
         <span className="onboarding-wizard__field-label">{props.title}</span>
         <span className="onboarding-wizard__field-status">
-          {resolution === "approved" ? (
+          {paired.length > 0 && !isActiveFlow ? (
+            <span className="onboarding-wizard__field-pill is-ok">
+              ✓ paired ({paired.length})
+            </span>
+          ) : resolution === "approved" ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ paired</span>
           ) : resolution === "observed" ? (
             <span className="onboarding-wizard__field-pill is-ok">✓ message seen</span>
@@ -4047,44 +4494,113 @@ function PairingBlock(props: {
           ) : null}
         </span>
       </div>
-      {props.options.length > 1 ? (
-        <div className="onboarding-wizard__segmented" role="radiogroup" aria-label="Pairing target">
-          {props.options.map((option) => (
-            <button
-              key={option.scope}
-              type="button"
-              role="radio"
-              aria-checked={scope === option.scope}
-              className={`onboarding-wizard__segmented-btn${scope === option.scope ? " is-active" : ""}`}
-              onClick={() => switchScope(option.scope)}
+      {paired.length > 0 ? (
+        <ul className="onboarding-wizard__paired-list">
+          {paired.map((entry) => (
+            <li
+              key={entry.entryId}
+              className="onboarding-wizard__paired-row"
             >
-              {option.label}
-            </button>
+              <span className="onboarding-wizard__paired-scope">
+                {labelForPairingScope(props.platform, entry.scope)}
+              </span>
+              <span className="onboarding-wizard__paired-actor">
+                {entry.chat && entry.chat !== entry.actor
+                  ? entry.chat
+                  : entry.actor ?? "(no display name reported)"}
+              </span>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : null}
-      {activeOption?.help ? (
-        <p className="onboarding-wizard__field-sub">{activeOption.help}</p>
-      ) : null}
-      {message ? (
-        <div className="onboarding-wizard__pairing-token">
-          <code>{message}</code>
-          <button
-            type="button"
-            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-            onClick={() => void copy()}
-          >
-            Copy
-          </button>
-        </div>
+      {isActiveFlow ? (
+        <>
+          {props.options.length > 1 ? (
+            <div className="onboarding-wizard__segmented" role="radiogroup" aria-label="Pairing target">
+              {props.options.map((option) => (
+                <button
+                  key={option.scope}
+                  type="button"
+                  role="radio"
+                  aria-checked={scope === option.scope}
+                  className={`onboarding-wizard__segmented-btn${scope === option.scope ? " is-active" : ""}`}
+                  onClick={() => switchScope(option.scope)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {activeOption?.help ? (
+            // `div`, not `<p>`: help content for some scopes contains
+            // its own `<p>` / `<ul>` blocks (e.g. Telegram bucket
+            // scope surfaces a bot-privacy gotcha with bullets). Nested
+            // `<p>` would be invalid HTML and React would silently
+            // hoist children out, breaking the styling.
+            <div className="onboarding-wizard__field-sub">{activeOption.help}</div>
+          ) : null}
+          {message && resolution !== "observed" ? (
+            // Pairing tokens are one-time-use; once the bot has
+            // reported the message landed we hide the code (the
+            // operator already sent it, displaying it longer just
+            // invites a confusing second paste). Below this block
+            // the Approve banner takes over.
+            <div className="onboarding-wizard__pairing-token">
+              <code>{message}</code>
+              <button
+                type="button"
+                className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+                onClick={() => void copy()}
+              >
+                Copy
+              </button>
+            </div>
+          ) : !message ? (
+            <button
+              type="button"
+              className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+              disabled={busy || !props.desktopApi?.generateMessagingPairingToken}
+              onClick={() => void generate()}
+            >
+              {busy ? "Generating…" : "Generate pairing code"}
+            </button>
+          ) : null}
+          {resolution === "observed" ? (
+            // The bot has reported the pairing message — surface an
+            // inline Approve so the operator can finish the pairing
+            // without navigating to Settings → Messaging Activity.
+            <div className="onboarding-wizard__pairing-approve">
+              <div className="onboarding-wizard__pairing-approve-text">
+                <span>
+                  Message received from{" "}
+                  <strong>{observedActorLabel ?? "this contact"}</strong>
+                  {observedChatLabel && observedChatLabel !== observedActorLabel ? (
+                    <>
+                      {" in "}
+                      <strong>{observedChatLabel}</strong>
+                    </>
+                  ) : null}
+                  . Approve to finish pairing.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                disabled={approving || !props.desktopApi?.approveMessagingPairing}
+                onClick={() => void approve()}
+              >
+                {approving ? "Approving…" : "Approve"}
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : (
         <button
           type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-          disabled={busy || !props.desktopApi?.generateMessagingPairingToken}
-          onClick={() => void generate()}
+          className="onboarding-wizard__btn onboarding-wizard__btn--link"
+          onClick={pairAnother}
         >
-          {busy ? "Generating…" : "Generate pairing code"}
+          + Pair another
         </button>
       )}
       {error ? (
@@ -4092,6 +4608,36 @@ function PairingBlock(props: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Human label for a pairing scope, scoped by the onboarding-known
+ * platforms so we say "DM" / "Supergroup" for Telegram, "DM" /
+ * "Guild" for Discord, etc. Falls back to a generic "Group" /
+ * "Conversation" label for any platform the wizard doesn't render
+ * a setup step for (currently none — the union is wider than the
+ * wizard's surface area to leave room for future providers).
+ */
+function labelForPairingScope(
+  platform: MessagingChannelKind,
+  scope: MessagingPairingScope,
+): string {
+  if (scope === "user_dm") return "DM";
+  switch (platform) {
+    case "telegram":
+      return "Supergroup";
+    case "discord":
+      return "Guild";
+    case "slack":
+      return "Workspace";
+    case "mattermost":
+      return "Channel";
+    case "feishu":
+    case "line":
+      return "Group";
+    default:
+      return "Conversation";
+  }
 }
 
 /* ----------------------------------------------------------------

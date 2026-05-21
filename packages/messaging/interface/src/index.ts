@@ -108,6 +108,45 @@ export function extractMessagingPairingToken(text: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Looser variant of `extractMessagingPairingToken` — returns true
+ * when the text *looks like* a pairing attempt regardless of
+ * whether the token itself parses as a valid 32-char base58 string.
+ *
+ * Provider adapters use this to decide whether to bypass the
+ * "unauthorized conversation" drop: if the operator typed `pair
+ * <something>` in a fresh group they're trying to authorize, we
+ * want the runtime to see the message and reply with a useful
+ * error ("That PwrAgent pairing token is invalid or expired.")
+ * rather than silently dropping the message at the adapter layer.
+ * The runtime's `handlePairingInbound` performs the strict token
+ * validation downstream — adapters only need the heuristic to
+ * route the candidate through.
+ *
+ * Matches when the first two whitespace-separated tokens are
+ * `(/|@bot)?pair` + ANYTHING. Bot-mention prefixes are skipped, so
+ * `@pwragent_bot pair garbage` also routes through.
+ */
+export function looksLikePairingAttempt(text: string): boolean {
+  let previousToken: string | undefined;
+  let skippedMention = false;
+  for (const token of pairingScanTokens(text)) {
+    if (!skippedMention && token.startsWith("@")) {
+      // Bot mention — skip without recording as previousToken so
+      // the `pair` keyword right after the @bot still triggers.
+      skippedMention = true;
+      continue;
+    }
+    if (previousToken && isMessagingPairingCommand(previousToken)) {
+      // Any non-empty follow-up is enough — the runtime will
+      // reject invalid tokens with a useful error message.
+      return token.length > 0;
+    }
+    previousToken = token;
+  }
+  return false;
+}
+
 function* pairingScanTokens(text: string): Generator<string> {
   const scanLength = Math.min(text.length, MESSAGING_PAIRING_SCAN_MAX_CHARS);
   let tokenStart: number | undefined;
@@ -137,12 +176,36 @@ export function isMessagingPairingCommand(command: string | undefined): boolean 
 }
 
 function isAsciiWhitespace(charCode: number): boolean {
-  return charCode === 0x20
-    || charCode === 0x09
-    || charCode === 0x0a
-    || charCode === 0x0b
-    || charCode === 0x0c
-    || charCode === 0x0d;
+  // Includes the common ASCII whitespace plus Unicode whitespace
+  // characters that mobile keyboards and copy-paste pipelines often
+  // substitute for a plain space:
+  //   U+00A0 NO-BREAK SPACE         — Telegram iOS sometimes pastes
+  //                                   this between words.
+  //   U+2007 FIGURE SPACE / U+2008  — narrow / punctuation space.
+  //   U+2009 THIN SPACE
+  //   U+200A HAIR SPACE
+  //   U+202F NARROW NO-BREAK SPACE  — common in French autocorrect.
+  //   U+205F MEDIUM MATHEMATICAL SP.
+  //   U+3000 IDEOGRAPHIC SPACE      — CJK keyboards.
+  // Without these, a `pair<NBSP><token>` paste tokenizes as one
+  // long token and `extractMessagingPairingToken` fails to find
+  // the command/token pair — silently dropping pairing attempts.
+  if (charCode <= 0x20) {
+    return charCode === 0x20
+      || charCode === 0x09
+      || charCode === 0x0a
+      || charCode === 0x0b
+      || charCode === 0x0c
+      || charCode === 0x0d;
+  }
+  return charCode === 0x00a0
+    || charCode === 0x2007
+    || charCode === 0x2008
+    || charCode === 0x2009
+    || charCode === 0x200a
+    || charCode === 0x202f
+    || charCode === 0x205f
+    || charCode === 0x3000;
 }
 
 export type MessagingRateLimitInfo = {

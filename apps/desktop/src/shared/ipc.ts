@@ -87,6 +87,19 @@ export const MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL =
 export const MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL =
   "messaging:open-activity-window";
 /**
+ * Stop the messaging runtime in *this* process. Used by the wizard's
+ * graduation path: the bootstrap process is about to spawn a child
+ * Electron pointed at the operator's chosen profile, and both
+ * processes would otherwise compete for the same long-poll (Telegram
+ * `getUpdates` returns 409 when two processes ask at once). Calling
+ * this before the spawn lets the bootstrap release the polling slot
+ * cleanly; the child then comes up without colliding.
+ *
+ * Idempotent — calling it when no runtime is running is a no-op.
+ */
+export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL =
+  "messaging:shutdown-runtime";
+/**
  * Drives the per-credential "Test" button on Settings → Messaging
  * and Settings → Models. Request payload: `{ kind: "telegram" |
  * "discord" | "grok" | "codex" }`. Response: `SettingsCredentialTestResult`.

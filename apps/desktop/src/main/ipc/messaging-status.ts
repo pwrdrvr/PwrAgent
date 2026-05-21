@@ -43,6 +43,7 @@ import {
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
+  MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
 
@@ -476,6 +477,28 @@ export function registerMessagingStatusIpcHandlers(): void {
   ipcMain.handle(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL, async (): Promise<void> => {
     showMessagingActivityWindow();
   });
+
+  ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
+  ipcMain.handle(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL, async (): Promise<void> => {
+    // Called by the wizard right before it spawns the operator's
+    // chosen profile in a new Electron process. The bootstrap's
+    // adapters (Telegram long-poll, Discord gateway, etc.) hold
+    // exclusive resources upstream; if we don't release them first
+    // the child process's adapters race and lose (Telegram 409,
+    // Discord "another shard already connected", etc.).
+    //
+    // `shutdown` stops the runtime AND releases the runtime-messaging
+    // lease, mirroring the SIGTERM cleanup path. Idempotent — calling
+    // it twice or when nothing is running is a no-op.
+    try {
+      await getRuntimeMessagingLeaseCoordinator().shutdown(runtime);
+      log.info("messaging runtime shutdown via wizard graduation");
+    } catch (error) {
+      log.warn("messaging runtime shutdown failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 }
 
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
@@ -494,4 +517,5 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
   ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);
 }

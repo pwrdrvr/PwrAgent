@@ -148,6 +148,43 @@ export type DesktopSettingsSecretName =
   | "lineChannelAccessToken"
   | "lineChannelSecret";
 
+/**
+ * Predicate: does writing or clearing this secret affect the
+ * messaging runtime? The runtime's "runnable adapters" check
+ * combines `messaging.<provider>.enabled = true` with a present
+ * bot token / per-provider auth secret, so changes to any of these
+ * names need to re-evaluate the runtime (start, stop, or reload).
+ *
+ * Kept here in shared (not in main-process code) so the renderer's
+ * onboarding wizard can reuse the same predicate when deciding
+ * which secret fields must be persisted *live* during the wizard
+ * vs. buffered for graduation-time write. The main process has its
+ * own `messagingSecretTouchesRuntime()` for the IPC layer; they
+ * must agree, and a unit test under shared keeps both honest.
+ */
+export function isMessagingRuntimeSecret(
+  name: DesktopSettingsSecretName,
+): boolean {
+  switch (name) {
+    case "telegramBotToken":
+    case "discordBotToken":
+    case "mattermostBotToken":
+    case "mattermostHmacSecret":
+    case "slackBotToken":
+    case "slackAppToken":
+    case "slackSigningSecret":
+    case "feishuAppId":
+    case "feishuAppSecret":
+    case "feishuEncryptKey":
+    case "feishuVerificationToken":
+    case "lineChannelAccessToken":
+    case "lineChannelSecret":
+      return true;
+    case "grokApiKey":
+      return false;
+  }
+}
+
 export type DesktopSettingsSecretState = {
   configured: boolean;
   source: DesktopSettingsSecretSource;

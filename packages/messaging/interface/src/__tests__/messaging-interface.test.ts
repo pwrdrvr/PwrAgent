@@ -6,6 +6,7 @@ import type {
 import {
   MESSAGING_SURFACE_INTENT_KINDS,
   extractMessagingPairingToken,
+  looksLikePairingAttempt,
 } from "../index";
 
 type FakeProvider = {
@@ -84,6 +85,45 @@ describe("messaging interface package", () => {
     expect(extractMessagingPairingToken(`pwragent_pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`/pair ${token}`)).toBe(token);
     expect(extractMessagingPairingToken(`/pwragent_pair ${token}`)).toBe(token);
+  });
+
+  it("treats Unicode whitespace between command and token as a separator", () => {
+    // U+00A0 NO-BREAK SPACE — Telegram iOS / some clipboard pipelines
+    // substitute this for a plain space when pasting. Before the
+    // tokenizer learned to recognize Unicode whitespace, a paste like
+    // this would tokenize as one big "pair <token>" blob and
+    // `extractMessagingPairingToken` would return undefined — silently
+    // dropping the operator's pairing attempt.
+    const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
+    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair　${token}`)).toBe(token);
+  });
+
+  it("looksLikePairingAttempt routes typo'd / malformed tokens through", () => {
+    // Source of truth: the runtime's `handlePairingInbound` runs the
+    // strict token validation, not the adapter. Adapters use this
+    // looser predicate so a `pair <garbage>` typed in a fresh group
+    // routes to the runtime (which replies with "That PwrAgent
+    // pairing token is invalid or expired.") instead of being silently
+    // dropped at the conversation-authorization check.
+    expect(looksLikePairingAttempt("pair garbage")).toBe(true);
+    expect(looksLikePairingAttempt("pair x")).toBe(true);
+    expect(looksLikePairingAttempt("/pair anything")).toBe(true);
+    expect(looksLikePairingAttempt("@PwrAgentBot pair anything")).toBe(true);
+    expect(looksLikePairingAttempt("pwragent_pair anything")).toBe(true);
+    // Negative cases: no pairing keyword, or keyword with no follow-up.
+    expect(looksLikePairingAttempt("hello world")).toBe(false);
+    expect(looksLikePairingAttempt("pair")).toBe(false);
+    expect(looksLikePairingAttempt("")).toBe(false);
+    // Mid-sentence "pair" followed by another word IS a false-positive
+    // by design — we'd rather route an over-broad match to the runtime
+    // (which replies with a friendly "invalid or expired" if it's not
+    // a real pairing) than silently drop a real pairing attempt at the
+    // adapter. Verifying the over-broad behavior so it isn't tightened
+    // later without a conscious trade-off.
+    expect(looksLikePairingAttempt("the word pair appears here")).toBe(true);
   });
 
   it("bounds pairing scans over untrusted message text", () => {
