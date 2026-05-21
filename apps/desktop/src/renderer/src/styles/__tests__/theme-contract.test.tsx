@@ -168,6 +168,10 @@ describe("Tangerine Terminal theme contract", () => {
     const emptyStateRule = extractRuleBody(css, ".thread-empty-state");
 
     expect(emptyStateRule).toContain("padding: 0 16px;");
+    expect(emptyStateRule).toContain("-webkit-app-region: drag;");
+    expect(css).toMatch(
+      /\.thread-empty-state \*\s*\{[\s\S]*?-webkit-app-region:\s*drag;[\s\S]*?\}/
+    );
   });
 
   it("lets transcript scroll restoration own scroll anchoring", () => {

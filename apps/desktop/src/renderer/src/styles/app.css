@@ -9740,8 +9740,18 @@ textarea,
   flex-direction: column;
   justify-content: center;
   min-height: calc(100vh - 48px);
-  max-width: 520px;
   padding: 0 16px;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-app-region: drag;
+}
+
+.thread-empty-state * {
+  -webkit-app-region: drag;
+}
+
+.thread-empty-state__content {
+  max-width: 520px;
 }
 
 .renderer-error-boundary {

@@ -33,6 +33,32 @@ describe("ThreadView", () => {
     cleanup();
   });
 
+  it("makes the empty thread detail pane a window drag region", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const emptyState = screen
+      .getByRole("heading", { level: 2, name: "Select a thread" })
+      .closest(".thread-empty-state");
+
+    expect(emptyState).not.toBeNull();
+    expect(emptyState?.querySelector(".thread-empty-state__content")).not.toBeNull();
+    expect(document.querySelector(".thread-header")).toBeNull();
+  });
+
   it("renders a directory-less thread with transcript history and context", () => {
     const { rerender } = render(
       <ThreadView

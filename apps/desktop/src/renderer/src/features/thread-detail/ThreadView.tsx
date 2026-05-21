@@ -1777,12 +1777,14 @@ export function ThreadView(props: ThreadViewProps) {
   if (!selectedThread && !selectedLaunchpad) {
     return (
       <section className="thread-empty-state">
-        <p className="eyebrow">Thread detail</p>
-        <h2>Select a thread</h2>
-        <p>
-          Inbox stays above every other lens. Pick a thread to read the full
-          transcript, or open a project launchpad from Directories.
-        </p>
+        <div className="thread-empty-state__content">
+          <p className="eyebrow">Thread detail</p>
+          <h2>Select a thread</h2>
+          <p>
+            Inbox stays above every other lens. Pick a thread to read the full
+            transcript, or open a project launchpad from Directories.
+          </p>
+        </div>
       </section>
     );
   }
