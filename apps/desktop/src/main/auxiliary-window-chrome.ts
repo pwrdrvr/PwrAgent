@@ -6,9 +6,14 @@ import type {
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";
 const supportsMoveTop = process.platform !== "linux";
+const linuxRaiseRetryDelaysMs = [100, 350, 800] as const;
 
 const hiddenMenuBarWindows = new Set<BrowserWindow>();
 const auxiliaryWindowTitles = new Map<number, string>();
+const auxiliaryWindowRaiseRetryTimers = new Map<
+  number,
+  Array<ReturnType<typeof setTimeout>>
+>();
 
 export function auxiliaryWindowChromeOptions(): Pick<
   BrowserWindowConstructorOptions,
@@ -57,6 +62,14 @@ export function getAuxiliaryWindowMenuTitle(window: BrowserWindow): string {
 }
 
 export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
+  raiseAuxiliaryWindow(window);
+  scheduleAuxiliaryWindowRaiseRetries(window);
+}
+
+function raiseAuxiliaryWindow(window: BrowserWindow): void {
+  if (window.isDestroyed()) {
+    return;
+  }
   if (window.isMinimized()) {
     window.restore();
   }
@@ -67,6 +80,43 @@ export function showAndFocusAuxiliaryWindow(window: BrowserWindow): void {
     pulseAuxiliaryWindowToTop(window);
   }
   window.focus();
+}
+
+function scheduleAuxiliaryWindowRaiseRetries(window: BrowserWindow): void {
+  if (supportsMoveTop) return;
+
+  clearAuxiliaryWindowRaiseRetries(window);
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  for (const [index, delayMs] of linuxRaiseRetryDelaysMs.entries()) {
+    const timer = setTimeout(() => {
+      if (auxiliaryWindowRaiseRetryTimers.get(window.id) !== timers) {
+        return;
+      }
+      if (window.isDestroyed()) {
+        clearAuxiliaryWindowRaiseRetries(window);
+        return;
+      }
+      raiseAuxiliaryWindow(window);
+      if (index === linuxRaiseRetryDelaysMs.length - 1) {
+        auxiliaryWindowRaiseRetryTimers.delete(window.id);
+      }
+    }, delayMs);
+    timers.push(timer);
+  }
+  auxiliaryWindowRaiseRetryTimers.set(window.id, timers);
+  window.once("closed", () => {
+    clearAuxiliaryWindowRaiseRetries(window);
+  });
+}
+
+function clearAuxiliaryWindowRaiseRetries(window: BrowserWindow): void {
+  const timers = auxiliaryWindowRaiseRetryTimers.get(window.id);
+  if (!timers) return;
+
+  for (const timer of timers) {
+    clearTimeout(timer);
+  }
+  auxiliaryWindowRaiseRetryTimers.delete(window.id);
 }
 
 function pulseAuxiliaryWindowToTop(window: BrowserWindow): void {
