@@ -75,6 +75,7 @@ import {
 } from "../settings/codex-profiles";
 import { getMainLogger } from "../log";
 import { AcpAgentStore } from "../acp/acp-agent-store";
+import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
 import { AcpInstaller } from "../acp/acp-installer";
@@ -194,12 +195,19 @@ async function listInstalledAndLocalAcpAgents(
   const refreshedInstalled = options?.refreshLocal
     ? store.listInstalledAgents()
     : installed;
+  const allowedInstalled = refreshedInstalled.filter(
+    (record) => !isBannedAcpRegistryId(record.registryId),
+  );
   const installedBackendIds = new Set(
-    refreshedInstalled.map((record) => record.backendId),
+    allowedInstalled.map((record) => record.backendId),
   );
   return [
-    ...refreshedInstalled,
-    ...discovered.filter((record) => !installedBackendIds.has(record.backendId)),
+    ...allowedInstalled,
+    ...discovered.filter(
+      (record) =>
+        !installedBackendIds.has(record.backendId) &&
+        !isBannedAcpRegistryId(record.registryId),
+    ),
   ];
 }
 

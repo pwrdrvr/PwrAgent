@@ -103,6 +103,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { AcpAgentStore } from "../acp/acp-agent-store";
+import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { acpAgentCapabilitiesForRegistryId } from "../acp/acp-agent-capabilities";
 import { AcpAgentClient } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
@@ -6531,11 +6532,15 @@ export class DesktopBackendRegistry {
   }
 
   private async listAvailableAcpAgents(): Promise<AcpInstalledAgentRecord[]> {
-    const installedAgents = this.acpAgentStore?.listInstalledAgents() ?? [];
+    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? []).filter(
+      (agent) => !isBannedAcpRegistryId(agent.registryId),
+    );
     const installedBackendIds = new Set(
       installedAgents.map((agent) => agent.backendId),
     );
-    const discoveredAgents = await this.readLocalAcpAgentsOnce();
+    const discoveredAgents = (await this.readLocalAcpAgentsOnce()).filter(
+      (agent) => !isBannedAcpRegistryId(agent.registryId),
+    );
     for (const agent of discoveredAgents) {
       if (!installedBackendIds.has(agent.backendId)) {
         this.acpAgentStore?.upsertInstalledAgent(agent);

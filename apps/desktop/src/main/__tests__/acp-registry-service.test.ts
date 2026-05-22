@@ -5,23 +5,23 @@ import { AcpRegistryService, normalizeRegistry } from "../acp/acp-registry-servi
 const registryPayload = {
   agents: [
     {
-      id: "codex-acp",
-      name: "Codex CLI",
+      id: "example-agent",
+      name: "Example Agent",
       version: "0.14.0",
-      description: "ACP adapter for OpenAI's coding assistant",
-      repository: "https://github.com/zed-industries/codex-acp",
-      authors: ["OpenAI", "Zed Industries"],
+      description: "Example ACP adapter",
+      repository: "https://github.com/example/example-agent",
+      authors: ["Example Maintainer"],
       license: "Apache-2.0",
       distribution: {
         binary: {
           "darwin-aarch64": {
             archive:
-              "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz",
-            cmd: "./codex-acp",
+              "https://github.com/example/example-agent/releases/download/v0.14.0/example-agent.tar.gz",
+            cmd: "./example-agent",
           },
         },
         npx: {
-          package: "@zed-industries/codex-acp@0.14.0",
+          package: "@example/agent-acp@0.14.0",
         },
       },
     },
@@ -44,17 +44,17 @@ describe("AcpRegistryService", () => {
     const agents = normalizeRegistry(registryPayload);
 
     expect(agents[0]).toMatchObject({
-      id: "codex-acp",
-      backendId: "acp:codex-acp",
-      name: "Codex CLI",
+      id: "example-agent",
+      backendId: "acp:example-agent",
+      name: "Example Agent",
       version: "0.14.0",
-      authors: ["OpenAI", "Zed Industries"],
+      authors: ["Example Maintainer"],
       distributionKinds: ["npx", "binary"],
     });
     expect(agents[0]?.distributions).toEqual([
       {
         kind: "npx",
-        packageName: "@zed-industries/codex-acp@0.14.0",
+        packageName: "@example/agent-acp@0.14.0",
         args: [],
         env: {},
       },
@@ -62,8 +62,8 @@ describe("AcpRegistryService", () => {
         kind: "binary",
         platform: "darwin-aarch64",
         archiveUrl:
-          "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz",
-        command: "./codex-acp",
+          "https://github.com/example/example-agent/releases/download/v0.14.0/example-agent.tar.gz",
+        command: "./example-agent",
         args: [],
         env: {},
         checksum: undefined,
@@ -86,7 +86,7 @@ describe("AcpRegistryService", () => {
     await expect(service.fetchRegistry()).resolves.toMatchObject({
       fetchedAt: 1234,
       agents: [
-        expect.objectContaining({ id: "codex-acp" }),
+        expect.objectContaining({ id: "example-agent" }),
         expect.objectContaining({ id: "blocked-gpl" }),
       ],
     });
@@ -96,11 +96,11 @@ describe("AcpRegistryService", () => {
     const service = new AcpRegistryService({
       allowlist: new AcpAgentAllowlist([
         {
-          id: "codex-rule",
-          registryId: "codex-acp",
+          id: "example-rule",
+          registryId: "example-agent",
           versions: ["0.14.0"],
           distributionKinds: ["npx", "binary"],
-          allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
+          allowedPackageNames: ["@example/agent-acp@0.14.0"],
           allowedArchiveHosts: ["github.com"],
           allowUnverifiedBinary: true,
         },
@@ -121,17 +121,17 @@ describe("AcpRegistryService", () => {
 
     const entries = service.applyAllowlist(snapshot);
 
-    const codexEntry = entries.find((entry) => entry.id === "codex-acp");
-    expect(codexEntry).toMatchObject({
+    const exampleEntry = entries.find((entry) => entry.id === "example-agent");
+    expect(exampleEntry).toMatchObject({
       installable: true,
       verificationStatus: "not-applicable",
-      allowlist: { allowed: true, ruleId: "codex-rule" },
+      allowlist: { allowed: true, ruleId: "example-rule" },
     });
-    const binaryDistribution = codexEntry?.distributions.find(
+    const binaryDistribution = exampleEntry?.distributions.find(
       (distribution) => distribution.kind === "binary",
     );
     expect(
-      binaryDistribution && service.evaluateDistribution(codexEntry!, binaryDistribution),
+      binaryDistribution && service.evaluateDistribution(exampleEntry!, binaryDistribution),
     ).toMatchObject({
       installable: true,
       verificationStatus: "unverified-allowed",
@@ -147,8 +147,8 @@ describe("AcpRegistryService", () => {
     const service = new AcpRegistryService({
       allowlist: new AcpAgentAllowlist([
         {
-          id: "codex-rule",
-          registryId: "codex-acp",
+          id: "example-rule",
+          registryId: "example-agent",
           versions: ["0.14.0"],
           distributionKinds: ["binary"],
           allowedArchiveHosts: ["github.com"],
@@ -161,17 +161,17 @@ describe("AcpRegistryService", () => {
       agents: normalizeRegistry({
         agents: [
           {
-            id: "codex-acp",
-            name: "Codex CLI",
+            id: "example-agent",
+            name: "Example Agent",
             version: "0.14.0",
             distribution: {
               binary: {
                 "darwin-aarch64": {
                   archive:
-                    "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz",
+                    "https://github.com/example/example-agent/releases/download/v0.14.0/example-agent.tar.gz",
                   signature:
-                    "https://github.com/zed-industries/codex-acp/releases/download/v0.14.0/codex-acp.tar.gz.sig",
-                  cmd: "./codex-acp",
+                    "https://github.com/example/example-agent/releases/download/v0.14.0/example-agent.tar.gz.sig",
+                  cmd: "./example-agent",
                 },
               },
             },
@@ -191,11 +191,11 @@ describe("AcpRegistryService", () => {
     const service = new AcpRegistryService({
       allowlist: new AcpAgentAllowlist([
         {
-          id: "codex-npx-only",
-          registryId: "codex-acp",
+          id: "example-npx-only",
+          registryId: "example-agent",
           versions: ["0.14.0"],
           distributionKinds: ["npx"],
-          allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
+          allowedPackageNames: ["@example/agent-acp@0.14.0"],
         },
       ]),
     });
@@ -220,13 +220,63 @@ describe("AcpRegistryService", () => {
     expect(npxDistribution && service.evaluateDistribution(entry!, npxDistribution)).toMatchObject({
       installable: true,
       verificationStatus: "not-applicable",
-      allowlist: { allowed: true, ruleId: "codex-npx-only" },
+      allowlist: { allowed: true, ruleId: "example-npx-only" },
     });
     expect(
       binaryDistribution && service.evaluateDistribution(entry!, binaryDistribution),
     ).toMatchObject({
       installable: false,
       allowlist: { allowed: false },
+    });
+  });
+
+  it("bans Codex ACP even when a matching allowlist rule exists", () => {
+    const service = new AcpRegistryService({
+      allowlist: new AcpAgentAllowlist([
+        {
+          id: "codex-rule",
+          registryId: "codex-acp",
+          versions: ["0.14.0"],
+          distributionKinds: ["npx"],
+          allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
+        },
+      ]),
+    });
+    const snapshot = {
+      fetchedAt: 1,
+      agents: normalizeRegistry({
+        agents: [
+          {
+            id: "codex-acp",
+            name: "Codex CLI",
+            version: "0.14.0",
+            distribution: {
+              npx: {
+                package: "@zed-industries/codex-acp@0.14.0",
+              },
+            },
+          },
+        ],
+      }),
+      raw: {},
+    };
+
+    const entry = service.applyAllowlist(snapshot)[0];
+
+    expect(entry).toMatchObject({
+      installable: false,
+      unavailableReason: "banned",
+      allowlist: { allowed: false, reason: "banned" },
+    });
+    const distribution = entry?.distributions[0];
+    expect(distribution).toBeDefined();
+    if (!entry || !distribution) {
+      throw new Error("expected Codex ACP registry entry");
+    }
+    expect(service.evaluateDistribution(entry, distribution)).toMatchObject({
+      installable: false,
+      unavailableReason: "banned",
+      allowlist: { allowed: false, reason: "banned" },
     });
   });
 

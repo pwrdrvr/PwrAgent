@@ -1306,6 +1306,36 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not report banned ACP adapters as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:codex-acp",
+          registryId: "codex-acp",
+          name: "Codex CLI",
+          distributionKind: "npx",
+          distributionSource: "@zed-industries/codex-acp@0.14.0",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "codex-rule",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends.some((backend) => backend.kind === "acp:codex-acp"))
+      .toBe(false);
+
+    await registry.close();
+  });
+
   it("reports locally discovered ACP agents as backend summaries", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
@@ -1511,7 +1541,7 @@ describe("DesktopBackendRegistry", () => {
     }> = [];
     const cancelledSessions: string[] = [];
     const emittedEvents: AgentEvent[] = [];
-    const acpBackendId = "acp:codex-acp" as AcpBackendId;
+    const acpBackendId = "acp:gemini" as AcpBackendId;
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -1590,22 +1620,22 @@ describe("DesktopBackendRegistry", () => {
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "codex-acp",
-          name: "Codex CLI",
+          registryId: "gemini",
+          name: "Gemini CLI",
           distributionKind: "npx",
-          distributionSource: "@zed-industries/codex-acp@0.14.0",
+          distributionSource: "@google/gemini-cli@0.42.0",
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "codex-rule",
+          allowlistRuleId: "gemini-v0.42.0-npx",
           installedAt: 1000,
           updatedAt: 2000,
           launchDescriptor: {
             backendId: acpBackendId,
-            registryId: "codex-acp",
+            registryId: "gemini",
             distributionKind: "npx",
             command: "npx",
-            args: ["--yes", "@zed-industries/codex-acp@0.14.0"],
+            args: ["--yes", "@google/gemini-cli@0.42.0"],
             env: {},
           },
         },
@@ -1682,7 +1712,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("loads persisted ACP sessions from the agent when no client is cached", async () => {
-    const acpBackendId = "acp:codex-acp" as AcpBackendId;
+    const acpBackendId = "acp:gemini" as AcpBackendId;
     const loadedReplay: AppServerThreadReplay = {
       entries: [
         {
@@ -1742,22 +1772,22 @@ describe("DesktopBackendRegistry", () => {
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "codex-acp",
-          name: "Codex CLI",
+          registryId: "gemini",
+          name: "Gemini CLI",
           distributionKind: "npx",
-          distributionSource: "@zed-industries/codex-acp@0.14.0",
+          distributionSource: "@google/gemini-cli@0.42.0",
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "codex-rule",
+          allowlistRuleId: "gemini-v0.42.0-npx",
           installedAt: 1000,
           updatedAt: 2000,
           launchDescriptor: {
             backendId: acpBackendId,
-            registryId: "codex-acp",
+            registryId: "gemini",
             distributionKind: "npx",
             command: "npx",
-            args: ["--yes", "@zed-industries/codex-acp@0.14.0"],
+            args: ["--yes", "@google/gemini-cli@0.42.0"],
             env: {},
           },
         },

@@ -17,22 +17,22 @@ describe("AcpAgentsSettings", () => {
         fetchedAt: 1000,
         entries: [
           {
-            backendId: "acp:codex-acp",
-            registryId: "codex-acp",
-            name: "Codex ACP",
-            description: "Codex over ACP",
-            version: "0.14.0",
+            backendId: "acp:gemini",
+            registryId: "gemini",
+            name: "Gemini CLI",
+            description: "Gemini over ACP",
+            version: "0.42.0",
             license: "Apache-2.0",
-            authors: ["Zed"],
-            repositoryUrl: "https://github.com/zed-industries/codex-acp",
+            authors: ["Google"],
+            repositoryUrl: "https://github.com/google-gemini/gemini-cli",
             distributionKind: "npx",
-            distributionSource: "@zed-industries/codex-acp@0.14.0",
+            distributionSource: "@google/gemini-cli@0.42.0",
             installable: true,
             installed: false,
             installStatus: "not-installed",
             authStatus: "not-required",
             verificationStatus: "not-applicable",
-            allowlistRuleId: "codex-rule",
+            allowlistRuleId: "gemini-v0.42.0-npx",
           } satisfies AcpAgentSettingsEntry,
         ],
       })),
@@ -40,9 +40,9 @@ describe("AcpAgentsSettings", () => {
 
     render(<AcpAgentsSettings desktopApi={desktopApi} />);
 
-    expect(await screen.findByText("Codex ACP")).toBeInTheDocument();
+    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.getByText("Apache-2.0")).toBeInTheDocument();
-    expect(screen.getByText(/@zed-industries\/codex-acp/)).toBeInTheDocument();
+    expect(screen.getByText(/@google\/gemini-cli/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review install" })).toBeEnabled();
   });
 

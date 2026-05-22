@@ -16,16 +16,9 @@ export type AcpAgentAllowlistRule = {
   allowGplFamilyLicense?: boolean;
 };
 
+const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
+
 export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
-  {
-    id: "codex-acp-v0.14.0",
-    registryId: "codex-acp",
-    versions: ["0.14.0"],
-    distributionKinds: ["npx", "binary"],
-    allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
-    allowedArchiveHosts: ["github.com"],
-    allowUnverifiedBinary: true,
-  },
   {
     id: "gemini-v0.42.0-npx",
     registryId: "gemini",
@@ -39,6 +32,10 @@ export class AcpAgentAllowlist {
   constructor(private readonly rules: AcpAgentAllowlistRule[]) {}
 
   evaluate(agent: AcpRegistryAgent): AcpAllowlistDecision {
+    if (isBannedAcpRegistryId(agent.id)) {
+      return { allowed: false, reason: "banned" };
+    }
+
     const matchingRules = this.rules.filter((rule) => rule.registryId === agent.id);
     if (matchingRules.length === 0) {
       return { allowed: false, reason: "not-allowlisted" };
@@ -62,6 +59,10 @@ export class AcpAgentAllowlist {
     agent: AcpRegistryAgent,
     distribution: AcpRegistryDistribution,
   ): AcpAllowlistDecision {
+    if (isBannedAcpRegistryId(agent.id)) {
+      return { allowed: false, reason: "banned" };
+    }
+
     const matchingRules = this.rules.filter((rule) => rule.registryId === agent.id);
     if (matchingRules.length === 0) {
       return { allowed: false, reason: "not-allowlisted" };
@@ -85,6 +86,12 @@ export class AcpAgentAllowlist {
 export const defaultAcpAgentAllowlist = new AcpAgentAllowlist(
   DEFAULT_ACP_AGENT_ALLOWLIST,
 );
+
+export function isBannedAcpRegistryId(registryId: string): boolean {
+  // PwrAgent talks to Codex through the first-class Codex App Server backend.
+  // The ACP adapter should not be presented as an installable duplicate.
+  return BANNED_ACP_REGISTRY_IDS.has(registryId);
+}
 
 function evaluateRule(
   rule: AcpAgentAllowlistRule,
