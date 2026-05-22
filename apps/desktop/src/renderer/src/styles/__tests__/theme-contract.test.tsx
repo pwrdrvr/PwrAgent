@@ -211,11 +211,22 @@ describe("Tangerine Terminal theme contract", () => {
     expect(statusBarRule).toContain("flex: 0 0 auto;");
     expect(statusBarRule).toContain("min-width: max-content;");
     expect(eyebrowRowRule).toContain("min-width: 0;");
-    expect(compactTitleRule).toContain("flex: 1 1 auto;");
+    expect(compactTitleRule).toContain("flex: 0 1 auto;");
     expect(compactTitleRule).toContain("overflow: hidden;");
     expect(css).toMatch(
       /\.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
     );
+  });
+
+  it("keeps the thread title reveal hit target to the rendered title text", () => {
+    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
+    const titleButtonRule = extractRuleBody(css, ".thread-header__title-button");
+
+    expect(compactTitleRule).toContain("width: fit-content;");
+    expect(compactTitleRule).toContain("max-width: min(58vw, 520px);");
+    expect(titleButtonRule).toContain("display: inline-block;");
+    expect(titleButtonRule).toContain("max-width: 100%;");
+    expect(titleButtonRule).not.toMatch(/(?:^|\n)\s*width:\s*100%;/);
   });
 
   it("keeps launchpad header chips content-sized and aligned with the eyebrow", () => {
