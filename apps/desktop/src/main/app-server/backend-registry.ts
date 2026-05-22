@@ -370,6 +370,7 @@ type AcpRuntimeClient = Pick<
   | "initialize"
   | "loadSession"
   | "readReplay"
+  | "refreshSession"
   | "startPrompt"
   | "startSession"
 > &
@@ -3508,7 +3509,15 @@ export class DesktopBackendRegistry {
 
     const client = await this.getAcpClient(backend);
     try {
-      return await client.loadSession(session);
+      const replay = await client.loadSession(session);
+      void client.refreshSession(session).catch((error) => {
+        backendRegistryLog.warn("acp_session_load_failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+          sessionId,
+        });
+      });
+      return replay;
     } catch (error) {
       backendRegistryLog.warn("acp_session_load_failed", {
         backend,

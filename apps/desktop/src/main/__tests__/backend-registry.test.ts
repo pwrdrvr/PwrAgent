@@ -1612,6 +1612,7 @@ describe("DesktopBackendRegistry", () => {
       startPrompt: vi.fn(),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
@@ -1721,6 +1722,7 @@ describe("DesktopBackendRegistry", () => {
       startPrompt: vi.fn(),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
@@ -1940,6 +1942,7 @@ describe("DesktopBackendRegistry", () => {
         },
         threadStatus: "idle",
       })),
+      refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(async (sessionId: string) => {
         cancelledSessions.push(sessionId);
       }),
@@ -2101,27 +2104,27 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("loads persisted ACP sessions from the agent when no client is cached", async () => {
+  it("reads persisted ACP sessions locally and refreshes the agent in the background", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
-    const loadedReplay: AppServerThreadReplay = {
+    const localReplay: AppServerThreadReplay = {
       entries: [
         {
           type: "message",
-          id: "assistant:loaded",
+          id: "assistant:cached",
           role: "assistant",
-          text: "Loaded from ACP session",
+          text: "Cached ACP transcript",
           createdAt: 1002,
         },
       ],
       messages: [
         {
-          id: "assistant:loaded",
+          id: "assistant:cached",
           role: "assistant",
-          text: "Loaded from ACP session",
+          text: "Cached ACP transcript",
           createdAt: 1002,
         },
       ],
-      lastAssistantMessage: "Loaded from ACP session",
+      lastAssistantMessage: "Cached ACP transcript",
       pagination: {
         supportsPagination: false,
         hasPreviousPage: false,
@@ -2143,7 +2146,8 @@ describe("DesktopBackendRegistry", () => {
           hasPreviousPage: false,
         },
       })),
-      loadSession: vi.fn(async () => loadedReplay),
+      loadSession: vi.fn(async () => localReplay),
+      refreshSession: vi.fn(async () => undefined),
     };
     const session: AcpSessionMetadata = {
       backendId: acpBackendId,
@@ -2195,11 +2199,12 @@ describe("DesktopBackendRegistry", () => {
       backend: acpBackendId,
       threadId: "session-1",
       replay: {
-        lastAssistantMessage: "Loaded from ACP session",
+        lastAssistantMessage: "Cached ACP transcript",
       },
     });
     expect(acpClient.initialize).toHaveBeenCalledTimes(1);
     expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+    expect(acpClient.refreshSession).toHaveBeenCalledWith(session);
 
     await registry.close();
   });
@@ -2244,6 +2249,7 @@ describe("DesktopBackendRegistry", () => {
       startPrompt: vi.fn(),
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
       cancelSession: vi.fn(),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
@@ -2348,7 +2354,16 @@ describe("DesktopBackendRegistry", () => {
       cancelSession: vi.fn(),
       ensureSession: vi.fn(async () => undefined),
       readReplay: vi.fn(),
-      loadSession: vi.fn(async () => {
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => {
         throw new Error("No previous sessions found for this project.");
       }),
     };
@@ -2392,17 +2407,12 @@ describe("DesktopBackendRegistry", () => {
       backend: acpBackendId,
       threadId: "session-1",
       replay: {
-        entries: [
-          expect.objectContaining({
-            type: "activity",
-            summary: "ACP transcript unavailable",
-            status: "failed",
-          }),
-        ],
+        entries: [],
         threadStatus: "idle",
       },
     });
     expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+    expect(acpClient.refreshSession).toHaveBeenCalledWith(session);
 
     await registry.close();
   });
@@ -2444,7 +2454,46 @@ describe("DesktopBackendRegistry", () => {
       cancelSession: vi.fn(),
       ensureSession: vi.fn(async () => undefined),
       readReplay: vi.fn(),
-      loadSession: vi.fn(async () => {
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [
+          {
+            type: "message",
+            id: "user:session-1:2000",
+            role: "user",
+            text: "What is this project?",
+            createdAt: 2000,
+          },
+          {
+            type: "message",
+            id: "assistant:session-1:2100",
+            role: "assistant",
+            text: "It is PwrSnap.",
+            createdAt: 2100,
+          },
+        ],
+        messages: [
+          {
+            id: "user:session-1:2000",
+            role: "user",
+            text: "What is this project?",
+            createdAt: 2000,
+          },
+          {
+            id: "assistant:session-1:2100",
+            role: "assistant",
+            text: "It is PwrSnap.",
+            createdAt: 2100,
+          },
+        ],
+        lastUserMessage: "What is this project?",
+        lastAssistantMessage: "It is PwrSnap.",
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => {
         throw new Error("No previous sessions found for this project.");
       }),
     };
@@ -7696,6 +7745,7 @@ command = "pnpm dev"
       cancelSession: vi.fn(),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
     };
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
@@ -7804,6 +7854,7 @@ command = "pnpm dev"
       cancelSession: vi.fn(),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
     };
     const handoff = vi.fn(async () => ({
       backend: acpBackendId,
@@ -8024,6 +8075,7 @@ command = "pnpm dev"
       cancelSession: vi.fn(),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
     };
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

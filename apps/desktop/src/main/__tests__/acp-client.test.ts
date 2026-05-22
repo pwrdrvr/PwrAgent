@@ -558,8 +558,70 @@ describe("AcpAgentClient", () => {
     ]);
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
-      "session/load",
-      "session/load",
+    ]);
+  });
+
+  it("returns persisted session replay without blocking on agent session/load", async () => {
+    let resolveLoad: ((value: unknown) => void) | undefined;
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport: {
+        request: async (method, params) => {
+          if (method === "session/load") {
+            return await new Promise((resolve) => {
+              resolveLoad = resolve;
+            });
+          }
+          return await transport.request(method, params);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "what is this?",
+            turnId: "turn-1",
+          },
+        },
+        {
+          receivedAt: 1100,
+          update: {
+            kind: "agent_message_chunk",
+            content: "cached answer",
+          },
+        },
+      ],
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:gemini", "session-1")!,
+    );
+
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "what is this?",
+      "cached answer",
+    ]);
+    expect(resolveLoad).toBeUndefined();
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
     ]);
   });
 
@@ -853,7 +915,7 @@ describe("AcpAgentClient", () => {
     expect((errors[0]?.error as Error).message).toBe("agent exited");
   });
 
-  it("loads stored session metadata without ingesting session/load replay", async () => {
+  it("refreshes stored session metadata without ingesting session/load replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const loadRequests: Array<Record<string, unknown> | undefined> = [];
     const client = new AcpAgentClient({
@@ -892,6 +954,9 @@ describe("AcpAgentClient", () => {
       executionMode: "full-access",
       status: "idle",
     });
+    await client.refreshSession(
+      store.getSession("acp:codex-acp", "session-1")!,
+    );
     await client.dispose();
 
     expect(replay.lastAssistantMessage).toBeUndefined();
@@ -910,7 +975,7 @@ describe("AcpAgentClient", () => {
     expect(transport.closeCount).toBe(1);
   });
 
-  it("persists ACP topic updates replayed during session/load", async () => {
+  it("persists ACP topic updates replayed during session/load refresh", async () => {
     let notificationListener:
       | ((method: string, params: Record<string, unknown>) => void)
       | undefined;
@@ -975,6 +1040,7 @@ describe("AcpAgentClient", () => {
       executionMode: "default",
       status: "idle",
     });
+    await client.refreshSession(store.getSession("acp:gemini", "session-1")!);
 
     expect(replay.lastAssistantMessage).toBeUndefined();
     expect(store.getSession("acp:gemini", "session-1")?.title).toBe(

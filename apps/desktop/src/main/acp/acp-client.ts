@@ -266,9 +266,13 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    const replay = this.hydratePersistedTranscript(metadata);
+    return this.hydratePersistedTranscript(metadata);
+  }
+
+  async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
+    this.options.store.upsertSession(metadata);
+    this.rememberSessionIds(metadata);
     await this.loadSessionFromAgent(metadata);
-    return replay;
   }
 
   async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
