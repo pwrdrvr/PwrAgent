@@ -55,10 +55,15 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
   const desktopApi = props.desktopApi;
 
   useEffect(() => {
-    if (!desktopApi?.onAgentEvent) {
+    if (!desktopApi?.onAgentEvent && !desktopApi?.getLatestCodexConfigWarning) {
       return;
     }
-    return desktopApi.onAgentEvent((event) => {
+
+    let cancelled = false;
+    const applyEvent = (event: AgentEvent): void => {
+      if (cancelled) {
+        return;
+      }
       const nextNotice = noticeFromEvent(event);
       if (!nextNotice) {
         return;
@@ -69,7 +74,23 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
       setNotice(nextNotice);
       setTrustError(null);
       setTrusting(false);
-    });
+    };
+
+    const unsubscribe = desktopApi.onAgentEvent?.(applyEvent);
+    void desktopApi.getLatestCodexConfigWarning?.()
+      .then((response) => {
+        if (response.event) {
+          applyEvent(response.event);
+        }
+      })
+      .catch(() => {
+        // Live events still cover builds that cannot provide a snapshot.
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [desktopApi, dismissedIds]);
 
   const actionLabel = useMemo(() => {

@@ -411,6 +411,10 @@ export type AgentEvent = {
   notification: AppServerNotification;
 };
 
+export type LatestCodexConfigWarningResponse = {
+  event?: AgentEvent;
+};
+
 export type AppServerCollaborationModeRequest = {
   mode: "default" | "plan";
   settings?: {

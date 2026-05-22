@@ -221,6 +221,71 @@ describe("App", () => {
     });
   });
 
+  it("surfaces a buffered Codex config warning captured before renderer subscription", async () => {
+    const trustCodexProject = vi.fn(
+      async (request: { projectPath: string; configPath?: string }) => ({
+        ...request,
+        trusted: true,
+      }),
+    );
+    const getLatestCodexConfigWarning = vi.fn(async () => ({
+      event: {
+        backend: "codex" as const,
+        notification: {
+          method: "configWarning" as const,
+          params: {
+            summary:
+              "Project-local config, hooks, and exec policies are disabled.\n" +
+              "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
+            details: null,
+            trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+            configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+          },
+        },
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        getLatestCodexConfigWarning,
+        trustCodexProject,
+      },
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Codex config warning"
+    );
+    expect(getLatestCodexConfigWarning).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Trust PwrAgnt" }));
+
+    await waitFor(() => {
+      expect(trustCodexProject).toHaveBeenCalledWith({
+        projectPath: "/Users/huntharo/github/PwrAgnt",
+        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      });
+    });
+  });
+
   it("blocks the app shell when desktop settings config is malformed", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),

@@ -1140,6 +1140,51 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("buffers the latest Codex config warning until the project is trusted", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({});
+
+    await codexClient.emit({
+      method: "configWarning",
+      params: {
+        summary: "Project-local config is disabled.",
+        details: null,
+        trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      },
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({
+      event: {
+        backend: "codex",
+        notification: {
+          method: "configWarning",
+          params: {
+            summary: "Project-local config is disabled.",
+            details: null,
+            trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+            configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+          },
+        },
+      },
+    });
+
+    await registry.trustCodexProject({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({});
+
+    await registry.close();
+  });
+
   it("reads Codex models once from the default client and reuses them", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

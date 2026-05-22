@@ -20,6 +20,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  LatestCodexConfigWarningResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -167,6 +168,7 @@ import type {
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
@@ -597,6 +599,8 @@ const desktopApi = Object.freeze({
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse> =>
     await ipcRenderer.invoke(AGENT_TRUST_CODEX_PROJECT_CHANNEL, request),
+  getLatestCodexConfigWarning: async (): Promise<LatestCodexConfigWarningResponse> =>
+    await ipcRenderer.invoke(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL),
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>

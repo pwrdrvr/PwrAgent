@@ -10,6 +10,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  LatestCodexConfigWarningResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   QueueThreadExecutionModeRequest,
@@ -43,6 +44,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -473,6 +475,14 @@ export function registerAgentIpcHandlers(): void {
       return await registry.trustCodexProject(request);
     },
   );
+
+  ipcMain.removeHandler(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL);
+  ipcMain.handle(
+    AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
+    async (): Promise<LatestCodexConfigWarningResponse> => {
+      return registry.getLatestCodexConfigWarning();
+    },
+  );
 }
 
 export function disposeAgentIpcHandlers(): void {
@@ -496,4 +506,5 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
   ipcMain.removeHandler(AGENT_TRUST_CODEX_PROJECT_CHANNEL);
+  ipcMain.removeHandler(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL);
 }

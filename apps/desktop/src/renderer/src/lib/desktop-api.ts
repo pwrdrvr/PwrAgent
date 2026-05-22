@@ -29,6 +29,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  LatestCodexConfigWarningResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -317,6 +318,7 @@ export type DesktopApi = {
   trustCodexProject?: (
     request: TrustCodexProjectRequest,
   ) => Promise<TrustCodexProjectResponse>;
+  getLatestCodexConfigWarning?: () => Promise<LatestCodexConfigWarningResponse>;
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
