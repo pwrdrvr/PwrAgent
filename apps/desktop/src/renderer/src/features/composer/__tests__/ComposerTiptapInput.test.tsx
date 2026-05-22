@@ -40,6 +40,14 @@ function renderTiptapInput(props?: {
   return { ...result, onChange };
 }
 
+function setComposerSelection(textbox: HTMLElement, index: number): void {
+  (
+    textbox as HTMLElement & {
+      setSelectionRange: (start: number, end?: number) => void;
+    }
+  ).setSelectionRange(index);
+}
+
 describe("ComposerTiptapInput", () => {
   it("does not render initial URLs or path-like markdown filenames as links", async () => {
     const { container } = renderTiptapInput({
@@ -121,6 +129,64 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("strong")).toHaveTextContent("this bold word");
     expect(container.querySelector("em")).toHaveTextContent("this italic");
     expect(container.querySelector("code")).toHaveTextContent("inline code");
+  });
+
+  it("pressing ArrowRight at the end of a bold run exits the mark with a plain space", async () => {
+    const original = "**GitHub PR title**";
+    const { container, onChange } = renderTiptapInput({ value: original });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, original.length);
+    fireEvent.keyDown(textbox, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(`${original} `, []);
+    });
+    expect(container.querySelector("strong")).toHaveTextContent("GitHub PR title");
+    expect(container.querySelector("strong")).not.toHaveTextContent(
+      "GitHub PR title ",
+    );
+  });
+
+  it("pressing ArrowRight after a pasted path-like token inserts an escape space", async () => {
+    const path =
+      "docs/brainstorms/2026-05-22-messaging-full-access-approval-requirements.md";
+    const { onChange } = renderTiptapInput({ value: path });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, path.length);
+    fireEvent.keyDown(textbox, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(`${path} `, []);
+    });
+  });
+
+  it("does not turn ArrowRight at the end of normal prose into a space", async () => {
+    const value = "plain prose";
+    const { onChange } = renderTiptapInput({ value });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, value.length);
+    fireEvent.keyDown(textbox, { key: "ArrowRight" });
+
+    expect(onChange).not.toHaveBeenCalledWith(`${value} `, []);
+  });
+
+  it("does not insert an escape space inside code blocks ending in paths", async () => {
+    const codeContent = "docs/brainstorms/example.md";
+    const value = `\`\`\`md\n${codeContent}\n\`\`\``;
+    const { container, onChange } = renderTiptapInput({ value });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, "```md\n".length + codeContent.length);
+    fireEvent.keyDown(textbox, { key: "ArrowRight" });
+
+    expect(onChange).not.toHaveBeenCalledWith(`\`\`\`md\n${codeContent} \n\`\`\``, []);
+    expect(container.querySelector("pre code")).toHaveTextContent(codeContent);
+    expect(container.querySelector("pre code")).not.toHaveTextContent(
+      `${codeContent} `,
+    );
   });
 
   // The `is-empty` class on `.composer-tiptap-input` is the contract

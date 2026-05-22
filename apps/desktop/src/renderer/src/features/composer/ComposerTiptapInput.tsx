@@ -646,6 +646,59 @@ function insertWysiwygSoftBreak(editor: TiptapEditor): boolean {
   return editor.commands.setHardBreak();
 }
 
+function getTrailingComposerToken(text: string): string | undefined {
+  return text.match(/(?:^|\s)(\S+)$/)?.[1];
+}
+
+function isLinkLikeComposerToken(token: string): boolean {
+  const trimmed = token.replace(/[),.;:!?]+$/, "");
+  if (/^(?:https?:\/\/|www\.)\S+\.\S+$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^[^\s/]+\/\S+$/.test(trimmed)) {
+    return true;
+  }
+  return /^[^\s/]+\.[A-Za-z]{2,}(?:\/\S*)?$/.test(trimmed);
+}
+
+function insertPlainSpaceAtTextblockEnd(editor: TiptapEditor): boolean {
+  const { selection } = editor.state;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const currentPos = selection.$from;
+  if (currentPos.pos !== currentPos.end()) {
+    return false;
+  }
+  if (currentPos.parent.type.name === "codeBlock") {
+    return false;
+  }
+
+  const currentMarks = editor.state.storedMarks ?? currentPos.marks();
+  const textBeforeCursor = currentPos.parent.textBetween(
+    0,
+    currentPos.parentOffset,
+    undefined,
+    "\uFFFC",
+  );
+  const trailingToken = getTrailingComposerToken(textBeforeCursor);
+  if (
+    currentMarks.length === 0 &&
+    (!trailingToken || !isLinkLikeComposerToken(trailingToken))
+  ) {
+    return false;
+  }
+
+  let transaction = editor.state.tr;
+  currentMarks.forEach((mark) => {
+    transaction = transaction.removeStoredMark(mark);
+  });
+  transaction = transaction.insertText(" ", currentPos.pos).scrollIntoView();
+  editor.view.dispatch(transaction);
+  return true;
+}
+
 function getPlainTextFromPaste(event: ClipboardEvent<HTMLDivElement>): string {
   return event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
 }
@@ -1333,6 +1386,21 @@ export const ComposerTiptapInput = forwardRef<
             }
             event.preventDefault();
             return runUndoOrRedo(currentEditor, "undo");
+          }
+
+          if (
+            propsRef.current.markdownConversion &&
+            event.key === "ArrowRight" &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !event.shiftKey
+          ) {
+            const currentEditor = editorRef.current;
+            if (currentEditor && insertPlainSpaceAtTextblockEnd(currentEditor)) {
+              event.preventDefault();
+              return true;
+            }
           }
 
           if (
