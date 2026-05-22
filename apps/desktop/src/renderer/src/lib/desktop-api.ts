@@ -95,6 +95,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -295,6 +297,9 @@ export type DesktopApi = {
   cancelThreadExecutionModeQueue?: (
     request: CancelThreadExecutionModeQueueRequest,
   ) => Promise<CancelThreadExecutionModeQueueResponse>;
+  setAcpSessionRuntimeOption?: (
+    request: SetAcpSessionRuntimeOptionRequest,
+  ) => Promise<SetAcpSessionRuntimeOptionResponse>;
   setThreadModelSettings?: (
     request: SetThreadModelSettingsRequest
   ) => Promise<SetThreadModelSettingsResponse>;

@@ -582,6 +582,12 @@ export type ThreadPermissionTransition = {
   id: string;
   fromExecutionMode: ThreadExecutionMode;
   toExecutionMode: ThreadExecutionMode;
+  /**
+   * Optional provider-native labels for non-Codex access modes. Codex
+   * transitions continue to derive labels from the execution-mode enum.
+   */
+  fromLabel?: string;
+  toLabel?: string;
   status: ThreadPermissionTransitionStatus;
   /** Epoch ms. */
   occurredAt: number;

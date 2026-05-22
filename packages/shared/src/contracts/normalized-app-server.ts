@@ -968,6 +968,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/acpRuntime/updated";
+      params: {
+        threadId: string;
+        acpRuntime?: AppServerAcpSessionRuntimeState;
+      };
+    }
+  | {
       method: "thread/codexEnvironment/updated";
       params: {
         threadId: string;

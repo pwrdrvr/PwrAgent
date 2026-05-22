@@ -103,6 +103,10 @@ export function acpSessionRuntimeStateFromUpdate(
   now: number,
 ): BackendAcpSessionRuntimeState | undefined {
   const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  if (kind === "agent_message_chunk") {
+    const modeId = readModeUpdateMarker(update);
+    return modeId ? { currentModeId: modeId, updatedAt: now } : undefined;
+  }
   if (kind === "current_mode_update") {
     const currentModeId =
       readString(update, "currentModeId") ??
@@ -124,6 +128,12 @@ export function acpSessionRuntimeStateFromUpdate(
       : undefined;
   }
   return undefined;
+}
+
+function readModeUpdateMarker(update: Record<string, unknown>): string | undefined {
+  const text = readString(update, "content") ?? readString(update, "text");
+  const match = text?.trim().match(/^\[MODE_UPDATE\]\s*([A-Za-z0-9_-]+)\s*$/);
+  return match?.[1];
 }
 
 function readConfigOptions(value: unknown): BackendAcpRuntimeConfigOption[] {

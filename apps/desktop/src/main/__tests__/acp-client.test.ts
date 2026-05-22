@@ -324,6 +324,46 @@ describe("AcpAgentClient", () => {
     expect(runtimeUpdates).toHaveLength(2);
   });
 
+  it("treats Gemini mode marker chunks as runtime updates instead of assistant text", async () => {
+    const runtimeUpdates: unknown[] = [];
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionRuntimeStateChange: (event) => {
+        runtimeUpdates.push(event);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "agent_message_chunk",
+      content: "[MODE_UPDATE] yolo",
+    });
+
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModeId: "yolo",
+      },
+    });
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+    expect(runtimeUpdates).toEqual([
+      {
+        sessionId: session.sessionId,
+        runtimeState: {
+          currentModeId: "yolo",
+          updatedAt: 1000,
+        },
+      },
+    ]);
+  });
+
   it("hydrates persisted ACP transcripts once without replaying session/load as new messages", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

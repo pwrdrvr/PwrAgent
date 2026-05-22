@@ -363,7 +363,7 @@ export class AcpAgentClient {
       params.source === "configOption"
         ? await this.options.transport.request("session/set_config_option", {
             sessionId: protocolSessionId,
-            configOptionId: params.optionId,
+            configId: params.optionId,
             value: params.value,
           })
         : await this.options.transport.request("session/set_mode", {

@@ -62,6 +62,8 @@ import {
   type RunCodexEnvironmentActionResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetCodexThreadEnvironmentResponse,
+  type SetAcpSessionRuntimeOptionRequest,
+  type SetAcpSessionRuntimeOptionResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -831,7 +833,11 @@ const EXECUTION_MODE_SUMMARIES: Record<
   },
 };
 
-const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set(["auto_edit", "yolo"]);
+const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set([
+  "auto_edit",
+  "autoEdit",
+  "yolo",
+]);
 
 function sanitizeAcpRuntimeForExecutionMode(params: {
   backend: AppServerBackendKind;
@@ -1126,6 +1132,49 @@ function buildPendingRequestKey(params: {
 
 function buildActiveTurnModeKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
+}
+
+function buildActiveTurnKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
+function mergeAcpRuntimeState(
+  current: BackendAcpSessionRuntimeState | undefined,
+  patch: BackendAcpSessionRuntimeState | undefined,
+): BackendAcpSessionRuntimeState | undefined {
+  if (!current && !patch) {
+    return undefined;
+  }
+  return {
+    ...current,
+    ...patch,
+    configValues: {
+      ...(current?.configValues ?? {}),
+      ...(patch?.configValues ?? {}),
+    },
+  };
+}
+
+function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
+  return value === "yolo" || value === "autoEdit" || value === "auto_edit";
+}
+
+function formatAcpRuntimeLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  if (trimmed.toLowerCase() === "yolo") {
+    return "Yolo";
+  }
+  return trimmed
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -1833,6 +1882,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
+  private readonly activeTurnKeys = new Set<string>();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -1851,6 +1901,21 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  private readonly queuedAcpRuntimeOptions = new Map<
+    string,
+    {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+      queuedAt: number;
+      queueId: string;
+      flushAttempts: number;
+      fromValue?: string;
+      fromLabel?: string;
+      toLabel?: string;
+    }
+  >();
+  private readonly queuedAcpRuntimeOptionFlushes = new Map<string, Promise<void>>();
   /**
    * Per-thread async chain serialising read-modify-write of
    * codexEnvironmentRuntime. Concurrent Run-button clicks and
@@ -2192,6 +2257,23 @@ export class DesktopBackendRegistry {
                 metadata.updatedAt,
                 runtimeState.updatedAt ?? Date.now(),
               ),
+            });
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "thread/acpRuntime/updated",
+                params: {
+                  threadId: sessionId,
+                  acpRuntime: {
+                    ...metadata.acpRuntime,
+                    ...runtimeState,
+                    configValues: {
+                      ...(metadata.acpRuntime?.configValues ?? {}),
+                      ...(runtimeState.configValues ?? {}),
+                    },
+                  },
+                },
+              },
             });
           },
           onRequest: async (request) =>
@@ -2890,6 +2972,313 @@ export class DesktopBackendRegistry {
         value: runtime.currentModeId,
       });
     }
+  }
+
+  async setAcpSessionRuntimeOption(
+    params: SetAcpSessionRuntimeOptionRequest,
+  ): Promise<SetAcpSessionRuntimeOptionResponse> {
+    if (!isAcpBackendId(params.backend)) {
+      throw new Error("ACP runtime options are only available for ACP backends");
+    }
+    if (!this.acpSessionStore) {
+      throw new Error("ACP session store is not available");
+    }
+    const session = this.acpSessionStore.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
+
+    const currentValue = this.readAcpRuntimeOptionValue(session.acpRuntime, params);
+    if (currentValue === params.value) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        runtimeState: session.acpRuntime,
+      };
+    }
+
+    if (this.threadHasActiveTurn(params.threadId, params.backend)) {
+      await this.queueAcpSessionRuntimeOption(params, currentValue);
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        runtimeState: session.acpRuntime,
+      };
+    }
+
+    return await this.applyAcpSessionRuntimeOption(params);
+  }
+
+  private async queueAcpSessionRuntimeOption(
+    params: SetAcpSessionRuntimeOptionRequest,
+    fromValue: string | undefined,
+  ): Promise<void> {
+    if (!isAcpBackendId(params.backend)) {
+      return;
+    }
+    const queuedAt = Date.now();
+    const queueId = randomUUID();
+    const queueKey = this.buildAcpRuntimeQueueKey(params.backend, params.threadId);
+    const fromLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
+    const toLabel = this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
+    this.queuedAcpRuntimeOptions.set(queueKey, {
+      source: params.source,
+      optionId: params.optionId,
+      value: params.value,
+      queuedAt,
+      queueId,
+      flushAttempts: 0,
+      fromValue,
+      fromLabel,
+      toLabel,
+    });
+
+    await this.appendPermissionTransition({
+      backend: params.backend,
+      threadId: params.threadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
+          ? "full-access"
+          : "default",
+        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
+          ? "full-access"
+          : "default",
+        fromLabel,
+        toLabel,
+        status: "queued",
+        occurredAt: queuedAt,
+        queueId,
+      },
+    });
+
+    backendRegistryLog.info("queued ACP runtime option change", {
+      backend: params.backend,
+      threadId: params.threadId,
+      source: params.source,
+      optionId: params.optionId,
+      from: fromValue,
+      to: params.value,
+      queueId,
+    });
+  }
+
+  private async applyAcpSessionRuntimeOption(
+    params: SetAcpSessionRuntimeOptionRequest,
+    options?: {
+      fromQueue?: boolean;
+      queueId?: string;
+      fromValue?: string;
+      fromLabel?: string;
+      toLabel?: string;
+    },
+  ): Promise<SetAcpSessionRuntimeOptionResponse> {
+    if (!isAcpBackendId(params.backend)) {
+      throw new Error("ACP runtime options are only available for ACP backends");
+    }
+    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.threadId}`);
+    }
+    const client = await this.getAcpClient(params.backend);
+    await client.ensureSession?.(session);
+    const fromValue =
+      options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
+    const runtimeState = await client.setRuntimeOption?.({
+      sessionId: params.threadId,
+      source: params.source,
+      optionId: params.optionId,
+      value: params.value,
+    });
+    const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
+    if (this.acpSessionStore?.upsertSession) {
+      this.acpSessionStore.upsertSession({
+        ...session,
+        acpRuntime: mergedRuntime,
+        updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
+      });
+    }
+
+    const fromLabel =
+      options?.fromLabel ??
+      this.formatAcpRuntimeOptionLabel(params.backend, params, fromValue);
+    const toLabel =
+      options?.toLabel ??
+      this.formatAcpRuntimeOptionLabel(params.backend, params, params.value);
+    await this.appendPermissionTransition({
+      backend: params.backend,
+      threadId: params.threadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
+          ? "full-access"
+          : "default",
+        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
+          ? "full-access"
+          : "default",
+        fromLabel,
+        toLabel,
+        status: "applied",
+        occurredAt: Date.now(),
+        queueId: options?.queueId,
+      },
+    });
+
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/acpRuntime/updated",
+        params: {
+          threadId: params.threadId,
+          acpRuntime: mergedRuntime,
+        },
+      },
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      runtimeState: mergedRuntime,
+    };
+  }
+
+  private async flushQueuedAcpRuntimeOptionIfPresent(
+    backend: AcpBackendId,
+    threadId: string,
+  ): Promise<void> {
+    const queueKey = this.buildAcpRuntimeQueueKey(backend, threadId);
+    const activeFlush = this.queuedAcpRuntimeOptionFlushes.get(queueKey);
+    if (activeFlush) {
+      await activeFlush;
+      return;
+    }
+    const queue = this.queuedAcpRuntimeOptions.get(queueKey);
+    if (!queue) {
+      return;
+    }
+    if (!this.queuedAcpRuntimeOptions.delete(queueKey)) {
+      return;
+    }
+    const flush = this.applyClaimedQueuedAcpRuntimeOption(backend, threadId, queue);
+    this.queuedAcpRuntimeOptionFlushes.set(queueKey, flush);
+    try {
+      await flush;
+    } finally {
+      if (this.queuedAcpRuntimeOptionFlushes.get(queueKey) === flush) {
+        this.queuedAcpRuntimeOptionFlushes.delete(queueKey);
+      }
+    }
+  }
+
+  private async applyClaimedQueuedAcpRuntimeOption(
+    backend: AcpBackendId,
+    threadId: string,
+    queue: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+      queueId: string;
+      flushAttempts: number;
+      fromValue?: string;
+      fromLabel?: string;
+      toLabel?: string;
+    },
+  ): Promise<void> {
+    try {
+      await this.applyAcpSessionRuntimeOption(
+        {
+          backend,
+          threadId,
+          source: queue.source,
+          optionId: queue.optionId,
+          value: queue.value,
+        },
+        {
+          fromQueue: true,
+          queueId: queue.queueId,
+          fromValue: queue.fromValue,
+          fromLabel: queue.fromLabel,
+          toLabel: queue.toLabel,
+        },
+      );
+    } catch (error) {
+      const attempts = queue.flushAttempts + 1;
+      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {
+        await this.appendPermissionTransition({
+          backend,
+          threadId,
+          transition: {
+            id: randomUUID(),
+            fromExecutionMode: acpRuntimeValueLooksPrivileged(queue.fromValue)
+              ? "full-access"
+              : "default",
+            toExecutionMode: acpRuntimeValueLooksPrivileged(queue.value)
+              ? "full-access"
+              : "default",
+            fromLabel: queue.fromLabel,
+            toLabel: queue.toLabel,
+            status: "cancelled",
+            occurredAt: Date.now(),
+            queueId: queue.queueId,
+            note: `auto-cancelled after ${MAX_QUEUE_FLUSH_ATTEMPTS} failed flush attempts`,
+          },
+        });
+        backendRegistryLog.error(
+          "auto-cancelling queued ACP runtime option change after repeated failures",
+          {
+            backend,
+            threadId,
+            queueId: queue.queueId,
+            attempts,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        return;
+      }
+      this.queuedAcpRuntimeOptions.set(this.buildAcpRuntimeQueueKey(backend, threadId), {
+        ...queue,
+        queuedAt: Date.now(),
+        flushAttempts: attempts,
+      });
+      backendRegistryLog.warn("queued ACP runtime option flush failed; will retry", {
+        backend,
+        threadId,
+        queueId: queue.queueId,
+        attempts,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private buildAcpRuntimeQueueKey(backend: AcpBackendId, threadId: string): string {
+    return `${backend}:${threadId}`;
+  }
+
+  private readAcpRuntimeOptionValue(
+    runtime: BackendAcpSessionRuntimeState | undefined,
+    params: Pick<SetAcpSessionRuntimeOptionRequest, "source" | "optionId">,
+  ): string | undefined {
+    return params.source === "configOption"
+      ? runtime?.configValues?.[params.optionId]
+      : runtime?.currentModeId;
+  }
+
+  private formatAcpRuntimeOptionLabel(
+    backend: AcpBackendId,
+    params: Pick<SetAcpSessionRuntimeOptionRequest, "source" | "optionId">,
+    value: string | undefined,
+  ): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+    const runtime = this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities;
+    if (params.source === "configOption") {
+      const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
+      const label = option?.values.find((item) => item.value === value)?.label;
+      return formatAcpRuntimeLabel(label ?? value);
+    }
+    const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
+    return formatAcpRuntimeLabel(label ?? value);
   }
 
   private async resolveAcpSessionForTurn(
@@ -3612,6 +4001,10 @@ export class DesktopBackendRegistry {
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
+      await this.flushQueuedAcpRuntimeOptionIfPresent(
+        params.backend,
+        params.threadId,
+      );
       return await this.startAcpTurn({
         backend: params.backend,
         threadId: params.threadId,
@@ -4040,7 +4433,7 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     });
     const currentApplied = overlay?.executionMode ?? "default";
-    const hasActiveTurn = this.threadHasActiveTurn(params.threadId);
+    const hasActiveTurn = this.threadHasActiveTurn(params.threadId, "codex");
     const hasQueue = this.queuedExecutionModes.has(params.threadId);
 
     // Toggling back to the currently-applied mode while a queue is
@@ -4353,13 +4746,25 @@ export class DesktopBackendRegistry {
    * flight on this thread. `activeCodexTurnModes` is keyed by
    * `${threadId}:${turnId}`; one or more matching keys → active turn.
    */
-  private threadHasActiveTurn(threadId: string): boolean {
-    if (this.reservedCodexStartThreadIds.has(threadId)) {
-      return true;
-    }
+  private threadHasActiveTurn(
+    threadId: string,
+    backend: AppServerBackendKind = "codex",
+  ): boolean {
+    if (backend === "codex") {
+      if (this.reservedCodexStartThreadIds.has(threadId)) {
+        return true;
+      }
 
-    const prefix = `${threadId}:`;
-    for (const key of this.activeCodexTurnModes.keys()) {
+      const prefix = `${threadId}:`;
+      for (const key of this.activeCodexTurnModes.keys()) {
+        if (key.startsWith(prefix)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    const prefix = `${backend}:${threadId}:`;
+    for (const key of this.activeTurnKeys) {
       if (key.startsWith(prefix)) {
         return true;
       }
@@ -4384,17 +4789,19 @@ export class DesktopBackendRegistry {
    * state remains correct, and the bus notification still fires.
    */
   private async appendPermissionTransition(params: {
+    backend?: AppServerBackendKind;
     threadId: string;
     transition: ThreadPermissionTransition;
   }): Promise<void> {
     try {
       await this.overlayStore.appendPermissionTransition({
-        backend: "codex",
+        backend: params.backend ?? "codex",
         threadId: params.threadId,
         transition: params.transition,
       });
     } catch (error) {
       backendRegistryLog.error("failed to append permission transition", {
+        backend: params.backend ?? "codex",
         threadId: params.threadId,
         status: params.transition.status,
         error: error instanceof Error ? error.message : String(error),
@@ -7442,10 +7849,7 @@ export class DesktopBackendRegistry {
       this.latestCodexConfigWarning = event;
     }
 
-    if (
-      event.backend === "codex" &&
-      event.notification.method === "turn/started"
-    ) {
+    if (event.notification.method === "turn/started") {
       const notification = event.notification as {
         params: {
           threadId: string;
@@ -7456,25 +7860,29 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromStartedNotification(notification);
-      const key = buildActiveTurnModeKey(
-        notification.params.threadId,
-        turnId,
+      this.activeTurnKeys.add(
+        buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
       );
-      if (!this.activeCodexTurnModes.has(key)) {
-        this.activeCodexTurnModes.set(
-          key,
-          await this.resolveCodexThreadExecutionModeForActiveTurn(
-            notification.params.threadId,
-          ),
+      if (event.backend === "codex") {
+        const key = buildActiveTurnModeKey(
+          notification.params.threadId,
+          turnId,
         );
+        if (!this.activeCodexTurnModes.has(key)) {
+          this.activeCodexTurnModes.set(
+            key,
+            await this.resolveCodexThreadExecutionModeForActiveTurn(
+              notification.params.threadId,
+            ),
+          );
+        }
       }
     }
 
     if (
-      event.backend === "codex" &&
-      (event.notification.method === "turn/completed" ||
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled")
+      event.notification.method === "turn/completed" ||
+      event.notification.method === "turn/failed" ||
+      event.notification.method === "turn/cancelled"
     ) {
       const notification = event.notification as {
         params: {
@@ -7487,6 +7895,11 @@ export class DesktopBackendRegistry {
       };
       const turnId = turnIdFromTerminalNotification(notification);
       if (turnId) {
+        this.activeTurnKeys.delete(
+          buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
+        );
+      }
+      if (event.backend === "codex" && turnId) {
         const activeTurnModeKey = buildActiveTurnModeKey(
           notification.params.threadId,
           turnId,
@@ -7502,42 +7915,63 @@ export class DesktopBackendRegistry {
           });
         }
       }
-      // Turn-end is the resume boundary — flush any queued mode change
-      // now. Fire-and-forget; failures are logged + retried inside
-      // flushQueuedExecutionModeIfPresent.
-      void this.flushQueuedExecutionModeIfPresent(
-        notification.params.threadId,
-      );
+      if (event.backend === "codex") {
+        // Turn-end is the resume boundary — flush any queued mode change
+        // now. Fire-and-forget; failures are logged + retried inside
+        // flushQueuedExecutionModeIfPresent.
+        void this.flushQueuedExecutionModeIfPresent(
+          notification.params.threadId,
+        );
+      } else if (isAcpBackendId(event.backend)) {
+        void this.flushQueuedAcpRuntimeOptionIfPresent(
+          event.backend,
+          notification.params.threadId,
+        );
+      }
     }
 
     if (
-      event.backend === "codex" &&
       event.notification.method === "thread/status/changed" &&
       readStatusType(event.notification.params.status) !== "active"
     ) {
-      const keyPrefix = `${event.notification.params.threadId}:`;
-      let hadKnownActiveTurn = false;
-      for (const key of this.activeCodexTurnModes.keys()) {
-        if (key.startsWith(keyPrefix)) {
-          if (!key.startsWith(`${keyPrefix}pending:`)) {
-            hadKnownActiveTurn = true;
-          }
-          this.activeCodexTurnModes.delete(key);
+      const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
+      for (const key of Array.from(this.activeTurnKeys)) {
+        if (key.startsWith(genericKeyPrefix)) {
+          this.activeTurnKeys.delete(key);
         }
       }
-      if (hadKnownActiveTurn) {
-        await this.adoptThreadBranchChangeFromActiveTurn({
-          backend: event.backend,
-          threadId: event.notification.params.threadId,
-        });
+      if (event.backend !== "codex") {
+        if (isAcpBackendId(event.backend)) {
+          void this.flushQueuedAcpRuntimeOptionIfPresent(
+            event.backend,
+            event.notification.params.threadId,
+          );
+        }
+      } else {
+        const keyPrefix = `${event.notification.params.threadId}:`;
+        let hadKnownActiveTurn = false;
+        for (const key of this.activeCodexTurnModes.keys()) {
+          if (key.startsWith(keyPrefix)) {
+            if (!key.startsWith(`${keyPrefix}pending:`)) {
+              hadKnownActiveTurn = true;
+            }
+            this.activeCodexTurnModes.delete(key);
+          }
+        }
+        if (hadKnownActiveTurn) {
+          await this.adoptThreadBranchChangeFromActiveTurn({
+            backend: event.backend,
+            threadId: event.notification.params.threadId,
+          });
+        }
+        // Same resume-boundary flush, triggered from the
+        // `thread/status/changed → idle` path (codex emits both, depending
+        // on the protocol shape; we cover both for resilience). Idempotent
+        // when no queue is set.
+        void this.flushQueuedExecutionModeIfPresent(
+          event.notification.params.threadId,
+        );
       }
-      // Same resume-boundary flush, triggered from the
-      // `thread/status/changed → idle` path (codex emits both, depending
-      // on the protocol shape; we cover both for resilience). Idempotent
-      // when no queue is set.
-      void this.flushQueuedExecutionModeIfPresent(
-        event.notification.params.threadId,
-      );
     }
 
     if (event.notification.method === "serverRequest/resolved") {

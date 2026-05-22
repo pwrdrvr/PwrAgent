@@ -265,6 +265,8 @@ function permissionTransitionLogsEqual(
       candidate?.id === entry.id &&
       candidate.fromExecutionMode === entry.fromExecutionMode &&
       candidate.toExecutionMode === entry.toExecutionMode &&
+      candidate.fromLabel === entry.fromLabel &&
+      candidate.toLabel === entry.toLabel &&
       candidate.status === entry.status &&
       candidate.occurredAt === entry.occurredAt &&
       candidate.queueId === entry.queueId &&
@@ -801,6 +803,46 @@ function applyThreadModelSettingsUpdate(
       reasoningEffort: params.reasoningEffort,
       serviceTier: params.serviceTier,
       fastMode: params.fastMode,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
+function applyThreadAcpRuntimeUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    acpRuntime?: NavigationThreadSummary["acpRuntime"];
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      acpRuntime: {
+        ...thread.acpRuntime,
+        ...params.acpRuntime,
+        configValues: {
+          ...(thread.acpRuntime?.configValues ?? {}),
+          ...(params.acpRuntime?.configValues ?? {}),
+        },
+      },
     };
   });
 
@@ -1372,6 +1414,14 @@ export function useThreadNavigation(
   cancelThreadExecutionModeQueue: (
     thread: NavigationThreadSummary
   ) => Promise<void>;
+  setAcpSessionRuntimeOption: (
+    thread: NavigationThreadSummary,
+    params: {
+      source: "configOption" | "mode";
+      optionId: string;
+      value: string;
+    }
+  ) => Promise<void>;
   setThreadModelSettings: (
     thread: NavigationThreadSummary,
     patch: Partial<
@@ -1434,6 +1484,7 @@ export function useThreadNavigation(
   const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
+  const setAcpSessionRuntimeOption = desktopApi?.setAcpSessionRuntimeOption;
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
@@ -1992,6 +2043,38 @@ export function useThreadNavigation(
             ? { ...current, model, reasoningEffort, serviceTier, fastMode }
             : current
         );
+        return;
+      }
+
+      if (method === "thread/acpRuntime/updated") {
+        const { threadId, acpRuntime } = event.notification.params as {
+          threadId: string;
+          acpRuntime?: NavigationThreadSummary["acpRuntime"];
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadAcpRuntimeUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            acpRuntime,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? {
+                ...current,
+                acpRuntime: {
+                  ...current.acpRuntime,
+                  ...acpRuntime,
+                  configValues: {
+                    ...(current.acpRuntime?.configValues ?? {}),
+                    ...(acpRuntime?.configValues ?? {}),
+                  },
+                },
+              }
+            : current
+        );
+        scheduleRefresh();
         return;
       }
 
@@ -3327,6 +3410,66 @@ export function useThreadNavigation(
     [refresh, setThreadModelSettings]
   );
 
+  const updateAcpSessionRuntimeOption = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      params: {
+        source: "configOption" | "mode";
+        optionId: string;
+        value: string;
+      }
+    ): Promise<void> => {
+      if (!setAcpSessionRuntimeOption) {
+        setSetThreadExecutionModeError(
+          "Desktop bridge is missing setAcpSessionRuntimeOption()."
+        );
+        return;
+      }
+
+      setSetThreadExecutionModeError(undefined);
+      const nextAcpRuntime: NavigationThreadSummary["acpRuntime"] = {
+        ...thread.acpRuntime,
+        configValues:
+          params.source === "configOption"
+            ? {
+                ...(thread.acpRuntime?.configValues ?? {}),
+                [params.optionId]: params.value,
+              }
+            : thread.acpRuntime?.configValues,
+        currentModeId:
+          params.source === "mode" ? params.value : thread.acpRuntime?.currentModeId,
+        updatedAt: Date.now(),
+      };
+      setOptimisticThread((current) =>
+        current && current.id === thread.id && current.source === thread.source
+          ? { ...current, acpRuntime: nextAcpRuntime }
+          : current
+      );
+      setState((current) => ({
+        ...current,
+        response: applyThreadAcpRuntimeUpdate(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          acpRuntime: nextAcpRuntime,
+        }),
+      }));
+      try {
+        await setAcpSessionRuntimeOption({
+          backend: thread.source,
+          threadId: thread.id,
+          ...params,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        setSetThreadExecutionModeError(
+          error instanceof Error ? error.message : String(error)
+        );
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setAcpSessionRuntimeOption]
+  );
+
   return {
     browseMode,
     createThread,
@@ -3356,6 +3499,7 @@ export function useThreadNavigation(
     selectedThread,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
+    setAcpSessionRuntimeOption: updateAcpSessionRuntimeOption,
     setThreadExecutionModeError,
     cancelThreadExecutionModeQueue,
     setThreadModelSettings: updateThreadModelSettings,

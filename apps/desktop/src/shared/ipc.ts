@@ -22,6 +22,8 @@ export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
   "agent:queue-thread-execution-mode";
 export const AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL =
   "agent:cancel-thread-execution-mode-queue";
+export const AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL =
+  "agent:set-acp-session-runtime-option";
 export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL = "agent:set-thread-model-settings";
 export const AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL = "agent:check-thread-branch-drift";
 export const AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL =

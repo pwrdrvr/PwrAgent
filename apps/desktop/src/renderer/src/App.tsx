@@ -400,6 +400,13 @@ function DesktopAppShell(props: {
             executionMode
           )
       : undefined,
+    onSetAcpRuntimeOption: navigation.selectedThread
+      ? async (params) =>
+          await navigation.setAcpSessionRuntimeOption(
+            navigation.selectedThread!,
+            params,
+          )
+      : undefined,
     onCancelExecutionModeQueue: navigation.selectedThread
       ? async () =>
           await navigation.cancelThreadExecutionModeQueue(navigation.selectedThread!)

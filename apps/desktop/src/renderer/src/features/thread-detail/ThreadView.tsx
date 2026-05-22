@@ -36,7 +36,10 @@ import { isBranchDrifted, readCodexEnvironmentActionRuns } from "@pwragent/share
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  formatAccessModeLabel,
+  formatExecutionModeLabel,
+} from "../../lib/execution-mode";
 import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
@@ -832,6 +835,11 @@ export type ThreadViewProps = {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetAcpRuntimeOption?: (params: {
+    source: "configOption" | "mode";
+    optionId: string;
+    value: string;
+  }) => Promise<void>;
   onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
@@ -1852,7 +1860,12 @@ export function ThreadView(props: ThreadViewProps) {
                 {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
               </span>
               <span className="chip chip--mode">
-                {formatExecutionModeLabel(selectedLaunchpad.executionMode)}
+                {formatAccessModeLabel(
+                  selectedLaunchpad,
+                  props.backends.find(
+                    (backend) => backend.kind === selectedLaunchpad.backend,
+                  ),
+                )}
               </span>
             </div>
             <h2 className="thread-header__title">{launchpadTitle}</h2>
@@ -2002,6 +2015,7 @@ export function ThreadView(props: ThreadViewProps) {
         desktopApi={props.desktopApi}
         projectLabel={props.selectedDirectory?.label}
         thread={selectedThread!}
+        backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
         onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       />
@@ -2162,6 +2176,7 @@ export function ThreadView(props: ThreadViewProps) {
               setTranscriptReglueRequestKey((current) => current + 1);
             }}
             onSetExecutionMode={props.onSetExecutionMode}
+            onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
