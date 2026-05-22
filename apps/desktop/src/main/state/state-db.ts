@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
+export const CURRENT_STATE_DB_USER_VERSION = 8;
+
 const SCHEMA_V1 = `
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
@@ -372,7 +374,7 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 8) {
       db.transaction(() => {
         db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
-        db.pragma("user_version = 8");
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
 

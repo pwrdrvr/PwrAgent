@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
 let store: ComposerDraftRecoveryStore;
@@ -23,7 +23,9 @@ afterEach(() => {
 
 describe("ComposerDraftRecoveryStore", () => {
   it("creates the durable draft schema at the current state DB version", () => {
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(7);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
     expect(
       stateDb.raw
         .prepare(
