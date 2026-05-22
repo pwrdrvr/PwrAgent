@@ -97,7 +97,8 @@ supported platform; the screenshots there happen to be Telegram.
   management rights. To let PwrAgent delete a topic, also grant delete
   message rights. Telegram deletion removes the topic and its messages,
   so PwrAgent treats cleanup as a dry run until you approve a specific
-  action.
+  action. Start with `/monitor`, then use the monitor card's **Topics**
+  button to create or reuse the PwrAgent control topic.
 - **Telegram bots cannot list every historical topic.** PwrAgent can
   manage topics it creates, topics it observes through normal traffic or
   forum-topic service messages, and topics you adopt from inside the

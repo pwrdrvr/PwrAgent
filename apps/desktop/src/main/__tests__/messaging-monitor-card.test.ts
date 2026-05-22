@@ -62,6 +62,9 @@ describe("buildMonitorStatusIntent", () => {
         }),
       ]),
     });
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "monitor:topics" }),
+    );
     expect(intent.text).toContain("Pins: 5 | Recent: 5");
     expect(intent.text).toContain("Status: inline | Snippet: off");
     expect(intent.text).toContain("Pins\nP1. Pinned release watch (codex) - idle - updated just now - PwrAgent");
@@ -69,6 +72,24 @@ describe("buildMonitorStatusIntent", () => {
     expect(intent.text).toContain("2. Review provider commands (grok) - queued permissions - updated just now - Messaging");
     expect(intent.text).toContain(`Interval: ${MESSAGING_MONITOR_INTERVAL_MS / 60_000} min`);
     expect(intent.text).not.toContain("undefined");
+  });
+
+  it("adds topic controls when the monitor surface supports Telegram topics", () => {
+    const intent = buildMonitorStatusIntent({
+      binding: buildBinding(),
+      createdAt: 121_000,
+      id: "monitor-1",
+      navigation: buildNavigationSnapshot(),
+      topicControls: true,
+    });
+
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "monitor:topics",
+        fallbackText: "monitor topics",
+        label: "Topics",
+      }),
+    );
   });
 
   it("updates the existing monitor surface when one is stored", () => {

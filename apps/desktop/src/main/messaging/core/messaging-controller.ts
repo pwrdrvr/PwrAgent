@@ -4248,7 +4248,7 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    if (actionId.startsWith("monitor:topics:")) {
+    if (actionId === "monitor:topics" || actionId.startsWith("monitor:topics:")) {
       await this.handleMonitorTopicCallback(event, actionId);
       return;
     }
@@ -4267,20 +4267,6 @@ export class MessagingController {
       { kind: "topics-adopt" | "topics-cleanup" | "topics-fanout" }
     >,
   ): Promise<void> {
-    if (event.channel.conversation.kind !== "topic") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("topics-not-topic"),
-          createdAt: this.now(),
-          title: "Telegram topic required",
-          body: "Run this from a Telegram supergroup topic so PwrAgent can infer the supergroup and topic route.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
-      return;
-    }
     if (event.channel.channel !== "telegram") {
       await this.deliver(
         buildErrorIntent({
@@ -4296,21 +4282,137 @@ export class MessagingController {
       return;
     }
 
-    const topic = await this.upsertManagedTopicFromChannel(event, {
-      source: "owned",
-      lifecycle: "open",
-      recommendation: "keep",
-    });
+    const topic = await this.resolveMonitorControlTopic(event);
+    if (!topic) {
+      return;
+    }
+    const topicEvent = this.eventForManagedTopic(
+      event,
+      topic,
+      action.kind === "topics-cleanup"
+        ? ["topics", "cleanup"]
+        : action.kind === "topics-fanout"
+          ? ["topics", "fanout"]
+          : ["topics"],
+    );
     if (action.kind === "topics-cleanup") {
-      await this.renderTopicCleanupProposal(event, topic);
+      await this.renderTopicCleanupProposal(topicEvent, topic);
       return;
     }
     if (action.kind === "topics-fanout") {
-      await this.runTopicMonitorFanout(event, topic);
+      await this.runTopicMonitorFanout(topicEvent, topic);
       return;
     }
 
-    await this.renderTopicControlStatus(event, topic);
+    await this.renderTopicControlStatus(topicEvent, topic);
+  }
+
+  private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
+    return channel.channel === "telegram" &&
+      (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
+  }
+
+  private async resolveMonitorControlTopic(
+    event: MessagingInboundCommandEvent,
+  ): Promise<MessagingManagedTopicRecord | undefined> {
+    if (event.channel.conversation.kind === "topic") {
+      return await this.upsertManagedTopicFromChannel(event, {
+        source: "owned",
+        lifecycle: "open",
+        recommendation: "keep",
+      });
+    }
+
+    if (event.channel.conversation.kind !== "channel") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-not-supergroup"),
+          createdAt: this.now(),
+          title: "Telegram supergroup required",
+          body: "Open Monitor from a Telegram supergroup or one of its topics so PwrAgent can manage forum topics.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    const supergroupId = event.channel.conversation.id;
+    const knownTopics = await this.options.store.findManagedTopicsForSupergroup({
+      channel: event.channel.channel,
+      supergroupId,
+    });
+    const existing = knownTopics.find(
+      (topic) => topic.source === "owned" && topic.lifecycle !== "deleted",
+    );
+    if (existing) {
+      return existing;
+    }
+
+    if (!this.options.adapter.createManagedConversation) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-create-unsupported"),
+          createdAt: this.now(),
+          title: "Topic creation unavailable",
+          body: "This adapter cannot create a PwrAgent control topic. Run this from an existing Telegram topic to adopt it instead.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    const result = await this.options.adapter.createManagedConversation({
+      actor: event.actor,
+      parent: event.channel,
+      routingState: event.routingState,
+      title: "PwrAgent topic owner",
+    });
+    if (result.outcome !== "created" || !result.conversation) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-create-failed"),
+          createdAt: this.now(),
+          title: "Topic creation failed",
+          body: result.errorMessage ?? "Telegram could not create the PwrAgent control topic.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    return await this.options.store.upsertManagedTopic(
+      managedTopicRecordFromConversation({
+        actorIds: this.monitorAuthorizedActorIds(event),
+        channel: event.channel.channel,
+        conversation: result.conversation,
+        now: this.now(),
+        routingState: result.routingState,
+        source: "owned",
+      }),
+    );
+  }
+
+  private eventForManagedTopic(
+    event: MessagingInboundEvent,
+    topic: MessagingManagedTopicRecord,
+    args: string[],
+  ): MessagingInboundCommandEvent {
+    return {
+      ...event,
+      id: `${event.id}:topic:${topic.id}`,
+      kind: "command",
+      channel: topicChannelRef(topic),
+      command: "monitor",
+      args,
+      rawText: `/monitor ${args.join(" ")}`,
+      routingState: topic.routingState ?? event.routingState,
+    };
   }
 
   private async handleMonitorTopicCallback(
@@ -7165,6 +7267,7 @@ export class MessagingController {
       id: this.newIntentId("monitor"),
       navigation: snapshot,
       snippetsByThreadKey,
+      topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
     });
     const result = await this.deliver(intent, binding, event);
     const latestBinding = await this.options.store.getBinding(binding.id);
@@ -7221,6 +7324,7 @@ export class MessagingController {
         monitorSurface: subscription.monitorSurface,
         navigation: snapshot,
         snippetsByThreadKey,
+        topicControls: this.supportsMonitorTopicControls(event?.channel ?? subscription.channel),
       }),
       allowedActorIds: subscription.authorizedActorIds,
       ...(event

@@ -2675,6 +2675,67 @@ describe("MessagingController", () => {
     });
   });
 
+  it("opens Telegram topic controls from the Monitor card", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "400",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "PwrAgent topic owner",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 400 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ createManagedConversation });
+    const event = buildTelegramChannelCommandEvent("/monitor");
+
+    await harness.controller.handleInboundEvent(event);
+
+    const topicAction = findAction(harness.delivered.at(-1), "monitor:topics");
+    expect(topicAction).toMatchObject({
+      fallbackText: "monitor topics",
+      label: "Topics",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: topicAction.id,
+        channel: event.channel,
+      }),
+    );
+
+    expect(createManagedConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parent: event.channel,
+        title: "PwrAgent topic owner",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent topic owner",
+      audit: expect.objectContaining({
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "400",
+            kind: "topic",
+            parentId: "-1001",
+            parentTitle: "Ops",
+            title: "PwrAgent topic owner",
+          },
+        },
+      }),
+      targetSurface: {
+        channel: "telegram",
+        id: expect.stringContaining("topic:topic:telegram:-1001:400"),
+        state: { opaque: { chatId: -1001, messageThreadId: 400 } },
+      },
+    });
+  });
+
   it("preserves command routing state for the initial Monitor render", async () => {
     const harness = await createHarness();
     const event = {
@@ -8698,6 +8759,27 @@ function buildTopicCommandEvent(
       opaque: {
         chatId: -1001,
         messageThreadId: Number(topicId),
+      },
+    },
+  };
+}
+
+function buildTelegramChannelCommandEvent(
+  rawText: string,
+): MessagingInboundEvent & { kind: "command" } {
+  return {
+    ...buildCommandEvent(rawText),
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "-1001",
+        kind: "channel",
+        title: "Ops",
+      },
+    },
+    routingState: {
+      opaque: {
+        chatId: -1001,
       },
     },
   };
