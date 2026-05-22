@@ -7,13 +7,15 @@ import {
 } from "../backend-selection";
 
 describe("backend selection helpers", () => {
-  it("returns available create-capable backends with available execution modes", () => {
+  it("returns available create-capable backends with available execution modes or ACP runtime modes", () => {
     const backends = [
       backendSummary("codex", { available: true, createThread: true }),
       backendSummary("acp:gemini", {
         available: true,
         createThread: true,
+        executionModes: [],
         label: "Gemini CLI",
+        source: "acp",
       }),
       backendSummary("grok", { available: true, createThread: false }),
       backendSummary("grok", {
@@ -71,12 +73,15 @@ function backendSummary(
   options: {
     available: boolean;
     createThread: boolean;
+    executionModes?: BackendSummary["executionModes"];
     executionModeAvailable?: boolean;
     label?: string;
+    source?: BackendSummary["source"];
   },
 ): BackendSummary {
   return {
     kind,
+    source: options.source,
     label: options.label ?? (kind === "codex" ? "Codex" : "Grok"),
     available: options.available,
     methods: [],
@@ -94,7 +99,7 @@ function backendSummary(
       approvalRequests: true,
       multiDirectoryThreads: true,
     },
-    executionModes: [
+    executionModes: options.executionModes ?? [
       {
         mode: "default",
         label: "Default",

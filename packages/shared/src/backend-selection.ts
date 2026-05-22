@@ -8,7 +8,8 @@ export function selectableNewThreadBackends(
     (backend) =>
       backend.available &&
       backend.capabilities.createThread &&
-      backend.executionModes.some((mode) => mode.available),
+      (backend.source === "acp" ||
+        backend.executionModes.some((mode) => mode.available)),
   );
 }
 

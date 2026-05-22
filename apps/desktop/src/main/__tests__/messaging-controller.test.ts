@@ -2495,6 +2495,7 @@ describe("MessagingController", () => {
             kind: "acp:gemini",
             label: "Gemini CLI",
             source: "acp",
+            executionModes: [],
             launchpadOptions: {
               models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
               reasoningEfforts: [],
