@@ -46,6 +46,7 @@ import type {
 } from "@pwragent/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
+  ConfigValueWriteParams as CodexConfigValueWriteParams,
   ModelListParams as CodexModelListParams,
   SandboxMode as CodexSandboxMode,
   SandboxPolicy as CodexSandboxPolicy,
@@ -185,6 +186,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "warning",
+  "configWarning",
   "thread/compacted",
   "thread/archived",
   "thread/unarchived",
@@ -205,6 +207,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
 ]);
 const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "warning",
+  "configWarning",
   "thread/started",
   "turn/started",
   "turn/completed",
@@ -582,16 +585,49 @@ function normalizeServerNotification(
       ? normalizeLiveNotificationItem(itemRecord)
       : undefined;
 
+  const configWarningMetadata =
+    method === "configWarning"
+      ? extractConfigWarningMetadata(record)
+      : undefined;
+
   return {
     method: method as AppServerNotification["method"],
     params: {
       ...record,
+      ...(configWarningMetadata ?? {}),
       ...(normalizedItem ? { item: normalizedItem } : {}),
       ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
       ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
       ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
     } as AppServerNotification["params"],
   } as AppServerNotification;
+}
+
+function extractConfigWarningMetadata(
+  record: Record<string, unknown>,
+): { trustedProjectPath?: string; configPath?: string } | undefined {
+  const summary = pickString(record, ["summary"]);
+  if (!summary) {
+    return undefined;
+  }
+
+  const trustLine = summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /as a trusted project in/i.test(line));
+  const trustMatch = trustLine?.match(
+    /add\s+(.+?)\s+as a trusted project in\s+(.+?)\s*\.?$/i,
+  );
+  if (!trustMatch) {
+    return undefined;
+  }
+
+  const trustedProjectPath = trustMatch[1]?.trim();
+  const configPath = trustMatch[2]?.trim();
+  return {
+    ...(trustedProjectPath ? { trustedProjectPath } : {}),
+    ...(configPath ? { configPath } : {}),
+  };
 }
 
 function normalizeLiveNotificationItem(
@@ -3792,6 +3828,44 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  async trustProject(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }> {
+    const projectPath = params.projectPath.trim();
+    if (!projectPath) {
+      throw new Error("projectPath is required");
+    }
+    await this.ensureInitialized();
+
+    const payload: CodexConfigValueWriteParams = {
+      keyPath: "projects",
+      value: {
+        [projectPath]: {
+          trust_level: "trusted",
+        },
+      },
+      mergeStrategy: "upsert",
+      ...(params.configPath?.trim()
+        ? { filePath: params.configPath.trim() }
+        : {}),
+    };
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/value/write"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      projectPath,
+      ...(params.configPath?.trim()
+        ? { configPath: params.configPath.trim() }
+        : {}),
+    };
   }
 
   private async recordThreadNameWithCodex(value: unknown): Promise<void> {

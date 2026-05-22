@@ -82,6 +82,8 @@ import {
   type StartThreadResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
+  type TrustCodexProjectRequest,
+  type TrustCodexProjectResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
   type WorktreeSnapshotSummary,
@@ -301,6 +303,10 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string }>;
+  trustProject?(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }>;
 };
 
 /**
@@ -1868,6 +1874,24 @@ export class DesktopBackendRegistry {
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
     await this.emit(event);
+  }
+
+  async trustCodexProject(
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse> {
+    if (!this.codexClient.trustProject) {
+      throw new Error("Codex project trust is not available.");
+    }
+
+    const result = await this.codexClient.trustProject({
+      projectPath: request.projectPath,
+      ...(request.configPath ? { configPath: request.configPath } : {}),
+    });
+    return {
+      projectPath: result.projectPath,
+      ...(result.configPath ? { configPath: result.configPath } : {}),
+      trusted: true,
+    };
   }
 
   async listBackends(

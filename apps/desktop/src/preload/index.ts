@@ -102,6 +102,8 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -180,6 +182,7 @@ import {
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+  AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
@@ -590,6 +593,10 @@ const desktopApi = Object.freeze({
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>
     await ipcRenderer.invoke(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL, request),
+  trustCodexProject: async (
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse> =>
+    await ipcRenderer.invoke(AGENT_TRUST_CODEX_PROJECT_CHANNEL, request),
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>

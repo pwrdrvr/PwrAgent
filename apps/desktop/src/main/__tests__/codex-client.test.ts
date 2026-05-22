@@ -75,6 +75,11 @@ class MockTransport implements JsonRpcTransport {
   static modelListResult: unknown = {
     data: []
   };
+  static configValueWriteResult: unknown = {
+    status: "ok",
+    filePath: "/Users/huntharo/.codex/config.toml"
+  };
+  static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
   };
@@ -506,6 +511,18 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "config/value/write") {
+      MockTransport.lastConfigValueWritePayload = JSON.parse(message).params;
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.configValueWriteResult,
+        })
+      );
+      return;
+    }
+
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -900,6 +917,11 @@ describe("CodexAppServerClient", () => {
     MockTransport.modelListResult = {
       data: []
     };
+    MockTransport.configValueWriteResult = {
+      status: "ok",
+      filePath: "/Users/huntharo/.codex/config.toml"
+    };
+    MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {}
     };
@@ -3236,6 +3258,89 @@ describe("CodexAppServerClient", () => {
         }
       }
     ]);
+
+    await client.close();
+  });
+
+  it("normalizes config warnings with project trust metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "configWarning",
+      params: {
+        summary:
+          "Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n" +
+          "    1. /Users/huntharo/.codex/worktrees/mp9wyft8/PwrAgnt/.codex\n" +
+          "       To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.\n",
+        details: null
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+      "unknown codex notification",
+      expect.anything()
+    );
+    expect(notifications).toEqual([
+      {
+        method: "configWarning",
+        params: expect.objectContaining({
+          trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+          configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+          details: null
+        })
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("writes Codex project trust through config/value/write", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const response = await client.trustProject({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+    });
+
+    expect(response).toEqual({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+    });
+    expect(MockTransport.lastConfigValueWritePayload).toEqual({
+      keyPath: "projects",
+      value: {
+        "/Users/huntharo/github/PwrAgnt": {
+          trust_level: "trusted"
+        }
+      },
+      mergeStrategy: "upsert",
+      filePath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+    });
 
     await client.close();
   });

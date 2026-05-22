@@ -104,6 +104,8 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -312,6 +314,9 @@ export type DesktopApi = {
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;
+  trustCodexProject?: (
+    request: TrustCodexProjectRequest,
+  ) => Promise<TrustCodexProjectResponse>;
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;

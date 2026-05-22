@@ -220,6 +220,17 @@ export type SubmitServerRequestResponse = {
   requestId: string;
 };
 
+export type TrustCodexProjectRequest = {
+  projectPath: string;
+  configPath?: string;
+};
+
+export type TrustCodexProjectResponse = {
+  projectPath: string;
+  configPath?: string;
+  trusted: boolean;
+};
+
 export type EnsureDirectoryLaunchpadRequest = {
   directoryKey: string;
   directoryKind: DirectorySummaryKind;

@@ -31,6 +31,7 @@ import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefres
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
+import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
@@ -614,6 +615,7 @@ function DesktopAppShell(props: {
         />
       ) : null}
 
+      <CodexConfigWarningBanner desktopApi={desktopApi} />
       <AppUpdateBanner desktopApi={desktopApi} />
     </div>
   );
