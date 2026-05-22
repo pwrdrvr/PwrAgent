@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import { AcpAgentsSettings } from "../AcpAgentsSettings";
@@ -78,7 +78,7 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Permission mode")).toBeInTheDocument();
     expect(screen.getByText("Discovered · session-load")).toBeInTheDocument();
     expect(screen.getByText("previous probe failed")).toBeInTheDocument();
-    expect(screen.queryByText("No allowlisted ACP agents found.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No discovered ACP agents found.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Discovering..." })).toBeDisabled();
 
     resolveRefresh?.({ fetchedAt: 2000, entries: [cachedEntry] });
@@ -87,7 +87,7 @@ describe("AcpAgentsSettings", () => {
     });
   });
 
-  it("renders allowlisted ACP agents with provenance before install", async () => {
+  it("renders discovered ACP agents with provenance", async () => {
     const desktopApi: DesktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
@@ -103,12 +103,11 @@ describe("AcpAgentsSettings", () => {
             repositoryUrl: "https://github.com/google-gemini/gemini-cli",
             distributionKind: "npx",
             distributionSource: "@google/gemini-cli@0.42.0",
-            installable: true,
+            installable: false,
             installed: false,
-            installStatus: "not-installed",
+            installStatus: "unavailable",
             authStatus: "not-required",
             verificationStatus: "not-applicable",
-            allowlistRuleId: "gemini-v0.42.0-npx",
           } satisfies AcpAgentSettingsEntry,
         ],
       })),
@@ -119,47 +118,6 @@ describe("AcpAgentsSettings", () => {
     expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.getByText("Apache-2.0")).toBeInTheDocument();
     expect(screen.getByText(/@google\/gemini-cli/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review install" })).toBeEnabled();
-  });
-
-  it("requires confirmation before invoking install", async () => {
-    const installAcpAgent = vi.fn(async () => ({ ok: true, fetchedAt: 1000 }));
-    const listAcpAgents = vi.fn(async () => ({
-      fetchedAt: 1000,
-      entries: [
-        {
-          backendId: "acp:gemini",
-          registryId: "gemini",
-          name: "Gemini",
-          authors: [],
-          distributionKind: "npx",
-          distributionSource: "@google/gemini-cli",
-          installable: true,
-          installed: false,
-          installStatus: "not-installed",
-          authStatus: "required",
-          verificationStatus: "not-applicable",
-        } satisfies AcpAgentSettingsEntry,
-      ],
-    }));
-    const desktopApi = {
-      listAcpAgents,
-      installAcpAgent,
-    } as unknown as DesktopApi;
-
-    render(<AcpAgentsSettings desktopApi={desktopApi} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Review install" }));
-    expect(installAcpAgent).not.toHaveBeenCalled();
-    expect(screen.getByText(/third-party ACP agent/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Install" }));
-    await waitFor(() => {
-      expect(installAcpAgent).toHaveBeenCalledWith({
-        backendId: "acp:gemini",
-        distributionKind: "npx",
-        confirmed: true,
-      });
-    });
+    expect(screen.queryByRole("button", { name: /install/i })).not.toBeInTheDocument();
   });
 });

@@ -1226,6 +1226,13 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function buildTurnStartReservationKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}\u0000${threadId}`;
+}
+
 function mergeAcpRuntimeState(
   current: BackendAcpSessionRuntimeState | undefined,
   patch: BackendAcpSessionRuntimeState | undefined,
@@ -2032,6 +2039,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
+  private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
@@ -4293,15 +4301,27 @@ export class DesktopBackendRegistry {
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
-      await this.flushQueuedAcpRuntimeOptionIfPresent(
+      const reservationKey = buildTurnStartReservationKey(
         params.backend,
         params.threadId,
       );
-      return await this.startAcpTurn({
-        backend: params.backend,
-        threadId: params.threadId,
-        input: params.input,
-      });
+      if (this.threadHasActiveTurn(params.threadId, params.backend)) {
+        throw new Error("A turn is already active for this thread.");
+      }
+      this.reservedAcpStartThreadKeys.add(reservationKey);
+      try {
+        await this.flushQueuedAcpRuntimeOptionIfPresent(
+          params.backend,
+          params.threadId,
+        );
+        return await this.startAcpTurn({
+          backend: params.backend,
+          threadId: params.threadId,
+          input: params.input,
+        });
+      } finally {
+        this.reservedAcpStartThreadKeys.delete(reservationKey);
+      }
     }
 
     const reserveCodexStart = params.backend === "codex";
@@ -5054,6 +5074,11 @@ export class DesktopBackendRegistry {
         }
       }
       return false;
+    }
+    if (this.reservedAcpStartThreadKeys.has(
+      buildTurnStartReservationKey(backend, threadId),
+    )) {
+      return true;
     }
     const prefix = `${backend}:${threadId}:`;
     for (const key of this.activeTurnKeys) {

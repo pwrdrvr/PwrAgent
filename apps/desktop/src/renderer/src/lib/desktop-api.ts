@@ -30,8 +30,6 @@ import type {
   InterruptTurnRequest,
   InterruptTurnResponse,
   LatestCodexConfigWarningResponse,
-  InstallAcpAgentRequest,
-  InstallAcpAgentResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   ListAcpAgentSettingsRequest,
@@ -337,9 +335,6 @@ export type DesktopApi = {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
-  installAcpAgent?: (
-    request: InstallAcpAgentRequest
-  ) => Promise<InstallAcpAgentResponse>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;

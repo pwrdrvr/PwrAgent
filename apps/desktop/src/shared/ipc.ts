@@ -11,7 +11,6 @@ export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
-export const ACP_AGENT_INSTALL_CHANNEL = "acp-agents:install";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";

@@ -251,15 +251,3 @@ export type ListAcpAgentSettingsResponse = {
   entries: AcpAgentSettingsEntry[];
   error?: string;
 };
-
-export type InstallAcpAgentRequest = {
-  backendId: AppServerBackendKind;
-  distributionKind?: BackendAcpDistributionKind;
-  confirmed: boolean;
-};
-
-export type InstallAcpAgentResponse = {
-  ok: boolean;
-  entry?: AcpAgentSettingsEntry;
-  error?: string;
-};

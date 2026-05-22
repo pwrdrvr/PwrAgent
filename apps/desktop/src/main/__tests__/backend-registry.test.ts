@@ -1983,20 +1983,20 @@ describe("DesktopBackendRegistry", () => {
           backendId: acpBackendId,
           registryId: "gemini",
           name: "Gemini CLI",
-          distributionKind: "npx",
-          distributionSource: "@google/gemini-cli@0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "gemini-v0.42.0-npx",
+          allowlistRuleId: "local-gemini-cli",
           installedAt: 1000,
           updatedAt: 2000,
           launchDescriptor: {
             backendId: acpBackendId,
             registryId: "gemini",
-            distributionKind: "npx",
-            command: "npx",
-            args: ["--yes", "@google/gemini-cli@0.42.0"],
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
             env: {},
           },
         },
@@ -2029,6 +2029,22 @@ describe("DesktopBackendRegistry", () => {
       threadId: "session-1",
       turnId: expect.stringMatching(/^pending:session-1:\d+$/),
     });
+    await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "session-1",
+          turnId: startedTurn.turnId,
+          turn: {
+            id: startedTurn.turnId,
+            status: "completed",
+            completedAt: 1002,
+            output: [{ type: "text", text: "Done" }],
+          },
+        },
+      },
+    });
     const imageUrl = "data:image/png;base64,aGVsbG8=";
     const imageTurn = await registry.startTurn({
       backend: acpBackendId,
@@ -2042,6 +2058,22 @@ describe("DesktopBackendRegistry", () => {
       backend: acpBackendId,
       threadId: "session-1",
       turnId: expect.stringMatching(/^pending:session-1:\d+$/),
+    });
+    await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "session-1",
+          turnId: imageTurn.turnId,
+          turn: {
+            id: imageTurn.turnId,
+            status: "completed",
+            completedAt: 1003,
+            output: [{ type: "text", text: "Done" }],
+          },
+        },
+      },
     });
     await expect(
       registry.readThread({
@@ -2099,7 +2131,9 @@ describe("DesktopBackendRegistry", () => {
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
       "turn/started",
+      "turn/completed",
       "turn/started",
+      "turn/completed",
       "turn/cancelled",
     ]);
 
@@ -2171,20 +2205,20 @@ describe("DesktopBackendRegistry", () => {
           backendId: acpBackendId,
           registryId: "gemini",
           name: "Gemini CLI",
-          distributionKind: "npx",
-          distributionSource: "@google/gemini-cli@0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "gemini-v0.42.0-npx",
+          allowlistRuleId: "local-gemini-cli",
           installedAt: 1000,
           updatedAt: 2000,
           launchDescriptor: {
             backendId: acpBackendId,
             registryId: "gemini",
-            distributionKind: "npx",
-            command: "npx",
-            args: ["--yes", "@google/gemini-cli@0.42.0"],
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
             env: {},
           },
         },
@@ -2469,6 +2503,101 @@ describe("DesktopBackendRegistry", () => {
       configValues: { "approval-mode": "default" },
       currentModeId: "default",
     });
+
+    await registry.close();
+  });
+
+  it("rejects a second ACP turn while the first start is still resolving", async () => {
+    const ensureSession = createDeferred<void>();
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        prompt: string;
+        turnId?: string;
+      }) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "pending:session-1:1001",
+      })),
+      ensureSession: vi.fn(async () => await ensureSession.promise),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "active",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    const firstTurn = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "first" }],
+    });
+    await waitForCondition(() => acpClient.ensureSession.mock.calls.length === 1);
+
+    await expect(
+      registry.startTurn({
+        backend: acpBackendId,
+        threadId: "session-1",
+        input: [{ type: "text", text: "second" }],
+      }),
+    ).rejects.toThrow("A turn is already active for this thread.");
+
+    ensureSession.resolve();
+    await expect(firstTurn).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+    });
+    expect(acpClient.startPrompt).toHaveBeenCalledTimes(1);
 
     await registry.close();
   });

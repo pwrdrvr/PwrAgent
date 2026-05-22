@@ -18,15 +18,7 @@ export type AcpAgentAllowlistRule = {
 
 const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
 
-export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
-  {
-    id: "gemini-v0.42.0-npx",
-    registryId: "gemini",
-    versions: ["0.42.0"],
-    distributionKinds: ["npx"],
-    allowedPackageNames: ["@google/gemini-cli@0.42.0"],
-  },
-];
+export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [];
 
 export class AcpAgentAllowlist {
   constructor(private readonly rules: AcpAgentAllowlistRule[]) {}

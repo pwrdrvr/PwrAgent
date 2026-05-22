@@ -280,7 +280,7 @@ describe("AcpRegistryService", () => {
     });
   });
 
-  it("allows the pinned Gemini CLI ACP package from the default allowlist", () => {
+  it("does not allow installing Gemini from the default allowlist", () => {
     const service = new AcpRegistryService();
     const snapshot = {
       fetchedAt: 1,
@@ -304,9 +304,9 @@ describe("AcpRegistryService", () => {
     };
 
     expect(service.applyAllowlist(snapshot)[0]).toMatchObject({
-      installable: true,
+      installable: false,
       verificationStatus: "not-applicable",
-      allowlist: { allowed: true, ruleId: "gemini-v0.42.0-npx" },
+      allowlist: { allowed: false, reason: "not-allowlisted" },
     });
   });
 

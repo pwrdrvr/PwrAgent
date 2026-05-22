@@ -17,8 +17,6 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsWriteResponse,
   DesktopSettingsSnapshot,
-  InstallAcpAgentRequest,
-  InstallAcpAgentResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
@@ -41,7 +39,6 @@ import {
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
-  ACP_AGENT_INSTALL_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -78,7 +75,6 @@ import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
-import { AcpInstaller } from "../acp/acp-installer";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
 import { AcpRegistryService } from "../acp/acp-registry-service";
@@ -250,77 +246,6 @@ async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
   return directory;
 }
 
-async function installAcpAgent(
-  request: InstallAcpAgentRequest,
-): Promise<InstallAcpAgentResponse> {
-  if (!request.confirmed) {
-    return { ok: false, error: "install-not-confirmed" };
-  }
-
-  const store = new AcpAgentStore(getAppStateDb());
-  const registryService = new AcpRegistryService();
-  const snapshot = await readAcpSnapshotForInstall(store, registryService);
-  const agent = registryService
-    .applyAllowlist(snapshot)
-    .find((candidate) => candidate.backendId === request.backendId);
-  if (!agent || !agent.allowlist.allowed || !agent.installable) {
-    return {
-      ok: false,
-      error: agent?.unavailableReason ?? "ACP agent is not installable",
-    };
-  }
-  if (request.distributionKind === "local") {
-    return { ok: false, error: "Local ACP agents do not require installation." };
-  }
-
-  const distribution = selectAcpDistribution(agent, request.distributionKind);
-  if (!distribution) {
-    return { ok: false, error: "No supported distribution is available for this platform." };
-  }
-  const distributionPolicy = registryService.evaluateDistribution(agent, distribution);
-  if (!distributionPolicy.installable || !distributionPolicy.allowlist.allowed) {
-    return {
-      ok: false,
-      error:
-        distributionPolicy.unavailableReason ??
-        (distributionPolicy.allowlist.allowed
-          ? "ACP distribution is not installable"
-          : distributionPolicy.allowlist.reason),
-    };
-  }
-
-  const installer = new AcpInstaller({ store });
-  const result = await installer.install({
-    agent,
-    distribution,
-    allowlistRuleId: distributionPolicy.allowlist.ruleId,
-    installRoot: path.join(resolveActiveProfileDir(), "state", "acp-agents"),
-    confirmed: true,
-  });
-  await disposeDesktopBackendRegistry();
-  const entry = installedAcpAgentSettingsEntry(result.record);
-  return result.ok
-    ? { ok: true, entry }
-    : { ok: false, entry, error: result.record.lastError ?? "install-failed" };
-}
-
-async function readAcpSnapshotForInstall(
-  store: AcpAgentStore,
-  registryService: AcpRegistryService,
-): Promise<AcpRegistrySnapshot> {
-  try {
-    const snapshot = await registryService.fetchRegistry();
-    store.saveRegistrySnapshot(snapshot);
-    return snapshot;
-  } catch (error) {
-    const cached = store.readRegistrySnapshot();
-    if (cached) {
-      return cached;
-    }
-    throw error;
-  }
-}
-
 function acpAgentSettingsEntry(params: {
   agent: AcpRegistryAgentWithPolicy;
   installed?: AcpInstalledAgentRecord;
@@ -330,9 +255,7 @@ function acpAgentSettingsEntry(params: {
     return installedAcpAgentSettingsEntry(params.installed, params.agent);
   }
 
-  const distribution =
-    selectInstallableAcpDistribution(params.agent, params.registryService) ??
-    selectAcpDistribution(params.agent);
+  const distribution = selectAcpDistribution(params.agent);
   if (!distribution) {
     const displayDistribution = params.agent.distributions[0];
     if (!displayDistribution) {
@@ -350,7 +273,7 @@ function acpAgentSettingsEntry(params: {
       websiteUrl: params.agent.websiteUrl,
       distributionKind: displayDistribution.kind,
       distributionSource: describeDistributionSource(displayDistribution),
-      installable: false,
+    installable: false,
       installed: false,
       installStatus: "unavailable",
       authStatus: params.agent.auth.required ? "required" : "not-required",
@@ -358,7 +281,7 @@ function acpAgentSettingsEntry(params: {
       allowlistRuleId: params.agent.allowlist.allowed
         ? params.agent.allowlist.ruleId
         : undefined,
-      unavailableReason: "No supported distribution is available for this platform.",
+    unavailableReason: "Install is not supported. Install the agent separately and run Discover new.",
     };
   }
   const distributionPolicy = params.registryService.evaluateDistribution(
@@ -377,15 +300,18 @@ function acpAgentSettingsEntry(params: {
     websiteUrl: params.agent.websiteUrl,
     distributionKind: distribution.kind,
     distributionSource: describeDistributionSource(distribution),
-    installable: distributionPolicy.installable,
+    installable: false,
     installed: false,
-    installStatus: distributionPolicy.installable ? "not-installed" : "unavailable",
+    installStatus: "unavailable",
     authStatus: params.agent.auth.required ? "required" : "not-required",
     verificationStatus: distributionPolicy.verificationStatus,
     allowlistRuleId: distributionPolicy.allowlist.allowed
       ? distributionPolicy.allowlist.ruleId
       : undefined,
-    unavailableReason: distributionPolicy.unavailableReason ?? params.agent.unavailableReason,
+    unavailableReason:
+      distributionPolicy.unavailableReason ??
+      params.agent.unavailableReason ??
+      "Install is not supported. Install the agent separately and run Discover new.",
   };
 }
 
@@ -406,7 +332,7 @@ function installedAcpAgentSettingsEntry(
     websiteUrl: agent?.websiteUrl,
     distributionKind: record.distributionKind,
     distributionSource: record.distributionSource,
-    installable: record.installStatus !== "installed",
+    installable: false,
     installed: record.installStatus === "installed",
     installStatus: record.installStatus,
     authStatus: record.authStatus,
@@ -426,20 +352,6 @@ function selectAcpDistribution(
   preferredKind?: AcpRegistryDistribution["kind"],
 ): AcpRegistryDistribution | undefined {
   return selectAcpDistributionForCurrentPlatform(agent.distributions, preferredKind);
-}
-
-function selectInstallableAcpDistribution(
-  agent: AcpRegistryAgent,
-  registryService: AcpRegistryService,
-  preferredKind?: AcpRegistryDistribution["kind"],
-): AcpRegistryDistribution | undefined {
-  return selectAcpDistributionForCurrentPlatform(
-    agent.distributions.filter(
-      (distribution) =>
-        registryService.evaluateDistribution(agent, distribution).installable,
-    ),
-    preferredKind,
-  );
 }
 
 async function resolveCodexCommandForProfileWorkflow(
@@ -936,15 +848,6 @@ export function registerSettingsIpcHandlers(
     ): Promise<ListAcpAgentSettingsResponse> => await listAcpAgentSettings(request),
   );
 
-  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
-  ipcMain.handle(
-    ACP_AGENT_INSTALL_CHANNEL,
-    async (
-      _event,
-      request: InstallAcpAgentRequest,
-    ): Promise<InstallAcpAgentResponse> => await installAcpAgent(request),
-  );
-
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -1199,7 +1102,6 @@ export function disposeSettingsIpcHandlers(): void {
   }
   activeCodexLoginProcesses.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
-  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);

@@ -22,6 +22,20 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
 describe("AcpAgentClient", () => {
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
     const transport = new FakeAcpAgentTransport();
@@ -478,6 +492,38 @@ describe("AcpAgentClient", () => {
         currentModelId: "gemini-3-pro-preview",
       },
     });
+  });
+
+  it("rejects a second active prompt for the same ACP session", async () => {
+    const pendingPrompt = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": pendingPrompt.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "first",
+    });
+
+    expect(() =>
+      client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "second",
+      }),
+    ).toThrow("A turn is already active for this ACP session.");
+
+    pendingPrompt.resolve({ turnId: "turn-1" });
   });
 
   it("treats Gemini mode marker chunks as runtime updates instead of assistant text", async () => {

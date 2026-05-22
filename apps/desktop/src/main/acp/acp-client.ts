@@ -732,6 +732,9 @@ export class AcpAgentClient {
   }
 
   private startTrackedTurn(sessionId: string, turnId: string): void {
+    if (this.activeTurns.has(sessionId)) {
+      throw new Error("A turn is already active for this ACP session.");
+    }
     this.activeTurns.set(sessionId, {
       assistantText: "",
       turnId,
