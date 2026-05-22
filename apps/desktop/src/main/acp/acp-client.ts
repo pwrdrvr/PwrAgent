@@ -337,16 +337,7 @@ export class AcpAgentClient {
         });
       })
       .catch((error) => {
-        const finished = this.finishTrackedTurn(params.sessionId);
-        void this.notifySessionUpdate({
-          sessionId: params.sessionId,
-          replay: finished.replay,
-          turnId: finished.turnId,
-          update: {
-            kind: "turn_finished",
-            outputText: finished.assistantText,
-          },
-        });
+        this.finishTrackedTurn(params.sessionId);
         return Promise.resolve(
           this.options.onPromptError?.({
             sessionId: params.sessionId,

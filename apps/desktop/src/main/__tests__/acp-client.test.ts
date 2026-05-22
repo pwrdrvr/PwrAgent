@@ -948,6 +948,7 @@ describe("AcpAgentClient", () => {
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
+    const sessionUpdateKinds: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
       store,
@@ -964,6 +965,15 @@ describe("AcpAgentClient", () => {
       now: () => 1000,
       onPromptError: (event) => {
         errors.push(event);
+      },
+      onSessionUpdate: ({ update }) => {
+        const record =
+          update && typeof update === "object" && !Array.isArray(update)
+            ? (update as Record<string, unknown>)
+            : undefined;
+        if (typeof record?.kind === "string") {
+          sessionUpdateKinds.push(record.kind);
+        }
       },
     });
 
@@ -991,6 +1001,7 @@ describe("AcpAgentClient", () => {
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
     expect((errors[0]?.error as Error).message).toBe("agent exited");
+    expect(sessionUpdateKinds).not.toContain("turn_finished");
   });
 
   it("refreshes stored session metadata without ingesting session/load replay", async () => {
