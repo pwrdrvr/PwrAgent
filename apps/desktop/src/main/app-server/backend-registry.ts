@@ -831,6 +831,48 @@ const EXECUTION_MODE_SUMMARIES: Record<
   },
 };
 
+const GEMINI_PRIVILEGED_APPROVAL_MODES = new Set(["auto_edit", "yolo"]);
+
+function sanitizeAcpRuntimeForExecutionMode(params: {
+  backend: AppServerBackendKind;
+  executionMode: ThreadExecutionMode;
+  runtime?: BackendAcpSessionRuntimeState;
+}): BackendAcpSessionRuntimeState | undefined {
+  const { backend, executionMode, runtime } = params;
+  if (backend !== "acp:gemini" || executionMode !== "default" || !runtime) {
+    return runtime;
+  }
+
+  let changed = false;
+  const configValues = runtime.configValues
+    ? { ...runtime.configValues }
+    : undefined;
+  if (
+    configValues?.["approval-mode"] &&
+    GEMINI_PRIVILEGED_APPROVAL_MODES.has(configValues["approval-mode"])
+  ) {
+    configValues["approval-mode"] = "default";
+    changed = true;
+  }
+
+  const currentModeId =
+    runtime.currentModeId &&
+    GEMINI_PRIVILEGED_APPROVAL_MODES.has(runtime.currentModeId)
+      ? "default"
+      : runtime.currentModeId;
+  if (currentModeId !== runtime.currentModeId) {
+    changed = true;
+  }
+
+  return changed
+    ? {
+        ...runtime,
+        ...(configValues ? { configValues } : {}),
+        ...(currentModeId ? { currentModeId } : {}),
+      }
+    : runtime;
+}
+
 function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
   const supported = new Set(methods);
   const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
@@ -3463,12 +3505,18 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
+    const acpRuntime = sanitizeAcpRuntimeForExecutionMode({
+      backend,
+      executionMode,
+      runtime: request.acpRuntime,
+    });
+
     const result = isAcpBackendId(backend)
       ? await this.startAcpSession({
           backend,
           cwd,
           executionMode,
-          acpRuntime: request.acpRuntime,
+          acpRuntime,
         })
       : await this.getClient(backend, executionMode).startThread({
           ...request,
@@ -3492,7 +3540,7 @@ export class DesktopBackendRegistry {
         updatedAt: startedAt,
         executionMode,
         ...modelSettings,
-        acpRuntime: request.acpRuntime,
+        acpRuntime,
         codexEnvironmentRuntime: request.codexEnvironmentRuntime,
         linkedDirectories: (
           resolvedLinkedDirectories?.length ? resolvedLinkedDirectories : buildLocalLinkedDirectory(cwd)

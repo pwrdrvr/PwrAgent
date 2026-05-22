@@ -15,6 +15,7 @@ import type {
   AppServerReviewTarget,
   AppServerTurnInputItem,
   BackendAccountSummary,
+  BackendAcpSessionRuntimeState,
   BackendRateLimitSummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -1886,6 +1887,130 @@ describe("DesktopBackendRegistry", () => {
     });
     expect(acpClient.initialize).toHaveBeenCalledTimes(1);
     expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+
+    await registry.close();
+  });
+
+  it("does not send privileged Gemini ACP modes for default access sessions", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        sessionId: string;
+        source: "configOption" | "mode";
+        optionId: string;
+        value: string;
+      }): Promise<BackendAcpSessionRuntimeState> =>
+        params.source === "configOption"
+          ? { configValues: { [params.optionId]: params.value }, updatedAt: 1001 }
+          : { currentModeId: params.value, updatedAt: 1001 },
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+        title?: string;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: params.title ?? "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { "approval-mode": "yolo" },
+        currentModeId: "yolo",
+      },
+    });
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acpRuntime: {
+          configValues: { "approval-mode": "default" },
+          currentModeId: "default",
+        },
+      }),
+    );
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "configOption",
+      optionId: "approval-mode",
+      value: "default",
+    });
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "mode",
+      optionId: "mode",
+      value: "default",
+    });
+    expect(setRuntimeOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ value: "yolo" }),
+    );
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { "approval-mode": "default" },
+      currentModeId: "default",
+    });
 
     await registry.close();
   });

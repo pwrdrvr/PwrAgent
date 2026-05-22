@@ -35,7 +35,9 @@ describe("discoverLocalAcpAgents", () => {
           distributionKind: "local",
           command: "gemini",
           args: ["--acp", "--skip-trust"],
-          env: {},
+          env: {
+            GEMINI_CLI_TRUST_WORKSPACE: "true",
+          },
         },
       }),
     ]);

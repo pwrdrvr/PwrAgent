@@ -4620,7 +4620,7 @@ export function Composer(props: ComposerProps) {
                     currentModeId:
                       acpRuntimeModeControl.source === "mode"
                         ? value
-                        : props.launchpad.acpRuntime?.currentModeId,
+                        : undefined,
                   },
                 });
               }}

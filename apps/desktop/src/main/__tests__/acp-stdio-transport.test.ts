@@ -101,6 +101,9 @@ describe("AcpStdioJsonRpcTransport", () => {
 
     expect(spawnCalls[0]?.[0]).toBe("gemini");
     expect(spawnCalls[0]?.[1]).toEqual(["--acp", "--skip-trust"]);
+    expect(spawnCalls[0]?.[2].env).toEqual(
+      expect.objectContaining({ GEMINI_CLI_TRUST_WORKSPACE: "true" }),
+    );
 
     const envelope = JSON.parse(child.writes[0]) as { id: string };
     child.stdout.write(
