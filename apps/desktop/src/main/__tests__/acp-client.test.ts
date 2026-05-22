@@ -947,6 +947,8 @@ describe("AcpAgentClient", () => {
 
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
+    const quotaError =
+      "json-rpc error (500): You have exhausted your capacity on this model. Your quota will reset after 22h38m3s.";
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
     const sessionUpdateKinds: string[] = [];
     const client = new AcpAgentClient({
@@ -955,7 +957,7 @@ describe("AcpAgentClient", () => {
       transport: {
         request: async (method, params) => {
           if (method === "session/prompt") {
-            throw new Error("agent exited");
+            throw new Error(quotaError);
           }
           return transport.request(method, params);
         },
@@ -1000,8 +1002,57 @@ describe("AcpAgentClient", () => {
       turnId: "pending:session-1",
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
-    expect((errors[0]?.error as Error).message).toBe("agent exited");
+    expect((errors[0]?.error as Error).message).toBe(quotaError);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
+    expect(store.getSession("acp:codex-acp", "session-1")?.transcriptUpdates)
+      .toEqual([
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "keep going",
+            turnId: "pending:session-1",
+          },
+        },
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_turn_failed",
+            turnId: "pending:session-1",
+            error: quotaError,
+          },
+        },
+      ]);
+    const expectedEntries = [
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "keep going",
+      }),
+      expect.objectContaining({
+        type: "activity",
+        summary: "Turn failed",
+        tone: "warning",
+        status: "failed",
+        details: [
+          expect.objectContaining({
+            label: quotaError,
+            status: "failed",
+          }),
+        ],
+      }),
+    ];
+    expect(client.readReplay("session-1").entries).toEqual(expectedEntries);
+
+    const reloadedClient = new AcpAgentClient({
+      backendId: "acp:codex-acp",
+      store,
+      transport,
+      now: () => 1000,
+    });
+    expect(reloadedClient.readReplay("session-1").entries).toEqual(
+      expectedEntries,
+    );
   });
 
   it("refreshes stored session metadata without ingesting session/load replay", async () => {

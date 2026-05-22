@@ -53,6 +53,41 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
+  recordTurnFailed(params: {
+    sessionId: string;
+    turnId: string;
+    error: string;
+    receivedAt?: number;
+  }): AppServerThreadReplay {
+    const createdAt = params.receivedAt ?? Date.now();
+    if (this.currentTurnId === params.turnId) {
+      this.currentTurnId = undefined;
+    }
+    this.status = "idle";
+    this.upsertActivity({
+      type: "activity",
+      id: `turn-failed:${params.turnId}`,
+      createdAt,
+      summary: "Turn failed",
+      tone: "warning",
+      status: "failed",
+      turn: {
+        id: params.turnId,
+        status: "failed",
+        completedAt: createdAt,
+      },
+      details: [
+        {
+          id: `turn-failed:${params.turnId}:detail`,
+          kind: "read",
+          label: params.error,
+          status: "failed",
+        },
+      ],
+    });
+    return this.replay();
+  }
+
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt = update.receivedAt ?? Date.now();
@@ -79,6 +114,13 @@ export class AcpSessionReplayNormalizer {
       this.status = "active";
     } else if (kind === "turn_finished") {
       this.recordTurnFinished(readString(update.update, "turnId"));
+    } else if (kind === "pwragent_turn_failed") {
+      this.recordTurnFailed({
+        sessionId: update.sessionId,
+        turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
+        error: readString(update.update, "error") ?? "Turn failed.",
+        receivedAt: createdAt,
+      });
     } else if (kind === "pwragent_user_prompt") {
       this.recordUserPrompt({
         sessionId: update.sessionId,

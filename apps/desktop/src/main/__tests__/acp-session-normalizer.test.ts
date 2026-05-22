@@ -569,4 +569,41 @@ describe("AcpSessionReplayNormalizer", () => {
       summary: "ACP update: future_update",
     });
   });
+
+  it("records PwrAgent turn failures as warning activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_turn_failed",
+        turnId: "turn-1",
+        error:
+          "json-rpc error (500): You have exhausted your capacity on this model.",
+      },
+    });
+
+    expect(replay.threadStatus).toBe("idle");
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "turn-failed:turn-1",
+        summary: "Turn failed",
+        tone: "warning",
+        status: "failed",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "failed",
+        }),
+        details: [
+          expect.objectContaining({
+            label:
+              "json-rpc error (500): You have exhausted your capacity on this model.",
+            status: "failed",
+          }),
+        ],
+      }),
+    ]);
+  });
 });

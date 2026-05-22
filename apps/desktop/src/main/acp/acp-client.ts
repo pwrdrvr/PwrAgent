@@ -250,7 +250,8 @@ export class AcpAgentClient {
       this.clearLoadReplaySuppression(protocolSessionId);
       result = await promptRequest;
     } catch (error) {
-      this.finishTrackedTurn(params.sessionId);
+      this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+      this.recordPromptFailure(params.sessionId, turnId, error);
       throw error;
     }
     this.finishTrackedTurn(params.sessionId);
@@ -337,7 +338,8 @@ export class AcpAgentClient {
         });
       })
       .catch((error) => {
-        this.finishTrackedTurn(params.sessionId);
+        this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+        this.recordPromptFailure(params.sessionId, turnId, error);
         return Promise.resolve(
           this.options.onPromptError?.({
             sessionId: params.sessionId,
@@ -709,7 +711,10 @@ export class AcpAgentClient {
     this.updateSessionStatus(sessionId, "active");
   }
 
-  private finishTrackedTurn(sessionId: string): {
+  private finishTrackedTurn(
+    sessionId: string,
+    options?: { persistFinished?: boolean },
+  ): {
     assistantText: string;
     replay: AppServerThreadReplay;
     turnId?: string;
@@ -720,7 +725,7 @@ export class AcpAgentClient {
       activeTurn?.turnId,
     );
     this.updateSessionStatus(sessionId, "idle");
-    if (activeTurn) {
+    if (activeTurn && options?.persistFinished !== false) {
       this.persistTranscriptUpdate(sessionId, {
         receivedAt: this.now(),
         update: {
@@ -735,6 +740,38 @@ export class AcpAgentClient {
       replay,
       turnId: activeTurn?.turnId,
     };
+  }
+
+  private recordPromptFailure(
+    sessionId: string,
+    turnId: string,
+    error: unknown,
+  ): AppServerThreadReplay {
+    const message = errorMessage(error);
+    const receivedAt = this.now();
+    this.persistTranscriptUpdate(sessionId, {
+      receivedAt,
+      update: {
+        kind: "pwragent_turn_failed",
+        turnId,
+        error: message,
+      },
+    });
+    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
+    if (metadata) {
+      this.options.store.upsertSession({
+        ...metadata,
+        lastError: message,
+        status: "idle",
+        updatedAt: Math.max(metadata.updatedAt, receivedAt),
+      });
+    }
+    return this.normalizerFor(sessionId).recordTurnFailed({
+      sessionId,
+      turnId,
+      error: message,
+      receivedAt,
+    });
   }
 
   private updateSessionStatus(
@@ -823,6 +860,14 @@ function readUpdateText(update: Record<string, unknown>): string | undefined {
   return contentRecord.type === "text" && typeof contentRecord.text === "string"
     ? contentRecord.text
     : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  const message = String(error).trim();
+  return message || "Turn failed.";
 }
 
 function acpSessionThreadStatus(
