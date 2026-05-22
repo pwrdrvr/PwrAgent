@@ -91,6 +91,7 @@ type ComposerProps = {
   draftStore?: ComposerDraftStore;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
+  unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
@@ -4887,6 +4888,11 @@ export function Composer(props: ComposerProps) {
       {workspaceHandoffDialog}
 
       {props.skillError ? <p className="composer__meta composer__meta--error">{props.skillError}</p> : null}
+      {props.unavailableReason ? (
+       <p className="composer__meta composer__meta--error">
+         {props.unavailableReason}
+       </p>
+      ) : null}
       {props.launchpadError ? (
         <CopyableComposerError
           desktopApi={props.desktopApi}
