@@ -6733,6 +6733,139 @@ describe("MessagingController", () => {
     );
   });
 
+  it("does not capture ordinary text into a warned /new session after the picker TTL", async () => {
+    let now = 1000;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("new thread prompt"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    const warning = harness.delivered.at(-1);
+    harness.startTurn.mockClear();
+    harness.materializeDirectoryLaunchpad.mockClear();
+
+    now += 90_000;
+    await harness.controller.handleInboundEvent(buildTextEvent("normal followup"));
+
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+        input: [
+          {
+            type: "text",
+            text: "new thread prompt",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("delivers the normal start failure if approved Full Access prompt startup throws", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const materializeDirectoryLaunchpad = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+    const warning = harness.delivered.at(-1);
+    const accept = findAction(warning, "full-access-risk:accept");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: accept.id,
+        value: accept.value,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Thread could not start",
+      body: "boom",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: accept.id,
+        value: accept.value,
+      }),
+    );
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(2);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Thread could not start",
+    });
+  });
+
   it("reports specific copy when a first-prompt Full Access approval lost its prompt", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.launchpadDefaults = {

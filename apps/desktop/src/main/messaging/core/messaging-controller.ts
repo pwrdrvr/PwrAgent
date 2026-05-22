@@ -1216,7 +1216,8 @@ export class MessagingController {
     if (
       session?.launchAction === "start_new_thread" &&
       session.mode === "new_thread_options" &&
-      session.selectedProject
+      session.selectedProject &&
+      (session.textInputExpiresAt ?? session.expiresAt) > this.now()
     ) {
       return session;
     }
@@ -5586,6 +5587,8 @@ export class MessagingController {
       await this.options.store.upsertBrowseSession({
         ...context.session,
         expiresAt: Math.max(context.session.expiresAt, expiresAt),
+        textInputExpiresAt:
+          context.session.textInputExpiresAt ?? context.session.expiresAt,
         updatedAt: this.now(),
       });
     }
@@ -5697,11 +5700,25 @@ export class MessagingController {
         return;
       }
       if (pendingPrompt) {
-        this.pendingFullAccessNewThreadPrompts.delete(session.id);
-        await this.createNewThreadFromPromptBundle({
-          events: pendingPrompt.events,
-          session: acceptedSession,
-        });
+        try {
+          await this.createNewThreadFromPromptBundle({
+            events: pendingPrompt.events,
+            session: acceptedSession,
+          });
+        } catch (error) {
+          this.logger.warn?.("messaging new-thread prompt failed", {
+            channel: pendingPrompt.session.channel.channel,
+            error: error instanceof Error ? error.message : String(error),
+            sessionId: pendingPrompt.session.id,
+          });
+          await this.deliverNewThreadPromptFailure(
+            {
+              events: pendingPrompt.events,
+              session: acceptedSession,
+            },
+            error,
+          );
+        }
         return;
       }
       await this.presentNewThreadPromptGate(acceptedSession, event);

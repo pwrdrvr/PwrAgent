@@ -1034,6 +1034,7 @@ export type MessagingBrowseSessionRecord = {
   branchName?: string;
   selectedProject?: MessagingBrowseSelectedProject;
   surface?: MessagingSurfaceRef;
+  textInputExpiresAt?: number;
   updatedAt: number;
 };
 
