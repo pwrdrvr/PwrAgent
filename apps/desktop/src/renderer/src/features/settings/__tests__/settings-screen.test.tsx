@@ -985,7 +985,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
   });
 
-  it("opens the Agents settings section", async () => {
+  it("opens the ACP Agents settings section", async () => {
     const desktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
@@ -1001,8 +1001,8 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: "ACP registry" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute(
+    expect(await screen.findByRole("heading", { name: "ACP Agents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ACP Agents" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -2487,7 +2487,7 @@ describe("SettingsScreen", () => {
       "Applications",
       "Profiles",
       "Models",
-      "Agents",
+      "ACP Agents",
       "Messaging",
       "Worktrees",
       "Archived Threads",
