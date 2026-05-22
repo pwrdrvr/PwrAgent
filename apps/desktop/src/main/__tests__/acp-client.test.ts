@@ -903,6 +903,48 @@ describe("AcpAgentClient", () => {
     expect(titleUpdates).toEqual([]);
   });
 
+  it("keeps the first ACP topic title instead of treating later topics as renames", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const titleUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ title }) => {
+        if (title) {
+          titleUpdates.push(title);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "update_topic_1",
+      kind: "think",
+      title: 'Update topic to: "Cleaning up formatting"',
+      status: "completed",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "update_topic_2",
+      kind: "think",
+      title: 'Update topic to: "Running npm audit"',
+      status: "completed",
+    });
+
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      title: "Cleaning up formatting",
+      titleSource: "derived",
+    });
+    expect(titleUpdates).toEqual(["Cleaning up formatting"]);
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];

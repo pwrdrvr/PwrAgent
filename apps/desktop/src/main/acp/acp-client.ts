@@ -771,7 +771,15 @@ export class AcpAgentClient {
       return undefined;
     }
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata || metadata.title === title || metadata.titleSource === "explicit") {
+    if (!metadata || metadata.title === title) {
+      return undefined;
+    }
+    const currentTitleSource =
+      metadata.titleSource ??
+      (metadata.title === "ACP session" || !metadata.title.trim()
+        ? "fallback"
+        : "derived");
+    if (currentTitleSource !== "fallback") {
       return undefined;
     }
     this.options.store.upsertSession({
