@@ -1017,6 +1017,7 @@ export type MessagingBrowseReturnTarget = {
 export type MessagingBrowseSessionRecord = {
   id: string;
   allowedActorIds: string[];
+  backend?: AppServerBackendKind;
   bindingId?: string;
   channel: MessagingChannelRef;
   createdAt: number;

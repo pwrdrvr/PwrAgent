@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  resolveNewThreadBackend,
+  selectableNewThreadBackends,
+} from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  BackendSummary,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
   DesktopAuthorizedContact,
@@ -20,6 +25,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
+  UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
@@ -2670,6 +2676,18 @@ export class MessagingController {
       backend: "all",
       filter: parsed.query,
     });
+    const selectedBackend =
+      parsed.launchAction === "start_new_thread"
+        ? await this.resolveNewThreadBackendForSession(
+            {
+              launchpadBackend: navigation.launchpadDefaults.backend,
+            },
+            event,
+          )
+        : undefined;
+    if (parsed.launchAction === "start_new_thread" && !selectedBackend) {
+      return;
+    }
     const selectedDirectory = parsed.cwd
       ? navigation.directories.find(
           (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
@@ -2678,6 +2696,7 @@ export class MessagingController {
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("browse"),
       allowedActorIds: [event.actor.platformUserId],
+      backend: selectedBackend?.kind,
       channel: event.channel,
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -2778,9 +2797,20 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:mode:new") {
+      const selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          session: nextSession,
+        },
+        event,
+      );
+      if (!selectedBackend) {
+        return;
+      }
       await this.renderResumeBrowser(
         {
           ...nextSession,
+          backend: selectedBackend.kind,
           launchAction: "start_new_thread",
           mode: "new_project",
           pageIndex: 0,
@@ -2857,6 +2887,10 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:workspace:local") {
+      await this.updateNewThreadStickySettings(nextSession, {
+        branchName: undefined,
+        workMode: "local",
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -2884,11 +2918,16 @@ export class MessagingController {
         );
         return;
       }
+      const branchName = resolveNewThreadBaseBranch(nextSession, navigation);
+      await this.updateNewThreadStickySettings(nextSession, {
+        branchName,
+        workMode: "worktree",
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
           workMode: "worktree",
-          branchName: resolveNewThreadBaseBranch(nextSession, navigation),
+          branchName,
         },
         event,
         navigation,
@@ -2947,6 +2986,10 @@ export class MessagingController {
         );
         return;
       }
+      await this.updateNewThreadStickySettings(nextSession, {
+        branchName,
+        workMode: "worktree",
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -2972,6 +3015,9 @@ export class MessagingController {
           return;
         }
       }
+      await this.updateNewThreadStickySettings(nextSession, {
+        executionMode,
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -2993,6 +3039,9 @@ export class MessagingController {
         navigation.launchpadDefaults.fastMode ??
         false
       );
+      await this.updateNewThreadStickySettings(nextSession, {
+        fastMode,
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -3026,11 +3075,51 @@ export class MessagingController {
       );
       return;
     }
+    if (actionId === "browse:new:backend") {
+      await this.presentNewThreadBackendPicker(nextSession, event, navigation);
+      return;
+    }
+    if (actionId === "browse:new:set-backend") {
+      const backend = readStringValue(event.value, "backend");
+      const selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          preferredBackend: backend,
+          session: nextSession,
+          requirePreferred: true,
+        },
+        event,
+      );
+      if (!selectedBackend) {
+        return;
+      }
+      const normalizedSession = normalizeNewThreadSessionForBackend(
+        {
+          ...nextSession,
+          backend: selectedBackend.kind,
+        },
+        selectedBackend,
+        this.now(),
+      );
+      await this.updateNewThreadStickySettings(normalizedSession, {
+        backend: selectedBackend.kind,
+        fastMode: normalizedSession.preferences?.fastMode,
+        model: normalizedSession.preferences?.model,
+        reasoningEffort: normalizedSession.preferences?.reasoningEffort,
+        serviceTier: normalizedSession.preferences?.serviceTier,
+      });
+      await this.presentNewThreadPromptGate(
+        normalizedSession,
+        event,
+        navigation,
+      );
+      return;
+    }
     if (actionId === "browse:new:model") {
       await this.presentNewThreadModelPicker(
         nextSession,
         event,
-        navigation.launchpadDefaults.backend,
+        nextSession.backend ?? navigation.launchpadDefaults.backend,
       );
       return;
     }
@@ -3040,6 +3129,9 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
+      await this.updateNewThreadStickySettings(nextSession, {
+        model,
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -3058,7 +3150,7 @@ export class MessagingController {
       await this.presentNewThreadReasoningPicker(
         nextSession,
         event,
-        navigation.launchpadDefaults.backend,
+        nextSession.backend ?? navigation.launchpadDefaults.backend,
       );
       return;
     }
@@ -3068,6 +3160,9 @@ export class MessagingController {
         await this.deliverInvalidBrowseSelection(event);
         return;
       }
+      await this.updateNewThreadStickySettings(nextSession, {
+        reasoningEffort,
+      });
       await this.presentNewThreadPromptGate(
         {
           ...nextSession,
@@ -3210,6 +3305,107 @@ export class MessagingController {
     }
   }
 
+  private async updateNewThreadStickySettings(
+    session: MessagingBrowseSessionRecord,
+    patch: UpdateDirectoryLaunchpadRequest["patch"],
+  ): Promise<void> {
+    const directoryKey = session.selectedProject?.directoryKey;
+    if (!directoryKey || !this.options.backend.updateDirectoryLaunchpad) {
+      return;
+    }
+
+    try {
+      await this.options.backend.updateDirectoryLaunchpad({
+        directoryKey,
+        patch,
+        stickySettingsChanged: true,
+      });
+    } catch (error) {
+      this.logger.debug?.("messaging new-thread sticky launchpad update failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async loadNewThreadBackendChoices(
+    event: MessagingInboundEvent,
+  ): Promise<{ backends: BackendSummary[]; selectable: BackendSummary[] } | undefined> {
+    try {
+      const response = await this.options.backend.listBackends?.({
+        includeUnavailable: true,
+      });
+      if (!response) {
+        throw new Error("backend discovery is unavailable");
+      }
+      const selectable = selectableNewThreadBackends(response.backends);
+      if (selectable.length === 0) {
+        await this.deliver(
+          buildErrorIntent({
+            id: this.newIntentId("new-thread-no-backends"),
+            createdAt: this.now(),
+            title: "No backends available",
+            body: "No backends are available to create a thread right now.",
+            recoverable: true,
+          }),
+          undefined,
+          event,
+        );
+        return undefined;
+      }
+      return {
+        backends: response.backends,
+        selectable,
+      };
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-backends-unavailable"),
+          createdAt: this.now(),
+          title: "Backends unavailable",
+          body: "Backend choices are unavailable right now. Try /new again in a moment.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      this.logger.debug?.("messaging new-thread backend discovery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  private async resolveNewThreadBackendForSession(
+    params: {
+      launchpadBackend: AppServerBackendKind;
+      preferredBackend?: string;
+      requirePreferred?: boolean;
+      session?: MessagingBrowseSessionRecord;
+    },
+    event: MessagingInboundEvent,
+  ): Promise<BackendSummary | undefined> {
+    const choices = await this.loadNewThreadBackendChoices(event);
+    if (!choices) {
+      return undefined;
+    }
+
+    if (params.requirePreferred) {
+      const selected = choices.selectable.find(
+        (backend) => backend.kind === params.preferredBackend,
+      );
+      if (!selected) {
+        await this.deliverInvalidBrowseSelection(event);
+        return undefined;
+      }
+      return selected;
+    }
+
+    return resolveNewThreadBackend(
+      choices.backends,
+      params.session?.backend ?? params.launchpadBackend,
+    );
+  }
+
   private async resolveCallbackHandleForEvent(
     event: MessagingInboundCallbackEvent,
   ): Promise<MessagingCallbackHandleRecord | undefined> {
@@ -3278,6 +3474,16 @@ export class MessagingController {
     }
 
     const directory = directoryForProjectSelection(navigation, project);
+    const selectedBackend = await this.resolveNewThreadBackendForSession(
+      {
+        launchpadBackend: navigation.launchpadDefaults.backend,
+        session,
+      },
+      event,
+    );
+    if (!selectedBackend) {
+      return;
+    }
     const workMode = resolveNewThreadWorkMode({
       requestedWorkMode:
         session.workMode ??
@@ -3287,8 +3493,9 @@ export class MessagingController {
       directory,
     });
     await this.presentNewThreadPromptGate(
-      {
+      normalizeNewThreadSessionForBackend({
         ...session,
+        backend: selectedBackend.kind,
         mode: "new_thread_options",
         pageIndex: 0,
         workMode,
@@ -3296,7 +3503,7 @@ export class MessagingController {
         selectedProject: project,
         updatedAt: this.now(),
         expiresAt: this.now() + this.pendingIntentTtlMs,
-      },
+      }, selectedBackend, this.now()),
       event,
       navigation,
     );
@@ -3310,34 +3517,81 @@ export class MessagingController {
     const snapshot = navigation ?? await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(snapshot, session.selectedProject)
+    const backendChoices = await this.loadNewThreadBackendChoices(event);
+    if (!backendChoices) {
+      return;
+    }
+    const selectedBackend = session.backend
+      ? backendChoices.selectable.find((backend) => backend.kind === session.backend)
+      : resolveNewThreadBackend(
+          backendChoices.backends,
+          snapshot.launchpadDefaults.backend,
+    );
+    if (!selectedBackend) {
+      await this.deliverSelectedNewThreadBackendUnavailable(event);
+      return;
+    }
+    const effectiveSession = normalizeNewThreadSessionForBackend(
+      {
+        ...session,
+        backend: selectedBackend.kind,
+      },
+      selectedBackend,
+      this.now(),
+    );
+    const directory = effectiveSession.selectedProject
+      ? directoryForProjectSelection(snapshot, effectiveSession.selectedProject)
       : undefined;
     const options = newThreadOptionsForSession(
-      session,
+      effectiveSession,
       snapshot,
       directory,
       this.streamingResponsesDefault,
+      selectedBackend,
     );
     const canCreateWorktree = canCreateNewThreadWorktree(directory);
     const fullAccessControls = await this.resolveFullAccessControls();
-    await this.options.store.upsertBrowseSession(session);
+    const hasMultipleBackends = backendChoices.selectable.length > 1;
+    const supportsModel = (selectedBackend.launchpadOptions?.models?.length ?? 0) > 0;
+    const supportsReasoning =
+      (selectedBackend.launchpadOptions?.reasoningEfforts?.length ?? 0) > 0 ||
+      Boolean(
+        selectedBackend.launchpadOptions?.models?.some(
+          (model) => model.supportsReasoning,
+        ),
+      );
+    const supportsFast =
+      Boolean(selectedBackend.launchpadOptions?.supportsFastMode) ||
+      Boolean(
+        selectedBackend.launchpadOptions?.models?.some((model) => model.supportsFast),
+      );
+    await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
       capabilityProfile: this.capabilityProfile,
-      browseSessionId: session.id,
+      browseSessionId: effectiveSession.id,
       createdAt: this.now(),
-      delivery: session.surface
+      delivery: effectiveSession.surface
         ? {
             mode: "update",
             replaceMarkup: true,
           }
         : undefined,
       title: "Ready to start",
-      body: newThreadPromptGateBody(session, options),
+      body: newThreadPromptGateBody(effectiveSession, options, selectedBackend),
       fallbackText: "Send your first instruction, or use the option buttons before sending it.",
-      targetSurface: session.surface,
+      targetSurface: effectiveSession.surface,
       actions: [
+        ...(hasMultipleBackends
+          ? [
+              {
+                id: "browse:new:backend",
+                label: `Provider: ${selectedBackend.label}`,
+                style: "secondary" as const,
+                fallbackText: "provider",
+              },
+            ]
+          : []),
         {
           id: "browse:new:workspace:local",
           label: options.workMode === "local" ? "Local ✓" : "Local",
@@ -3379,30 +3633,42 @@ export class MessagingController {
               },
             ]
           : []),
-        {
-          id: "browse:new:fast",
-          label: options.fastMode ? "Fast: on" : "Fast: off",
-          style: "secondary",
-          fallbackText: "fast",
-        },
+        ...(supportsFast
+          ? [
+              {
+                id: "browse:new:fast",
+                label: options.fastMode ? "Fast: on" : "Fast: off",
+                style: "secondary" as const,
+                fallbackText: "fast",
+              },
+            ]
+          : []),
         {
           id: "browse:new:streaming",
           label: options.streamingResponses ? "Stream: on" : "Stream: off",
           style: "secondary",
           fallbackText: "stream",
         },
-        {
-          id: "browse:new:model",
-          label: "Model",
-          style: "secondary",
-          fallbackText: "model",
-        },
-        {
-          id: "browse:new:reasoning",
-          label: `Reasoning: ${options.reasoningEffort}`,
-          style: "secondary",
-          fallbackText: "reasoning",
-        },
+        ...(supportsModel
+          ? [
+              {
+                id: "browse:new:model",
+                label: "Model",
+                style: "secondary" as const,
+                fallbackText: "model",
+              },
+            ]
+          : []),
+        ...(supportsReasoning && options.reasoningEffort
+          ? [
+              {
+                id: "browse:new:reasoning",
+                label: `Reasoning: ${options.reasoningEffort}`,
+                style: "secondary" as const,
+                fallbackText: "reasoning",
+              },
+            ]
+          : []),
         {
           id: "browse:mode:new",
           label: "Back",
@@ -3424,7 +3690,7 @@ export class MessagingController {
     }
 
     const updatedSession = {
-      ...session,
+      ...effectiveSession,
       workMode: options.workMode,
       branchName: options.workMode === "worktree" ? options.branchName : undefined,
       surface: result.surface,
@@ -3440,6 +3706,79 @@ export class MessagingController {
       expiresAt: this.now() + this.pendingIntentTtlMs,
       surface: result.surface,
     });
+  }
+
+  private async presentNewThreadBackendPicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+  ): Promise<void> {
+    const choices = await this.loadNewThreadBackendChoices(event);
+    if (!choices) {
+      return;
+    }
+    const selectedBackend =
+      choices.selectable.find((backend) => backend.kind === session.backend) ??
+      resolveNewThreadBackend(choices.backends, navigation.launchpadDefaults.backend);
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-backend"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Select provider",
+      body: "Choose the provider for the new thread.",
+      fallbackText: "Choose a provider, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...choices.selectable.map((backend, index) => ({
+          id: "browse:new:set-backend",
+          label: `${backend.label}${backend.kind === selectedBackend?.kind ? " ✓" : ""}`,
+          style: backend.kind === selectedBackend?.kind
+            ? "primary" as const
+            : "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: { backend: backend.kind },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async deliverSelectedNewThreadBackendUnavailable(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("new-thread-selected-backend-unavailable"),
+        createdAt: this.now(),
+        title: "Backend unavailable",
+        body: "The selected backend is no longer available to create a thread. Use /new to start again.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
   }
 
   private async presentNewThreadBranchPicker(
@@ -3667,29 +4006,64 @@ export class MessagingController {
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
+    let selectedBackend: BackendSummary | undefined;
+    if (bundle.session.backend) {
+      const backendChoices = await this.loadNewThreadBackendChoices(event);
+      if (!backendChoices) {
+        return;
+      }
+      selectedBackend = backendChoices.selectable.find(
+        (backend) => backend.kind === bundle.session.backend,
+      );
+      if (!selectedBackend) {
+        await this.deliverSelectedNewThreadBackendUnavailable(event);
+        return;
+      }
+    } else {
+      selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          session: bundle.session,
+        },
+        event,
+      );
+    }
+    if (!selectedBackend) {
+      return;
+    }
+    const session = normalizeNewThreadSessionForBackend(
+      {
+        ...bundle.session,
+        backend: selectedBackend.kind,
+      },
+      selectedBackend,
+      this.now(),
+    );
     const project = bundle.session.selectedProject;
     const directory = directoryForProjectSelection(navigation, project);
-    const preferences = bundle.session.preferences;
+    const preferences = session.preferences;
     const options = newThreadOptionsForSession(
-      bundle.session,
+      session,
       navigation,
       directory,
       this.streamingResponsesDefault,
+      selectedBackend,
     );
     if (
       options.executionMode === "full-access" &&
-      !(await this.isFullAccessRiskAcceptedForSession(bundle.session, event))
+      !(await this.isFullAccessRiskAcceptedForSession(session, event))
     ) {
       await this.presentFullAccessRiskWarning(
-        { kind: "new-thread", session: bundle.session },
+        { kind: "new-thread", session },
         event,
       );
       return;
     }
     const materialized = this.options.backend.materializeDirectoryLaunchpad
       ? await this.options.backend.materializeDirectoryLaunchpad({
-          directoryKey: messagingLaunchpadMaterializationKey(bundle.session),
+          directoryKey: messagingLaunchpadMaterializationKey(session),
           launchpad: launchpadForMessagingProject({
+            backend: selectedBackend.kind,
             directory,
             navigation,
             preferences,
@@ -3701,14 +4075,13 @@ export class MessagingController {
         })
       : undefined;
     const started = materialized ?? (await this.options.backend.startThread!({
-      backend: navigation.launchpadDefaults.backend,
+      backend: selectedBackend.kind,
       cwd: directory?.path ?? project.path,
       executionMode: options.executionMode,
-      fastMode: preferences?.fastMode ?? navigation.launchpadDefaults.fastMode,
-      model: preferences?.model ?? navigation.launchpadDefaults.model,
-      reasoningEffort:
-        preferences?.reasoningEffort ?? navigation.launchpadDefaults.reasoningEffort,
-      serviceTier: preferences?.serviceTier ?? navigation.launchpadDefaults.serviceTier,
+      fastMode: options.supportsFast ? options.fastMode : undefined,
+      model: options.supportsModel ? options.model : undefined,
+      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
+      serviceTier: preferences?.serviceTier,
       ...(options.workMode === "worktree"
         ? {
             workMode: "worktree" as const,
@@ -3737,13 +4110,17 @@ export class MessagingController {
       linkedDirectory: materialized?.linkedDirectory,
       navigation,
       now: this.now(),
+      model: options.supportsModel ? options.model : undefined,
+      reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
+      serviceTier: preferences?.serviceTier,
+      fastMode: options.supportsFast ? options.fastMode : undefined,
       preferences,
       project,
       threadId: started.threadId,
       worktreePath: materialized?.linkedDirectory?.worktreePath,
       workMode: materialized?.workMode ?? options.workMode,
     });
-    await this.options.store.deleteBrowseSession(bundle.session.id);
+    await this.options.store.deleteBrowseSession(session.id);
     await this.startPreparedInput({
       binding: updatedBinding,
       input: prepared.input,
@@ -7832,12 +8209,83 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .join("\n");
 }
 
+function normalizeNewThreadSessionForBackend(
+  session: MessagingBrowseSessionRecord,
+  backend: BackendSummary,
+  updatedAt: number,
+): MessagingBrowseSessionRecord {
+  if (!session.preferences) {
+    return session;
+  }
+
+  const preferences = { ...session.preferences };
+  const models = backend.launchpadOptions?.models ?? [];
+  if (preferences.model !== undefined) {
+    const modelIsValid = models.some((model) => model.id === preferences.model);
+    if (models.length === 0) {
+      delete preferences.model;
+    } else if (!modelIsValid) {
+      preferences.model = defaultBackendModel(models)?.id;
+    }
+  }
+
+  const selectedModel =
+    models.find((model) => model.id === preferences.model) ??
+    defaultBackendModel(models);
+  const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
+  if (preferences.reasoningEffort !== undefined) {
+    if (reasoningEfforts.length === 0) {
+      delete preferences.reasoningEffort;
+    } else if (!reasoningEfforts.includes(preferences.reasoningEffort)) {
+      preferences.reasoningEffort = reasoningEfforts[0];
+    }
+  }
+
+  const supportsFast =
+    Boolean(backend.launchpadOptions?.supportsFastMode) ||
+    Boolean(selectedModel?.supportsFast);
+  if (!supportsFast) {
+    delete preferences.fastMode;
+  }
+
+  const serviceTiers = backend.launchpadOptions?.serviceTiers ?? [];
+  if (preferences.serviceTier !== undefined) {
+    if (serviceTiers.length === 0) {
+      delete preferences.serviceTier;
+    } else if (!serviceTiers.includes(preferences.serviceTier)) {
+      preferences.serviceTier = serviceTiers[0];
+    }
+  }
+
+  const hasPreferences = Object.keys(preferences).some((key) => key !== "updatedAt");
+  return {
+    ...session,
+    preferences: hasPreferences
+      ? {
+          ...preferences,
+          updatedAt,
+        }
+      : undefined,
+  };
+}
+
+function defaultBackendModel(
+  models: NonNullable<BackendSummary["launchpadOptions"]>["models"] = [],
+) {
+  return models.find((model) => model.current) ?? models[0];
+}
+
 type NewThreadOptionsSummary = {
+  backend: AppServerBackendKind;
+  backendLabel: string;
   branchName: string;
   executionMode: ThreadExecutionMode;
   fastMode: boolean;
   model: string;
-  reasoningEffort: string;
+  reasoningEffort?: string;
+  supportsFast: boolean;
+  supportsModel: boolean;
+  supportsReasoning: boolean;
   streamingResponses: boolean;
   workMode: LaunchpadWorkMode;
 };
@@ -7847,6 +8295,7 @@ function newThreadOptionsForSession(
   navigation: NavigationSnapshot,
   directory: NavigationDirectorySummary | undefined,
   streamingResponsesDefault: boolean,
+  backend: BackendSummary,
 ): NewThreadOptionsSummary {
   const workMode = resolveNewThreadWorkMode({
     requestedWorkMode:
@@ -7857,18 +8306,41 @@ function newThreadOptionsForSession(
     directory,
   });
   const streamingMode = session.preferences?.streamingResponses ?? "inherit";
+  const models = backend.launchpadOptions?.models ?? [];
+  const modelOption =
+    models.find((model) => model.id === session.preferences?.model) ??
+    models.find((model) => model.id === navigation.launchpadDefaults.model) ??
+    models.find((model) => model.current) ??
+    models[0];
+  const reasoningEfforts = backend.launchpadOptions?.reasoningEfforts ?? [];
+  const reasoningEffort =
+    session.preferences?.reasoningEffort &&
+    reasoningEfforts.includes(session.preferences.reasoningEffort)
+      ? session.preferences.reasoningEffort
+      : navigation.launchpadDefaults.reasoningEffort &&
+          reasoningEfforts.includes(navigation.launchpadDefaults.reasoningEffort)
+        ? navigation.launchpadDefaults.reasoningEffort
+        : reasoningEfforts[0];
+  const supportsFast =
+    Boolean(backend.launchpadOptions?.supportsFastMode) ||
+    Boolean(modelOption?.supportsFast);
+  const supportsReasoning =
+    reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
   return {
+    backend: backend.kind,
+    backendLabel: backend.label,
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
     executionMode:
       session.preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
     fastMode:
-      session.preferences?.fastMode ?? navigation.launchpadDefaults.fastMode ?? false,
-    model:
-      session.preferences?.model ?? navigation.launchpadDefaults.model ?? "default",
-    reasoningEffort:
-      session.preferences?.reasoningEffort ??
-      navigation.launchpadDefaults.reasoningEffort ??
-      "medium",
+      supportsFast
+        ? session.preferences?.fastMode ?? navigation.launchpadDefaults.fastMode ?? false
+        : false,
+    model: session.preferences?.model ?? modelOption?.id ?? "default",
+    reasoningEffort,
+    supportsFast,
+    supportsModel: models.length > 0,
+    supportsReasoning,
     streamingResponses:
       streamingMode === "inherit"
         ? streamingResponsesDefault
@@ -7901,16 +8373,20 @@ function resolveNewThreadWorkMode(params: {
 function newThreadPromptGateBody(
   session: MessagingBrowseSessionRecord,
   options: NewThreadOptionsSummary,
+  backend: BackendSummary,
 ): string {
   return [
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
+    `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
     `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
-    `Model: ${options.model}`,
-    `Reasoning: ${options.reasoningEffort}`,
-    `Fast mode: ${options.fastMode ? "on" : "off"}`,
+    options.supportsModel ? `Model: ${options.model}` : undefined,
+    options.supportsReasoning && options.reasoningEffort
+      ? `Reasoning: ${options.reasoningEffort}`
+      : undefined,
+    options.supportsFast ? `Fast mode: ${options.fastMode ? "on" : "off"}` : undefined,
     `Streaming: ${options.streamingResponses ? "on" : "off"}`,
   ]
     .filter((line): line is string => Boolean(line))
@@ -8503,10 +8979,14 @@ function navigationWithStartedThread(params: {
   directory?: NavigationDirectorySummary;
   executionMode?: ThreadExecutionMode;
   linkedDirectory?: LinkedDirectorySummary;
+  fastMode?: boolean;
+  model?: string;
   navigation: NavigationSnapshot;
   now: number;
   preferences?: MessagingBrowseSessionRecord["preferences"];
   project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
+  reasoningEffort?: string;
+  serviceTier?: string;
   threadId: ThreadIdentifier;
   worktreePath?: string;
   workMode: LaunchpadWorkMode;
@@ -8544,14 +9024,10 @@ function navigationWithStartedThread(params: {
         createdAt: params.now,
         updatedAt: params.now,
         executionMode: params.executionMode,
-        model: params.preferences?.model ?? params.navigation.launchpadDefaults.model,
-        reasoningEffort:
-          params.preferences?.reasoningEffort ??
-          params.navigation.launchpadDefaults.reasoningEffort,
-        serviceTier:
-          params.preferences?.serviceTier ?? params.navigation.launchpadDefaults.serviceTier,
-        fastMode:
-          params.preferences?.fastMode ?? params.navigation.launchpadDefaults.fastMode,
+        model: params.model,
+        reasoningEffort: params.reasoningEffort,
+        serviceTier: params.serviceTier,
+        fastMode: params.fastMode,
         linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
         inbox: {
           inInbox: true,
@@ -8578,6 +9054,7 @@ function navigationWithStartedThread(params: {
 }
 
 function launchpadForMessagingProject(params: {
+  backend: AppServerBackendKind;
   branchName: string;
   directory?: NavigationDirectorySummary;
   navigation: NavigationSnapshot;
@@ -8597,7 +9074,7 @@ function launchpadForMessagingProject(params: {
     directoryKind: params.directory?.kind ?? "directory",
     directoryLabel: params.directory?.label ?? params.project.label,
     directoryPath,
-    backend: defaults.backend,
+    backend: params.backend,
     executionMode: defaults.executionMode,
     model: defaults.model,
     reasoningEffort: defaults.reasoningEffort,
@@ -8612,7 +9089,7 @@ function launchpadForMessagingProject(params: {
 
   return {
     ...base,
-    backend: base.backend,
+    backend: params.backend,
     executionMode: params.preferences?.executionMode ?? base.executionMode,
     model: params.preferences?.model ?? base.model,
     reasoningEffort: params.preferences?.reasoningEffort ?? base.reasoningEffort,

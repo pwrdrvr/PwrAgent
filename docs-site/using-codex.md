@@ -308,7 +308,8 @@ text bind, and the Full Access resume escalation path.
 `/new` (or `@PwrAgent new`, or **New** from `/help`) opens a project
 picker. Selecting a project advances to the [Start Card](#start-card-buttons)
 where you set the thread's initial model, reasoning, fast mode, and
-permissions before sending the first prompt.
+permissions before sending the first prompt. `/resume --new` is the
+compatibility spelling for the same flow.
 
 Same pagination and text-fallback semantics as the Resume browser:
 8 rows per page, button-or-reply-with-number, `next`/`back`/`cancel`.
@@ -316,28 +317,35 @@ Same pagination and text-fallback semantics as the Resume browser:
 If you only have one project configured, the picker is skipped and
 you land on the Start Card directly.
 
+If PwrAgent has more than one backend that can create threads, the
+Start Card also shows **Provider**. The initial provider comes from the
+same sticky launchpad default used by the desktop app. Changing it
+updates the available Model, Reasoning, Fast, and other setup controls
+because capabilities vary by backend.
+
 ## Start Card buttons {#start-card-buttons}
 
 After picking a thread (or a project for a new thread), you see the
-**Start Card** before the first prompt is sent. Four buttons let
-you set the thread's initial state:
+**Start Card** before the first prompt is sent. These buttons let you
+set the thread's initial state:
 
 | Button | What you change |
 |---|---|
-| **Model** | The Codex model the thread will use (e.g., Claude Opus, Claude Sonnet, etc.) |
+| **Provider** | The backend that will create the thread; shown only when multiple create-capable backends are available |
+| **Model** | The model the selected provider will use |
 | **Reasoning** | Reasoning effort (Low, Medium, High) |
 | **Fast: on / off** | Toggles Fast mode for the thread |
 | **Permissions** | Cycles between Default Access and Full Access |
 
-Each setting is **per-thread** in PwrAgent — unlike Codex Desktop,
-where these are global. You can run a high-stakes refactor with
-**Full Access** on a strong model while a low-stakes throwaway script
-runs in **Default Access** on a cheaper model, and the two settings
-don't bleed into each other.
+Buttons appear only when the selected provider advertises support for
+the setting. For example, a provider without Fast mode won't show a
+Fast button on the Start Card.
 
-**Defaults** come from the desktop's global Settings → Models page.
-You can override per-thread here on the Start Card; the override
-persists for the lifetime of the thread.
+**Defaults** come from the desktop launchpad sticky defaults. Changing
+Provider, Model, Reasoning, Fast, or Permissions on the Start Card also
+updates those sticky defaults for the next launchpad. Once the thread
+is created, the provider is fixed; model, reasoning, fast mode, and
+permissions remain thread-scoped controls on the status card.
 
 ### A note on Permissions mid-turn
 
@@ -399,8 +407,8 @@ menu or `/detach` (which is a no-op if nothing's bound yet but always
 safe).
 
 The binding-confirmation message the bot posts back includes the
-chosen model, reasoning, fast mode, and permissions so you can verify
-the Start Card state was captured correctly.
+chosen provider, model, reasoning, fast mode, and permissions so you
+can verify the Start Card state was captured correctly.
 
 ## Status card on a bound thread {#status-card-bound}
 
@@ -410,7 +418,11 @@ the Start Card state was captured correctly.
 After the binding completes, the **Start Card** evolves into the
 **bound-thread status card**, pinned (or repeatedly posted, where the
 platform doesn't support pinning) to the conversation. It carries the
-same four state buttons as the Start Card plus four runtime controls:
+setup controls that remain mutable plus runtime controls:
+
+The status card shows the backend that owns the thread, but it does
+not offer a Provider button. To use another backend, start a new
+thread.
 
 | Button | What it does |
 |---|---|

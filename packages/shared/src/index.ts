@@ -1,4 +1,5 @@
 export * from "./contracts/normalized-app-server";
+export * from "./backend-selection";
 export * from "./codex-environment-action-runs";
 export * from "./contracts/backend";
 export * from "./contracts/agent";

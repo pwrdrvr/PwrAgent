@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AppServerListSkillsResponse,
   AppServerPendingRequestNotification,
+  BackendSummary,
   CancelThreadExecutionModeQueueRequest,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
@@ -18,6 +19,7 @@ import type {
   StartTurnRequest,
   SteerTurnRequest,
   SubmitServerRequestRequest,
+  UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import type {
   MessagingCapabilityProfile,
@@ -2293,6 +2295,253 @@ describe("MessagingController", () => {
       kind: "project_picker",
       fallbackText: expect.stringContaining("new PwrAgent thread"),
       prompt: expect.stringContaining("Choose a project"),
+    });
+  });
+
+  it("reports zero create-capable backends before opening the new-thread picker", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            available: false,
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "No backends available",
+      recoverable: true,
+    });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "project_picker" }),
+    );
+  });
+
+  it("lets a pending new-thread session switch providers before creation", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "codex",
+            label: "Codex",
+            launchpadOptions: {
+              models: [{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex" }],
+              reasoningEfforts: ["low", "medium", "high"],
+              supportsFastMode: true,
+            },
+          }),
+          buildBackendSummary({
+            kind: "grok",
+            label: "Grok",
+            launchpadOptions: {
+              models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+              reasoningEfforts: ["low", "medium", "high"],
+              supportsFastMode: false,
+            },
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Provider: Codex"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:backend",
+          label: "Provider: Codex",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:backend" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select provider",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-backend",
+          label: "Codex ✓",
+          value: { backend: "codex" },
+        }),
+        expect.objectContaining({
+          id: "browse:new:set-backend",
+          label: "Grok",
+          value: { backend: "grok" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "grok" },
+      }),
+    );
+
+    const grokReadyIntent = harness.delivered.at(-1);
+    expect(grokReadyIntent).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Provider: Grok"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:backend",
+          label: "Provider: Grok",
+        }),
+      ]),
+    });
+    expect(grokReadyIntent).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:fast" }),
+      ]),
+    });
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:pwragent",
+      stickySettingsChanged: true,
+      patch: expect.objectContaining({
+        backend: "grok",
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "grok",
+        directoryKey: "directory:pwragent",
+      }),
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "grok",
+        threadId: "new-thread-1",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toMatchObject({
+      backend: "grok",
+      threadId: "new-thread-1",
+    });
+  });
+
+  it("does not fall back to another provider when the selected backend becomes unavailable before creation", async () => {
+    const codexBackend = buildBackendSummary({
+      kind: "codex",
+      label: "Codex",
+    });
+    const grokBackend = buildBackendSummary({
+      kind: "grok",
+      label: "Grok",
+      launchpadOptions: {
+        models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+        reasoningEfforts: ["low", "medium", "high"],
+        supportsFastMode: false,
+      },
+    });
+    let availableBackends = [codexBackend, grokBackend];
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: availableBackends,
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "grok" },
+      }),
+    );
+    availableBackends = [codexBackend];
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Backend unavailable",
+      body: expect.stringContaining("selected backend is no longer available"),
+      recoverable: true,
+    });
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toBeUndefined();
+  });
+
+  it("updates sticky launchpad defaults when selecting a pending new-thread model", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:model" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-model",
+        value: {
+          model: "gpt-5.3-codex",
+        },
+      }),
+    );
+
+    expect(harness.updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:pwragent",
+      stickySettingsChanged: true,
+      patch: {
+        model: "gpt-5.3-codex",
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Model: gpt-5.3-codex"),
     });
   });
 
@@ -5375,6 +5624,7 @@ describe("MessagingController", () => {
         model: "gpt-5.3-codex",
       }),
     );
+    expect(harness.updateDirectoryLaunchpad).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
     ).resolves.toMatchObject({
@@ -7151,6 +7401,7 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  listBackends?: NonNullable<MessagingBackendBridge["listBackends"]>;
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
   now?: () => number;
@@ -7162,6 +7413,9 @@ async function createHarness(options?: {
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
   materializeDirectoryLaunchpad?: NonNullable<
     MessagingBackendBridge["materializeDirectoryLaunchpad"]
+  >;
+  updateDirectoryLaunchpad?: NonNullable<
+    MessagingBackendBridge["updateDirectoryLaunchpad"]
   >;
   streamingResponsesDefault?: boolean;
   /**
@@ -7204,6 +7458,7 @@ async function createHarness(options?: {
   startTurn: ReturnType<typeof vi.fn>;
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
+  updateDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   store: MessagingStore;
 }> {
   const store = await createStore();
@@ -7395,10 +7650,33 @@ async function createHarness(options?: {
           warnings: [],
           completedAt: 1000,
         }));
-  const listBackends = vi.fn(async (): Promise<ListBackendsResponse> => ({
-    fetchedAt: 1000,
-    backends: [buildBackendSummary()],
-  }));
+  const listBackends = vi.fn(
+    options?.listBackends ??
+      (async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildBackendSummary()],
+      })),
+  );
+  const updateDirectoryLaunchpad = vi.fn(
+    options?.updateDirectoryLaunchpad ??
+      (async (
+        request: UpdateDirectoryLaunchpadRequest,
+      ) => ({
+        defaults: buildNavigationSnapshot().launchpadDefaults,
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: "directory" as const,
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/pwragent",
+          backend: request.patch.backend ?? "codex",
+          executionMode: request.patch.executionMode ?? "default",
+          prompt: "",
+          workMode: request.patch.workMode ?? "local",
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      })),
+  );
   const readThreadLastAssistantMessage = vi.fn(
     options?.readThreadLastAssistantMessage ?? (async () => undefined),
   );
@@ -7432,6 +7710,7 @@ async function createHarness(options?: {
     startTurn,
     steerTurn,
     submitServerRequest,
+    updateDirectoryLaunchpad,
   };
 
   const onBindingChanged = vi.fn();
@@ -7486,6 +7765,7 @@ async function createHarness(options?: {
     startTurn,
     steerTurn,
     submitServerRequest,
+    updateDirectoryLaunchpad,
     store,
   };
 }
@@ -7504,10 +7784,11 @@ async function bindThread(
   );
 }
 
-function buildBackendSummary(): ListBackendsResponse["backends"][number] {
-  return {
-    kind: "codex",
-    label: "Codex",
+function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSummary {
+  const kind = overrides.kind ?? "codex";
+  const base: BackendSummary = {
+    kind,
+    label: kind === "grok" ? "Grok" : "Codex",
     available: true,
     methods: [],
     capabilities: {
@@ -7540,13 +7821,23 @@ function buildBackendSummary(): ListBackendsResponse["backends"][number] {
     launchpadOptions: {
       models: [
         {
-          id: "gpt-5.3-codex",
-          label: "GPT-5.3 Codex",
+          id: kind === "grok" ? "grok-4.20-reasoning" : "gpt-5.3-codex",
+          label: kind === "grok" ? "Grok 4.20 Reasoning" : "GPT-5.3 Codex",
         },
       ],
       reasoningEfforts: ["low", "medium", "high"],
       supportsFastMode: true,
     },
+  };
+  return {
+    ...base,
+    ...overrides,
+    capabilities: {
+      ...base.capabilities,
+      ...overrides.capabilities,
+    },
+    executionModes: overrides.executionModes ?? base.executionModes,
+    launchpadOptions: overrides.launchpadOptions ?? base.launchpadOptions,
   };
 }
 

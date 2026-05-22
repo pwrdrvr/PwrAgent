@@ -31,6 +31,8 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type {
   MessagingDeliveryResult,
@@ -113,6 +115,9 @@ export type MessagingBackendBridge = {
   materializeDirectoryLaunchpad?(
     request: MaterializeDirectoryLaunchpadRequest,
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
+  updateDirectoryLaunchpad?(
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;

@@ -299,6 +299,39 @@ Available command-bus entry points today, all on `DesktopMessagingRuntime`:
 
 If no controller's scope matches a `request*` event (messaging is disabled, or the platform's adapter failed to start), the runtime falls back to a store-only revoke so the renderer chip clears regardless. Best-effort platform notification, guaranteed local cleanup.
 
+### New-thread backend selection is pre-thread state
+
+`/new`, **New** from `/help`, and `/resume --new` all enter the same
+new-thread browse session. Before rendering the project picker, the
+controller asks the backend bridge for current backend summaries and
+keeps only backends that are available, can create threads, and have at
+least one available execution mode. If none qualify, the controller
+returns a recoverable error instead of silently falling back to stale
+launchpad defaults.
+
+The selected backend lives on `MessagingBrowseSessionRecord`, not on
+binding preferences. It is seeded from the desktop launchpad sticky
+default when that backend is usable, otherwise from the shared backend
+resolver's fallback. With one usable backend the Start Card shows no
+provider control. With multiple usable backends it shows a **Provider**
+action that opens a single-select picker. Changing Provider normalizes
+pending model, reasoning, service-tier, and fast-mode choices against
+that backend's advertised `launchpadOptions`, then re-renders the Start
+Card with only supported controls.
+
+Pending new-thread settings that mirror desktop launchpad settings
+flow through `MessagingBackendBridge.updateDirectoryLaunchpad` with
+`stickySettingsChanged: true`, so messaging and desktop launchpads share
+the same sticky defaults. Existing bound-thread status-card changes do
+not use this path; they remain thread-scoped mutations such as
+`setThreadModelSettings`.
+
+When the first prompt arrives, the controller revalidates the selected
+backend before materializing or starting the thread. The resulting
+binding stores the backend as immutable thread identity. After that,
+there is no Provider button; the bound-thread status card only reports
+which backend owns the thread.
+
 ### Permission-mode queue audit messages
 
 When a user toggles a thread's permission mode (Default Access ↔ Full Access) while a turn is running, the registry queues the change at the resume boundary instead of applying it immediately. The messaging controller surfaces this lifecycle in the bound conversation as audit chat messages, so users on Telegram and Discord see the same story the desktop transcript tells:
@@ -349,7 +382,7 @@ Four things consume the catalog:
 
 1. **The controller's `handleCommand` dispatch.** `matchMessagingCommandVerb` resolves an inbound `MessagingInboundCommandEvent.command` to a known verb (or `undefined` for unrecognized commands). Verbs in the catalog dispatch to typed handlers; everything else falls through to the help surface.
 2. **The user-facing `/help` body.** `formatMessagingCommandHelpBody` derives the plain-text command list from the catalog so adding or renaming a verb in one place updates the help text everywhere it's rendered. The body avoids Markdown markers because confirmation surfaces render as plain text on some providers.
-3. **The `/help` action row.** `paginateHelpCatalog` + `buildHelpActions` render one `command:<verb>` button per catalog entry on the current page, with generic two-column row hints for providers that support compact button rows. Pages overflow with capability-aware Prev/Next/Cancel navigation when the catalog grows past the profile's action budget; for today's small catalog every button fits on one page and no nav row is rendered. The `Resume` button is styled primary to match the previous single-button shape; `New` jumps directly to the existing new-thread browser mode; everything else is neutral. Pagination is **stateless** — the next/previous page index travels in `action.value.pageIndex` and comes back through `MessagingInboundCallbackEvent.value`, so the controller can re-render without persistent session state (unlike the resume browser which uses a `MessagingBrowseSessionRecord`).
+3. **The `/help` action row.** `paginateHelpCatalog` + `buildHelpActions` render one `command:<verb>` button per catalog entry on the current page, with generic two-column row hints for providers that support compact button rows. Pages overflow with capability-aware Prev/Next/Cancel navigation when the catalog grows past the profile's action budget; for today's small catalog every button fits on one page and no nav row is rendered. The `Resume` button is styled primary to match the previous single-button shape; `New` jumps directly to the existing backend-aware new-thread browser mode; everything else is neutral. Pagination is **stateless** — the next/previous page index travels in `action.value.pageIndex` and comes back through `MessagingInboundCallbackEvent.value`, so the controller can re-render without persistent session state (unlike the resume browser which uses a `MessagingBrowseSessionRecord`).
 4. **Provider adapters that register native slash commands.** Today each adapter maintains its own list (`packages/messaging/providers/discord/src/discord-commands.ts`, `packages/messaging/providers/mattermost/src/mattermost-commands.ts`). A future refactor can collapse those onto the shared catalog so a new verb only requires touching one file. Until then, adapter-side lists must stay in sync with the catalog by convention.
 
 To add a new canonical verb:

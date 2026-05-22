@@ -32,6 +32,8 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
@@ -137,6 +139,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: MaterializeDirectoryLaunchpadRequest,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     return await this.registry.materializeDirectoryLaunchpad(request);
+  }
+
+  async updateDirectoryLaunchpad(
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse> {
+    return await this.registry.updateDirectoryLaunchpad(request);
   }
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
