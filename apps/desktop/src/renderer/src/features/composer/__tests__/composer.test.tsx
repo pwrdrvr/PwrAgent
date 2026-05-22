@@ -265,6 +265,43 @@ function renderComposerWithRegressionSkills(
 }
 
 describe("Composer", () => {
+  it("lets launchpad errors be copied with the transcript copy control", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const launchpadError =
+      "Error invoking remote method 'agent:materialize-directory-launchpad': Cannot enable privileged approval modes in an untrusted folder.";
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ copyText }}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        launchpadError={launchpadError}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByText(launchpadError)).toHaveClass("composer__meta-text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy launchpad error" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(launchpadError);
+    });
+  });
+
   it("opens the current workspace in discovered applications", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 
