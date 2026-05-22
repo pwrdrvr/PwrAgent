@@ -929,7 +929,7 @@ function buildAcpCapabilities(): BackendCapabilities {
     restoreThread: true,
     archiveWorktree: false,
     restoreWorktree: false,
-    renameThread: false,
+    renameThread: true,
     readThread: true,
     startTurn: true,
     startReview: false,
@@ -1023,7 +1023,9 @@ function acpSessionToThreadSummary(
   return {
     id: session.sessionId,
     title: session.title,
-    titleSource: "explicit",
+    titleSource:
+      session.titleSource ??
+      (session.title === "ACP session" ? "fallback" : "derived"),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     archivedAt: session.archivedAt,
@@ -3930,12 +3932,20 @@ export class DesktopBackendRegistry {
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
-    const result =
-      backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await this.renameWithClient(client, request.threadId, request.name),
-          )
-        : await this.renameWithClient(this.grokClient, request.threadId, request.name);
+    let result: { threadId: string };
+    if (isAcpBackendId(backend)) {
+      result = await this.renameAcpSession(backend, request.threadId, request.name);
+    } else if (backend === "codex") {
+      result = await this.withCodexThreadClient(request.threadId, async (client) =>
+        await this.renameWithClient(client, request.threadId, request.name),
+      );
+    } else {
+      result = await this.renameWithClient(
+        this.grokClient,
+        request.threadId,
+        request.name,
+      );
+    }
     this.invalidateThreadListCache(backend);
 
     return {
@@ -3943,6 +3953,40 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       renamedAt: Date.now(),
     };
+  }
+
+  private async renameAcpSession(
+    backend: AcpBackendId,
+    threadId: string,
+    name: string,
+  ): Promise<{ threadId: string }> {
+    const nextName = name.trim();
+    if (!nextName) {
+      throw new Error("Thread name cannot be blank.");
+    }
+    const store = this.acpSessionStore;
+    const session = store?.getSession(backend, threadId);
+    if (!store?.upsertSession || !session) {
+      throw new Error("Selected ACP thread was not found.");
+    }
+    const updatedAt = Date.now();
+    store.upsertSession({
+      ...session,
+      title: nextName,
+      titleSource: "explicit",
+      updatedAt: Math.max(session.updatedAt, updatedAt),
+    });
+    await this.emit({
+      backend,
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId,
+          threadName: nextName,
+        },
+      },
+    });
+    return { threadId };
   }
 
   async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<

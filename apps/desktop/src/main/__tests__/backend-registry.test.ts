@@ -1297,6 +1297,7 @@ describe("DesktopBackendRegistry", () => {
           }),
           capabilities: expect.objectContaining({
             createThread: true,
+            renameThread: true,
             readThread: true,
             startTurn: true,
           }),
@@ -8803,6 +8804,48 @@ command = "pnpm dev"
     expect(grokClient.lastRenameThreadParams).toEqual({
       threadId: "thread-2",
       name: "Renamed Grok thread",
+    });
+
+    await registry.close();
+  });
+
+  it("renames ACP threads in the local session store", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+    });
+
+    await expect(
+      registry.renameThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+        name: "  Cleaned up formatting  ",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      renamedAt: expect.any(Number),
+    });
+
+    expect(sessions[0]).toMatchObject({
+      title: "Cleaned up formatting",
+      titleSource: "explicit",
     });
 
     await registry.close();

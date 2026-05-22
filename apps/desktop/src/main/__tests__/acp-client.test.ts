@@ -867,6 +867,42 @@ describe("AcpAgentClient", () => {
     expect(titleUpdates).toEqual(["Exploring PwrSnap Project"]);
   });
 
+  it("does not overwrite an explicit ACP session title with topic updates", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const titleUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ title }) => {
+        if (title) {
+          titleUpdates.push(title);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      title: "Manual thread name",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "update_topic_1",
+      kind: "think",
+      title: 'Update topic to: "Agent Suggested Name"',
+      status: "completed",
+    });
+
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      title: "Manual thread name",
+      titleSource: "explicit",
+    });
+    expect(titleUpdates).toEqual([]);
+  });
+
   it("reports fire-and-forget prompt failures", async () => {
     const transport = new FakeAcpAgentTransport();
     const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];

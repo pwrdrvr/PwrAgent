@@ -194,6 +194,7 @@ export class AcpAgentClient {
       sessionId: appSessionId,
       ...(sessionId === appSessionId ? {} : { agentSessionId: sessionId }),
       title: params.title ?? "ACP session",
+      titleSource: params.title ? "explicit" : "fallback",
       cwd,
       createdAt: params.createdAt ?? now,
       updatedAt: now,
@@ -770,12 +771,13 @@ export class AcpAgentClient {
       return undefined;
     }
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata || metadata.title === title) {
+    if (!metadata || metadata.title === title || metadata.titleSource === "explicit") {
       return undefined;
     }
     this.options.store.upsertSession({
       ...metadata,
       title,
+      titleSource: "derived",
       updatedAt: Math.max(metadata.updatedAt, receivedAt),
     });
     return title;

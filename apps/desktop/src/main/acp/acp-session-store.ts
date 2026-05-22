@@ -1,5 +1,6 @@
 import type {
   AcpBackendId,
+  AppServerThreadTitleSource,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -14,6 +15,7 @@ export type AcpSessionMetadata = {
   sessionId: string;
   agentSessionId?: string;
   title: string;
+  titleSource?: AppServerThreadTitleSource;
   cwd?: string;
   createdAt: number;
   updatedAt: number;

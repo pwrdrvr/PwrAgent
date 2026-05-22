@@ -1530,6 +1530,62 @@ describe("Sidebar", () => {
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
   });
 
+  it("offers rename for ACP threads when the backend supports local renaming", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+    const acpThread = {
+      ...sharedThread,
+      id: "session-1",
+      source: "acp:gemini" as const,
+      title: "ACP session",
+      linkedDirectories: [],
+    };
+    const acpBackend: BackendSummary = {
+      ...backends[0]!,
+      kind: "acp:gemini",
+      source: "acp",
+      label: "Gemini CLI",
+      executionModes: [],
+      capabilities: {
+        ...backends[0]!.capabilities,
+        renameThread: true,
+      },
+    };
+
+    render(
+      <Sidebar
+        backends={[...backends, acpBackend]}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={[]}
+        inboxThreads={[acpThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="acp%3Agemini:session-1"
+        threads={[acpThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+        onRenameThread={onRenameThread}
+      />
+    );
+
+    const threadButton = screen.getByText("ACP session").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "Gemini cleanup" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(onRenameThread).toHaveBeenCalledWith(acpThread, "Gemini cleanup");
+  });
+
   it("focuses and selects the current name when opening the rename dialog", () => {
     render(
       <Sidebar
