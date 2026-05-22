@@ -1452,6 +1452,82 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("invalidates cached ACP thread summaries when a live topic update renames the thread", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const sessionStore = createAcpSessionStoreMock(sessions);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+        },
+      ]),
+      acpSessionStore: sessionStore,
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        title: "ACP session",
+      }),
+    ]);
+
+    sessionStore.upsertSession({
+      ...sessions[0]!,
+      title: "Exploring PwrSnap Project",
+      updatedAt: 2000,
+    });
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "session-1",
+          threadName: "Exploring PwrSnap Project",
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        title: "Exploring PwrSnap Project",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("archives and restores persisted ACP sessions locally", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [

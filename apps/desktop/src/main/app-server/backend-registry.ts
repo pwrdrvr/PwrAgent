@@ -7383,6 +7383,10 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+      this.invalidateThreadListCache(event.backend);
+    }
+
     if (
       event.backend === "codex" &&
       event.notification.method === "configWarning"
