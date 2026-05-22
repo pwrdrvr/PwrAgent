@@ -78,6 +78,37 @@ describe("AcpStdioJsonRpcTransport", () => {
     await expect(request).resolves.toEqual({ ok: true });
   });
 
+  it("adds Gemini session trust when launching persisted local descriptors", async () => {
+    const child = new MockAcpChildProcess();
+    const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+    const spawn: AcpStdioSpawn = (command, args, options) => {
+      spawnCalls.push([command, args, options]);
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({
+        backendId: "acp:gemini" as AcpBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "gemini",
+        args: ["--acp"],
+      }),
+      spawn,
+    });
+
+    const request = transport.request("initialize");
+    await vi.waitFor(() => expect(child.writes).toHaveLength(1));
+
+    expect(spawnCalls[0]?.[0]).toBe("gemini");
+    expect(spawnCalls[0]?.[1]).toEqual(["--acp", "--skip-trust"]);
+
+    const envelope = JSON.parse(child.writes[0]) as { id: string };
+    child.stdout.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: envelope.id, result: { ok: true } })}\n`,
+    );
+    await expect(request).resolves.toEqual({ ok: true });
+  });
+
   it("fans out ACP notifications until listeners unsubscribe", async () => {
     const child = new MockAcpChildProcess();
     const transport = new AcpStdioJsonRpcTransport({

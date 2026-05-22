@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { AcpBackendId } from "@pwragent/shared";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
+import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 const execFile = promisify(execFileCallback);
@@ -51,7 +52,7 @@ async function discoverLocalGemini(options?: {
     name: "Gemini CLI",
     version,
     distributionKind: "local",
-    distributionSource: "gemini --acp",
+    distributionSource: "gemini --acp --skip-trust",
     installStatus: "installed",
     authStatus: "not-required",
     verificationStatus: "not-applicable",
@@ -59,14 +60,14 @@ async function discoverLocalGemini(options?: {
     installedAt: now,
     updatedAt: now,
     capabilities: acpAgentCapabilitiesForRegistryId("gemini"),
-    launchDescriptor: {
+    launchDescriptor: normalizeAcpLaunchDescriptor({
       backendId,
       registryId: "gemini",
       distributionKind: "local",
       command: "gemini",
       args: ["--acp"],
       env: {},
-    },
+    }),
     registryAgent: {
       id: "gemini",
       backendId,

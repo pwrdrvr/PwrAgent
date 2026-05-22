@@ -11,6 +11,23 @@ export type AcpLaunchDescriptor = {
   installPath?: string;
 };
 
+export function normalizeAcpLaunchDescriptor(
+  descriptor: AcpLaunchDescriptor,
+): AcpLaunchDescriptor {
+  if (descriptor.registryId !== "gemini") {
+    return descriptor;
+  }
+
+  if (!descriptor.args.includes("--acp") || descriptor.args.includes("--skip-trust")) {
+    return descriptor;
+  }
+
+  return {
+    ...descriptor,
+    args: [...descriptor.args, "--skip-trust"],
+  };
+}
+
 export function buildPackageLaunchDescriptor(params: {
   backendId: AcpBackendId;
   registryId: string;
@@ -19,7 +36,7 @@ export function buildPackageLaunchDescriptor(params: {
   args: string[];
   env: Record<string, string>;
 }): AcpLaunchDescriptor {
-  return {
+  return normalizeAcpLaunchDescriptor({
     backendId: params.backendId,
     registryId: params.registryId,
     distributionKind: params.kind,
@@ -29,7 +46,7 @@ export function buildPackageLaunchDescriptor(params: {
         ? ["--yes", params.packageName, ...params.args]
         : [params.packageName, ...params.args],
     env: params.env,
-  };
+  });
 }
 
 export function buildBinaryLaunchDescriptor(params: {
@@ -40,7 +57,7 @@ export function buildBinaryLaunchDescriptor(params: {
   env: Record<string, string>;
   installPath: string;
 }): AcpLaunchDescriptor {
-  return {
+  return normalizeAcpLaunchDescriptor({
     backendId: params.backendId,
     registryId: params.registryId,
     distributionKind: "binary",
@@ -48,5 +65,5 @@ export function buildBinaryLaunchDescriptor(params: {
     args: params.args,
     env: params.env,
     installPath: params.installPath,
-  };
+  });
 }

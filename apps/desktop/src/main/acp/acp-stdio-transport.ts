@@ -2,7 +2,10 @@ import type { SpawnOptionsWithoutStdio } from "node:child_process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import type { AcpLaunchDescriptor } from "./acp-launch-descriptor.js";
+import {
+  normalizeAcpLaunchDescriptor,
+  type AcpLaunchDescriptor,
+} from "./acp-launch-descriptor.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 import {
   JsonRpcConnection,
@@ -144,7 +147,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       return;
     }
 
-    const descriptor = this.options.launchDescriptor;
+    const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const env = { ...process.env, ...descriptor.env };
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
