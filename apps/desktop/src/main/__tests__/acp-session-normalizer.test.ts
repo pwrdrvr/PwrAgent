@@ -399,6 +399,63 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("extracts nested ACP tool update content as command output", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "README.md",
+        status: "in_progress",
+        locations: [{ path: "/repo/README.md" }],
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "README.md",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "Read lines 1-80 of 200 from README.md",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "read-file-1",
+        summary: "README.md",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: "README.md",
+            path: "/repo/README.md",
+            command: expect.objectContaining({
+              displayCommand: "README.md",
+              output: "Read lines 1-80 of 200 from README.md",
+            }),
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("ignores available command updates in transcripts", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

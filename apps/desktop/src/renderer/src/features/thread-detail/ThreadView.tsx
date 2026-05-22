@@ -754,6 +754,10 @@ function activityContainsDiff(
   });
 }
 
+function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): boolean {
+  return Boolean(entry?.details.some((detail) => detail.fileDiff));
+}
+
 export type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -1395,6 +1399,15 @@ export function ThreadView(props: ThreadViewProps) {
     }
     return latest;
   }, [props.transcriptEntries]);
+
+  const pendingTranscriptActivityEntry =
+    pendingActivityEntry && !activityHasFileDiff(pendingActivityEntry)
+      ? pendingActivityEntry
+      : undefined;
+  const pendingRailActivityEntry =
+    pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
+      ? pendingActivityEntry
+      : undefined;
 
   useEffect(() => {
     if (!pendingActivityEntry) {
@@ -2088,13 +2101,12 @@ export function ThreadView(props: ThreadViewProps) {
               loading={props.loading}
               loadingMore={props.loadingMore}
               pagination={props.transcriptPagination}
-              // pendingActivityEntry and pendingPlanEntry render in
-              // the LiveWorkRail above the composer (issue #495); pass
-              // undefined here so the transcript doesn't double-render
-              // the same live state. The persisted/optimistic copies
-              // that settle after `turn/completed` still flow through
-              // `entries`, so the transcript history is unaffected.
-              pendingActivityEntry={undefined}
+              // File-diff activity renders in the LiveWorkRail above
+              // the composer (issue #495). Generic tool activity has no
+              // rail body, so keep it in the transcript while the turn
+              // is live instead of collapsing the UI to a bare
+              // "Thinking" indicator.
+              pendingActivityEntry={pendingTranscriptActivityEntry}
               pendingAssistantMessage={props.pendingAssistantMessage}
               pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
@@ -2132,7 +2144,7 @@ export function ThreadView(props: ThreadViewProps) {
               desktopApi={props.desktopApi}
               dock="above"
               editedFilesEntry={
-                pendingActivityEntry ??
+                pendingRailActivityEntry ??
                 (props.activeTurnId ? undefined : lastCompletedActivityEntry)
               }
               pinned={!props.activeTurnId}
@@ -2202,7 +2214,7 @@ export function ThreadView(props: ThreadViewProps) {
             desktopApi={props.desktopApi}
             dock="sidebar"
             editedFilesEntry={
-              pendingActivityEntry ??
+              pendingRailActivityEntry ??
               (props.activeTurnId ? undefined : lastCompletedActivityEntry)
             }
             pinned={!props.activeTurnId}

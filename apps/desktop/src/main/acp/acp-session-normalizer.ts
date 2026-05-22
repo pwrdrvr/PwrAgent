@@ -408,17 +408,35 @@ function readContentText(
   record: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const value = record[key];
+  return readAcpContentText(record[key]);
+}
+
+export function readAcpContentText(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => readAcpContentText(item))
+      .filter((item): item is string => Boolean(item));
+    return parts.length > 0 ? parts.join("\n") : undefined;
+  }
+
+  if (!value || typeof value !== "object") {
     return undefined;
   }
+
   const content = value as Record<string, unknown>;
-  return content.type === "text" && typeof content.text === "string"
-    ? content.text
-    : undefined;
+  if (content.type === "text" && typeof content.text === "string") {
+    return content.text;
+  }
+  return (
+    readAcpContentText(content.content) ??
+    readAcpContentText(content.text) ??
+    readAcpContentText(content.output) ??
+    readAcpContentText(content.result)
+  );
 }
 
 function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {

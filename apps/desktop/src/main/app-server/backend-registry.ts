@@ -117,6 +117,7 @@ import {
 } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
+import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
 import { acpSessionRuntimeStateFromUpdate } from "../acp/acp-runtime-capabilities";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -2235,6 +2236,16 @@ export class DesktopBackendRegistry {
                   },
                 });
               }
+            }
+            for (const notification of acpToolUpdateNotifications({
+              threadId: sessionId,
+              turnId,
+              update,
+            })) {
+              await this.emit({
+                backend: agent.backendId,
+                notification,
+              });
             }
             if (updateKind === "turn_finished" && turnId) {
               const outputText = readAcpUpdateText(update);

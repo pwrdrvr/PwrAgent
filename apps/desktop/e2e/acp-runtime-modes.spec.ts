@@ -115,6 +115,91 @@ function acpConfigOptionMockScript(): string {
 	`;
 }
 
+function acpLiveToolProgressMockScript(): string {
+  return `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+function send(payload) { process.stdout.write(JSON.stringify(payload) + "\\n"); }
+function modes() {
+  return {
+    currentModeId: "default",
+    availableModes: [
+      { id: "default", name: "Default" },
+      { id: "yolo", name: "YOLO" }
+    ]
+  };
+}
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+    return;
+  }
+  if (msg.method === "session/load") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { modes: modes() } });
+    return;
+  }
+  if (msg.method === "session/prompt") {
+    const sessionId = msg.params.sessionId;
+    send({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "read_file_1",
+          kind: "read",
+          title: "README.md",
+          status: "in_progress",
+          locations: [{ path: "/tmp/acp-live-tool-thread/README.md" }]
+        }
+      }
+    });
+    send({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "read_file_1",
+          kind: "read",
+          title: "README.md",
+          status: "completed",
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: "Read lines 1-80 of 200 from README.md"
+              }
+            }
+          ]
+        }
+      }
+    });
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Done inspecting README.md." }
+          }
+        }
+      });
+      send({ jsonrpc: "2.0", id: msg.id, result: {} });
+    }, 2500);
+    return;
+  }
+  send({ jsonrpc: "2.0", id: msg.id, result: {} });
+});
+  `;
+}
+
 async function seedAcpGemini(homeRoot: string): Promise<void> {
   const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
   await mkdir(path.dirname(dbPath), { recursive: true });
@@ -178,6 +263,65 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
           },
         },
       ],
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function seedAcpGeminiLiveToolProgress(homeRoot: string): Promise<void> {
+  const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  try {
+    new AcpAgentStore(db).upsertInstalledAgent({
+      backendId: geminiBackendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      distributionKind: "local",
+      distributionSource: "node -e <mock-acp>",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "e2e-gemini",
+      installedAt: 1779400000000,
+      updatedAt: 1779400000000,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1779400000000,
+        checkedAt: 1779400000000,
+        source: "session-load",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "yolo", label: "YOLO" },
+          ],
+        },
+      },
+      launchDescriptor: {
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: process.execPath,
+        args: ["-e", acpLiveToolProgressMockScript()],
+        env: {},
+      },
+    });
+    new AcpSessionStore(db).upsertSession({
+      backendId: geminiBackendId,
+      sessionId: "acp-live-tool-thread",
+      title: "ACP Live Tool Thread",
+      cwd: "/tmp/acp-live-tool-thread",
+      createdAt: 1779400000000,
+      updatedAt: 1779400000000,
+      executionMode: "default",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1779400000000,
+      },
+      status: "idle",
     });
   } finally {
     db.close();
@@ -530,6 +674,33 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
     await expect(acpMode).toHaveAttribute("data-value", "yolo");
     await expect(modeChip).toHaveText("Yolo");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("shows ACP tool progress while a turn is still running", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/acp-runtime-modes/replay.fixture.json",
+    ),
+    preLaunchHook: seedAcpGeminiLiveToolProgress,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: /ACP Live Tool Thread/i }).click();
+
+    await app.window.getByLabel("Reply").fill("Inspect the project README.");
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByText(/Explored 1 item/i)).toBeVisible();
+    await app.window.getByRole("button", { name: /Explored 1 item/i }).click();
+    await expect(app.window.getByText(/README\.md/)).toBeVisible();
+    await expect(
+      app.window.getByText(/Read lines 1-80 of 200 from README\.md/),
+    ).toBeVisible();
   } finally {
     await app.close();
   }
