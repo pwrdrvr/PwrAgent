@@ -37,6 +37,7 @@ import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
@@ -4561,7 +4562,11 @@ export function Composer(props: ComposerProps) {
               options={acpRuntimeModeControl.options}
               onChange={(value) => {
                 if (props.launchpad) {
+                  const executionMode = acpRuntimeModeRequiresFullAccess(value)
+                    ? "full-access"
+                    : "default";
                   handleLaunchpadPatch({
+                    executionMode,
                     acpRuntime: {
                       ...props.launchpad.acpRuntime,
                       configValues:

@@ -9,6 +9,12 @@ export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "full-access" ? "Full Access" : "Default Access";
 }
 
+export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
+  return ["auto_edit", "autoedit", "yolo"].includes(
+    value.trim().replace(/[-\s]+/g, "_").toLowerCase(),
+  );
+}
+
 export type AcpRuntimeModeControl = {
   optionId: string;
   source: "configOption" | "mode";

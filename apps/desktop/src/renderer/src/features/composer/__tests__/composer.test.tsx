@@ -203,6 +203,34 @@ function backendSummary(
   };
 }
 
+function acpGeminiBackendSummary(): BackendSummary {
+  return {
+    ...backendSummary("acp:gemini"),
+    label: "Gemini CLI",
+    executionModes: [],
+    acp: {
+      registryId: "gemini",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        modes: {
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "autoEdit", label: "Auto Edit" },
+            { id: "yolo", label: "YOLO" },
+            { id: "plan", label: "Plan" },
+          ],
+          currentModeId: "default",
+        },
+      },
+    },
+  };
+}
+
 const reportedSkillAutocompleteDraftPrefix =
   "Oh shoot... I was wrong about this I think. I thought the desktop app didn't show the tool use but I was looking at a version of the desktop app that didn't start the turn. I just now looked at the instance that started the turn and it does indeed have the tool use notifications.\n\n\n\nLet's use ";
 
@@ -4523,6 +4551,55 @@ describe("Composer", () => {
           ]),
           model: "gpt-5.5",
           prompt: "Keep this launchpad while changing settings",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("marks ACP privileged launchpad modes as full-access before materialization", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[acpGeminiBackendSummary()]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:gemini",
+          executionMode: "default",
+          acpRuntime: { currentModeId: "default" },
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    chooseDropdownOption("ACP mode", "Yolo");
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          acpRuntime: expect.objectContaining({
+            currentModeId: "yolo",
+          }),
+          executionMode: "full-access",
         }),
         { stickySettingsChanged: true },
       );

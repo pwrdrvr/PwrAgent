@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import {
+  acpRuntimeModeRequiresFullAccess,
   formatAccessModeLabel,
   getAcpRuntimeModeControl,
 } from "../execution-mode";
@@ -69,6 +70,16 @@ const thread = {
 } satisfies NavigationThreadSummary;
 
 describe("ACP execution mode labels", () => {
+  it("identifies ACP runtime modes that need the privileged execution envelope", () => {
+    expect(acpRuntimeModeRequiresFullAccess("yolo")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("YOLO")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("autoEdit")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("auto_edit")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("auto edit")).toBe(true);
+    expect(acpRuntimeModeRequiresFullAccess("default")).toBe(false);
+    expect(acpRuntimeModeRequiresFullAccess("plan")).toBe(false);
+  });
+
   it("uses ACP current mode when a mode config option is stale", () => {
     expect(getAcpRuntimeModeControl(acpBackend, thread)).toMatchObject({
       optionId: "approval-mode",
