@@ -6466,6 +6466,508 @@ describe("MessagingController", () => {
     });
   });
 
+  it("starts a new inherited Full Access thread without a dismissable warning", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.delivered).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "confirmation",
+          title: "Enable Full Access?",
+        }),
+      ]),
+    );
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("starts a new thread from a directory launchpad Full Access default without a dismissable warning", async () => {
+    const navigation = buildFullAccessDirectoryLaunchpadNavigationSnapshot();
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.delivered).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "confirmation",
+          title: "Enable Full Access?",
+        }),
+      ]),
+    );
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+        }),
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+      }),
+    );
+  });
+
+  it("posts the first-prompt Full Access warning as a direct response when always warning", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      delivery: expect.anything(),
+      targetSurface: expect.anything(),
+    });
+  });
+
+  it("blocks an inherited Full Access new thread when messaging escalation is disabled", async () => {
+    const onFullAccessPolicyViolation = vi.fn();
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: false,
+        allowThreadResume: true,
+        warningPolicy: "dismissable",
+      },
+      onFullAccessPolicyViolation,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(onFullAccessPolicyViolation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user-1",
+        requestedAction: "messaging.full_access.start_new_thread",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+      body: expect.stringContaining("Starting a Full Access thread"),
+    });
+  });
+
+  it("keeps a first-prompt Full Access approval usable after the browse TTL", async () => {
+    let now = 1000;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+    const warning = harness.delivered.at(-1);
+
+    now += 90_000;
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+        input: [
+          {
+            type: "text",
+            text: "fix bug",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "error",
+          title: "Invalid selection",
+        }),
+      ]),
+    );
+  });
+
+  it("does not capture ordinary text into a warned /new session after the picker TTL", async () => {
+    let now = 1000;
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      now: () => now,
+      pendingIntentTtlMs: 60_000,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("new thread prompt"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Full Access?",
+    });
+    const warning = harness.delivered.at(-1);
+    harness.startTurn.mockClear();
+    harness.materializeDirectoryLaunchpad.mockClear();
+
+    now += 90_000;
+    await harness.controller.handleInboundEvent(buildTextEvent("normal followup"));
+
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionMode: "full-access",
+        input: [
+          {
+            type: "text",
+            text: "new thread prompt",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("delivers the normal start failure if approved Full Access prompt startup throws", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const materializeDirectoryLaunchpad = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const harness = await createHarness({
+      navigation,
+      materializeDirectoryLaunchpad,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+    const warning = harness.delivered.at(-1);
+    const accept = findAction(warning, "full-access-risk:accept");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: accept.id,
+        value: accept.value,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Thread could not start",
+      body: "boom",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: accept.id,
+        value: accept.value,
+      }),
+    );
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(2);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Thread could not start",
+    });
+  });
+
+  it("reports specific copy when a first-prompt Full Access approval lost its prompt", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+    const warning = harness.delivered.at(-1);
+    (
+      harness.controller as unknown as {
+        pendingFullAccessNewThreadPrompts: Map<string, unknown>;
+      }
+    ).pendingFullAccessNewThreadPrompts.clear();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "full-access-risk:accept",
+        value: findAction(warning, "full-access-risk:accept").value,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access prompt expired",
+      body: expect.stringContaining("pending prompt"),
+    });
+  });
+
+  it("reports specific copy when a Full Access approval lost its session", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+        authorizedUsers: {
+          telegram: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("fix bug"));
+    const warning = harness.delivered.at(-1);
+    const accept = findAction(warning, "full-access-risk:accept");
+    const value = accept.value as { sessionId: string };
+    await harness.store.deleteBrowseSession(value.sessionId);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: accept.id,
+        value: accept.value,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access approval expired",
+      body: expect.stringContaining("Full Access approval"),
+    });
+  });
+
   it("posts a permissions-queue audit message with a Cancel button on thread/executionMode/queued", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -7405,6 +7907,7 @@ async function createHarness(options?: {
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
   now?: () => number;
+  pendingIntentTtlMs?: number;
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
   fullAccessControls?: MessagingControllerOptions["fullAccessControls"];
@@ -7723,6 +8226,7 @@ async function createHarness(options?: {
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    pendingIntentTtlMs: options?.pendingIntentTtlMs,
     fullAccessControls: options?.fullAccessControls ?? {
       allowEscalation: true,
       allowThreadResume: true,
@@ -7903,6 +8407,26 @@ function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
       prompt: "",
       workMode: "worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+    },
+  };
+  return snapshot;
+}
+
+function buildFullAccessDirectoryLaunchpadNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.directories[0] = {
+    ...snapshot.directories[0]!,
+    launchpad: {
+      directoryKey: "directory:pwragent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/repo/pwragent",
+      backend: "codex",
+      executionMode: "full-access",
+      prompt: "",
+      workMode: "local",
       createdAt: 1000,
       updatedAt: 1000,
     },

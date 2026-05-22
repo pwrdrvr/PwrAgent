@@ -53,6 +53,7 @@ import type {
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import {
   buildHelpActions,
   formatMessagingCommandHelpBody,
@@ -324,6 +325,7 @@ type FullAccessEscalationContext =
     }
   | {
       kind: "new-thread";
+      pendingPrompt?: boolean;
       session: MessagingBrowseSessionRecord;
     }
   | {
@@ -341,6 +343,7 @@ type FullAccessRiskWarningContext =
     }
   | {
       kind: "new-thread";
+      pendingPrompt?: boolean;
       sessionId: string;
     }
   | {
@@ -357,8 +360,11 @@ type FullAccessRiskPresentation = {
 
 type FullAccessWarningResolution = {
   canDismiss: boolean;
+  policy: DesktopMessagingFullAccessWarningGlobalPolicy;
   shouldWarn: boolean;
 };
+
+type FullAccessRiskPresentationMode = "surface" | "message";
 
 export type MessagingControllerDeliveryBudgetEvent = {
   at: number;
@@ -468,6 +474,10 @@ export class MessagingController {
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
+  private readonly pendingFullAccessNewThreadPrompts = new Map<
+    string,
+    PendingNewThreadPromptBundle
+  >();
   private readonly monitorTimersByBindingId = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -1206,7 +1216,8 @@ export class MessagingController {
     if (
       session?.launchAction === "start_new_thread" &&
       session.mode === "new_thread_options" &&
-      session.selectedProject
+      session.selectedProject &&
+      (session.textInputExpiresAt ?? session.expiresAt) > this.now()
     ) {
       return session;
     }
@@ -2605,6 +2616,7 @@ export class MessagingController {
       }
     }
     this.pendingNewThreadPrompts.clear();
+    this.pendingFullAccessNewThreadPrompts.clear();
     this.toolUpdatePolicy.dispose();
   }
 
@@ -3284,6 +3296,7 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
   ): Promise<void> {
     this.clearPendingNewThreadPrompt(session.id);
+    this.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
     try {
       const removed = await this.options.store.deletePendingIntentsForChannel({
@@ -4049,15 +4062,27 @@ export class MessagingController {
       this.streamingResponsesDefault,
       selectedBackend,
     );
-    if (
-      options.executionMode === "full-access" &&
-      !(await this.isFullAccessRiskAcceptedForSession(session, event))
-    ) {
-      await this.presentFullAccessRiskWarning(
-        { kind: "new-thread", session },
+    if (options.executionMode === "full-access") {
+      const decision = await this.resolveFullAccessRiskForSession(
+        session,
         event,
+        options,
       );
-      return;
+      if (decision === "blocked") {
+        return;
+      }
+      if (decision === "warning") {
+        this.pendingFullAccessNewThreadPrompts.set(session.id, {
+          events: bundle.events,
+          session,
+        });
+        await this.presentFullAccessRiskWarning(
+          { kind: "new-thread", session },
+          event,
+          { presentationMode: "message" },
+        );
+        return;
+      }
     }
     const materialized = this.options.backend.materializeDirectoryLaunchpad
       ? await this.options.backend.materializeDirectoryLaunchpad({
@@ -4120,6 +4145,7 @@ export class MessagingController {
       worktreePath: materialized?.linkedDirectory?.worktreePath,
       workMode: materialized?.workMode ?? options.workMode,
     });
+    this.pendingFullAccessNewThreadPrompts.delete(session.id);
     await this.options.store.deleteBrowseSession(session.id);
     await this.startPreparedInput({
       binding: updatedBinding,
@@ -5473,6 +5499,7 @@ export class MessagingController {
   private async presentFullAccessRiskWarning(
     context: FullAccessEscalationContext,
     event: MessagingInboundEvent,
+    options: { presentationMode?: FullAccessRiskPresentationMode } = {},
   ): Promise<void> {
     const controls = await this.resolveFullAccessControls();
     const warning = await this.resolveFullAccessWarning(controls, event);
@@ -5486,6 +5513,9 @@ export class MessagingController {
         : context.kind === "new-thread"
           ? {
             kind: "new-thread",
+            ...(options.presentationMode === "message"
+              ? { pendingPrompt: true }
+              : {}),
             sessionId: context.session.id,
           }
           : {
@@ -5493,8 +5523,11 @@ export class MessagingController {
               kind: "resume-thread",
               sessionId: context.session.id,
               threadId: context.threadId,
-            };
-    const presentation = fullAccessRiskPresentationForContext(context);
+          };
+    const presentation = fullAccessRiskPresentationForContext(
+      context,
+      options.presentationMode ?? "surface",
+    );
     const actions: MessagingConfirmationIntent["actions"] = [
       {
         id: `${FULL_ACCESS_RISK_ACTION_PREFIX}accept`,
@@ -5543,7 +5576,28 @@ export class MessagingController {
       actions,
       targetSurface: presentation.surface,
     });
-    const pending = await this.storePendingIntent(intent, presentation.binding, event);
+    const expiresAt =
+      context.kind === "new-thread" || context.kind === "resume-thread"
+        ? this.now() + MESSAGING_CALLBACK_HANDLE_TTL_MS
+        : undefined;
+    if (
+      expiresAt !== undefined &&
+      (context.kind === "new-thread" || context.kind === "resume-thread")
+    ) {
+      await this.options.store.upsertBrowseSession({
+        ...context.session,
+        expiresAt: Math.max(context.session.expiresAt, expiresAt),
+        textInputExpiresAt:
+          context.session.textInputExpiresAt ?? context.session.expiresAt,
+        updatedAt: this.now(),
+      });
+    }
+    const pending = await this.storePendingIntent(
+      intent,
+      presentation.binding,
+      event,
+      expiresAt === undefined ? undefined : { expiresAt },
+    );
     const result = await this.deliver(intent, presentation.binding, event);
     if (result.surface) {
       await this.options.store.upsertPendingIntent({
@@ -5568,8 +5622,11 @@ export class MessagingController {
           now: this.now(),
         });
         if (!session) {
-          await this.deliverInvalidBrowseSelection(event);
+          await this.deliverStaleFullAccessWarning(event);
           return;
+        }
+        if (context.kind === "new-thread") {
+          this.pendingFullAccessNewThreadPrompts.delete(session.id);
         }
         const navigation = await this.options.backend.getNavigationSnapshot({
           backend: "all",
@@ -5627,19 +5684,44 @@ export class MessagingController {
 
     if (escalationContext.kind === "new-thread") {
       const { session } = escalationContext;
-      await this.presentNewThreadPromptGate(
-        {
-          ...session,
-          fullAccessRiskAcceptedAt: this.now(),
-          preferences: {
-            ...session.preferences,
-            executionMode: "full-access",
-            permissionsMode: "full-access",
-            updatedAt: this.now(),
-          },
+      const acceptedSession = {
+        ...session,
+        fullAccessRiskAcceptedAt: this.now(),
+        preferences: {
+          ...session.preferences,
+          executionMode: "full-access" as const,
+          permissionsMode: "full-access" as const,
+          updatedAt: this.now(),
         },
-        event,
-      );
+      };
+      const pendingPrompt = this.pendingFullAccessNewThreadPrompts.get(session.id);
+      if (escalationContext.pendingPrompt && !pendingPrompt) {
+        await this.deliverMissingFullAccessPrompt(event);
+        return;
+      }
+      if (pendingPrompt) {
+        try {
+          await this.createNewThreadFromPromptBundle({
+            events: pendingPrompt.events,
+            session: acceptedSession,
+          });
+        } catch (error) {
+          this.logger.warn?.("messaging new-thread prompt failed", {
+            channel: pendingPrompt.session.channel.channel,
+            error: error instanceof Error ? error.message : String(error),
+            sessionId: pendingPrompt.session.id,
+          });
+          await this.deliverNewThreadPromptFailure(
+            {
+              events: pendingPrompt.events,
+              session: acceptedSession,
+            },
+            error,
+          );
+        }
+        return;
+      }
+      await this.presentNewThreadPromptGate(acceptedSession, event);
       return;
     }
 
@@ -5712,10 +5794,14 @@ export class MessagingController {
         now: this.now(),
       });
       if (!session) {
-        await this.deliverInvalidBrowseSelection(event);
+        await this.deliverStaleFullAccessWarning(event);
         return undefined;
       }
-      return { kind: "new-thread", session };
+      return {
+        kind: "new-thread",
+        pendingPrompt: context.pendingPrompt,
+        session,
+      };
     }
 
     if (context.kind === "resume-thread") {
@@ -5723,7 +5809,7 @@ export class MessagingController {
         now: this.now(),
       });
       if (!session) {
-        await this.deliverInvalidBrowseSelection(event);
+        await this.deliverStaleFullAccessWarning(event);
         return undefined;
       }
       return {
@@ -5779,12 +5865,13 @@ export class MessagingController {
     return await this.canResumeFullAccessThreads();
   }
 
-  private async isFullAccessRiskAcceptedForSession(
+  private async resolveFullAccessRiskForSession(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
-  ): Promise<boolean> {
+    options: NewThreadOptionsSummary,
+  ): Promise<"accepted" | "blocked" | "warning"> {
     if (session.fullAccessRiskAcceptedAt) {
-      return true;
+      return "accepted";
     }
     const controls = await this.resolveFullAccessControls();
     if (!controls.allowEscalation) {
@@ -5797,10 +5884,16 @@ export class MessagingController {
         event,
         "Starting a Full Access thread from messaging is disabled in Settings.",
       );
-      return false;
+      return "blocked";
     }
     const warning = await this.resolveFullAccessWarning(controls, event);
-    return !warning.shouldWarn;
+    if (
+      warning.policy === "dismissable" &&
+      options.executionModeSource !== "session"
+    ) {
+      return "accepted";
+    }
+    return warning.shouldWarn ? "warning" : "accepted";
   }
 
   private async resolveFullAccessControls(): Promise<MessagingFullAccessControls> {
@@ -5828,10 +5921,10 @@ export class MessagingController {
     const effectivePolicy =
       policy === "default" ? controls.warningPolicy : policy;
     if (effectivePolicy === "never") {
-      return { canDismiss: false, shouldWarn: false };
+      return { canDismiss: false, policy: effectivePolicy, shouldWarn: false };
     }
     if (effectivePolicy === "always") {
-      return { canDismiss: false, shouldWarn: true };
+      return { canDismiss: false, policy: effectivePolicy, shouldWarn: true };
     }
     const canPersistDismissal =
       controls.canDismissWarning
@@ -5842,6 +5935,7 @@ export class MessagingController {
         : Boolean(controls.dismissWarning);
     return {
       canDismiss: Boolean(controls.dismissWarning) && canPersistDismissal,
+      policy: effectivePolicy,
       shouldWarn: contact?.fullAccessWarningDismissed !== true,
     };
   }
@@ -6958,6 +7052,38 @@ export class MessagingController {
     );
   }
 
+  private async deliverStaleFullAccessWarning(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("stale-full-access-warning"),
+        createdAt: this.now(),
+        title: "Full Access approval expired",
+        body: "That Full Access approval is no longer available. Start the command again.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async deliverMissingFullAccessPrompt(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("missing-full-access-prompt"),
+        createdAt: this.now(),
+        title: "Full Access prompt expired",
+        body: "That Full Access approval no longer has the pending prompt. Send the prompt again.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
+  }
+
   /**
    * Best-effort fan-out to the runtime's bindings-changed listener.
    * Wrapped so a misbehaving listener (e.g. closed BrowserWindow) can
@@ -7128,6 +7254,7 @@ export class MessagingController {
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
+    options: { expiresAt?: number } = {},
   ): Promise<MessagingPendingIntentRecord> {
     return await this.options.store.upsertPendingIntent({
       id: intent.id,
@@ -7138,7 +7265,7 @@ export class MessagingController {
         event?.actor.platformUserId ?? "unknown",
       ],
       createdAt: this.now(),
-      expiresAt: this.now() + this.pendingIntentTtlMs,
+      expiresAt: options.expiresAt ?? this.now() + this.pendingIntentTtlMs,
     });
   }
 
@@ -7980,6 +8107,7 @@ function readFullAccessRiskContext(
   if (value.kind === "new-thread" && typeof value.sessionId === "string") {
     return {
       kind: "new-thread",
+      ...(value.pendingPrompt === true ? { pendingPrompt: true } : {}),
       sessionId: value.sessionId,
     };
   }
@@ -8012,7 +8140,11 @@ function readFullAccessRiskContext(
 
 function fullAccessRiskPresentationForContext(
   context: FullAccessEscalationContext,
+  presentationMode: FullAccessRiskPresentationMode,
 ): FullAccessRiskPresentation {
+  if (presentationMode === "message") {
+    return {};
+  }
   if (context.kind === "thread") {
     return {
       binding: context.binding,
@@ -8280,6 +8412,7 @@ type NewThreadOptionsSummary = {
   backendLabel: string;
   branchName: string;
   executionMode: ThreadExecutionMode;
+  executionModeSource: "session" | "directory-launchpad" | "launchpad-defaults";
   fastMode: boolean;
   model: string;
   reasoningEffort?: string;
@@ -8326,12 +8459,21 @@ function newThreadOptionsForSession(
     Boolean(modelOption?.supportsFast);
   const supportsReasoning =
     reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
+  const executionMode =
+    session.preferences?.executionMode ??
+    directory?.launchpad?.executionMode ??
+    navigation.launchpadDefaults.executionMode;
+  const executionModeSource = session.preferences?.executionMode
+    ? "session"
+    : directory?.launchpad?.executionMode
+      ? "directory-launchpad"
+      : "launchpad-defaults";
   return {
     backend: backend.kind,
     backendLabel: backend.label,
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
-    executionMode:
-      session.preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
+    executionMode,
+    executionModeSource,
     fastMode:
       supportsFast
         ? session.preferences?.fastMode ?? navigation.launchpadDefaults.fastMode ?? false
