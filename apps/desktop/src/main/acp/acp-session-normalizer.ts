@@ -1,7 +1,9 @@
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
   AppServerThreadMessage,
+  AppServerThreadMessagePart,
   AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
@@ -24,6 +26,7 @@ export class AcpSessionReplayNormalizer {
   recordUserPrompt(params: {
     sessionId: string;
     prompt: string;
+    parts?: AppServerThreadMessagePart[];
     turnId: string;
     receivedAt?: number;
   }): AppServerThreadReplay {
@@ -34,6 +37,7 @@ export class AcpSessionReplayNormalizer {
       id,
       role: "user",
       text: params.prompt,
+      ...(params.parts?.length ? { parts: params.parts } : {}),
       createdAt,
     });
     this.status = "active";
@@ -78,6 +82,7 @@ export class AcpSessionReplayNormalizer {
       this.recordUserPrompt({
         sessionId: update.sessionId,
         prompt: readString(update.update, "prompt") ?? "",
+        parts: readMessageParts(update.update),
         turnId: readString(update.update, "turnId") ?? `pending:${update.sessionId}`,
         receivedAt: createdAt,
       });
@@ -217,6 +222,7 @@ export class AcpSessionReplayNormalizer {
       id: message.id,
       role: message.role,
       text: message.text,
+      ...(message.parts?.length ? { parts: message.parts } : {}),
       createdAt: message.createdAt,
     });
   }
@@ -303,12 +309,52 @@ function readString(
   return typeof value === "string" ? value : undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 function readNumber(
   record: Record<string, unknown>,
   key: string,
 ): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readMessageParts(
+  record: Record<string, unknown>,
+): AppServerThreadMessagePart[] | undefined {
+  const value = record.parts;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const parts = value.flatMap((part): AppServerThreadMessagePart[] => {
+    const item = asRecord(part);
+    if (!item) {
+      return [];
+    }
+    if (item.type === "image") {
+      const url = readString(item, "url");
+      const alt = readString(item, "alt");
+      return url
+        ? [
+            {
+              type: "image",
+              url,
+              ...(alt ? { alt } : {}),
+            } satisfies AppServerThreadImagePart,
+          ]
+        : [];
+    }
+    if (item.type === "text") {
+      const text = readString(item, "text");
+      return text ? [{ type: "text", text }] : [];
+    }
+    return [];
+  });
+  return parts.length > 0 ? parts : undefined;
 }
 
 function readToolOutput(record: Record<string, unknown>): string | undefined {

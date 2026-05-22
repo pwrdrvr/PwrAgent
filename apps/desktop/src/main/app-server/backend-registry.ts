@@ -23,6 +23,7 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadReplay,
+  type AppServerThreadMessagePart,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
@@ -110,7 +111,10 @@ import {
   acpAgentCapabilitiesForRegistryId,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
-import { AcpAgentClient } from "../acp/acp-client";
+import {
+  AcpAgentClient,
+  type AcpPromptContentBlock,
+} from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
@@ -1666,20 +1670,78 @@ function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): strin
   return text || undefined;
 }
 
-function inputToAcpPrompt(input: AppServerTurnInputItem[]): string | undefined {
-  const prompt = input
-    .map((item) => {
-      if (item.type === "text") {
-        return item.text.trim();
+type AcpPromptPayload = {
+  prompt: string;
+  promptContent: AcpPromptContentBlock[];
+  parts: AppServerThreadMessagePart[];
+};
+
+function inputToAcpPrompt(
+  input: AppServerTurnInputItem[],
+): AcpPromptPayload | undefined {
+  const promptContent: AcpPromptContentBlock[] = [];
+  const parts: AppServerThreadMessagePart[] = [];
+
+  for (const item of input) {
+    if (item.type === "text") {
+      const text = item.text.trim();
+      if (text) {
+        promptContent.push({ type: "text", text });
+        parts.push({ type: "text", text });
       }
-      if (item.type === "image") {
-        return `[Image: ${item.url}]`;
+      continue;
+    }
+
+    if (item.type === "image") {
+      parts.push({ type: "image", url: item.url });
+      const image = parseImageDataUrl(item.url);
+      if (image) {
+        promptContent.push({
+          type: "image",
+          mimeType: image.mimeType,
+          data: image.data,
+        });
+      } else {
+        promptContent.push({ type: "text", text: "[Image attachment]" });
       }
-      return `[Local image: ${item.path}]`;
-    })
-    .filter(Boolean)
-    .join("\n");
-  return prompt || undefined;
+      continue;
+    }
+
+    const fileName = path.basename(item.path);
+    const text = `[Local image: ${fileName}]`;
+    promptContent.push({ type: "text", text });
+    parts.push({ type: "text", text });
+  }
+
+  if (promptContent.length === 0 && parts.length === 0) {
+    return undefined;
+  }
+
+  return {
+    prompt: parts
+      .filter((part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
+        part.type === "text",
+      )
+      .map((part) => part.text)
+      .join("\n"),
+    promptContent,
+    parts,
+  };
+}
+
+function parseImageDataUrl(
+  url: string,
+): { mimeType: string; data: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/iu.exec(
+    url,
+  );
+  if (!match) {
+    return undefined;
+  }
+  return {
+    mimeType: match[1],
+    data: match[2],
+  };
 }
 
 function buildTitleGenerationKey(
@@ -2908,9 +2970,9 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const prompt = inputToAcpPrompt(params.input);
-    if (!prompt) {
-      throw new Error("ACP turns require text input");
+    const promptPayload = inputToAcpPrompt(params.input);
+    if (!promptPayload) {
+      throw new Error("ACP turns require text or image input");
     }
 
     const client = await this.getAcpClient(params.backend);
@@ -2956,7 +3018,9 @@ export class DesktopBackendRegistry {
     try {
       const result = client.startPrompt({
         sessionId: params.threadId,
-        prompt,
+        prompt: promptPayload.prompt,
+        promptContent: promptPayload.promptContent,
+        parts: promptPayload.parts,
         turnId: syntheticStartedTurnId,
       });
       this.invalidateThreadListCache(params.backend);

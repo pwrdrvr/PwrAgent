@@ -1889,6 +1889,8 @@ describe("DesktopBackendRegistry", () => {
     const startedPrompts: Array<{
       sessionId: string;
       prompt: string;
+      promptContent?: unknown;
+      parts?: unknown;
       turnId?: string;
     }> = [];
     const cancelledSessions: string[] = [];
@@ -1918,6 +1920,8 @@ describe("DesktopBackendRegistry", () => {
       startPrompt: vi.fn((params: {
         sessionId: string;
         prompt: string;
+        promptContent?: unknown;
+        parts?: unknown;
         turnId?: string;
       }) => {
         startedPrompts.push(params);
@@ -2020,6 +2024,20 @@ describe("DesktopBackendRegistry", () => {
       threadId: "session-1",
       turnId: expect.stringMatching(/^pending:session-1:\d+$/),
     });
+    const imageUrl = "data:image/png;base64,aGVsbG8=";
+    const imageTurn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", url: imageUrl },
+      ],
+    });
+    expect(imageTurn).toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      turnId: expect.stringMatching(/^pending:session-1:\d+$/),
+    });
     await expect(
       registry.readThread({
         backend: acpBackendId,
@@ -2051,10 +2069,30 @@ describe("DesktopBackendRegistry", () => {
       title: "ACP session",
     });
     expect(startedPrompts).toEqual([
-      { sessionId: "session-1", prompt: "hello ACP", turnId: startedTurn.turnId },
+      {
+        sessionId: "session-1",
+        prompt: "hello ACP",
+        promptContent: [{ type: "text", text: "hello ACP" }],
+        parts: [{ type: "text", text: "hello ACP" }],
+        turnId: startedTurn.turnId,
+      },
+      {
+        sessionId: "session-1",
+        prompt: "What's in this image?",
+        promptContent: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+        ],
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl },
+        ],
+        turnId: imageTurn.turnId,
+      },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
     expect(emittedEvents.map((event) => event.notification.method)).toEqual([
+      "turn/started",
       "turn/started",
       "turn/cancelled",
     ]);

@@ -2,6 +2,7 @@ import type {
   AcpBackendId,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
+  AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
@@ -40,6 +41,10 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
+
+export type AcpPromptContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; data: string };
 
 type AcpSessionStoreLike = Pick<
   AcpSessionStore,
@@ -211,6 +216,8 @@ export class AcpAgentClient {
   async prompt(params: {
     sessionId: string;
     prompt: string;
+    promptContent?: AcpPromptContentBlock[];
+    parts?: AppServerThreadMessagePart[];
   }): Promise<{ sessionId: string; turnId: string }> {
     this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = `pending:${params.sessionId}:${this.now()}`;
@@ -219,6 +226,7 @@ export class AcpAgentClient {
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
+      parts: params.parts,
       turnId,
       receivedAt,
     });
@@ -227,6 +235,7 @@ export class AcpAgentClient {
       update: {
         kind: "pwragent_user_prompt",
         prompt: params.prompt,
+        ...(params.parts?.length ? { parts: params.parts } : {}),
         turnId,
       },
     });
@@ -235,7 +244,7 @@ export class AcpAgentClient {
     try {
       const promptRequest = this.options.transport.request("session/prompt", {
         sessionId: protocolSessionId,
-        prompt: textPrompt(params.prompt),
+        prompt: params.promptContent ?? textPrompt(params.prompt),
       });
       this.clearLoadReplaySuppression(protocolSessionId);
       result = await promptRequest;
@@ -279,6 +288,8 @@ export class AcpAgentClient {
   startPrompt(params: {
     sessionId: string;
     prompt: string;
+    promptContent?: AcpPromptContentBlock[];
+    parts?: AppServerThreadMessagePart[];
     turnId?: string;
   }): { sessionId: string; turnId: string } {
     this.hydratePersistedTranscriptForSession(params.sessionId);
@@ -288,6 +299,7 @@ export class AcpAgentClient {
     this.normalizerFor(params.sessionId).recordUserPrompt({
       sessionId: params.sessionId,
       prompt: params.prompt,
+      parts: params.parts,
       turnId,
       receivedAt,
     });
@@ -296,13 +308,14 @@ export class AcpAgentClient {
       update: {
         kind: "pwragent_user_prompt",
         prompt: params.prompt,
+        ...(params.parts?.length ? { parts: params.parts } : {}),
         turnId,
       },
     });
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.options.transport.request("session/prompt", {
       sessionId: protocolSessionId,
-      prompt: textPrompt(params.prompt),
+      prompt: params.promptContent ?? textPrompt(params.prompt),
     });
     this.clearLoadReplaySuppression(protocolSessionId);
     void promptRequest
@@ -943,7 +956,7 @@ function selectPermissionOptionId(
   return undefined;
 }
 
-function textPrompt(text: string): Array<{ type: "text"; text: string }> {
+function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
 }
 

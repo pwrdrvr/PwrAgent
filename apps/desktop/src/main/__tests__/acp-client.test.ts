@@ -118,6 +118,67 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
+  it("sends pasted images as ACP image content and persists structured transcript parts", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const imageUrl = "data:image/png;base64,aGVsbG8=";
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "What's in this image?",
+      promptContent: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+      ],
+      parts: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", url: imageUrl },
+      ],
+      turnId: "turn-1",
+    });
+
+    expect(transport.requests[2]?.params).toEqual({
+      sessionId: "session-1",
+      prompt: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+    expect(client.readReplay("session-1").messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl },
+        ],
+      }),
+    ]);
+    expect(store.getSession("acp:gemini", "session-1")?.transcriptUpdates?.[0])
+      .toEqual({
+        receivedAt: 1000,
+        update: {
+          kind: "pwragent_user_prompt",
+          prompt: "What's in this image?",
+          parts: [
+            { type: "text", text: "What's in this image?" },
+            { type: "image", url: imageUrl },
+          ],
+          turnId: "turn-1",
+        },
+      });
+  });
+
   it("surfaces ACP permission requests and returns the selected option", async () => {
     const transport = new FakeAcpAgentTransport();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];

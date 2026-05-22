@@ -144,6 +144,48 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(idleReplay.threadStatus).toBe("idle");
   });
 
+  it("keeps persisted user prompt image parts out of transcript text", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const imageUrl = "data:image/png;base64,aGVsbG8=";
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl, alt: "Pasted image" },
+        ],
+        turnId: "pending:session-1:1000",
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl, alt: "Pasted image" },
+        ],
+      }),
+    ]);
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl, alt: "Pasted image" },
+        ],
+      }),
+    ]);
+    expect(replay.lastUserMessage).toBe("What's in this image?");
+  });
+
   it("keeps repeated ACP turns in durable order", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
