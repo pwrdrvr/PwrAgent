@@ -881,6 +881,7 @@ describe("settings ipc", () => {
             installStatus: "installed",
             installable: false,
             allowlistRuleId: "local-gemini-cli",
+            lastDiscoveredAt: 2222,
             runtime: expect.objectContaining({
               discoveredAt: 2222,
             }),

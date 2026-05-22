@@ -127,10 +127,27 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
                   <dt>Verification</dt>
                   <dd>{entry.verificationStatus}</dd>
                 </div>
-                {entry.runtime?.discoveredAt ? (
+                <div>
+                  <dt>Auth</dt>
+                  <dd>{formatAcpStatusValue(entry.authStatus)}</dd>
+                </div>
+                <div>
+                  <dt>Last checked</dt>
+                  <dd>{formatAcpTimestamp(acpLastCheckedAt(entry))}</dd>
+                </div>
+                {entry.runtime?.status ? (
                   <div>
-                    <dt>Capabilities</dt>
-                    <dd>{new Date(entry.runtime.discoveredAt).toLocaleString()}</dd>
+                    <dt>Runtime</dt>
+                    <dd>
+                      {formatAcpStatusValue(entry.runtime.status)}
+                      {entry.runtime.source ? ` · ${entry.runtime.source}` : ""}
+                    </dd>
+                  </div>
+                ) : null}
+                {entry.runtime?.protocolVersion ? (
+                  <div>
+                    <dt>Protocol</dt>
+                    <dd>{entry.runtime.protocolVersion}</dd>
                   </div>
                 ) : null}
                 {entry.runtime?.modes?.availableModes.length ? (
@@ -143,6 +160,26 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
                     </dd>
                   </div>
                 ) : null}
+                {entry.runtime?.configOptions?.length ? (
+                  <div>
+                    <dt>Options</dt>
+                    <dd>
+                      {entry.runtime.configOptions
+                        .map((option) => option.label)
+                        .join(", ")}
+                    </dd>
+                  </div>
+                ) : null}
+                {entry.runtime?.models?.availableModels.length ? (
+                  <div>
+                    <dt>Models</dt>
+                    <dd>
+                      {entry.runtime.models.availableModels
+                        .map((model) => model.label ?? model.id)
+                        .join(", ")}
+                    </dd>
+                  </div>
+                ) : null}
               </dl>
               {entry.repositoryUrl || entry.websiteUrl ? (
                 <p className="settings-acp-agent__links">
@@ -150,9 +187,9 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
                   {entry.websiteUrl ? <span>{entry.websiteUrl}</span> : null}
                 </p>
               ) : null}
-              {entry.lastError || entry.unavailableReason ? (
+              {entry.lastDiscoveryError || entry.lastError || entry.unavailableReason ? (
                 <p className="settings-row__error">
-                  {entry.lastError ?? entry.unavailableReason}
+                  {entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason}
                 </p>
               ) : null}
               {confirming?.backendId === entry.backendId ? (
@@ -194,4 +231,23 @@ export function AcpAgentsSettings(props: { desktopApi?: DesktopApi }) {
       </SettingsSection>
     </SettingsSectionStack>
   );
+}
+
+function acpLastCheckedAt(entry: AcpAgentSettingsEntry): number | undefined {
+  return (
+    entry.lastDiscoveredAt ??
+    entry.runtime?.checkedAt ??
+    entry.runtime?.discoveredAt ??
+    entry.updatedAt
+  );
+}
+
+function formatAcpTimestamp(value: number | undefined): string {
+  return value ? new Date(value).toLocaleString() : "never";
+}
+
+function formatAcpStatusValue(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }

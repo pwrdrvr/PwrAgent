@@ -11,6 +11,82 @@ afterEach(() => {
 });
 
 describe("AcpAgentsSettings", () => {
+  it("keeps cached ACP agents visible while background discovery refreshes", async () => {
+    let resolveRefresh:
+      | ((value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void)
+      | undefined;
+    const refreshPromise = new Promise<{
+      fetchedAt: number;
+      entries: AcpAgentSettingsEntry[];
+    }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const cachedEntry = {
+      backendId: "acp:gemini",
+      registryId: "gemini",
+      name: "Gemini CLI",
+      version: "0.42.0",
+      authors: [],
+      distributionKind: "local",
+      distributionSource: "gemini --acp --skip-trust",
+      installable: false,
+      installed: true,
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      lastDiscoveredAt: 1779400000000,
+      lastDiscoveryError: "previous probe failed",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1779400000000,
+        checkedAt: 1779400000000,
+        source: "session-load",
+        protocolVersion: 1,
+        configOptions: [
+          {
+            id: "approval-mode",
+            label: "Permission mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [{ value: "default", label: "Default" }],
+          },
+        ],
+        models: {
+          currentModelId: "gemini-3-flash-preview",
+          availableModels: [
+            { id: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
+          ],
+        },
+      },
+    } satisfies AcpAgentSettingsEntry;
+    const listAcpAgents = vi.fn(
+      async (request?: { refresh?: boolean }) =>
+        request?.refresh
+          ? refreshPromise
+          : { fetchedAt: 1000, entries: [cachedEntry] },
+    );
+
+    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+
+    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+    });
+    expect(screen.getByText("Gemini 3 Flash")).toBeInTheDocument();
+    expect(screen.getByText("Permission mode")).toBeInTheDocument();
+    expect(screen.getByText("Discovered · session-load")).toBeInTheDocument();
+    expect(screen.getByText("previous probe failed")).toBeInTheDocument();
+    expect(screen.queryByText("No allowlisted ACP agents found.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discovering..." })).toBeDisabled();
+
+    resolveRefresh?.({ fetchedAt: 2000, entries: [cachedEntry] });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Discover new" })).toBeEnabled();
+    });
+  });
+
   it("renders allowlisted ACP agents with provenance before install", async () => {
     const desktopApi: DesktopApi = {
       listAcpAgents: vi.fn(async () => ({

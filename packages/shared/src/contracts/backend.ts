@@ -237,6 +237,8 @@ export type AcpAgentSettingsEntry = {
   updatedAt?: number;
   unavailableReason?: string;
   lastError?: string;
+  lastDiscoveredAt?: number;
+  lastDiscoveryError?: string;
   runtime?: BackendAcpRuntimeCapabilities;
 };
 

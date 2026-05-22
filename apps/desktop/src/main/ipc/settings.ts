@@ -415,6 +415,8 @@ function installedAcpAgentSettingsEntry(
     installedAt: record.installedAt,
     updatedAt: record.updatedAt,
     lastError: record.lastError,
+    lastDiscoveredAt: record.lastDiscoveredAt,
+    lastDiscoveryError: record.lastDiscoveryError,
     runtime: record.runtimeCapabilities,
   };
 }
