@@ -734,7 +734,7 @@ export class MessagingController {
         }
       } else if (isTerminalTurnLifecycle(activeTurn)) {
         await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-        this.clearAssistantStreamsForEvent(event, binding);
+        await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
       }
 
       if (isThreadNameUpdatedEvent(event)) {
@@ -2365,13 +2365,40 @@ export class MessagingController {
     return deliveredFinalStream;
   }
 
-  private clearAssistantStreamsForEvent(
+  private async flushBufferedAssistantStreamsForTerminalEvent(
     event: AgentEvent,
     binding: MessagingBindingRecord,
-  ): void {
+  ): Promise<void> {
+    const fallbackTexts: string[] = [];
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+      const buffer = this.assistantStreamBuffers.get(bufferKey);
+      if (!buffer) {
+        continue;
+      }
+      const text = buffer.text.trim();
+      if (!text) {
+        this.assistantStreamBuffers.delete(bufferKey);
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+        continue;
+      }
+      this.assistantStreamBuffers.set(bufferKey, {
+        ...buffer,
+        delta: "",
+        lastEmittedAt: this.now(),
+        sequence: buffer.sequence + 1,
+        text,
+      });
+      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
+      if (!isVisibleAssistantStreamDelivery(result)) {
+        fallbackTexts.push(text);
+      }
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+
+    const fallbackText = fallbackTexts.join("\n\n").trim();
+    if (fallbackText) {
+      await this.deliverAssistantMessage(fallbackText, event, binding);
     }
   }
 

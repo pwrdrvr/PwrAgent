@@ -19,9 +19,10 @@ export function acpToolUpdateNotifications(params: {
     return [];
   }
 
+  const method = isTerminalToolStatus(item.status) ? "item/completed" : "item/started";
   return [
     {
-      method: "item/started",
+      method,
       params: {
         threadId: params.threadId,
         ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -108,6 +109,10 @@ function normalizeAcpToolStatus(status: string | undefined): string {
     status === "in_progress"
     ? status
     : "in_progress";
+}
+
+function isTerminalToolStatus(status: unknown): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function readAcpToolOutput(record: Record<string, unknown>): string | undefined {

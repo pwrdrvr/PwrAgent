@@ -239,7 +239,7 @@ export class AcpSessionReplayNormalizer {
       (message) => message.id === params.id,
     );
     if (existingMessage) {
-      existingMessage.text += params.text;
+      existingMessage.text = appendTranscriptChunk(existingMessage.text, params.text);
     } else {
       this.messages.push({
         id: params.id,
@@ -254,7 +254,7 @@ export class AcpSessionReplayNormalizer {
         entry.type === "message" && entry.id === params.id,
     );
     if (existingEntry) {
-      existingEntry.text += params.text;
+      existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
     } else {
       this.entries.push({
         type: "message",
@@ -266,6 +266,23 @@ export class AcpSessionReplayNormalizer {
       });
     }
   }
+}
+
+function appendTranscriptChunk(existing: string, next: string): string {
+  if (!existing || !next) {
+    return `${existing}${next}`;
+  }
+  if (shouldSeparateTranscriptChunks(existing, next)) {
+    return `${existing}\n\n${next}`;
+  }
+  return `${existing}${next}`;
+}
+
+function shouldSeparateTranscriptChunks(existing: string, next: string): boolean {
+  if (/\s$/.test(existing)) {
+    return false;
+  }
+  return /^(?:#{1,6}\s|\*\*[^*]+?\*\*(?:\s|$))/.test(next);
 }
 
 function readKind(update: Record<string, unknown>): string {

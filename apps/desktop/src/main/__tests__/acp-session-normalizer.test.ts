@@ -119,6 +119,42 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBeUndefined();
   });
 
+  it("preserves markdown block boundaries across ACP thought chunks", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "I found the thread creation path.",
+        },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "**Refining Button Logic**\nI am checking the disabled state.",
+        },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text:
+          "I found the thread creation path.\n\n" +
+          "**Refining Button Logic**\nI am checking the disabled state.",
+      }),
+    ]);
+  });
+
   it("records local user prompts as active replay state", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

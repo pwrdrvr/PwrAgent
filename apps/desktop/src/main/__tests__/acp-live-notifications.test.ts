@@ -65,7 +65,7 @@ describe("acpToolUpdateNotifications", () => {
 
     expect(notifications).toEqual([
       expect.objectContaining({
-        method: "item/started",
+        method: "item/completed",
         params: expect.objectContaining({
           item: expect.objectContaining({
             id: "grep-1",
