@@ -3414,6 +3414,7 @@ export function Composer(props: ComposerProps) {
     props.thread &&
       threadWorkspace &&
       props.onHandoffThreadWorkspace &&
+      props.thread.workspaceHandoff?.available !== false &&
       !sending &&
       !activeTurnId &&
       !props.pendingRequestActive &&

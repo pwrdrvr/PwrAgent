@@ -1453,6 +1453,64 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("marks Gemini ACP thread workspace handoff unavailable after conversation history", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: "acp:gemini",
+          sessionId: "session-1",
+          title: "ACP Thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 3000,
+          executionMode: "default",
+          status: "idle",
+          transcriptUpdates: [
+            {
+              receivedAt: 2000,
+              update: {
+                kind: "pwragent_user_prompt",
+                prompt: "What is this project?",
+              },
+            },
+          ],
+        },
+      ]),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "acp:gemini" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        workspaceHandoff: {
+          available: false,
+          unavailableReason: expect.stringContaining("cannot hand off"),
+        },
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("invalidates cached ACP thread summaries when a live topic update renames the thread", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [

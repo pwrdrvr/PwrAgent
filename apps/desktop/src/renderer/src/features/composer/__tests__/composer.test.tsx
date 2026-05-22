@@ -169,7 +169,7 @@ function createComposerDraftStore(): ComposerDraftStore {
 }
 
 function backendSummary(
-  kind: "codex" | "grok",
+  kind: BackendSummary["kind"],
   launchpadOptions?: BackendSummary["launchpadOptions"],
 ): BackendSummary {
   return {
@@ -3380,6 +3380,47 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Workspace mode")).toBeEnabled();
+  });
+
+  it("disables existing thread workspace handoff when the backend marks it unavailable", () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("acp:gemini")]}
+        disabled={false}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "session-1",
+          title: "Gemini thread",
+          titleSource: "explicit",
+          source: "acp:gemini",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/repo",
+              kind: "local",
+            },
+          ],
+          workspaceHandoff: {
+            available: false,
+            unavailableReason: "ACP live workspace handoff is unsupported.",
+          },
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeDisabled();
+    expect(workspaceMode).toHaveValue("local");
+    fireEvent.click(workspaceMode);
+    expect(
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+    ).not.toBeInTheDocument();
   });
 
   it("lets the desktop handoff dialog move the current branch instead", async () => {

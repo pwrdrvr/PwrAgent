@@ -106,7 +106,10 @@ import {
 } from "@pwragent/shared";
 import type { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
-import { acpAgentCapabilitiesForRegistryId } from "../acp/acp-agent-capabilities";
+import {
+  acpAgentCapabilitiesForRegistryId,
+  type AcpAgentCapabilities,
+} from "../acp/acp-agent-capabilities";
 import { AcpAgentClient } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
@@ -999,7 +1002,13 @@ function buildAcpLaunchpadOptions(
   return models.length > 0 ? { models } : undefined;
 }
 
-function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
+function acpSessionToThreadSummary(
+  session: AcpSessionMetadata,
+  capabilities?: AcpAgentCapabilities,
+): AppServerThreadSummary {
+  const workspaceHandoffAvailable =
+    !acpSessionHasConversationHistory(session) ||
+    capabilities?.liveWorkspaceHandoff === true;
   return {
     id: session.sessionId,
     title: session.title,
@@ -1020,6 +1029,12 @@ function acpSessionToThreadSummary(session: AcpSessionMetadata): AppServerThread
     source: session.backendId,
     executionMode: session.executionMode,
     acpRuntime: session.acpRuntime,
+    workspaceHandoff: workspaceHandoffAvailable
+      ? { available: true }
+      : {
+          available: false,
+          unavailableReason: ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
+        },
   };
 }
 
@@ -2820,8 +2835,12 @@ export class DesktopBackendRegistry {
       return [];
     }
     const normalizedFilter = filter?.trim().toLowerCase();
+    const agent = this.acpAgentStore?.getInstalledAgent(backendId);
+    const capabilities =
+      agent?.capabilities ??
+      (agent ? acpAgentCapabilitiesForRegistryId(agent.registryId) : undefined);
     return (this.acpSessionStore?.listSessions(backendId, { archived }) ?? [])
-      .map((session) => acpSessionToThreadSummary(session))
+      .map((session) => acpSessionToThreadSummary(session, capabilities))
       .filter(
         (thread) =>
           !normalizedFilter ||

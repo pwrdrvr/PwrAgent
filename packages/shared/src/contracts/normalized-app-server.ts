@@ -241,6 +241,10 @@ export type AppServerThreadSummary = {
   reasoningEffort?: string;
   fastMode?: boolean;
   acpRuntime?: AppServerAcpSessionRuntimeState;
+  workspaceHandoff?: {
+    available: boolean;
+    unavailableReason?: string;
+  };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
 };

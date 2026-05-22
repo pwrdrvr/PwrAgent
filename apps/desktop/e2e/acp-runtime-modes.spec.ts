@@ -128,6 +128,56 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
   }
 }
 
+async function seedAcpGeminiWithHistory(homeRoot: string): Promise<void> {
+  const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  try {
+    new AcpAgentStore(db).upsertInstalledAgent({
+      backendId: geminiBackendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      distributionKind: "local",
+      distributionSource: "node -e <mock-acp>",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "e2e-gemini",
+      installedAt: 1779400000000,
+      updatedAt: 1779400000000,
+      launchDescriptor: {
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: process.execPath,
+        args: ["-e", acpMockScript()],
+        env: {},
+      },
+    });
+    new AcpSessionStore(db).upsertSession({
+      backendId: geminiBackendId,
+      sessionId: "acp-handoff-thread",
+      title: "ACP Handoff Thread",
+      cwd: "/tmp/acp-handoff-thread",
+      createdAt: 1779400000000,
+      updatedAt: 1779400000000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 1779400000000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "What is this project?",
+          },
+        },
+      ],
+    });
+  } finally {
+    db.close();
+  }
+}
+
 test("renders ACP-native runtime modes and keeps live mode chrome in sync", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -159,6 +209,33 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     await expect(acpMode).toHaveAttribute("data-value", "yolo");
     await expect(modeChip).toHaveText("Yolo");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("disables workspace handoff for ACP threads after conversation history", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/acp-runtime-modes/replay.fixture.json",
+    ),
+    preLaunchHook: seedAcpGeminiWithHistory,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: /ACP Handoff Thread/i }).click();
+
+    const workspaceMode = app.window.getByLabel("Workspace mode");
+    await expect(workspaceMode).toBeDisabled();
+    await expect(workspaceMode).toHaveAttribute("value", "local");
+    await workspaceMode.click({ force: true });
+    await expect(
+      app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }),
+    ).toHaveCount(0);
+    await expect(
+      app.window.getByRole("dialog", { name: /Handoff to/i }),
+    ).toHaveCount(0);
   } finally {
     await app.close();
   }

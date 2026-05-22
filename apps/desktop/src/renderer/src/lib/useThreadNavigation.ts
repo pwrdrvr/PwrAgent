@@ -324,6 +324,8 @@ function threadSummariesEqual(
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
+    JSON.stringify(left.workspaceHandoff ?? {}) ===
+      JSON.stringify(right.workspaceHandoff ?? {}) &&
     left.pinnedRank === right.pinnedRank &&
     retainedBranchDriftPairsEqual(
       left.retainedBranchDriftPairs,
