@@ -10,7 +10,7 @@
 #
 # Then open http://localhost:4000/.
 
-FROM ruby:3.2-slim
+FROM ruby:4.0-slim
 
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends build-essential git \
