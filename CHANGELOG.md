@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.0-beta.13 - 2026-05-22
+
+- Added transcript copy controls for full messages, code blocks, blockquotes, and launchpad error text.
+- Added selected-thread project breadcrumbs, with a clickable thread title that scrolls the matching sidebar row into view.
+- Fixed transcript wrapping for long inline and fenced-code lines.
+- Added the first-run onboarding wizard, including theme/density setup, Codex profile model selection, optional messaging setup, paired PwrAgent/Codex profile provisioning, and replay support.
+- Added bootstrap-mode startup so fresh installs and missing profile names no longer silently create or bind to the operator's existing `default` Codex profile.
+- Added onboarding prerequisite checks for Codex CLI discovery and xAI API key setup, with Linux discovery paths and deferred Codex spawning while onboarding is incomplete.
+- Fixed onboarding messaging setup so provider secrets start the runtime during the wizard, pairing can be approved inline, and Telegram pairing is more tolerant of whitespace and typo cases.
+- Fixed queued-turn release handling to prevent duplicate queued turn submission.
+- Fixed Linux auxiliary window menus and Linux onboarding startup behavior.
+- Fixed empty thread panes and directory headers so window dragging/selection chrome behaves correctly.
+- Added an Apple signing secret upload helper for release maintenance.
+
 ## v1.0.0-beta.12 - 2026-05-20
 
 - Added a WCAG AA accessibility gate for the desktop renderer, including baseline fixes for composer autocomplete, sidebar tabs, resize controls, and transcript list semantics.
