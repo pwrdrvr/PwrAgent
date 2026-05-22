@@ -220,6 +220,17 @@ export type SubmitServerRequestResponse = {
   requestId: string;
 };
 
+export type TrustCodexProjectRequest = {
+  projectPath: string;
+  configPath?: string;
+};
+
+export type TrustCodexProjectResponse = {
+  projectPath: string;
+  configPath?: string;
+  trusted: boolean;
+};
+
 export type EnsureDirectoryLaunchpadRequest = {
   directoryKey: string;
   directoryKind: DirectorySummaryKind;
@@ -398,6 +409,10 @@ export type RegisterDirectoryFromDiskResponse =
 export type AgentEvent = {
   backend: AppServerBackendKind;
   notification: AppServerNotification;
+};
+
+export type LatestCodexConfigWarningResponse = {
+  event?: AgentEvent;
 };
 
 export type AppServerCollaborationModeRequest = {

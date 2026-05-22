@@ -20,6 +20,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  LatestCodexConfigWarningResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -102,6 +103,8 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -165,6 +168,7 @@ import type {
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
@@ -180,6 +184,7 @@ import {
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+  AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
@@ -590,6 +595,12 @@ const desktopApi = Object.freeze({
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>
     await ipcRenderer.invoke(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL, request),
+  trustCodexProject: async (
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse> =>
+    await ipcRenderer.invoke(AGENT_TRUST_CODEX_PROJECT_CHANNEL, request),
+  getLatestCodexConfigWarning: async (): Promise<LatestCodexConfigWarningResponse> =>
+    await ipcRenderer.invoke(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL),
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>

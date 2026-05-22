@@ -901,6 +901,17 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "configWarning";
+      params: {
+        summary: string;
+        details?: string | null;
+        path?: string;
+        range?: unknown;
+        trustedProjectPath?: string;
+        configPath?: string;
+      };
+    }
+  | {
       method: "thread/name/updated";
       params: {
         threadId: string;

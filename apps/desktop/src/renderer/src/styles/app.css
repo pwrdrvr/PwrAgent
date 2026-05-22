@@ -3002,6 +3002,74 @@ textarea,
   background: var(--bg-app);
 }
 
+.codex-config-warning-banner {
+  position: fixed;
+  z-index: 82;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 32px));
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
+  box-shadow: var(--shadow-popover);
+  animation: app-update-banner-enter 160ms ease-out;
+}
+
+.codex-config-warning-banner__content {
+  min-width: 0;
+}
+
+.codex-config-warning-banner__eyebrow {
+  margin: 0 0 4px;
+  color: var(--status-warning);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.codex-config-warning-banner__message,
+.codex-config-warning-banner__detail,
+.codex-config-warning-banner__error {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.codex-config-warning-banner__message {
+  color: var(--text-primary);
+}
+
+.codex-config-warning-banner__detail {
+  margin-top: 8px;
+  color: var(--text-secondary);
+}
+
+.codex-config-warning-banner__error {
+  margin-top: 8px;
+  color: var(--danger-text);
+}
+
+.codex-config-warning-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.codex-config-warning-banner__actions .button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .app-update-banner {
   position: fixed;
   z-index: 80;

@@ -35,6 +35,9 @@ export const AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL =
 export const AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL =
   "agent:set-codex-thread-environment";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
+export const AGENT_TRUST_CODEX_PROJECT_CHANNEL = "agent:trust-codex-project";
+export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =
+  "agent:latest-codex-config-warning";
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";

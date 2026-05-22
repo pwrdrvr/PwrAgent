@@ -537,6 +537,10 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   };
+  lastTrustProjectParams?: {
+    projectPath: string;
+    configPath?: string;
+  };
   listThreadsCallCount = 0;
   listModelsCallCount = 0;
   steerTurnCallCount = 0;
@@ -811,6 +815,14 @@ class MockBackendClient {
       turnId: "compact-turn-1",
       itemId: "compact-item-1",
     };
+  }
+
+  async trustProject(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }> {
+    this.lastTrustProjectParams = params;
+    return params;
   }
 
   async emit(notification: AppServerNotification): Promise<void> {
@@ -1098,6 +1110,77 @@ describe("DesktopBackendRegistry", () => {
         unavailableReason: "grok app server unavailable: XAI_API_KEY is not set",
       },
     ]);
+
+    await registry.close();
+  });
+
+  it("delegates Codex project trust to the Codex client", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const response = await registry.trustCodexProject({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+    });
+
+    expect(response).toEqual({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      trusted: true,
+    });
+    expect(codexClient.lastTrustProjectParams).toEqual({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+    });
+
+    await registry.close();
+  });
+
+  it("buffers the latest Codex config warning until the project is trusted", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({});
+
+    await codexClient.emit({
+      method: "configWarning",
+      params: {
+        summary: "Project-local config is disabled.",
+        details: null,
+        trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      },
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({
+      event: {
+        backend: "codex",
+        notification: {
+          method: "configWarning",
+          params: {
+            summary: "Project-local config is disabled.",
+            details: null,
+            trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
+            configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+          },
+        },
+      },
+    });
+
+    await registry.trustCodexProject({
+      projectPath: "/Users/huntharo/github/PwrAgnt",
+      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+    });
+
+    expect(registry.getLatestCodexConfigWarning()).toEqual({});
 
     await registry.close();
   });

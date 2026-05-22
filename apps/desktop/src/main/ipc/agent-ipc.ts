@@ -10,6 +10,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  LatestCodexConfigWarningResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   QueueThreadExecutionModeRequest,
@@ -34,6 +35,8 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
@@ -41,6 +44,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
+  AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -55,6 +59,7 @@ import {
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+  AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   BACKEND_LIST_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -459,6 +464,25 @@ export function registerAgentIpcHandlers(): void {
       return await registry.submitServerRequest(request);
     },
   );
+
+  ipcMain.removeHandler(AGENT_TRUST_CODEX_PROJECT_CHANNEL);
+  ipcMain.handle(
+    AGENT_TRUST_CODEX_PROJECT_CHANNEL,
+    async (
+      _event,
+      request: TrustCodexProjectRequest,
+    ): Promise<TrustCodexProjectResponse> => {
+      return await registry.trustCodexProject(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL);
+  ipcMain.handle(
+    AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
+    async (): Promise<LatestCodexConfigWarningResponse> => {
+      return registry.getLatestCodexConfigWarning();
+    },
+  );
 }
 
 export function disposeAgentIpcHandlers(): void {
@@ -481,4 +505,6 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
+  ipcMain.removeHandler(AGENT_TRUST_CODEX_PROJECT_CHANNEL);
+  ipcMain.removeHandler(AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL);
 }

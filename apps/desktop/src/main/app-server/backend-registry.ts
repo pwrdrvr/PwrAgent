@@ -40,6 +40,7 @@ import {
   isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
+  type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
   type LinkedDirectorySummary,
@@ -82,6 +83,8 @@ import {
   type StartThreadResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
+  type TrustCodexProjectRequest,
+  type TrustCodexProjectResponse,
   type ThreadExecutionMode,
   type ThreadOverlayState,
   type WorktreeSnapshotSummary,
@@ -301,6 +304,10 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string }>;
+  trustProject?(params: {
+    projectPath: string;
+    configPath?: string;
+  }): Promise<{ projectPath: string; configPath?: string }>;
 };
 
 /**
@@ -1494,6 +1501,7 @@ export class DesktopBackendRegistry {
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
+  private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   private readonly pendingTitleGenerations = new Map<
@@ -1868,6 +1876,40 @@ export class DesktopBackendRegistry {
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
     await this.emit(event);
+  }
+
+  getLatestCodexConfigWarning(): LatestCodexConfigWarningResponse {
+    return this.latestCodexConfigWarning
+      ? { event: this.latestCodexConfigWarning }
+      : {};
+  }
+
+  async trustCodexProject(
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse> {
+    if (!this.codexClient.trustProject) {
+      throw new Error("Codex project trust is not available.");
+    }
+
+    const result = await this.codexClient.trustProject({
+      projectPath: request.projectPath,
+      ...(request.configPath ? { configPath: request.configPath } : {}),
+    });
+    if (
+      this.latestCodexConfigWarning?.notification.method === "configWarning" &&
+      this.latestCodexConfigWarning.notification.params.trustedProjectPath ===
+        request.projectPath &&
+      (!request.configPath ||
+        this.latestCodexConfigWarning.notification.params.configPath ===
+          request.configPath)
+    ) {
+      this.latestCodexConfigWarning = undefined;
+    }
+    return {
+      projectPath: result.projectPath,
+      ...(result.configPath ? { configPath: result.configPath } : {}),
+      trusted: true,
+    };
   }
 
   async listBackends(
@@ -6329,6 +6371,13 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    if (
+      event.backend === "codex" &&
+      event.notification.method === "configWarning"
+    ) {
+      this.latestCodexConfigWarning = event;
+    }
+
     if (
       event.backend === "codex" &&
       event.notification.method === "turn/started"
