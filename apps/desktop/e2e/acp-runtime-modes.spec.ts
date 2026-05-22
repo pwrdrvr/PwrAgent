@@ -56,7 +56,63 @@ rl.on("line", (line) => {
   }
   send({ jsonrpc: "2.0", id: msg.id, result: {} });
 });
-`;
+	`;
+}
+
+function acpConfigOptionMockScript(): string {
+  return `
+	const readline = require("node:readline");
+	const rl = readline.createInterface({ input: process.stdin });
+	let currentApprovalMode = "default";
+	function modeConfig(currentValue) {
+	  return [{
+	    id: "approval-mode",
+	    label: "Approval mode",
+	    type: "select",
+	    category: "mode",
+	    currentValue,
+	    values: [
+	      { value: "default", label: "Default" },
+	      { value: "auto_edit", label: "Auto Edit" },
+	      { value: "yolo", label: "YOLO" }
+	    ]
+	  }];
+	}
+	function send(payload) { process.stdout.write(JSON.stringify(payload) + "\\n"); }
+	rl.on("line", (line) => {
+	  const msg = JSON.parse(line);
+	  if (msg.method === "initialize") {
+	    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+	    return;
+	  }
+	  if (msg.method === "session/load") {
+	    send({
+	      jsonrpc: "2.0",
+	      id: msg.id,
+	      result: { configOptions: modeConfig(currentApprovalMode) }
+	    });
+	    return;
+	  }
+	  if (msg.method === "session/set_config_option") {
+	    currentApprovalMode = msg.params.value;
+	    send({
+	      jsonrpc: "2.0",
+	      method: "session/update",
+	      params: {
+	        sessionId: msg.params.sessionId,
+	        update: { kind: "agent_message_chunk", content: "[MODE_UPDATE] " + msg.params.value }
+	      }
+	    });
+	    send({
+	      jsonrpc: "2.0",
+	      id: msg.id,
+	      result: { configOptions: modeConfig("default") }
+	    });
+	    return;
+	  }
+	  send({ jsonrpc: "2.0", id: msg.id, result: {} });
+	});
+	`;
 }
 
 async function seedAcpGemini(homeRoot: string): Promise<void> {
@@ -122,6 +178,73 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
           },
         },
       ],
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function seedAcpGeminiConfigOptionMode(homeRoot: string): Promise<void> {
+  const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  try {
+    new AcpAgentStore(db).upsertInstalledAgent({
+      backendId: geminiBackendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      distributionKind: "local",
+      distributionSource: "node -e <mock-acp>",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "e2e-gemini",
+      installedAt: 1779400000000,
+      updatedAt: 1779400000000,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1779400000000,
+        checkedAt: 1779400000000,
+        source: "session-load",
+        configOptions: [
+          {
+            id: "approval-mode",
+            label: "Approval mode",
+            type: "select",
+            category: "mode",
+            currentValue: "default",
+            values: [
+              { value: "default", label: "Default" },
+              { value: "auto_edit", label: "Auto Edit" },
+              { value: "yolo", label: "YOLO" },
+            ],
+          },
+        ],
+      },
+      launchDescriptor: {
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: process.execPath,
+        args: ["-e", acpConfigOptionMockScript()],
+        env: {},
+      },
+    });
+    new AcpSessionStore(db).upsertSession({
+      backendId: geminiBackendId,
+      sessionId: "acp-config-mode-thread",
+      title: "ACP Config Mode Thread",
+      cwd: "/tmp/acp-config-mode-thread",
+      createdAt: 1779400000000,
+      updatedAt: 1779400000000,
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { "approval-mode": "default" },
+        currentModeId: "default",
+        updatedAt: 1779400000000,
+      },
+      status: "idle",
     });
   } finally {
     db.close();
@@ -298,6 +421,37 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
 
     const acpMode = app.window.getByLabel("ACP mode");
     await expect(acpMode).toBeEnabled();
+    await expect(acpMode).toHaveAttribute("data-value", "default");
+
+    await acpMode.click();
+    await app.window.getByRole("option", { name: "YOLO" }).click();
+
+    await expect(acpMode).toHaveAttribute("data-value", "yolo");
+    await expect(modeChip).toHaveText("Yolo");
+    await app.window.waitForTimeout(300);
+    await expect(acpMode).toHaveAttribute("data-value", "yolo");
+    await expect(modeChip).toHaveText("Yolo");
+    await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("keeps ACP config-option mode controls in sync when the agent echoes stale config", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/acp-runtime-modes/replay.fixture.json",
+    ),
+    preLaunchHook: seedAcpGeminiConfigOptionMode,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: /ACP Config Mode Thread/i }).click();
+
+    const modeChip = app.window.locator(".thread-header .chip--mode");
+    const acpMode = app.window.getByLabel("ACP mode");
+    await expect(modeChip).toHaveText("Default");
     await expect(acpMode).toHaveAttribute("data-value", "default");
 
     await acpMode.click();

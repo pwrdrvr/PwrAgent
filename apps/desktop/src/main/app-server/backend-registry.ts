@@ -3121,12 +3121,15 @@ export class DesktopBackendRegistry {
     await client.ensureSession?.(session);
     const fromValue =
       options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
-    const runtimeState = await client.setRuntimeOption?.({
-      sessionId: params.threadId,
-      source: params.source,
-      optionId: params.optionId,
-      value: params.value,
-    });
+    const runtimeState = this.normalizeAcpRuntimeSelectionState(
+      params,
+      await client.setRuntimeOption?.({
+        sessionId: params.threadId,
+        source: params.source,
+        optionId: params.optionId,
+        value: params.value,
+      }),
+    );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
     if (this.acpSessionStore?.upsertSession) {
       this.acpSessionStore.upsertSession({
@@ -3293,11 +3296,56 @@ export class DesktopBackendRegistry {
 
   private readAcpRuntimeOptionValue(
     runtime: BackendAcpSessionRuntimeState | undefined,
-    params: Pick<SetAcpSessionRuntimeOptionRequest, "source" | "optionId">,
+    params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
   ): string | undefined {
+    if (
+      params.source === "configOption" &&
+      runtime?.currentModeId &&
+      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+    ) {
+      return runtime.currentModeId;
+    }
     return params.source === "configOption"
       ? runtime?.configValues?.[params.optionId]
       : runtime?.currentModeId;
+  }
+
+  private normalizeAcpRuntimeSelectionState(
+    params: SetAcpSessionRuntimeOptionRequest,
+    runtimeState: BackendAcpSessionRuntimeState | undefined,
+  ): BackendAcpSessionRuntimeState {
+    const updatedAt = runtimeState?.updatedAt ?? Date.now();
+    const selectedState: BackendAcpSessionRuntimeState =
+      params.source === "mode" ||
+      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+        ? {
+            configValues:
+              params.source === "configOption"
+                ? { [params.optionId]: params.value }
+                : runtimeState?.configValues,
+            currentModeId: params.value,
+            updatedAt,
+          }
+        : {
+            configValues: { [params.optionId]: params.value },
+            updatedAt,
+          };
+    return mergeAcpRuntimeState(runtimeState, selectedState) ?? selectedState;
+  }
+
+  private isAcpRuntimeModeConfigOption(
+    backend: AppServerBackendKind,
+    optionId: string,
+  ): boolean {
+    if (!isAcpBackendId(backend)) {
+      return false;
+    }
+    const agent = this.acpAgentStore?.getInstalledAgent(backend);
+    return (
+      agent?.runtimeCapabilities?.configOptions?.some(
+        (option) => option.id === optionId && option.category === "mode",
+      ) ?? false
+    );
   }
 
   private formatAcpRuntimeOptionLabel(

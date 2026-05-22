@@ -3439,7 +3439,9 @@ export function useThreadNavigation(
               }
             : thread.acpRuntime?.configValues,
         currentModeId:
-          params.source === "mode" ? params.value : thread.acpRuntime?.currentModeId,
+          params.source === "mode" || params.source === "configOption"
+            ? params.value
+            : thread.acpRuntime?.currentModeId,
         updatedAt: Date.now(),
       };
       setOptimisticThread((current) =>

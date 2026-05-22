@@ -29,7 +29,15 @@ export function getAcpRuntimeModeControl(
     (option) => option.category === "mode" && option.values.length > 0,
   );
   if (modeConfigOption) {
+    const currentModeValue =
+      settings?.acpRuntime?.currentModeId &&
+      modeConfigOption.values.some(
+        (option) => option.value === settings.acpRuntime?.currentModeId,
+      )
+        ? settings.acpRuntime.currentModeId
+        : undefined;
     const value =
+      currentModeValue ??
       settings?.acpRuntime?.configValues?.[modeConfigOption.id] ??
       modeConfigOption.currentValue ??
       modeConfigOption.values[0]?.value ??
