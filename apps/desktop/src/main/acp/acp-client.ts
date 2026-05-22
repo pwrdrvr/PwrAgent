@@ -370,21 +370,34 @@ export class AcpAgentClient {
             sessionId: protocolSessionId,
             modeId: params.value,
           });
+    const now = this.now();
+    const responseRuntimeCapabilities = normalizeAcpRuntimeCapabilities({
+      value: result,
+      now,
+      source: "session-load",
+    });
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
       result,
     });
-    const runtimeState =
-      acpSessionRuntimeStateFromCapabilities(runtimeCapabilities, this.now()) ??
-      (params.source === "configOption"
+    const responseRuntimeState = acpSessionRuntimeStateFromCapabilities(
+      responseRuntimeCapabilities,
+      now,
+    );
+    const requestedRuntimeState: BackendAcpSessionRuntimeState =
+      params.source === "configOption"
         ? {
             configValues: { [params.optionId]: params.value },
-            updatedAt: this.now(),
+            updatedAt: now,
           }
         : {
             currentModeId: params.value,
-            updatedAt: this.now(),
-          });
+            updatedAt: now,
+          };
+    const runtimeState = mergeAcpRuntimeState(
+      requestedRuntimeState,
+      responseRuntimeState ?? { updatedAt: now },
+    );
     this.updateSessionRuntimeState(params.sessionId, runtimeState);
     this.notifyRuntimeCapabilities({
       sessionId: params.sessionId,

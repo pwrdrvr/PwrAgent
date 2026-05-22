@@ -6327,6 +6327,7 @@ export class DesktopBackendRegistry {
   private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
     return (
       method === "thread/archived" ||
+      method === "thread/acpRuntime/updated" ||
       method === "thread/name/updated" ||
       method === "thread/started" ||
       method === "thread/unarchived" ||

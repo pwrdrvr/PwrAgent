@@ -324,6 +324,50 @@ describe("AcpAgentClient", () => {
     expect(runtimeUpdates).toHaveLength(2);
   });
 
+  it("keeps requested ACP mode when set_mode returns no fresh runtime state", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "gemini-session",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", name: "Default" },
+            { id: "yolo", name: "YOLO" },
+          ],
+        },
+      },
+      "session/set_mode": {},
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "mode",
+        optionId: "mode",
+        value: "yolo",
+      }),
+    ).resolves.toMatchObject({
+      currentModeId: "yolo",
+    });
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModeId: "yolo",
+      },
+    });
+  });
+
   it("treats Gemini mode marker chunks as runtime updates instead of assistant text", async () => {
     const runtimeUpdates: unknown[] = [];
     const transport = new FakeAcpAgentTransport();

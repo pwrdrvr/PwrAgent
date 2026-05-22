@@ -16,7 +16,7 @@ function acpMockScript(): string {
   return `
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin });
-let currentModeId = "yolo";
+let currentModeId = "default";
 function send(payload) { process.stdout.write(JSON.stringify(payload) + "\\n"); }
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
@@ -83,7 +83,7 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
         checkedAt: 1779400000000,
         source: "session-load",
         modes: {
-          currentModeId: "yolo",
+          currentModeId: "default",
           availableModes: [
             { id: "default", label: "Default" },
             { id: "autoEdit", label: "Auto Edit" },
@@ -109,7 +109,7 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
       updatedAt: 1779400000000,
       executionMode: "default",
       acpRuntime: {
-        currentModeId: "yolo",
+        currentModeId: "default",
         updatedAt: 1779400000000,
       },
       status: "idle",
@@ -128,7 +128,7 @@ async function seedAcpGemini(homeRoot: string): Promise<void> {
   }
 }
 
-test("renders ACP-native runtime modes and updates them without transcript noise", async () => {
+test("renders ACP-native runtime modes and keeps live mode chrome in sync", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -143,18 +143,21 @@ test("renders ACP-native runtime modes and updates them without transcript noise
     await expect(
       app.window.getByRole("heading", { level: 2, name: "ACP Yolo Thread" }),
     ).toBeVisible();
-    await expect(app.window.locator(".thread-header .chip--mode")).toHaveText(
-      "Yolo",
-    );
+    const modeChip = app.window.locator(".thread-header .chip--mode");
+    await expect(modeChip).toHaveText("Default");
 
     const acpMode = app.window.getByLabel("ACP mode");
     await expect(acpMode).toBeEnabled();
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
+    await expect(acpMode).toHaveAttribute("data-value", "default");
 
     await acpMode.click();
-    await app.window.getByRole("option", { name: "Default" }).click();
+    await app.window.getByRole("option", { name: "YOLO" }).click();
 
-    await expect(acpMode).toHaveAttribute("data-value", "default");
+    await expect(acpMode).toHaveAttribute("data-value", "yolo");
+    await expect(modeChip).toHaveText("Yolo");
+    await app.window.waitForTimeout(300);
+    await expect(acpMode).toHaveAttribute("data-value", "yolo");
+    await expect(modeChip).toHaveText("Yolo");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
   } finally {
     await app.close();
