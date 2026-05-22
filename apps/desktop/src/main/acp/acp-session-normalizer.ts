@@ -32,12 +32,13 @@ export class AcpSessionReplayNormalizer {
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     const id = `user:${params.turnId}`;
+    const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.currentTurnId = params.turnId;
     this.upsertMessage({
       id,
       role: "user",
-      text: params.prompt,
-      ...(params.parts?.length ? { parts: params.parts } : {}),
+      text: normalizedPrompt.text,
+      ...(normalizedPrompt.parts?.length ? { parts: normalizedPrompt.parts } : {}),
       createdAt,
     });
     this.status = "active";
@@ -355,6 +356,38 @@ function readMessageParts(
     return [];
   });
   return parts.length > 0 ? parts : undefined;
+}
+
+function normalizeUserPrompt(
+  prompt: string,
+  parts: AppServerThreadMessagePart[] | undefined,
+): { text: string; parts?: AppServerThreadMessagePart[] } {
+  if (parts?.length) {
+    return { text: prompt, parts };
+  }
+
+  const images: AppServerThreadImagePart[] = [];
+  const text = prompt
+    .replace(
+      /\s*\[Image:\s*(data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+)\]\s*/giu,
+      (_match, url: string) => {
+        images.push({ type: "image", url });
+        return "\n";
+      },
+    )
+    .trim();
+
+  if (images.length === 0) {
+    return { text: prompt };
+  }
+
+  return {
+    text,
+    parts: [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...images,
+    ],
+  };
 }
 
 function readToolOutput(record: Record<string, unknown>): string | undefined {

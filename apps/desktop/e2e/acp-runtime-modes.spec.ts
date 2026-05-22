@@ -401,6 +401,73 @@ async function seedAcpGeminiReplayNoise(homeRoot: string): Promise<void> {
   }
 }
 
+async function seedAcpGeminiLegacyImagePrompt(homeRoot: string): Promise<void> {
+  const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  const imageUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  try {
+    new AcpAgentStore(db).upsertInstalledAgent({
+      backendId: geminiBackendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      distributionKind: "local",
+      distributionSource: "node -e <mock-acp>",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "e2e-gemini",
+      installedAt: 1779400000000,
+      updatedAt: 1779400000000,
+      launchDescriptor: {
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: process.execPath,
+        args: ["-e", acpMockScript()],
+        env: {},
+      },
+    });
+    new AcpSessionStore(db).upsertSession({
+      backendId: geminiBackendId,
+      sessionId: "acp-legacy-image-thread",
+      title: "ACP Legacy Image Thread",
+      cwd: "/tmp/acp-legacy-image-thread",
+      createdAt: 1779400000000,
+      updatedAt: 1779400005000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 1779400000000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: `What's in this image?\n[Image: ${imageUrl}]`,
+            turnId: "pending:acp-legacy-image-thread:1779400000000",
+          },
+        },
+        {
+          receivedAt: 1779400001000,
+          update: {
+            kind: "agent_message_chunk",
+            content: "This image is a detailed screenshot.",
+          },
+        },
+        {
+          receivedAt: 1779400002000,
+          update: {
+            kind: "turn_finished",
+            turnId: "pending:acp-legacy-image-thread:1779400000000",
+          },
+        },
+      ],
+    });
+  } finally {
+    db.close();
+  }
+}
+
 test("renders ACP-native runtime modes and keeps live mode chrome in sync", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -463,6 +530,36 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
     await expect(acpMode).toHaveAttribute("data-value", "yolo");
     await expect(modeChip).toHaveText("Yolo");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("repairs legacy ACP image prompts before assistant replies", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/acp-runtime-modes/replay.fixture.json",
+    ),
+    preLaunchHook: seedAcpGeminiLegacyImagePrompt,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /ACP Legacy Image Thread/i })
+      .click();
+
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await expect(app.window.getByText("What's in this image?")).toHaveCount(1);
+    await expect(app.window.getByAltText("Transcript image")).toBeVisible();
+    await expect(app.window.getByText("This image is a detailed screenshot.")).toBeVisible();
+
+    const transcriptText = await transcript.innerText();
+    expect(transcriptText).not.toContain("data:image/");
+    const userIndex = transcriptText.indexOf("What's in this image?");
+    const assistantIndex = transcriptText.indexOf("This image is a detailed screenshot.");
+    expect(userIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeGreaterThan(userIndex);
   } finally {
     await app.close();
   }

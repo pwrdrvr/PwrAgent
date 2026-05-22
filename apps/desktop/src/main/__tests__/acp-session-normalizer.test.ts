@@ -186,6 +186,43 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastUserMessage).toBe("What's in this image?");
   });
 
+  it("repairs legacy data URL image markers in persisted ACP prompts", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const imageUrl = "data:image/png;base64,aGVsbG8=";
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: `What's in this image?\n[Image: ${imageUrl}]`,
+        turnId: "pending:session-1:1000",
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl },
+        ],
+      }),
+    ]);
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "What's in this image?",
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl },
+        ],
+      }),
+    ]);
+  });
+
   it("keeps repeated ACP turns in durable order", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
