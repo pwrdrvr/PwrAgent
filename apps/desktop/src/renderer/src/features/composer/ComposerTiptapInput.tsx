@@ -671,6 +671,9 @@ function insertPlainSpaceAtTextblockEnd(editor: TiptapEditor): boolean {
   if (currentPos.pos !== currentPos.end()) {
     return false;
   }
+  if (currentPos.parent.type.name === "codeBlock") {
+    return false;
+  }
 
   const currentMarks = editor.state.storedMarks ?? currentPos.marks();
   const textBeforeCursor = currentPos.parent.textBetween(

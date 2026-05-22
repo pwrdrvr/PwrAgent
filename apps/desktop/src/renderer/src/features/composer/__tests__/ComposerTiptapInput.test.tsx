@@ -173,6 +173,22 @@ describe("ComposerTiptapInput", () => {
     expect(onChange).not.toHaveBeenCalledWith(`${value} `, []);
   });
 
+  it("does not insert an escape space inside code blocks ending in paths", async () => {
+    const codeContent = "docs/brainstorms/example.md";
+    const value = `\`\`\`md\n${codeContent}\n\`\`\``;
+    const { container, onChange } = renderTiptapInput({ value });
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    setComposerSelection(textbox, "```md\n".length + codeContent.length);
+    fireEvent.keyDown(textbox, { key: "ArrowRight" });
+
+    expect(onChange).not.toHaveBeenCalledWith(`\`\`\`md\n${codeContent} \n\`\`\``, []);
+    expect(container.querySelector("pre code")).toHaveTextContent(codeContent);
+    expect(container.querySelector("pre code")).not.toHaveTextContent(
+      `${codeContent} `,
+    );
+  });
+
   // The `is-empty` class on `.composer-tiptap-input` is the contract
   // hook for empty-state styling — currently used for the placeholder
   // appearance, but reserved for any future CSS that distinguishes
