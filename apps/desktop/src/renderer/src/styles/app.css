@@ -5209,7 +5209,8 @@ textarea,
 }
 
 .thread-header__compact-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  width: fit-content;
   max-width: min(58vw, 520px);
   min-width: 0;
   margin: 0;
@@ -5224,8 +5225,8 @@ textarea,
 }
 
 .thread-header__title-button {
-  display: block;
-  width: 100%;
+  display: inline-block;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   padding: 0;
