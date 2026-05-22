@@ -2909,6 +2909,150 @@ describe("MessagingController", () => {
     });
   });
 
+  it("establishes a Telegram topic owner surface from /monitor topics", async () => {
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTopicChannel("100").conversation,
+      outcome: "ok" as const,
+      operations: [
+        { operation: "create_child" as const, supported: true },
+        { operation: "close" as const, supported: true },
+        { operation: "reopen" as const, supported: true },
+        { operation: "delete" as const, supported: false, missingPermission: "can_delete_messages" },
+      ],
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ getManagedConversationRights });
+    const event = buildTopicCommandEvent("/monitor topics", "100");
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(getManagedConversationRights).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: event.channel,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent topic owner",
+      body: expect.stringContaining("Known topics: 1"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "monitor:topics:cleanup" }),
+        expect.objectContaining({ id: "monitor:topics:fanout" }),
+      ]),
+    });
+    await expect(
+      harness.store.findManagedTopicByConversation({
+        channel: "telegram",
+        supergroupId: "-1001",
+        topicId: "100",
+      }),
+    ).resolves.toMatchObject({
+      source: "owned",
+      lifecycle: "open",
+    });
+  });
+
+  it("renders Telegram topic cleanup as dry-run proposals", async () => {
+    const closeManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: buildTopicChannel("200").conversation,
+      operation: "close" as const,
+      outcome: "updated" as const,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ closeManagedConversation });
+
+    await harness.controller.handleInboundEvent(buildTopicCommandEvent("/monitor topics", "100"));
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("hello", { channel: buildTopicChannel("200") }),
+    );
+    harness.delivered.splice(0);
+
+    await harness.controller.handleInboundEvent(
+      buildTopicCommandEvent("/monitor topics cleanup", "100"),
+    );
+
+    expect(closeManagedConversation).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Topic cleanup dry run",
+      body: expect.stringContaining("Dry run only"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringContaining("monitor:topics:approve:"),
+          label: expect.stringContaining("Close"),
+        }),
+      ]),
+    });
+
+    const approve = (harness.delivered.at(-1) as { actions?: Array<{ id: string }> })
+      .actions?.find((action) => action.id.includes(":200"));
+    if (!approve) throw new Error("approval action missing");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: approve.id, channel: buildTopicChannel("100") }),
+    );
+
+    expect(closeManagedConversation).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.store.findManagedTopicByConversation({
+        channel: "telegram",
+        supergroupId: "-1001",
+        topicId: "200",
+      }),
+    ).resolves.toMatchObject({
+      lifecycle: "closed",
+    });
+  });
+
+  it("fans monitor threads out to one Telegram topic per thread without duplicates", async () => {
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "300",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "Ops",
+        title: "Thread one",
+      },
+      outcome: "created" as const,
+      routingState: { opaque: { chatId: -1001, messageThreadId: 300 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ createManagedConversation });
+    const control = buildTopicCommandEvent("/monitor topics fanout", "100");
+
+    await harness.controller.handleInboundEvent(control);
+    await harness.controller.handleInboundEvent(control);
+
+    expect(createManagedConversation).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.store.findThreadTopicLink({
+        backend: "codex",
+        channel: "telegram",
+        supergroupId: "-1001",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      topicRecordId: "topic:telegram:-1001:300",
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildTopicChannel("300")),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      routingState: { opaque: { chatId: -1001, messageThreadId: 300 } },
+    });
+    expect(
+      harness.delivered.filter(
+        (intent) =>
+          intent.kind === "message" &&
+          intent.audit?.action === "topics.seed",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("does not create duplicate Monitor timers for repeated starts", async () => {
     vi.useFakeTimers();
     const harness = await createHarness();
@@ -7914,6 +8058,10 @@ async function createHarness(options?: {
   onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
+  createManagedConversation?: MessagingAdapter["createManagedConversation"];
+  closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
+  deleteManagedConversation?: MessagingAdapter["deleteManagedConversation"];
   materializeDirectoryLaunchpad?: NonNullable<
     MessagingBackendBridge["materializeDirectoryLaunchpad"]
   >;
@@ -7993,6 +8141,18 @@ async function createHarness(options?: {
     ),
     ...(options?.setConversationTitle
       ? { setConversationTitle: options.setConversationTitle }
+      : {}),
+    ...(options?.getManagedConversationRights
+      ? { getManagedConversationRights: options.getManagedConversationRights }
+      : {}),
+    ...(options?.createManagedConversation
+      ? { createManagedConversation: options.createManagedConversation }
+      : {}),
+    ...(options?.closeManagedConversation
+      ? { closeManagedConversation: options.closeManagedConversation }
+      : {}),
+    ...(options?.deleteManagedConversation
+      ? { deleteManagedConversation: options.deleteManagedConversation }
       : {}),
   };
   const getNavigationSnapshot = vi.fn(
@@ -8524,6 +8684,35 @@ function buildCommandEvent(
     args: parts.slice(1),
     rawText,
     receivedAt: 1000,
+  };
+}
+
+function buildTopicCommandEvent(
+  rawText: string,
+  topicId: string,
+): MessagingInboundEvent & { kind: "command" } {
+  return {
+    ...buildCommandEvent(rawText),
+    channel: buildTopicChannel(topicId),
+    routingState: {
+      opaque: {
+        chatId: -1001,
+        messageThreadId: Number(topicId),
+      },
+    },
+  };
+}
+
+function buildTopicChannel(topicId: string): MessagingInboundEvent["channel"] {
+  return {
+    channel: "telegram",
+    conversation: {
+      id: topicId,
+      kind: "topic",
+      parentId: "-1001",
+      parentTitle: "Ops",
+      title: topicId === "100" ? "PwrAgent" : `Topic ${topicId}`,
+    },
   };
 }
 

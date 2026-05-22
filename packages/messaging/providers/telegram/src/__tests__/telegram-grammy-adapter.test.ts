@@ -40,6 +40,23 @@ describe("adaptGrammyBot", () => {
       parse_mode: "HTML",
       text: "Choose a thread",
     });
+    await bot.api.createForumTopic({
+      chat_id: 42,
+      name: "Thread topic",
+    });
+    await bot.api.closeForumTopic({
+      chat_id: 42,
+      message_thread_id: 9,
+    });
+    await bot.api.reopenForumTopic({
+      chat_id: 42,
+      message_thread_id: 9,
+    });
+    await bot.api.deleteForumTopic({
+      chat_id: 42,
+      message_thread_id: 9,
+    });
+    await bot.api.getChatMember(42, 123);
     await bot.api.editMessageText({
       chat_id: 42,
       message_id: 7,
@@ -95,6 +112,14 @@ describe("adaptGrammyBot", () => {
         parse_mode: "HTML",
       },
     );
+    expect(grammyBot.api.createForumTopic).toHaveBeenCalledWith(
+      42,
+      "Thread topic",
+    );
+    expect(grammyBot.api.closeForumTopic).toHaveBeenCalledWith(42, 9);
+    expect(grammyBot.api.reopenForumTopic).toHaveBeenCalledWith(42, 9);
+    expect(grammyBot.api.deleteForumTopic).toHaveBeenCalledWith(42, 9);
+    expect(grammyBot.api.getChatMember).toHaveBeenCalledWith(42, 123);
     expect(grammyBot.api.editMessageText).toHaveBeenCalledWith(
       42,
       7,
@@ -479,10 +504,14 @@ describe("TelegramAdapter callback persistence", () => {
 function createGrammyBot(): TelegramGrammyBotLike & {
   api: {
     answerCallbackQuery: ReturnType<typeof vi.fn>;
+    closeForumTopic: ReturnType<typeof vi.fn>;
+    createForumTopic: ReturnType<typeof vi.fn>;
     deleteWebhook: ReturnType<typeof vi.fn>;
+    deleteForumTopic: ReturnType<typeof vi.fn>;
     editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
     getFile: ReturnType<typeof vi.fn>;
+    getChatMember: ReturnType<typeof vi.fn>;
     getMe: ReturnType<typeof vi.fn>;
     getWebhookInfo: ReturnType<typeof vi.fn>;
     pinChatMessage: ReturnType<typeof vi.fn>;
@@ -490,6 +519,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     sendDocument: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
+    reopenForumTopic: ReturnType<typeof vi.fn>;
     setMyCommands: ReturnType<typeof vi.fn>;
     unpinChatMessage: ReturnType<typeof vi.fn>;
   };
@@ -497,7 +527,13 @@ function createGrammyBot(): TelegramGrammyBotLike & {
   return {
     api: {
       answerCallbackQuery: vi.fn(async () => true),
+      closeForumTopic: vi.fn(async () => true),
+      createForumTopic: vi.fn(async (_chatId, name) => ({
+        message_thread_id: 44,
+        name,
+      })),
       deleteWebhook: vi.fn(async () => true),
+      deleteForumTopic: vi.fn(async () => true),
       editForumTopic: vi.fn(async () => true),
       editMessageText: vi.fn(
         async (
@@ -517,6 +553,11 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         }),
       ),
       getFile: vi.fn(async () => ({ file_path: "documents/file.txt" })),
+      getChatMember: vi.fn(async () => ({
+        can_delete_messages: true,
+        can_manage_topics: true,
+        status: "administrator" as const,
+      })),
       getMe: vi.fn(async () => ({ id: 123, is_bot: true, username: "TestBot" })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(
@@ -575,6 +616,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           message_id: 201,
         }),
       ),
+      reopenForumTopic: vi.fn(async () => true),
       setMyCommands: vi.fn(async () => true),
       unpinChatMessage: vi.fn(
         async (
@@ -610,7 +652,13 @@ function fakeCallbackStore(): MessagingCallbackHandleStore & {
 function fakeTelegramApi(): TelegramBotApi {
   return {
     answerCallbackQuery: async () => true,
+    closeForumTopic: async () => true,
+    createForumTopic: async (request) => ({
+      message_thread_id: 44,
+      name: request.name,
+    }),
     deleteWebhook: async () => true,
+    deleteForumTopic: async () => true,
     editForumTopic: async () => true,
     editMessageText: async (request) => ({
       chat: {
@@ -620,6 +668,11 @@ function fakeTelegramApi(): TelegramBotApi {
       message_id: request.message_id,
     }),
     getFile: async () => ({ file_path: "documents/file.txt" }),
+    getChatMember: async () => ({
+      can_delete_messages: true,
+      can_manage_topics: true,
+      status: "administrator",
+    }),
     getMe: async () => ({ id: 123, is_bot: true, username: "TestBot" }),
     getWebhookInfo: async () => ({ url: "" }),
     pinChatMessage: async () => true,
@@ -645,6 +698,7 @@ function fakeTelegramApi(): TelegramBotApi {
       },
       message_id: 201,
     }),
+    reopenForumTopic: async () => true,
     setMyCommands: async () => true,
     unpinChatMessage: async () => true,
   };

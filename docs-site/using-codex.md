@@ -732,6 +732,14 @@ Running `/monitor` in a conversation that already has a monitor
 binding refreshes the existing card rather than posting a duplicate.
 Each monitor-bound conversation hosts exactly one monitor card.
 
+In Telegram forum supergroups, `/monitor topics` establishes or adopts the
+current topic as PwrAgent's topic-owner surface. From that topic,
+`/monitor topics cleanup` posts a dry-run cleanup proposal for known or adopted
+topics, and `/monitor topics fanout` creates or reuses one topic for each
+selected recent thread. Telegram bots cannot list every historical topic in a
+supergroup, so cleanup only covers topics PwrAgent has created, observed, or you
+have adopted from inside the topic.
+
 The monitor binding survives PwrAgent restarts — on startup, every
 monitor-bound conversation resumes its refresh ticks automatically.
 The set of threads the card shows is derived live from your desktop

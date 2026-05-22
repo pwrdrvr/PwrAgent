@@ -17,6 +17,12 @@ import type {
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingManagedConversationActionRequest,
+  MessagingManagedConversationActionResult,
+  MessagingManagedConversationCreateRequest,
+  MessagingManagedConversationCreateResult,
+  MessagingManagedConversationRightsRequest,
+  MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -200,6 +206,29 @@ export type TelegramEditForumTopicRequest = {
   name: string;
 };
 
+export type TelegramCreateForumTopicRequest = {
+  chat_id: number | string;
+  name: string;
+};
+
+export type TelegramForumTopic = {
+  icon_color?: number;
+  icon_custom_emoji_id?: string;
+  message_thread_id: number;
+  name: string;
+};
+
+export type TelegramForumTopicActionRequest = {
+  chat_id: number | string;
+  message_thread_id: number;
+};
+
+export type TelegramChatMember = {
+  can_delete_messages?: boolean;
+  can_manage_topics?: boolean;
+  status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
+};
+
 export type TelegramSendPhotoRequest = {
   caption?: string;
   chat_id: number | string;
@@ -247,10 +276,18 @@ export type TelegramBotApi = {
     callback_query_id: string;
     text?: string;
   }): Promise<boolean>;
+  closeForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
+  createForumTopic(request: TelegramCreateForumTopicRequest): Promise<TelegramForumTopic>;
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+  deleteForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
+  getChatMember(
+    chatId: number | string,
+    userId: number | string,
+  ): Promise<TelegramChatMember>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
   getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
+  reopenForumTopic(request: TelegramForumTopicActionRequest): Promise<boolean>;
   getWebhookInfo(): Promise<{ url: string }>;
   getFile(fileId: string): Promise<{ file_path?: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
@@ -279,7 +316,19 @@ export type TelegramGrammyBotLike = {
       callbackQueryId: string,
       other?: { text?: string },
     ): Promise<boolean>;
+    closeForumTopic(
+      chatId: number | string,
+      messageThreadId: number,
+    ): Promise<boolean>;
+    createForumTopic(
+      chatId: number | string,
+      name: string,
+    ): Promise<TelegramForumTopic>;
     deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    deleteForumTopic(
+      chatId: number | string,
+      messageThreadId: number,
+    ): Promise<boolean>;
     editForumTopic(
       chatId: number | string,
       messageThreadId: number,
@@ -300,6 +349,14 @@ export type TelegramGrammyBotLike = {
     // match `TelegramBotApi.getMe` and avoid a structural narrowing
     // surprise if grammy ever loosens the type.
     getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
+    reopenForumTopic(
+      chatId: number | string,
+      messageThreadId: number,
+    ): Promise<boolean>;
+    getChatMember(
+      chatId: number | string,
+      userId: number | string,
+    ): Promise<TelegramChatMember>;
     getWebhookInfo(): Promise<{ url: string }>;
     getFile(fileId: string): Promise<{ file_path?: string }>;
     pinChatMessage(
@@ -371,6 +428,21 @@ export type TelegramProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  getManagedConversationRights(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult>;
+  createManagedConversation(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult>;
+  closeManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  reopenManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  deleteManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -1090,6 +1162,199 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         errorMessage: errorMessage(error),
         outcome: "failed",
         title,
+        updatedAt: this.now(),
+      };
+    }
+  }
+
+  async getManagedConversationRights(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult> {
+    const conversation = request.channel.conversation;
+    const target =
+      this.telegramStateFromChannel(conversation) ??
+      this.telegramStateFromSurface(request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Telegram topic management needs a supergroup or topic target.",
+        operations: unsupportedManagedTopicOperations("unsupported target"),
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      const me = await this.bot.api.getMe();
+      const member = await this.bot.api.getChatMember(target.chatId, me.id);
+      const isAdmin = member.status === "creator" || member.status === "administrator";
+      const canManageTopics =
+        member.status === "creator" || member.can_manage_topics === true;
+      const canDeleteMessages =
+        member.status === "creator" || member.can_delete_messages === true;
+      return {
+        channel: this.channel,
+        conversation,
+        operations: [
+          {
+            operation: "create_child",
+            supported: isAdmin && canManageTopics,
+            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            reason: isAdmin ? undefined : "bot is not an administrator",
+          },
+          {
+            operation: "close",
+            supported: isAdmin && canManageTopics,
+            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            reason: isAdmin ? undefined : "bot is not an administrator",
+          },
+          {
+            operation: "reopen",
+            supported: isAdmin && canManageTopics,
+            missingPermission: isAdmin && !canManageTopics ? "can_manage_topics" : undefined,
+            reason: isAdmin ? undefined : "bot is not an administrator",
+          },
+          {
+            operation: "delete",
+            supported: isAdmin && canDeleteMessages,
+            missingPermission: isAdmin && !canDeleteMessages ? "can_delete_messages" : undefined,
+            reason: isAdmin ? undefined : "bot is not an administrator",
+          },
+        ],
+        outcome: "ok",
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: errorMessage(error),
+        operations: unsupportedManagedTopicOperations(errorMessage(error)),
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+  }
+
+  async createManagedConversation(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult> {
+    const parent = request.parent.conversation;
+    const target =
+      this.telegramStateFromChannel(parent) ??
+      this.telegramStateFromSurface(request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        errorMessage: "Telegram topic creation needs a supergroup target.",
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    const title = sanitizeTelegramTopicName(request.title);
+    try {
+      const topic = await this.bot.api.createForumTopic({
+        chat_id: target.chatId,
+        name: title,
+      });
+      const conversation = {
+        id: String(topic.message_thread_id),
+        kind: "topic" as const,
+        parentId: String(target.chatId),
+        parentTitle: parent.kind === "topic" ? parent.parentTitle : parent.title,
+        title: topic.name,
+      };
+      this.topicNameCache.set(
+        this.topicCacheKey(target.chatId, topic.message_thread_id),
+        topic.name,
+      );
+      return {
+        channel: this.channel,
+        conversation,
+        outcome: "created",
+        routingState: {
+          opaque: {
+            chatId: target.chatId,
+            messageThreadId: topic.message_thread_id,
+          },
+        },
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+  }
+
+  async closeManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult> {
+    return await this.applyManagedTopicAction(request, "close");
+  }
+
+  async reopenManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult> {
+    return await this.applyManagedTopicAction(request, "reopen");
+  }
+
+  async deleteManagedConversation(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult> {
+    return await this.applyManagedTopicAction(request, "delete");
+  }
+
+  private async applyManagedTopicAction(
+    request: MessagingManagedConversationActionRequest,
+    operation: "close" | "reopen" | "delete",
+  ): Promise<MessagingManagedConversationActionResult> {
+    const conversation = request.channel.conversation;
+    const target =
+      this.telegramStateFromChannel(conversation) ??
+      this.telegramStateFromSurface(request.routingState);
+    if (conversation.kind !== "topic" || !target?.messageThreadId) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Telegram topic action needs a forum topic target.",
+        operation,
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      const payload = {
+        chat_id: target.chatId,
+        message_thread_id: target.messageThreadId,
+      };
+      if (operation === "close") {
+        await this.bot.api.closeForumTopic(payload);
+      } else if (operation === "reopen") {
+        await this.bot.api.reopenForumTopic(payload);
+      } else {
+        await this.bot.api.deleteForumTopic(payload);
+      }
+      return {
+        channel: this.channel,
+        conversation,
+        operation,
+        outcome: "updated",
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: errorMessage(error),
+        operation,
+        outcome: "failed",
         updatedAt: this.now(),
       };
     }
@@ -2372,6 +2637,19 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
   );
 }
 
+function unsupportedManagedTopicOperations(reason: string) {
+  return ([
+    "create_child",
+    "close",
+    "reopen",
+    "delete",
+  ] as const).map((operation) => ({
+    operation,
+    reason,
+    supported: false,
+  }));
+}
+
 function textForTelegramIntentWithoutFiles(intent: MessagingSurfaceIntent): string {
   if (intent.kind !== "message") {
     return textForTelegramIntent(intent);
@@ -2413,7 +2691,19 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         await bot.api.answerCallbackQuery(params.callback_query_id, {
           text: params.text,
         }),
+      closeForumTopic: async (request) =>
+        await bot.api.closeForumTopic(
+          request.chat_id,
+          request.message_thread_id,
+        ),
+      createForumTopic: async (request) =>
+        await bot.api.createForumTopic(request.chat_id, request.name),
       deleteWebhook: async (params) => await bot.api.deleteWebhook(params),
+      deleteForumTopic: async (request) =>
+        await bot.api.deleteForumTopic(
+          request.chat_id,
+          request.message_thread_id,
+        ),
       editForumTopic: async (request) =>
         await bot.api.editForumTopic(
           request.chat_id,
@@ -2422,6 +2712,8 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
             name: request.name,
           },
         ),
+      getChatMember: async (chatId, userId) =>
+        await bot.api.getChatMember(chatId, userId),
       editMessageText: async (request) => {
         const { chat_id, message_id, text, ...other } = request;
         return coerceTelegramSentMessage(
@@ -2430,6 +2722,11 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         );
       },
       getMe: async () => await bot.api.getMe(),
+      reopenForumTopic: async (request) =>
+        await bot.api.reopenForumTopic(
+          request.chat_id,
+          request.message_thread_id,
+        ),
       getWebhookInfo: async () => await bot.api.getWebhookInfo(),
       getFile: async (fileId) => await bot.api.getFile(fileId),
       pinChatMessage: async (request) => {

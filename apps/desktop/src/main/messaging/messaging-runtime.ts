@@ -39,6 +39,12 @@ import type {
   MessagingDeliveryScope,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingManagedConversationActionRequest,
+  MessagingManagedConversationActionResult,
+  MessagingManagedConversationCreateRequest,
+  MessagingManagedConversationCreateResult,
+  MessagingManagedConversationRightsRequest,
+  MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
@@ -96,6 +102,21 @@ export type DesktopMessagingAdapter = {
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  getManagedConversationRights?(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult>;
+  createManagedConversation?(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult>;
+  closeManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  reopenManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  deleteManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };

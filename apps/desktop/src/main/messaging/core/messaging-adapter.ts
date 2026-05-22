@@ -49,6 +49,12 @@ import type {
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingChannelRef,
   MessagingChannelKind,
+  MessagingManagedConversationActionRequest,
+  MessagingManagedConversationActionResult,
+  MessagingManagedConversationCreateRequest,
+  MessagingManagedConversationCreateResult,
+  MessagingManagedConversationRightsRequest,
+  MessagingManagedConversationRightsResult,
   MessagingReconnectInfo,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -91,6 +97,21 @@ export type MessagingAdapter = {
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  getManagedConversationRights?(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult>;
+  createManagedConversation?(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult>;
+  closeManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  reopenManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
+  deleteManagedConversation?(
+    request: MessagingManagedConversationActionRequest,
+  ): Promise<MessagingManagedConversationActionResult>;
 };
 
 export type MessagingBackendBridge = {
