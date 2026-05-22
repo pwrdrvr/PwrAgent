@@ -556,6 +556,7 @@ describe("messaging surface contract", () => {
     const browseSession = {
       id: "browse-1",
       allowedActorIds: ["telegram-user-1"],
+      backend: "codex",
       bindingId: "binding-1",
       channel: binding.channel,
       createdAt: 1000,

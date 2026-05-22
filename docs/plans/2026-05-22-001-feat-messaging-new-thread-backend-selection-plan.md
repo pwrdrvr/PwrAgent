@@ -126,7 +126,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add create-capable backend selection state and helpers**
+- [x] **Unit 1: Add create-capable backend selection state and helpers**
 
 **Goal:** Represent the pending new-thread backend explicitly and provide one predicate/resolver for usable backend selection.
 
