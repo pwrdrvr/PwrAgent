@@ -2482,6 +2482,98 @@ describe("MessagingController", () => {
     });
   });
 
+  it("includes enabled ACP backends in the messaging new-thread provider picker", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "codex",
+            label: "Codex",
+          }),
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            launchpadOptions: {
+              models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+              reasoningEfforts: [],
+              supportsFastMode: false,
+            },
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:backend" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select provider",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-backend",
+          label: "Gemini CLI",
+          value: { backend: "acp:gemini" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "acp:gemini" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Provider: Gemini CLI"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:backend",
+          label: "Provider: Gemini CLI",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "acp:gemini",
+        directoryKey: "directory:pwragent",
+      }),
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:gemini",
+        threadId: "new-thread-1",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toMatchObject({
+      backend: "acp:gemini",
+      threadId: "new-thread-1",
+    });
+  });
+
   it("does not fall back to another provider when the selected backend becomes unavailable before creation", async () => {
     const codexBackend = buildBackendSummary({
       kind: "codex",
