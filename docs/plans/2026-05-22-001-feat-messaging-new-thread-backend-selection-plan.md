@@ -285,7 +285,7 @@ flowchart TB
 **Verification:**
 - Messaging and desktop launchpad defaults stay aligned for pre-thread choices without changing existing thread preferences.
 
-- [ ] **Unit 5: Update documentation and lock cross-surface behavior with focused tests**
+- [x] **Unit 5: Update documentation and lock cross-surface behavior with focused tests**
 
 **Goal:** Document the new backend-selection behavior and ensure future backend additions do not regress the flow.
 

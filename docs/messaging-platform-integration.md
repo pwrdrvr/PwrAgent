@@ -39,6 +39,26 @@ stay in this repo:
 - Package boundary rules and `pnpm lint:boundaries` enforcement live in
   [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md).
 
+## New-thread backend selection smoke
+
+The operator-facing `/new` walkthrough lives in
+[`docs-site/using-codex.md`](../docs-site/using-codex.md), but
+contributors changing messaging workflow should keep these checks in
+sync with tests:
+
+- With one create-capable backend, `/new`, **New** from `/help`, and
+  `/resume --new` open the same project picker and Start Card without a
+  Provider button.
+- With multiple create-capable backends, the Start Card is seeded from
+  the desktop launchpad sticky backend and includes a Provider button.
+  Changing Provider re-renders Model, Reasoning, Fast, and related
+  controls from that backend's advertised capabilities.
+- Changing Provider or Model before the first prompt updates the
+  desktop launchpad sticky defaults through `updateDirectoryLaunchpad`.
+- Sending the first prompt creates the thread on the selected backend.
+  After binding, the status card reports the backend identity and does
+  not offer a Provider switch.
+
 ## Chat SDK decision (contributor context)
 
 Vercel Chat SDK is not the runtime boundary for PwrAgent. The current
