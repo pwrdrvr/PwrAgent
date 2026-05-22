@@ -164,7 +164,7 @@ flowchart TB
 **Verification:**
 - Messaging has an explicit place to store pending backend selection without breaking existing persisted sessions.
 
-- [ ] **Unit 2: Add backend preflight and picker to the new-thread messaging flow**
+- [x] **Unit 2: Add backend preflight and picker to the new-thread messaging flow**
 
 **Goal:** Make `/new`, New button, and `/resume --new` handle zero/one/multiple backend cases and expose backend switching before the first prompt.
 
@@ -205,7 +205,7 @@ flowchart TB
 **Verification:**
 - Users can see and change provider/backend before sending the first prompt when more than one backend can create threads.
 
-- [ ] **Unit 3: Normalize backend-specific options and create threads with the selected backend**
+- [x] **Unit 3: Normalize backend-specific options and create threads with the selected backend**
 
 **Goal:** Ensure model/reasoning/fast controls and thread creation use the pending backend rather than `navigation.launchpadDefaults.backend`.
 
@@ -248,7 +248,7 @@ flowchart TB
 **Verification:**
 - No new-thread creation path uses `navigation.launchpadDefaults.backend` after a session backend has been selected.
 
-- [ ] **Unit 4: Preserve launchpad sticky-default parity from messaging**
+- [x] **Unit 4: Preserve launchpad sticky-default parity from messaging**
 
 **Goal:** Make backend/model/settings changes in a pending messaging new-thread flow update the same sticky launchpad defaults used by desktop launchpads.
 
