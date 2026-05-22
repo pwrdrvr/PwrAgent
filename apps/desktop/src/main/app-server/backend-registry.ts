@@ -31,6 +31,7 @@ import {
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
   type BackendAcpRuntimeCapabilities,
+  type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
   type CodexEnvironmentOption,
@@ -1009,6 +1010,48 @@ function buildAcpLaunchpadOptions(
   return models.length > 0 ? { models } : undefined;
 }
 
+function findAcpModelConfigOption(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+) {
+  return runtimeCapabilities?.configOptions?.find(
+    (option) => option.category === "model",
+  );
+}
+
+function withAcpModelRuntimeSelection(params: {
+  runtime: BackendAcpSessionRuntimeState | undefined;
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined;
+  model: string | undefined;
+  now: number;
+}): BackendAcpSessionRuntimeState | undefined {
+  const model = params.model?.trim();
+  if (!model) {
+    return params.runtime;
+  }
+
+  const modelConfigOption = findAcpModelConfigOption(params.runtimeCapabilities);
+  const hasModelList = Array.isArray(params.runtimeCapabilities?.models?.availableModels);
+  const hasAdvertisedModel =
+    params.runtimeCapabilities?.models?.availableModels.some(
+      (option) => option.id === model,
+    ) ?? false;
+  const shouldSetCurrentModelId =
+    hasAdvertisedModel || (!modelConfigOption && !hasModelList);
+  const configValues = modelConfigOption
+    ? {
+        ...(params.runtime?.configValues ?? {}),
+        [modelConfigOption.id]: model,
+      }
+    : params.runtime?.configValues;
+
+  return {
+    ...params.runtime,
+    ...(shouldSetCurrentModelId ? { currentModelId: model } : {}),
+    ...(configValues ? { configValues } : {}),
+    updatedAt: Math.max(params.runtime?.updatedAt ?? 0, params.now),
+  };
+}
+
 function acpSessionToThreadSummary(
   session: AcpSessionMetadata,
   capabilities?: AcpAgentCapabilities,
@@ -1873,6 +1916,14 @@ function resolveModelSettingsFromOptions(
   settings: ModelSettings,
 ): ModelSettings {
   const models = options?.models ?? [];
+  if (models.length === 0 && isAcpBackendId(backend)) {
+    return {
+      model: settings.model,
+      reasoningEffort: undefined,
+      serviceTier: settings.serviceTier,
+      fastMode: undefined,
+    };
+  }
   const selectedModel =
     models.find((model) => model.id === settings.model) ??
     getDefaultModelOption(backend, options);
@@ -2003,7 +2054,7 @@ export class DesktopBackendRegistry {
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
-      source: "configOption" | "mode";
+      source: BackendAcpRuntimeOptionSource;
       optionId: string;
       value: string;
       queuedAt: number;
@@ -2973,7 +3024,6 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
       executionMode: params.executionMode,
       acpRuntime: params.acpRuntime,
-      title: "ACP session",
     });
     await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
     return { threadId: session.sessionId };
@@ -3085,6 +3135,14 @@ export class DesktopBackendRegistry {
         source: "mode",
         optionId: "mode",
         value: runtime.currentModeId,
+      });
+    }
+    if (runtime?.currentModelId) {
+      await client.setRuntimeOption?.({
+        sessionId,
+        source: "model",
+        optionId: "model",
+        value: runtime.currentModelId,
       });
     }
   }
@@ -3292,7 +3350,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId,
     threadId: string,
     queue: {
-      source: "configOption" | "mode";
+      source: BackendAcpRuntimeOptionSource;
       optionId: string;
       value: string;
       queueId: string;
@@ -3383,9 +3441,12 @@ export class DesktopBackendRegistry {
     ) {
       return runtime.currentModeId;
     }
-    return params.source === "configOption"
-      ? runtime?.configValues?.[params.optionId]
-      : runtime?.currentModeId;
+    if (params.source === "configOption") {
+      return runtime?.configValues?.[params.optionId];
+    }
+    return params.source === "mode"
+      ? runtime?.currentModeId
+      : runtime?.currentModelId;
   }
 
   private normalizeAcpRuntimeSelectionState(
@@ -3394,20 +3455,25 @@ export class DesktopBackendRegistry {
   ): BackendAcpSessionRuntimeState {
     const updatedAt = runtimeState?.updatedAt ?? Date.now();
     const selectedState: BackendAcpSessionRuntimeState =
-      params.source === "mode" ||
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+      params.source === "model"
         ? {
-            configValues:
-              params.source === "configOption"
-                ? { [params.optionId]: params.value }
-                : runtimeState?.configValues,
-            currentModeId: params.value,
+            currentModelId: params.value,
             updatedAt,
           }
-        : {
-            configValues: { [params.optionId]: params.value },
-            updatedAt,
-          };
+        : params.source === "mode" ||
+            this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+          ? {
+              configValues:
+                params.source === "configOption"
+                  ? { [params.optionId]: params.value }
+                  : runtimeState?.configValues,
+              currentModeId: params.value,
+              updatedAt,
+            }
+          : {
+              configValues: { [params.optionId]: params.value },
+              updatedAt,
+            };
     return mergeAcpRuntimeState(runtimeState, selectedState) ?? selectedState;
   }
 
@@ -3438,6 +3504,10 @@ export class DesktopBackendRegistry {
     if (params.source === "configOption") {
       const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
       const label = option?.values.find((item) => item.value === value)?.label;
+      return formatAcpRuntimeLabel(label ?? value);
+    }
+    if (params.source === "model") {
+      const label = runtime?.models?.availableModels.find((model) => model.id === value)?.label;
       return formatAcpRuntimeLabel(label ?? value);
     }
     const label = runtime?.modes?.availableModes.find((mode) => mode.id === value)?.label;
@@ -4107,10 +4177,19 @@ export class DesktopBackendRegistry {
           : buildLocalLinkedDirectory(cwd);
     }
 
+    const acpRuntimeWithModel = isAcpBackendId(backend)
+      ? withAcpModelRuntimeSelection({
+          runtime: request.acpRuntime,
+          runtimeCapabilities:
+            this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities,
+          model: modelSettings.model,
+          now: Date.now(),
+        })
+      : request.acpRuntime;
     const acpRuntime = sanitizeAcpRuntimeForExecutionMode({
       backend,
       executionMode,
-      runtime: request.acpRuntime,
+      runtime: acpRuntimeWithModel,
     });
 
     const result = isAcpBackendId(backend)
@@ -6286,7 +6365,9 @@ export class DesktopBackendRegistry {
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (isAcpBackendId(backend)) {
-      return undefined;
+      return buildAcpLaunchpadOptions(
+        this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities,
+      );
     }
 
     if (backend === "codex") {

@@ -4,6 +4,7 @@ import type {
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
+  BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -365,22 +366,17 @@ export class AcpAgentClient {
 
   async setRuntimeOption(params: {
     sessionId: string;
-    source: "configOption" | "mode";
+    source: BackendAcpRuntimeOptionSource;
     optionId: string;
     value: string;
   }): Promise<BackendAcpSessionRuntimeState | undefined> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const result =
-      params.source === "configOption"
-        ? await this.options.transport.request("session/set_config_option", {
-            sessionId: protocolSessionId,
-            configId: params.optionId,
-            value: params.value,
-          })
-        : await this.options.transport.request("session/set_mode", {
-            sessionId: protocolSessionId,
-            modeId: params.value,
-          });
+    const result = await this.setRuntimeOptionOnTransport({
+      protocolSessionId,
+      source: params.source,
+      optionId: params.optionId,
+      value: params.value,
+    });
     const now = this.now();
     const responseRuntimeCapabilities = normalizeAcpRuntimeCapabilities({
       value: result,
@@ -401,10 +397,15 @@ export class AcpAgentClient {
             configValues: { [params.optionId]: params.value },
             updatedAt: now,
           }
-        : {
-            currentModeId: params.value,
-            updatedAt: now,
-          };
+        : params.source === "mode"
+          ? {
+              currentModeId: params.value,
+              updatedAt: now,
+            }
+          : {
+              currentModelId: params.value,
+              updatedAt: now,
+            };
     const runtimeState = mergeAcpRuntimeState(
       requestedRuntimeState,
       responseRuntimeState ?? { updatedAt: now },
@@ -416,6 +417,33 @@ export class AcpAgentClient {
       runtimeState,
     });
     return runtimeState;
+  }
+
+  private async setRuntimeOptionOnTransport(params: {
+    protocolSessionId: string;
+    source: BackendAcpRuntimeOptionSource;
+    optionId: string;
+    value: string;
+  }): Promise<unknown> {
+    if (params.source === "configOption") {
+      return await this.options.transport.request("session/set_config_option", {
+        sessionId: params.protocolSessionId,
+        configId: params.optionId,
+        value: params.value,
+      });
+    }
+
+    if (params.source === "mode") {
+      return await this.options.transport.request("session/set_mode", {
+        sessionId: params.protocolSessionId,
+        modeId: params.value,
+      });
+    }
+
+    return await this.options.transport.request("session/set_model", {
+      sessionId: params.protocolSessionId,
+      modelId: params.value,
+    });
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {

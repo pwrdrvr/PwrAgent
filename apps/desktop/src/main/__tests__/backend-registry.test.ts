@@ -15,6 +15,7 @@ import type {
   AppServerReviewTarget,
   AppServerTurnInputItem,
   BackendAccountSummary,
+  BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendRateLimitSummary,
   NavigationLaunchpadDefaults,
@@ -2067,11 +2068,12 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(acpClient.initialize).toHaveBeenCalledTimes(1);
-    expect(acpClient.startSession).toHaveBeenCalledWith({
+    const startSessionParams = acpClient.startSession.mock.calls[0]?.[0];
+    expect(startSessionParams).toMatchObject({
       cwd: "/repo/project",
       executionMode: "full-access",
-      title: "ACP session",
     });
+    expect(startSessionParams).not.toHaveProperty("title");
     expect(startedPrompts).toEqual([
       {
         sessionId: "session-1",
@@ -2210,13 +2212,149 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("preserves ACP launchpad model selections when starting sessions", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        sessionId: string;
+        source: BackendAcpRuntimeOptionSource;
+        optionId: string;
+        value: string;
+      }): Promise<BackendAcpSessionRuntimeState> =>
+        params.source === "model"
+          ? { currentModelId: params.value, updatedAt: 1001 }
+          : { configValues: { [params.optionId]: params.value }, updatedAt: 1001 },
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: ThreadExecutionMode;
+        title?: string;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: params.title ?? "ACP session",
+          titleSource: params.title ? "explicit" : "fallback",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            models: {
+              currentModelId: "gemini-3-flash-preview",
+              availableModels: [
+                {
+                  id: "gemini-3-flash-preview",
+                  label: "Gemini 3 Flash Preview",
+                },
+                {
+                  id: "gemini-3-pro-preview",
+                  label: "Gemini 3 Pro Preview",
+                },
+              ],
+            },
+          },
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "default",
+        model: "gemini-3-pro-preview",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+    });
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/repo/project",
+        executionMode: "default",
+        acpRuntime: expect.objectContaining({
+          currentModelId: "gemini-3-pro-preview",
+        }),
+      }),
+    );
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-3-pro-preview",
+    });
+    expect(sessions[0]?.acpRuntime).toMatchObject({
+      currentModelId: "gemini-3-pro-preview",
+    });
+
+    await registry.close();
+  });
+
   it("does not send privileged Gemini ACP modes for default access sessions", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const setRuntimeOption = vi.fn(
       async (params: {
         sessionId: string;
-        source: "configOption" | "mode";
+        source: BackendAcpRuntimeOptionSource;
         optionId: string;
         value: string;
       }): Promise<BackendAcpSessionRuntimeState> =>

@@ -27,7 +27,7 @@ export type BackendAcpRuntimeDiscoveryStatus =
   | "stale"
   | "failed";
 
-export type BackendAcpRuntimeOptionSource = "configOption" | "mode";
+export type BackendAcpRuntimeOptionSource = "configOption" | "mode" | "model";
 
 export type BackendAcpRuntimeConfigOptionValue = {
   value: string;

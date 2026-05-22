@@ -429,6 +429,57 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("keeps requested ACP model when set_model returns no fresh runtime state", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "gemini-session",
+        models: {
+          currentModelId: "gemini-3-flash-preview",
+          availableModels: [
+            { modelId: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
+            { modelId: "gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
+          ],
+        },
+      },
+      "session/set_model": {},
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "model",
+        optionId: "model",
+        value: "gemini-3-pro-preview",
+      }),
+    ).resolves.toMatchObject({
+      currentModelId: "gemini-3-pro-preview",
+    });
+    expect(transport.requests.at(-1)).toEqual({
+      method: "session/set_model",
+      params: {
+        sessionId: "gemini-session",
+        modelId: "gemini-3-pro-preview",
+      },
+    });
+    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+      acpRuntime: {
+        currentModelId: "gemini-3-pro-preview",
+      },
+    });
+  });
+
   it("treats Gemini mode marker chunks as runtime updates instead of assistant text", async () => {
     const runtimeUpdates: unknown[] = [];
     const transport = new FakeAcpAgentTransport();
