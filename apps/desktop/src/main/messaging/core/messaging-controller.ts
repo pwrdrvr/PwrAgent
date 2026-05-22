@@ -3526,19 +3526,9 @@ export class MessagingController {
       : resolveNewThreadBackend(
           backendChoices.backends,
           snapshot.launchpadDefaults.backend,
-        );
+    );
     if (!selectedBackend) {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("new-thread-selected-backend-unavailable"),
-          createdAt: this.now(),
-          title: "Backend unavailable",
-          body: "The selected backend is no longer available to create a thread. Use /new to start again.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
+      await this.deliverSelectedNewThreadBackendUnavailable(event);
       return;
     }
     const effectiveSession = normalizeNewThreadSessionForBackend(
@@ -3775,6 +3765,22 @@ export class MessagingController {
     }
   }
 
+  private async deliverSelectedNewThreadBackendUnavailable(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("new-thread-selected-backend-unavailable"),
+        createdAt: this.now(),
+        title: "Backend unavailable",
+        body: "The selected backend is no longer available to create a thread. Use /new to start again.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
+  }
+
   private async presentNewThreadBranchPicker(
     session: MessagingBrowseSessionRecord,
     navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
@@ -4000,13 +4006,28 @@ export class MessagingController {
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const selectedBackend = await this.resolveNewThreadBackendForSession(
-      {
-        launchpadBackend: navigation.launchpadDefaults.backend,
-        session: bundle.session,
-      },
-      event,
-    );
+    let selectedBackend: BackendSummary | undefined;
+    if (bundle.session.backend) {
+      const backendChoices = await this.loadNewThreadBackendChoices(event);
+      if (!backendChoices) {
+        return;
+      }
+      selectedBackend = backendChoices.selectable.find(
+        (backend) => backend.kind === bundle.session.backend,
+      );
+      if (!selectedBackend) {
+        await this.deliverSelectedNewThreadBackendUnavailable(event);
+        return;
+      }
+    } else {
+      selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          session: bundle.session,
+        },
+        event,
+      );
+    }
     if (!selectedBackend) {
       return;
     }

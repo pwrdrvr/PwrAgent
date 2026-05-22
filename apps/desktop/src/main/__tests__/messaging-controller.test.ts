@@ -2448,6 +2448,63 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not fall back to another provider when the selected backend becomes unavailable before creation", async () => {
+    const codexBackend = buildBackendSummary({
+      kind: "codex",
+      label: "Codex",
+    });
+    const grokBackend = buildBackendSummary({
+      kind: "grok",
+      label: "Grok",
+      launchpadOptions: {
+        models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+        reasoningEfforts: ["low", "medium", "high"],
+        supportsFastMode: false,
+      },
+    });
+    let availableBackends = [codexBackend, grokBackend];
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: availableBackends,
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "grok" },
+      }),
+    );
+    availableBackends = [codexBackend];
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Fix bug with Grok"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Backend unavailable",
+      body: expect.stringContaining("selected backend is no longer available"),
+      recoverable: true,
+    });
+    expect(harness.materializeDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(harness.startThread).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toBeUndefined();
+  });
+
   it("updates sticky launchpad defaults when selecting a pending new-thread model", async () => {
     const harness = await createHarness();
 
