@@ -248,6 +248,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(setupComposerRule).toContain("min-height: 0;");
   });
 
+  it("keeps launchpad composer errors selectable and directly copyable", () => {
+    const errorRule = extractRuleBody(css, ".composer__meta--copyable");
+    const errorTextRule = extractRuleBody(css, ".composer__meta-text");
+    const copyButtonRule = extractRuleBody(
+      css,
+      ".transcript-copy-button--composer-error"
+    );
+
+    expect(errorRule).toContain("user-select: text;");
+    expect(errorTextRule).toContain("user-select: text;");
+    expect(copyButtonRule).toContain("opacity: 1;");
+  });
+
   it("reserves opened context rail width for the thread header status area", () => {
     expect(css).toMatch(
       /\.thread-view:has\(\.context-rail\.is-open\) \.thread-header\s*\{[\s\S]*?padding-right:\s*calc\(min\(var\(--context-rail-width, 380px\), calc\(100% - 32px\)\) \+ 12px\);[\s\S]*?\}/

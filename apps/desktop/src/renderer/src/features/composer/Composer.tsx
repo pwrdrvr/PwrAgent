@@ -54,6 +54,7 @@ import {
 } from "./ComposerInputTypes";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
+import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
   useComposerDraftStore,
   type ComposerDraftSnapshot,
@@ -1144,6 +1145,25 @@ function ComposerApplicationButton(props: {
       )}
       <span>{props.label}</span>
     </button>
+  );
+}
+
+function CopyableComposerError(props: {
+  desktopApi?: Pick<DesktopApi, "copyText">;
+  label: string;
+  text: string;
+}) {
+  return (
+    <div className="composer__meta composer__meta--error composer__meta--copyable">
+      <span className="composer__meta-text">{props.text}</span>
+      <TranscriptCopyButton
+        className="transcript-copy-button--composer-error"
+        copiedLabel="Copied error"
+        desktopApi={props.desktopApi}
+        label={props.label}
+        text={props.text}
+      />
+    </div>
   );
 }
 
@@ -4762,7 +4782,11 @@ export function Composer(props: ComposerProps) {
 
       {props.skillError ? <p className="composer__meta composer__meta--error">{props.skillError}</p> : null}
       {props.launchpadError ? (
-        <p className="composer__meta composer__meta--error">{props.launchpadError}</p>
+        <CopyableComposerError
+          desktopApi={props.desktopApi}
+          label="Copy launchpad error"
+          text={props.launchpadError}
+        />
       ) : null}
       {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
       {applicationOpenError ? (

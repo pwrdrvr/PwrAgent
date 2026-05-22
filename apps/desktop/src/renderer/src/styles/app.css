@@ -9650,6 +9650,28 @@ textarea,
   color: var(--danger-text);
 }
 
+.composer__meta--copyable {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.composer__meta-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.transcript-copy-button--composer-error {
+  flex: 0 0 auto;
+  opacity: 1;
+}
+
 .composer__actions {
   display: flex;
   align-items: center;
