@@ -68,6 +68,57 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("does not duplicate ACP user echo chunks for a locally recorded prompt", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "What is this project?",
+      turnId: "pending:session-1:1000",
+      receivedAt: 1000,
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "What is " },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "this project?" },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        id: "user:pending:session-1:1000",
+        role: "user",
+        text: "What is this project?",
+      }),
+    ]);
+  });
+
+  it("does not render Gemini mode marker chunks as assistant text", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "[MODE_UPDATE] yolo" },
+      },
+    });
+
+    expect(replay.entries).toEqual([]);
+    expect(replay.lastAssistantMessage).toBeUndefined();
+  });
+
   it("records local user prompts as active replay state", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -213,6 +264,56 @@ describe("AcpSessionReplayNormalizer", () => {
             kind: "read",
             label: "README.md",
             path: "/repo/README.md",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("merges ACP tool call updates into the original activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "run-pwd",
+        kind: "execute",
+        title: "pwd",
+        status: "pending",
+        command: "pwd",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "run-pwd",
+        kind: "execute",
+        status: "completed",
+        output: "/repo/project\n",
+        exitCode: 0,
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "run-pwd",
+        summary: "pwd",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "command",
+            label: "pwd",
+            command: {
+              displayCommand: "pwd",
+              rawCommand: "pwd",
+              output: "/repo/project\n",
+              exitCode: 0,
+            },
           }),
         ],
       }),

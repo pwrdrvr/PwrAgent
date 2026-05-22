@@ -111,6 +111,9 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
+    if (isModeUpdateMarker(text)) {
+      return;
+    }
     const id =
       readString(update.update, "messageId") ??
       `assistant:${this.currentTurnId ?? update.sessionId}`;
@@ -122,6 +125,18 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
+    if (this.currentTurnId) {
+      const localPromptId = `user:${this.currentTurnId}`;
+      if (this.messages.some((message) => message.id === localPromptId)) {
+        return;
+      }
+    }
+    const lastUserMessage = [...this.messages]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (lastUserMessage?.text.trim() === text.trim()) {
+      return;
+    }
     const id =
       readString(update.update, "messageId") ??
       readString(update.update, "id") ??
@@ -164,7 +179,18 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertActivity(activity: AppServerThreadActivityEntry): void {
-    this.upsertEntry(activity);
+    const index = this.entries.findIndex(
+      (existing): existing is AppServerThreadActivityEntry =>
+        existing.type === "activity" && existing.id === activity.id,
+    );
+    if (index === -1) {
+      this.entries.push(activity);
+      return;
+    }
+    this.entries[index] = mergeActivity(
+      this.entries[index] as AppServerThreadActivityEntry,
+      activity,
+    );
   }
 
   private upsertEntry(entry: AppServerThreadEntry): void {
@@ -277,6 +303,28 @@ function readString(
   return typeof value === "string" ? value : undefined;
 }
 
+function readNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readToolOutput(record: Record<string, unknown>): string | undefined {
+  return (
+    readString(record, "output") ??
+    readString(record, "stdout") ??
+    readString(record, "stderr") ??
+    readString(record, "result") ??
+    readContentText(record, "content")
+  );
+}
+
+function isModeUpdateMarker(text: string): boolean {
+  return /^\[MODE_UPDATE\]\s*[A-Za-z0-9_-]+\s*$/.test(text.trim());
+}
+
 function readContentText(
   record: Record<string, unknown>,
   key: string,
@@ -338,6 +386,8 @@ function toolActivity(
   const status = readString(update.update, "status");
   const path = readString(update.update, "path") ?? readFirstLocationPath(update.update);
   const command = readString(update.update, "command");
+  const output = readToolOutput(update.update);
+  const exitCode = readNumber(update.update, "exitCode");
   const detailKind = command
     ? "command"
     : toolDetailKind(readString(update.update, "kind"), path);
@@ -351,8 +401,11 @@ function toolActivity(
       status === "completed" ||
       status === "failed" ||
       status === "cancelled" ||
-      status === "in_progress"
-        ? status
+      status === "in_progress" ||
+      status === "pending"
+        ? status === "pending"
+          ? "in_progress"
+          : status
         : undefined,
     details: [
       {
@@ -360,10 +413,87 @@ function toolActivity(
         kind: detailKind,
         label,
         path,
-        command: command ? { displayCommand: command, rawCommand: command } : undefined,
+        command:
+          command || output !== undefined || exitCode !== undefined
+            ? {
+                displayCommand: command ?? label,
+                rawCommand: command,
+                output,
+                exitCode,
+              }
+            : undefined,
       },
     ],
   };
+}
+
+function mergeActivity(
+  existing: AppServerThreadActivityEntry,
+  incoming: AppServerThreadActivityEntry,
+): AppServerThreadActivityEntry {
+  const existingDetail = existing.details[0];
+  const incomingDetail = incoming.details[0];
+  return {
+    ...existing,
+    createdAt: existing.createdAt ?? incoming.createdAt,
+    summary: preferSpecificLabel(existing.summary, incoming.summary),
+    status: incoming.status ?? existing.status,
+    details:
+      existingDetail && incomingDetail
+        ? [
+            {
+              ...existingDetail,
+              ...incomingDetail,
+              label: preferSpecificLabel(existingDetail.label, incomingDetail.label),
+              path: incomingDetail.path ?? existingDetail.path,
+              command:
+                existingDetail.command || incomingDetail.command
+                  ? {
+                      displayCommand:
+                        existingDetail.command?.displayCommand ??
+                        incomingDetail.command?.displayCommand ??
+                        preferSpecificLabel(existingDetail.label, incomingDetail.label),
+                      rawCommand:
+                        existingDetail.command?.rawCommand ??
+                        incomingDetail.command?.rawCommand,
+                      output:
+                        incomingDetail.command?.output ??
+                        existingDetail.command?.output,
+                      exitCode:
+                        incomingDetail.command?.exitCode ??
+                        existingDetail.command?.exitCode,
+                      durationMs:
+                        incomingDetail.command?.durationMs ??
+                        existingDetail.command?.durationMs,
+                      cwd:
+                        incomingDetail.command?.cwd ??
+                        existingDetail.command?.cwd,
+                    }
+                  : undefined,
+              fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
+            },
+          ]
+        : incoming.details.length > 0
+          ? incoming.details
+          : existing.details,
+  };
+}
+
+function preferSpecificLabel(existing: string, incoming: string): string {
+  const generic = new Set([
+    "execute",
+    "read",
+    "write",
+    "search",
+    "list",
+    "tool call",
+    "tool_call",
+    "tool call update",
+    "tool_call_update",
+  ]);
+  return generic.has(existing.toLowerCase()) && incoming
+    ? incoming
+    : existing || incoming;
 }
 
 function toolDetailKind(

@@ -114,6 +114,7 @@ import { AcpAgentClient } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
 import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import { acpSessionRuntimeStateFromUpdate } from "../acp/acp-runtime-capabilities";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
@@ -1009,6 +1010,10 @@ function acpSessionToThreadSummary(
   const workspaceHandoffAvailable =
     !acpSessionHasConversationHistory(session) ||
     capabilities?.liveWorkspaceHandoff === true;
+  const acpRuntime = mergeAcpRuntimeState(
+    session.acpRuntime,
+    deriveAcpRuntimeStateFromTranscript(session),
+  );
   return {
     id: session.sessionId,
     title: session.title,
@@ -1028,7 +1033,7 @@ function acpSessionToThreadSummary(
       : [],
     source: session.backendId,
     executionMode: session.executionMode,
-    acpRuntime: session.acpRuntime,
+    acpRuntime,
     workspaceHandoff: workspaceHandoffAvailable
       ? { available: true }
       : {
@@ -1090,6 +1095,19 @@ function replayPersistedAcpTranscript(
     ...replay,
     threadStatus: acpSessionThreadStatus(session.status),
   };
+}
+
+function deriveAcpRuntimeStateFromTranscript(
+  session: AcpSessionMetadata,
+): BackendAcpSessionRuntimeState | undefined {
+  let runtimeState: BackendAcpSessionRuntimeState | undefined;
+  for (const item of session.transcriptUpdates ?? []) {
+    runtimeState = mergeAcpRuntimeState(
+      runtimeState,
+      acpSessionRuntimeStateFromUpdate(item.update, item.receivedAt),
+    );
+  }
+  return runtimeState;
 }
 
 function acpSessionThreadStatus(

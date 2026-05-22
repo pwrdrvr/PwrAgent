@@ -538,6 +538,13 @@ export class AcpAgentClient {
   ): AppServerThreadReplay {
     let replay = normalizer.replay();
     for (const item of metadata.transcriptUpdates ?? []) {
+      const runtimeState = acpSessionRuntimeStateFromUpdate(
+        item.update,
+        item.receivedAt,
+      );
+      if (runtimeState) {
+        this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
+      }
       this.updateSessionTitleFromAcpUpdate(
         metadata.sessionId,
         item.update,

@@ -178,6 +178,106 @@ async function seedAcpGeminiWithHistory(homeRoot: string): Promise<void> {
   }
 }
 
+async function seedAcpGeminiReplayNoise(homeRoot: string): Promise<void> {
+  const dbPath = path.join(homeRoot, ".pwragent/profiles/default/state/state.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  try {
+    new AcpAgentStore(db).upsertInstalledAgent({
+      backendId: geminiBackendId,
+      registryId: "gemini",
+      name: "Gemini CLI",
+      distributionKind: "local",
+      distributionSource: "node -e <mock-acp>",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "e2e-gemini",
+      installedAt: 1779400000000,
+      updatedAt: 1779400000000,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1779400000000,
+        checkedAt: 1779400000000,
+        source: "session-load",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "yolo", label: "YOLO" },
+          ],
+        },
+      },
+      launchDescriptor: {
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: process.execPath,
+        args: ["-e", acpMockScript()],
+        env: {},
+      },
+    });
+    new AcpSessionStore(db).upsertSession({
+      backendId: geminiBackendId,
+      sessionId: "acp-replay-noise-thread",
+      title: "ACP Replay Noise Thread",
+      cwd: "/tmp/acp-replay-noise-thread",
+      createdAt: 1779400000000,
+      updatedAt: 1779400005000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 1779400000000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "What is this project?",
+            turnId: "pending:acp-replay-noise-thread:1779400000000",
+          },
+        },
+        {
+          receivedAt: 1779400000100,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "What is " },
+          },
+        },
+        {
+          receivedAt: 1779400000200,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "this project?" },
+          },
+        },
+        {
+          receivedAt: 1779400000300,
+          update: {
+            kind: "agent_message_chunk",
+            content: "[MODE_UPDATE] yolo",
+          },
+        },
+        {
+          receivedAt: 1779400000400,
+          update: {
+            kind: "agent_message_chunk",
+            content: "It is PwrAgent.",
+          },
+        },
+        {
+          receivedAt: 1779400000500,
+          update: {
+            kind: "turn_finished",
+            turnId: "pending:acp-replay-noise-thread:1779400000000",
+          },
+        },
+      ],
+    });
+  } finally {
+    db.close();
+  }
+}
+
 test("renders ACP-native runtime modes and keeps live mode chrome in sync", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -209,6 +309,31 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     await expect(acpMode).toHaveAttribute("data-value", "yolo");
     await expect(modeChip).toHaveText("Yolo");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("normalizes ACP replay noise without duplicate prompts or mode marker text", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/acp-runtime-modes/replay.fixture.json",
+    ),
+    preLaunchHook: seedAcpGeminiReplayNoise,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /ACP Replay Noise Thread/i })
+      .click();
+
+    await expect(app.window.getByText("What is this project?")).toHaveCount(1);
+    await expect(app.window.getByText("It is PwrAgent.")).toBeVisible();
+    await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
+
+    const modeChip = app.window.locator(".thread-header .chip--mode");
+    await expect(modeChip).toHaveText("Yolo");
   } finally {
     await app.close();
   }

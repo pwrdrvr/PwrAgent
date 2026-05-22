@@ -408,6 +408,45 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("hydrates persisted Gemini mode markers as runtime state without transcript noise", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "agent_message_chunk",
+            content: "[MODE_UPDATE] yolo",
+          },
+        },
+      ],
+    });
+
+    await client.initialize();
+    const replay = client.readReplay("session-1");
+
+    expect(replay.entries).toEqual([]);
+    expect(store.getSession("acp:gemini", "session-1")).toMatchObject({
+      acpRuntime: {
+        currentModeId: "yolo",
+      },
+    });
+  });
+
   it("hydrates persisted ACP transcripts once without replaying session/load as new messages", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
