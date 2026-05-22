@@ -726,6 +726,79 @@ describe("AcpAgentClient", () => {
     expect(transport.closeCount).toBe(1);
   });
 
+  it("persists ACP topic updates replayed during session/load", async () => {
+    let notificationListener:
+      | ((method: string, params: Record<string, unknown>) => void)
+      | undefined;
+    const titleUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport: {
+        request: async (method) => {
+          if (method === "initialize") {
+            return { protocolVersion: 1 };
+          }
+          if (method === "session/load") {
+            notificationListener?.("session/update", {
+              sessionId: "session-1",
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId: "update_topic_1",
+                kind: "think",
+                title: 'Update topic to: "Loaded Project Research"',
+                status: "completed",
+              },
+            });
+            notificationListener?.("session/update", {
+              sessionId: "session-1",
+              update: {
+                kind: "agent_message_chunk",
+                content: "Suppressed replay response",
+              },
+            });
+            return {};
+          }
+          return {};
+        },
+        notify: async () => undefined,
+        close: async () => undefined,
+        onNotification: (listener) => {
+          notificationListener = listener;
+          return () => {
+            if (notificationListener === listener) {
+              notificationListener = undefined;
+            }
+          };
+        },
+      },
+      now: () => 1000,
+      onSessionUpdate: ({ title }) => {
+        if (title) {
+          titleUpdates.push(title);
+        }
+      },
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 950,
+      executionMode: "default",
+      status: "idle",
+    });
+
+    expect(replay.lastAssistantMessage).toBeUndefined();
+    expect(store.getSession("acp:gemini", "session-1")?.title).toBe(
+      "Loaded Project Research",
+    );
+    expect(titleUpdates).toEqual(["Loaded Project Research"]);
+  });
+
   it("reloads stored sessions at a changed cwd before prompting", async () => {
     const transport = new FakeAcpAgentTransport();
     const updateEvents: string[] = [];

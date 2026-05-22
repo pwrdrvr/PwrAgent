@@ -417,13 +417,22 @@ export class AcpAgentClient {
       ).catch(() => undefined);
       return;
     }
+    const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     if (this.suppressLoadReplaySessions.has(protocolSessionId)) {
+      if (title) {
+        void this.notifySessionUpdate({
+          sessionId,
+          replay: this.normalizerFor(sessionId).replay(),
+          title,
+          turnId: activeTurn?.turnId,
+          update,
+        });
+      }
       return;
     }
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
       activeTurn.assistantText += readUpdateText(update) ?? "";
     }
-    const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
       update,
