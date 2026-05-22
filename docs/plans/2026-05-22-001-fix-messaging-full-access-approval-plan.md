@@ -1,7 +1,7 @@
 ---
 title: fix: Stabilize Messaging Full Access Approval
 type: fix
-status: active
+status: completed
 date: 2026-05-22
 origin: docs/brainstorms/2026-05-22-messaging-full-access-approval-requirements.md
 deepened: 2026-05-22
@@ -191,7 +191,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Classify New-Thread Full Access Provenance**
+- [x] **Unit 1: Classify New-Thread Full Access Provenance**
 
 **Goal:** Distinguish inherited Full Access defaults from explicit messaging
 escalation before deciding whether the warning gate applies.
@@ -255,7 +255,7 @@ security-sensitive permission routing.
 - Existing explicit escalation tests continue to pass without weakening policy
   controls.
 
-- [ ] **Unit 2: Make Full Access Warning Presentation Causal and Long-Lived**
+- [x] **Unit 2: Make Full Access Warning Presentation Causal and Long-Lived**
 
 **Goal:** Ensure Full Access warnings update only the surface that caused them
 and remain actionable beyond the short browse-picker TTL.
@@ -317,7 +317,7 @@ and remain actionable beyond the short browse-picker TTL.
 - Visible warning buttons are not tied to the short picker TTL.
 - Stale cases no longer use resume-browser invalid-selection copy.
 
-- [ ] **Unit 3: Preserve Submitted Prompt Continuation for Explicit Warning Path**
+- [x] **Unit 3: Preserve Submitted Prompt Continuation for Explicit Warning Path**
 
 **Goal:** If a first prompt is blocked by a legitimate explicit Full Access
 warning, approval should continue the submitted prompt during the active
@@ -367,7 +367,7 @@ controller lifetime instead of returning to the ready card and losing context.
   approval within one running controller.
 - Missing in-memory prompt state fails explicitly and safely.
 
-- [ ] **Unit 4: Tighten Regression Coverage and Policy Invariants**
+- [x] **Unit 4: Tighten Regression Coverage and Policy Invariants**
 
 **Goal:** Lock the security and UX invariants across controller, store, and
 callback lifecycle tests so future changes do not reintroduce the stale warning
