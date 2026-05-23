@@ -521,6 +521,7 @@ class MockBackendClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     executionMode?: "default" | "full-access";
+    cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
     model?: string;
@@ -6607,12 +6608,22 @@ command = "pnpm dev"
       turnId: "turn-1",
     });
     expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
       ephemeral: true,
+      sandbox: "workspace-write",
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
       threadId: "thread-1",
-      input: [{ type: "text", text: "Run the scheduled task." }],
     });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Default Access (default)."),
+      },
+      { type: "text", text: "Run the scheduled task." },
+    ]);
     expect(events).toEqual([
       {
         backend: "codex",
@@ -6625,6 +6636,7 @@ command = "pnpm dev"
             automationRunId: "run-1",
             automationName: "Check email",
             status: "started",
+            backendThreadId: "thread-1",
             turnId: "turn-1",
           },
         },
@@ -6683,6 +6695,109 @@ command = "pnpm dev"
           },
         },
       },
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("runs headless automations with the Agent thread's full access settings", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread-1": {
+            backend: "codex",
+            threadId: "agent-thread-1",
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/tmp/full-access-project",
+                label: "Full Access Project",
+                path: "/tmp/full-access-project",
+                kind: "local",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check weather",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Check whether it will rain." }],
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/full-access-project",
+      ephemeral: true,
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/full-access-project",
+      sandbox: "danger-full-access",
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Full Access (full-access)."),
+      },
+      { type: "text", text: "Check whether it will rain." },
+    ]);
+
+    await registry.close();
+  });
+
+  it("auto-cancels approval requests from headless automations", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check weather",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Check whether it will rain." }],
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "call-1",
+        requestId: "approval-1",
+        command: "curl https://example.com",
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({ decision: "cancel" });
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "thread/turnQueue/updated",
     ]);
 
     unsubscribe();

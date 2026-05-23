@@ -936,6 +936,53 @@ function buildTurnStartReservationKey(
   return `${backend}\u0000${threadId}`;
 }
 
+function prependAutomationRuntimeContext(params: {
+  approvalPolicy: string;
+  executionMode: ThreadExecutionMode;
+  input: AppServerTurnInputItem[];
+  label: string;
+  sandbox: string;
+}): AppServerTurnInputItem[] {
+  const accessNote =
+    params.sandbox === "danger-full-access"
+      ? "Shell commands may run with Full Access. Permission prompts are unavailable; do not ask the user for approval."
+      : "Shell commands run in the Default Access workspace-write sandbox. Shell network access is unavailable, and permission prompts are unavailable; do not ask the user for approval or wait for one. Use built-in hosted tools such as web search when available, or return a concise failure explaining that the automation needs Full Access.";
+
+  return [
+    {
+      type: "text",
+      text: [
+        "Automation runtime context:",
+        `Access mode: ${params.label} (${params.executionMode}).`,
+        `Approval policy: ${params.approvalPolicy}.`,
+        `Sandbox: ${params.sandbox}.`,
+        accessNote,
+      ].join("\n"),
+    },
+    ...params.input,
+  ];
+}
+
+function buildHeadlessAutomationRequestCancelResponse(
+  request: AppServerPendingRequestNotification,
+): Record<string, unknown> {
+  if (request.method === "mcpServer/elicitation/request") {
+    return {
+      action: "cancel",
+      content: null,
+      _meta: null,
+    };
+  }
+
+  if (request.method === "item/tool/requestUserInput") {
+    return {
+      answers: {},
+    };
+  }
+
+  return { decision: "cancel" };
+}
+
 function readStatusType(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || !("type" in value)) {
     return undefined;
@@ -1666,6 +1713,7 @@ export class DesktopBackendRegistry {
       agentThreadId: string;
       automationName?: string;
       automationRunId: string;
+      executionMode: ThreadExecutionMode;
       queueEntryId: string;
     }
   >();
@@ -2083,39 +2131,80 @@ export class DesktopBackendRegistry {
     turnId: string;
   }> {
     this.assertNotBootstrap("startAutomationHeadlessTurn");
-    const client = this.getClient(params.backend);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.agentThreadId,
+    });
+    const executionMode = overlay?.executionMode ?? "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const approvalPolicy = "never";
+    const sandbox = modeSettings.sandbox;
+    const modelSettings = await this.resolveModelSettings(params.backend, {
+      model: overlay?.model,
+      serviceTier: overlay?.serviceTier,
+      reasoningEffort: overlay?.reasoningEffort,
+      fastMode: params.backend === "codex" ? overlay?.fastMode : undefined,
+    });
+    const cwd =
+      params.backend === "codex"
+        ? await this.resolveCodexThreadTurnCwd(params.agentThreadId, overlay)
+        : undefined;
+    const input = prependAutomationRuntimeContext({
+      approvalPolicy,
+      executionMode,
+      input: params.input,
+      label: modeSettings.label,
+      sandbox,
+    });
+    const client = this.getClient(params.backend, executionMode);
     const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
     backendRegistryLog.info("starting automation headless thread", {
       agentThreadId: params.agentThreadId,
       automationName: params.automationName,
       automationRunId: params.automationRunId,
+      approvalPolicy,
       backend: params.backend,
+      cwd,
+      executionMode,
       ephemeral: params.backend === "codex",
-      inputItemCount: params.input.length,
+      inputItemCount: input.length,
       promptLength: submittedPrompt?.length ?? 0,
+      sandbox,
     });
     const headlessThread = await client.startThread({
+      ...(cwd ? { cwd } : {}),
+      ...modelSettings,
+      approvalPolicy,
       ephemeral: params.backend === "codex" ? true : undefined,
+      sandbox,
     });
     backendRegistryLog.info("automation headless thread created", {
       agentThreadId: params.agentThreadId,
       automationName: params.automationName,
       automationRunId: params.automationRunId,
       backend: params.backend,
+      executionMode,
       headlessThreadId: headlessThread.threadId,
     });
     const turn = await client.startTurn({
       threadId: headlessThread.threadId,
-      input: params.input,
+      input,
+      ...(cwd ? { cwd } : {}),
+      ...modelSettings,
+      approvalPolicy,
+      sandbox,
     });
     const queueEntryId = `headless:${params.automationRunId}`;
     backendRegistryLog.info("automation headless turn started", {
       agentThreadId: params.agentThreadId,
       automationName: params.automationName,
       automationRunId: params.automationRunId,
+      approvalPolicy,
       backend: params.backend,
+      executionMode,
       headlessThreadId: turn.threadId,
       queueEntryId,
+      sandbox,
       turnId: turn.turnId,
     });
     this.headlessAutomationTurns.set(
@@ -2124,6 +2213,7 @@ export class DesktopBackendRegistry {
         agentThreadId: params.agentThreadId,
         automationName: params.automationName,
         automationRunId: params.automationRunId,
+        executionMode,
         queueEntryId,
       },
     );
@@ -6016,6 +6106,47 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private findHeadlessAutomationTurnForRequest(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+  ):
+    | {
+        agentThreadId: string;
+        automationName?: string;
+        automationRunId: string;
+        executionMode: ThreadExecutionMode;
+        queueEntryId: string;
+      }
+    | undefined {
+    const turnId = request.params.turnId?.trim();
+    if (turnId) {
+      return this.headlessAutomationTurns.get(
+        buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
+      );
+    }
+
+    const keyPrefix = `${backend}:${request.params.threadId}:`;
+    let match:
+      | {
+          agentThreadId: string;
+          automationName?: string;
+          automationRunId: string;
+          executionMode: ThreadExecutionMode;
+          queueEntryId: string;
+        }
+      | undefined;
+    for (const [key, run] of this.headlessAutomationTurns.entries()) {
+      if (!key.startsWith(keyPrefix)) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = run;
+    }
+    return match;
+  }
+
   private getClient(
     backend: AppServerBackendKind,
     // executionMode is retained for documentation symmetry with callers
@@ -7681,6 +7812,26 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
+      backend,
+      request,
+    );
+    if (headlessAutomation) {
+      backendRegistryLog.warn("auto-cancelling headless automation server request", {
+        agentThreadId: headlessAutomation.agentThreadId,
+        automationName: headlessAutomation.automationName,
+        automationRunId: headlessAutomation.automationRunId,
+        backend,
+        executionMode: headlessAutomation.executionMode,
+        method: request.method,
+        queueEntryId: headlessAutomation.queueEntryId,
+        requestId: request.params.requestId,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      });
+      return buildHeadlessAutomationRequestCancelResponse(request);
+    }
+
     const key = buildPendingRequestKey({
       backend,
       threadId: request.params.threadId,
