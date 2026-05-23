@@ -4534,6 +4534,64 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("keeps environment options available after switching a launchpad to ACP", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-env-options-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+
+[setup]
+script = "pnpm install"
+`,
+      "utf8",
+    );
+
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.ensureDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        directoryKind: "directory",
+        directoryLabel: "repo",
+        directoryPath: root,
+      });
+
+      const updated = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: {
+          backend: "acp:kimi" as AcpBackendId,
+          codexEnvironmentId: undefined,
+          codexEnvironmentExecutionTarget: undefined,
+          codexEnvironmentSetupEnabled: false,
+          codexEnvironmentActionId: undefined,
+        },
+      });
+
+      expect(updated.launchpad.backend).toBe("acp:kimi");
+      expect(updated.launchpad.codexEnvironmentOptions).toMatchObject([
+        {
+          id: "environment",
+          name: "Repo Environment",
+          setupScript: "pnpm install",
+        },
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes empty saved directory drafts from current launchpad work mode defaults", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({

@@ -88,13 +88,6 @@ export function withCodexEnvironmentOptions(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
 ): NavigationLaunchpadDraft {
-  if (launchpad.backend !== "codex") {
-    return {
-      ...launchpad,
-      codexEnvironmentOptions: [],
-    };
-  }
-
   if (options.length === 0) {
     return {
       ...launchpad,

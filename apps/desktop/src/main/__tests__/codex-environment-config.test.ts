@@ -2,9 +2,11 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { NavigationLaunchpadDraft } from "@pwragent/shared";
 import {
   listCodexEnvironmentOptions,
   parseCodexEnvironmentToml,
+  withCodexEnvironmentOptions,
 } from "../app-server/codex-environment-config";
 
 describe("codex environment config", () => {
@@ -115,5 +117,40 @@ command = "pnpm dev:alt"
         command: "pnpm dev:alt",
       },
     ]);
+  });
+
+  it("hydrates environment options for ACP launchpads", () => {
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "repo",
+      directoryPath: "/repo",
+      backend: "acp:kimi",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    expect(
+      withCodexEnvironmentOptions(launchpad, [
+        {
+          id: "environment",
+          name: "Repo Environment",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          setupScript: "pnpm install",
+          actions: [],
+        },
+      ]),
+    ).toMatchObject({
+      backend: "acp:kimi",
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "Repo Environment",
+        },
+      ],
+    });
   });
 });
