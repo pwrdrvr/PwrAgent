@@ -60,12 +60,24 @@ export function renderAutomationOutputForMessaging(
     return undefined;
   }
   if (outputDecision?.kind === "post_card") {
+    return renderAutomationDecisionForMessaging(outputDecision);
+  }
+  return trimmed;
+}
+
+export function renderAutomationDecisionForMessaging(
+  outputDecision: AutomationRunOutputDecision | undefined,
+): string | undefined {
+  if (outputDecision?.kind === "quiet") {
+    return undefined;
+  }
+  if (outputDecision?.kind === "post_card") {
     return [outputDecision.summary, outputDecision.details]
       .map((part) => part?.trim())
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
   }
-  return trimmed;
+  return undefined;
 }
 
 function firstLine(value: string | undefined): string | undefined {

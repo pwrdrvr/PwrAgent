@@ -1,3 +1,5 @@
+import type { AutomationRunOutputDecision } from "./automations";
+
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
@@ -1009,6 +1011,9 @@ export type AppServerNotification =
       params: {
         threadId: string;
         automationId: string;
+        automationName?: string;
+        finalText?: string;
+        outputDecision?: AutomationRunOutputDecision;
         runId: string;
         status:
           | "pending"

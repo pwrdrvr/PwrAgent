@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
+  AppServerBackendKind,
   AppServerNotification,
+  AppServerTurnInputItem,
   AutomationDetail,
   AutomationIdRequest,
   AutomationMutationResponse,
@@ -87,6 +89,9 @@ export class DesktopAutomationService {
         this.handleRegistryEvent(event),
       );
     }
+    this.options.registry.setAutomationTurnContextProvider?.((params) =>
+      this.buildThreadAutomationContextInput(params),
+    );
     this.scheduler.start();
   }
 
@@ -94,6 +99,7 @@ export class DesktopAutomationService {
     this.scheduler.stop();
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    this.options.registry.setAutomationTurnContextProvider?.(null);
   }
 
   list(request: ListAutomationsRequest = {}): ListAutomationsResponse {
@@ -485,6 +491,7 @@ export class DesktopAutomationService {
         ),
       });
     }
+    const artifact = this.options.store.getRunArtifact(run.id);
     await this.options.registry.publishLocalEvent({
       backend: params.backend,
       notification: {
@@ -492,6 +499,9 @@ export class DesktopAutomationService {
         params: {
           threadId: automation?.threadId ?? params.threadId,
           automationId: run.automationId,
+          automationName: automation?.name,
+          finalText: artifact?.finalText,
+          outputDecision: artifact?.outputDecision,
           runId: params.runId,
           status: run.status,
         },
@@ -616,6 +626,62 @@ export class DesktopAutomationService {
         ]),
     );
     this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
+  }
+
+  private buildThreadAutomationContextInput(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): AppServerTurnInputItem[] {
+    const lines = this.options.store
+      .listRunsForThread({
+        backend: params.backend,
+        threadId: params.threadId,
+        limit: 10,
+      })
+      .filter((run) =>
+        run.status === "completed" ||
+        run.status === "failed" ||
+        run.status === "cancelled" ||
+        run.status === "skipped"
+      )
+      .slice(0, 5)
+      .map((run) => {
+        const automation = this.options.store.getAutomation(run.automationId, {
+          includeDeleted: true,
+        });
+        const artifact = this.options.store.getRunArtifact(run.id);
+        const when =
+          run.completedAt ??
+          run.startedAt ??
+          run.queuedAt ??
+          run.scheduledFor;
+        const summary =
+          artifact?.outputDecision?.summary ??
+          firstLine(artifact?.finalText) ??
+          artifact?.errorMessage ??
+          run.errorMessage ??
+          run.status;
+        const details = artifact?.outputDecision?.details;
+        return [
+          `- ${automation?.name ?? "Automation"} (${run.status}${when ? ` at ${new Date(when).toISOString()}` : ""}): ${summary}`,
+          details ? `  Details: ${details}` : undefined,
+        ]
+          .filter((line): line is string => Boolean(line))
+          .join("\n");
+      });
+    if (lines.length === 0) {
+      return [];
+    }
+    return [
+      {
+        type: "text",
+        text: [
+          "Recent automation updates for this Agent thread:",
+          ...lines,
+          "These automation updates were delivered out of band and may not appear in the Codex transcript above. Use them when answering questions about automation runs.",
+        ].join("\n"),
+      },
+    ];
   }
 
   private assertValidSchedule(schedule: CreateAutomationRequest["schedule"]): void {

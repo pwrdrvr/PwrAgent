@@ -1850,6 +1850,48 @@ describe("MessagingController", () => {
     expect(JSON.stringify(harness.delivered)).not.toContain('"decision":"post_card"');
   });
 
+  it("delivers recovered automation run updates to messaging surfaces", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          threadId: "thread-1",
+          automationId: "automation-1",
+          automationName: "Check weather",
+          runId: "run-1",
+          status: "completed",
+          outputDecision: {
+            kind: "post_card",
+            summary: "Rain is already underway.",
+            details: "Hourly forecast shows rain through at least 5 AM.",
+          },
+          finalText: JSON.stringify({
+            decision: "post_card",
+            summary: "Rain is already underway.",
+            details: "Hourly forecast shows rain through at least 5 AM.",
+          }),
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Rain is already underway.\n\nHourly forecast shows rain through at least 5 AM.",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("suppresses structured automation quiet output in messaging", async () => {
     const harness = await createHarness();
     await bindThread(harness);

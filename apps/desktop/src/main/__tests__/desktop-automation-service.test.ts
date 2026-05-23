@@ -82,6 +82,7 @@ beforeEach(() => {
     publishLocalEvent: vi.fn(async (event: AgentEvent) => {
       publishedEvents.push(event);
     }),
+    setAutomationTurnContextProvider: vi.fn(),
   } as unknown as DesktopBackendRegistry;
 });
 
@@ -399,12 +400,12 @@ describe("DesktopAutomationService", () => {
       backend: "codex",
       notification: {
         method: "automation/run/updated",
-        params: {
+        params: expect.objectContaining({
           automationId: created.automation.id,
           runId: runNow.run.id,
           status: "completed",
           threadId: "thread-1",
-        },
+        }),
       },
     });
     expect(store.getRunArtifact(runNow.run.id)).toMatchObject({
@@ -614,12 +615,12 @@ describe("DesktopAutomationService", () => {
       backend: "codex",
       notification: {
         method: "automation/run/updated",
-        params: {
+        params: expect.objectContaining({
           automationId: created.automation.id,
           runId: "run-weather",
           status: "completed",
           threadId: "thread-1",
-        },
+        }),
       },
     });
   });
@@ -709,14 +710,70 @@ describe("DesktopAutomationService", () => {
       backend: "codex",
       notification: {
         method: "automation/run/updated",
-        params: {
+        params: expect.objectContaining({
           automationId: created.automation.id,
           runId: "run-weather",
           status: "completed",
           threadId: "thread-1",
-        },
+        }),
       },
     });
+  });
+
+  it("registers recent automation results as Agent turn context", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    const run = store.createRun({
+      id: "run-context",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 1_000,
+      now: 1_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunTerminal({
+      runId: "run-context",
+      status: "completed",
+      completedAt: 2_000,
+      now: 2_000,
+    });
+    store.upsertRunArtifact({
+      runId: "run-context",
+      status: "completed",
+      outputDecision: {
+        kind: "post_card",
+        summary: "Rain is already underway.",
+        details: "Hourly forecast shows rain through at least 5 AM.",
+      },
+    });
+
+    const provider = vi.mocked(registry.setAutomationTurnContextProvider).mock
+      .calls.at(-1)?.[0];
+    expect(provider).toBeDefined();
+    const context = await provider!({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(context).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Rain is already underway."),
+      },
+    ]);
+    expect(context[0]?.type === "text" ? context[0].text : "").toContain(
+      "Hourly forecast shows rain through at least 5 AM.",
+    );
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {

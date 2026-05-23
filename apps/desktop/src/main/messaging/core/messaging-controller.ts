@@ -10,6 +10,7 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  AutomationRunOutputDecision,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
@@ -173,7 +174,10 @@ import {
   type MessagingTurnAdmissionBundle,
   type MessagingTurnInputEvent,
 } from "./messaging-turn-admission.js";
-import { renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
+import {
+  renderAutomationDecisionForMessaging,
+  renderAutomationOutputForMessaging,
+} from "../../automations/automation-output-decision.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
@@ -513,6 +517,7 @@ export class MessagingController {
     AutomationTurnMessagingContext
   >();
   private readonly deliveredAutomationStartKeys = new Set<string>();
+  private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -702,6 +707,18 @@ export class MessagingController {
         threadId,
       }),
     );
+    const automationRunUpdate = automationRunUpdateForBackendEvent(event);
+    if (automationRunUpdate) {
+      await this.handleAutomationRunUpdated({
+        bindings,
+        event,
+        runId: automationRunUpdate.runId,
+        finalText: automationRunUpdate.finalText,
+        outputDecision: automationRunUpdate.outputDecision,
+        status: automationRunUpdate.status,
+      });
+      return;
+    }
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {
       if (
@@ -724,6 +741,7 @@ export class MessagingController {
         turnQueueUpdate.turnId
       ) {
         await this.handleAutomationTurnTerminal({
+          automationRunId: turnQueueUpdate.automationRunId,
           backend: event.backend,
           bindings,
           event,
@@ -8425,6 +8443,7 @@ export class MessagingController {
   }
 
   private async handleAutomationTurnTerminal(params: {
+    automationRunId?: string;
     backend: AppServerBackendKind;
     bindings: MessagingBindingRecord[];
     event: AgentEvent;
@@ -8433,12 +8452,70 @@ export class MessagingController {
     turnId: string;
   }): Promise<void> {
     for (const binding of params.bindings) {
-      const messageText = renderAutomationOutputForMessaging(params.finalText);
-      if (messageText) {
-        await this.deliverAssistantMessage(messageText, params.event, binding);
-      }
+      await this.deliverAutomationFinalMessageOnce({
+        binding,
+        event: params.event,
+        finalText: params.finalText,
+        keyParts: [
+          binding.id,
+          params.automationRunId ?? params.threadId,
+          params.automationRunId ? "automation-run" : params.turnId,
+        ],
+      });
     }
     this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
+  }
+
+  private async handleAutomationRunUpdated(params: {
+    bindings: MessagingBindingRecord[];
+    event: AgentEvent;
+    finalText?: string;
+    outputDecision?: AutomationRunOutputDecision;
+    runId: string;
+    status: string;
+  }): Promise<void> {
+    if (
+      params.status !== "completed" &&
+      params.status !== "failed" &&
+      params.status !== "cancelled" &&
+      params.status !== "skipped"
+    ) {
+      return;
+    }
+    for (const binding of params.bindings) {
+      await this.deliverAutomationFinalMessageOnce({
+        binding,
+        event: params.event,
+        finalText: params.finalText,
+        keyParts: [binding.id, params.runId, "automation-run"],
+        outputDecision: params.outputDecision,
+      });
+    }
+  }
+
+  private async deliverAutomationFinalMessageOnce(params: {
+    binding: MessagingBindingRecord;
+    event: AgentEvent;
+    finalText?: string;
+    keyParts: string[];
+    outputDecision?: AutomationRunOutputDecision;
+  }): Promise<void> {
+    if (params.outputDecision?.kind === "quiet") {
+      return;
+    }
+    const messageText =
+      params.outputDecision?.kind === "post_card"
+        ? renderAutomationDecisionForMessaging(params.outputDecision)
+        : renderAutomationOutputForMessaging(params.finalText);
+    if (!messageText) {
+      return;
+    }
+    const key = [...params.keyParts, messageText].join("\0");
+    if (this.deliveredAutomationFinalKeys.has(key)) {
+      return;
+    }
+    this.deliveredAutomationFinalKeys.add(key);
+    await this.deliverAssistantMessage(messageText, params.event, params.binding);
   }
 
   private rememberAutomationTurn(params: {
@@ -10428,6 +10505,44 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     status: typeof params.status === "string" ? params.status : undefined,
     turnId: typeof params.turnId === "string" ? params.turnId : undefined,
   };
+}
+
+function automationRunUpdateForBackendEvent(event: AgentEvent): {
+  finalText?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  runId: string;
+  status: string;
+} | undefined {
+  if (event.notification.method !== "automation/run/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    finalText?: unknown;
+    outputDecision?: unknown;
+    runId?: unknown;
+    status?: unknown;
+  };
+  if (typeof params.runId !== "string" || typeof params.status !== "string") {
+    return undefined;
+  }
+  return {
+    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
+    outputDecision: isAutomationRunOutputDecision(params.outputDecision)
+      ? params.outputDecision
+      : undefined,
+    runId: params.runId,
+    status: params.status,
+  };
+}
+
+function isAutomationRunOutputDecision(
+  value: unknown,
+): value is AutomationRunOutputDecision {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const kind = (value as { kind?: unknown }).kind;
+  return kind === "post_card" || kind === "quiet" || kind === "parse_failed";
 }
 
 function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {

@@ -6946,6 +6946,41 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("prepends automation context to non-automation thread turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    registry.setAutomationTurnContextProvider(() => [
+      {
+        type: "text",
+        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
+      },
+    ]);
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "What happened?" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
+      },
+      { type: "text", text: "What happened?" },
+    ]);
+
+    await registry.close();
+  });
+
   it("emits server request resolution when a pending request is submitted externally", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
