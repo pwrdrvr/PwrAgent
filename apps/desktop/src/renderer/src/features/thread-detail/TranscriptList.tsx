@@ -97,7 +97,6 @@ type SyncScrollStateOptions = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
-type ScrollBottomMode = "instant" | "smooth";
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
@@ -480,7 +479,7 @@ export function TranscriptList(props: TranscriptListProps) {
     }
   }, [captureSnapshot]);
 
-  const scrollToBottom = useCallback((mode: ScrollBottomMode = "instant") => {
+  const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) {
       return;
@@ -492,22 +491,6 @@ export function TranscriptList(props: TranscriptListProps) {
     // as "stay pinned" rather than "user navigated away from the
     // bottom."
     isGluedToBottomRef.current = true;
-
-    if (mode === "smooth" && typeof container.scrollTo === "function") {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth",
-      });
-      // Smooth scrolls converge asynchronously — let the scroll events
-      // fired during the animation drive syncScrollState. Calling
-      // syncScrollState here would observe the pre-animation scrollTop
-      // and immediately flip isGluedToBottomRef back to false, which
-      // surfaces the "Jump to latest" button mid-animation and, worse,
-      // un-glues the transcript so subsequent content growth never
-      // re-anchors.
-      return;
-    }
-
     container.scrollTop = container.scrollHeight;
     syncScrollState();
 
@@ -555,7 +538,7 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     appliedReglueRequestKeyRef.current = props.reglueRequestKey;
-    scrollToBottom("instant");
+    scrollToBottom();
   }, [props.reglueRequestKey, scrollToBottom]);
 
   useEffect(() => {
@@ -592,23 +575,25 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.lastMessageId === lastMessageId &&
         previousSnapshot.firstMessageId !== firstMessageId
     );
+    // hasAppendedMessages and hasGrownWhileFollowingBottom both intentionally
+    // skip the firstMessageId equality check that earlier versions of this
+    // file enforced. That check broke the common navigation-preview →
+    // full-transcript transition: the preview entries (lastUserMessage /
+    // lastAssistantMessage from the navigation snapshot) have synthetic ids
+    // that don't match any entries in the eventual readThread response, so
+    // when the real transcript replaced them BOTH firstMessageId and
+    // lastMessageId changed and neither branch fired — leaving the user
+    // staring at the top of a thread they expected to open at the bottom.
+    // hasPrependedMessages already covers the only case the equality check
+    // was protecting against (older messages paginated in at the top).
     const hasAppendedMessages = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
-        previousSnapshot.firstMessageId === firstMessageId &&
+        !hasPrependedMessages &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
           previousSnapshot.itemCount < visibleItemCount)
     );
-    // Re-anchor whenever a glued, same-thread render grows. The previous
-    // implementation also required firstMessageId equality, which broke
-    // the common navigation-preview → full-transcript transition: the
-    // preview entries (lastUserMessage / lastAssistantMessage from the
-    // navigation snapshot) have synthetic ids that don't match any
-    // entries in the eventual readThread response, so when the real
-    // transcript replaced them the renderer concluded "neither prepend,
-    // append, nor grow" and left scrollTop=0, stranding the user at the
-    // top of a thread they expected to open at the bottom.
     const hasGrownWhileFollowingBottom = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
@@ -627,7 +612,7 @@ export function TranscriptList(props: TranscriptListProps) {
           restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX;
         if (shouldRestoreBottom) {
           isGluedToBottomRef.current = true;
-          scrollToBottom("instant");
+          scrollToBottom();
         } else {
           isGluedToBottomRef.current = false;
           container.scrollTop = Math.min(
@@ -640,21 +625,21 @@ export function TranscriptList(props: TranscriptListProps) {
         return;
       }
 
-      scrollToBottom("instant");
+      scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       shouldScrollToBottomRef.current ||
       !previousSnapshot
     ) {
-      scrollToBottom("instant");
+      scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       isGluedToBottomRef.current &&
       (hasAppendedMessages || hasGrownWhileFollowingBottom)
     ) {
-      scrollToBottom("instant");
+      scrollToBottom();
       return;
     }
 
@@ -682,7 +667,7 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const observer = new ResizeObserver(() => {
       if (isGluedToBottomRef.current) {
-        scrollToBottom("instant");
+        scrollToBottom();
       } else {
         syncScrollState({ preserveGlueOnResize: true });
       }
@@ -906,7 +891,7 @@ export function TranscriptList(props: TranscriptListProps) {
           type="button"
           aria-label="Jump to latest message"
           onClick={() => {
-            scrollToBottom("instant");
+            scrollToBottom();
           }}
         >
           <span className="transcript-list__scroll-bottom-icon" aria-hidden="true" />

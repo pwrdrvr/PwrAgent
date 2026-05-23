@@ -2682,6 +2682,10 @@ describe("TranscriptList", () => {
     );
 
     const list = screen.getByRole("list");
+    // No assertion about the initial scrollTop here: jsdom doesn't clamp
+    // scrollTop to (scrollHeight - clientHeight) the way Chromium does,
+    // so the value after the preview-only render isn't meaningful. The
+    // contract under test is the AFTER-rerender scrollTop, below.
 
     scrollHeight = 4800;
     rerender(
