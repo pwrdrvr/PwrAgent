@@ -17,6 +17,8 @@
  *       --sign-stage-only:
  *                       sign/notarize/publish an already prepared release-stage
  *                       without reinstalling dependencies or rerunning tests
+ *       --linux       : build/package a Linux .deb for the current native
+ *                       architecture (or PWRAGENT_LINUX_ARCH=x64|arm64)
  *       (default)     : build + package signed/notarized + publish to the
  *                       channel configured in electron-builder.yml
  *   - In CI, the App Store Connect API key may arrive as a base64-encoded
@@ -27,7 +29,17 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -43,9 +55,14 @@ const dryrun = args.includes("--dryrun");
 const noPublish = args.includes("--no-publish");
 const prepareOnly = args.includes("--prepare-only");
 const signStageOnly = args.includes("--sign-stage-only");
+const linux = args.includes("--linux");
 
 if (prepareOnly && signStageOnly) {
   throw new Error("--prepare-only and --sign-stage-only cannot be combined");
+}
+
+if (linux && signStageOnly) {
+  throw new Error("--linux cannot be combined with --sign-stage-only");
 }
 
 const publish = !dryrun && !noPublish && !prepareOnly;
@@ -77,6 +94,85 @@ function electronBuilderCli() {
     throw new Error(`electron-builder CLI is missing at ${cli}; signing jobs must use the prepared release artifact`);
   }
   return cli;
+}
+
+function currentLinuxBuilderArch() {
+  const requested = process.env.PWRAGENT_LINUX_ARCH?.trim();
+  const arch = requested || (process.arch === "arm64" ? "arm64" : "x64");
+  if (arch !== "x64" && arch !== "arm64") {
+    throw new Error(
+      `PWRAGENT_LINUX_ARCH must be x64 or arm64 when set; got ${JSON.stringify(arch)}`,
+    );
+  }
+  return arch;
+}
+
+function findLinuxUnpackedDir(distDir) {
+  const candidates = readdirSync(distDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^linux(?:-.+)?-unpacked$/.test(entry.name))
+    .map((entry) => join(distDir, entry.name))
+    .sort();
+  if (candidates.length === 0) {
+    throw new Error(`No linux unpacked app directory found under ${distDir}`);
+  }
+  return candidates[0];
+}
+
+function linuxDebArtifacts(distDir) {
+  const artifacts = readdirSync(distDir)
+    .filter((entry) => entry.endsWith(".deb"))
+    .sort()
+    .map((name) => ({ name, path: join(distDir, name) }));
+  if (artifacts.length === 0) {
+    throw new Error(`No .deb artifacts found under ${distDir}`);
+  }
+  return artifacts;
+}
+
+function createLinuxStableAliases(distDir) {
+  const aliases = [];
+  for (const { name, path } of linuxDebArtifacts(distDir)) {
+    let alias;
+    if (name.includes("-linux-x64.deb") || name.includes("-linux-amd64.deb")) {
+      alias = "PwrAgent-linux-x64.deb";
+    } else if (name.includes("-linux-arm64.deb")) {
+      alias = "PwrAgent-linux-arm64.deb";
+    }
+    if (!alias || name === alias) {
+      continue;
+    }
+    const aliasPath = join(distDir, alias);
+    copyFileSync(path, aliasPath);
+    aliases.push(aliasPath);
+  }
+  return aliases;
+}
+
+function writeLinuxChecksums(distDir) {
+  const artifacts = linuxDebArtifacts(distDir);
+  const lines = artifacts
+    .map(({ name, path }) => {
+      const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+      return `${digest}  ${name}`;
+    })
+    .join("\n");
+  const checksumPath = join(distDir, "SHA256SUMS");
+  writeFileSync(checksumPath, `${lines}\n`);
+  return checksumPath;
+}
+
+function publishLinuxArtifacts(distDir) {
+  const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME;
+  if (!tag) {
+    throw new Error("RELEASE_TAG or GITHUB_REF_NAME is required to publish Linux artifacts");
+  }
+  const artifacts = linuxDebArtifacts(distDir).map((artifact) => artifact.name);
+  const checksum = "SHA256SUMS";
+  runChecked(
+    "gh",
+    ["release", "upload", tag, ...artifacts, checksum, "--repo", "pwrdrvr/PwrAgent", "--clobber"],
+    { cwd: distDir },
+  );
 }
 
 // 1. Decode CI-provided Apple API key (if present) to a real .p8 file.
@@ -147,19 +243,26 @@ if (!signStageOnly) {
 }
 
 // 5. electron-builder.
-step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
-maybeDecodeAppleApiKey();
-const builderArgs = ["--mac", "--universal"];
-if (dryrun) {
-  // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
-  // electron-builder modifies the Electron binary to set fuses, which
-  // invalidates its original code signature. Without re-signing, macOS
-  // kills the app with SIGKILL (Code Signature Invalid) on launch.
-  // Ad-hoc signing creates a locally valid signature that satisfies
-  // macOS page validation without requiring a Developer ID certificate.
-  builderArgs.push("--config.mac.identity=-", "--config.mac.notarize=false");
+const builderArgs = [];
+if (linux) {
+  const linuxArch = currentLinuxBuilderArch();
+  step(`electron-builder --linux deb --${linuxArch} (no builder publish)`);
+  builderArgs.push("--linux", "deb", `--${linuxArch}`, "--publish=never");
+} else {
+  step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
+  maybeDecodeAppleApiKey();
+  builderArgs.push("--mac", "--universal");
+  if (dryrun) {
+    // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
+    // electron-builder modifies the Electron binary to set fuses, which
+    // invalidates its original code signature. Without re-signing, macOS
+    // kills the app with SIGKILL (Code Signature Invalid) on launch.
+    // Ad-hoc signing creates a locally valid signature that satisfies
+    // macOS page validation without requiring a Developer ID certificate.
+    builderArgs.push("--config.mac.identity=-", "--config.mac.notarize=false");
+  }
+  builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 }
-builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
 runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
 
@@ -167,7 +270,35 @@ runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the
 //    bundle. Exclusions are configured in electron-builder.yml; this script
 //    is a belt-and-braces guard against accidental edits to that YAML.
-const builtApp = join(stageDir, "dist", "mac-universal", "PwrAgent.app");
+const dist = join(stageDir, "dist");
+
+if (linux) {
+  const builtApp = findLinuxUnpackedDir(dist);
+
+  step("verify packaged asar contents");
+  runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+
+  step("write stable Linux download aliases");
+  const aliases = createLinuxStableAliases(dist);
+  for (const alias of aliases) {
+    console.log(`  alias: ${alias}`);
+  }
+
+  step("write Linux checksums");
+  const checksumPath = writeLinuxChecksums(dist);
+  console.log(`  checksum: ${checksumPath}`);
+
+  if (publish) {
+    step("publish Linux artifacts");
+    publishLinuxArtifacts(dist);
+  }
+
+  step("done");
+  console.log(`  artifacts: ${dist}`);
+  process.exit(0);
+}
+
+const builtApp = join(dist, "mac-universal", "PwrAgent.app");
 
 step("verify universal binary slices");
 runChecked("lipo", [
@@ -197,5 +328,4 @@ step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
 
 step("done");
-const dist = join(stageDir, "dist");
 console.log(`  artifacts: ${dist}`);

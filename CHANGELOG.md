@@ -8,6 +8,7 @@
 - Added the first-run onboarding wizard, including theme/density setup, Codex profile model selection, optional messaging setup, paired PwrAgent/Codex profile provisioning, and replay support.
 - Added bootstrap-mode startup so fresh installs and missing profile names no longer silently create or bind to the operator's existing `default` Codex profile.
 - Added onboarding prerequisite checks for Codex CLI discovery and xAI API key setup, with Linux discovery paths and deferred Codex spawning while onboarding is incomplete.
+- Added Linux Debian package release support for x64/amd64 and arm64, with manual package upgrades, desktop launcher integration, and published checksums.
 - Fixed onboarding messaging setup so provider secrets start the runtime during the wizard, pairing can be approved inline, and Telegram pairing is more tolerant of whitespace and typo cases.
 - Fixed queued-turn release handling to prevent duplicate queued turn submission.
 - Fixed Linux auxiliary window menus and Linux onboarding startup behavior.

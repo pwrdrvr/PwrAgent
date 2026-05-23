@@ -83,6 +83,17 @@ function developmentUpdateCheckResult(): AppUpdateCheckResult {
   };
 }
 
+function linuxManualPackageUpdateCheckResult(): AppUpdateCheckResult {
+  return {
+    status: "skipped",
+    reason: "Linux builds are updated by installing a newer package.",
+  };
+}
+
+function linuxManualPackageUpdatesEnabled(): boolean {
+  return process.platform === "linux";
+}
+
 function preserveDownloadedStatus(nextStatus: AppUpdateStatus): boolean {
   if (updateStatus.status !== "downloaded") {
     return false;
@@ -114,6 +125,12 @@ export async function checkForAppUpdatesNow(
 ): Promise<AppUpdateCheckResult> {
   if (!productionUpdatesEnabled()) {
     const result = developmentUpdateCheckResult();
+    setUpdateStatus(result);
+    return result;
+  }
+
+  if (linuxManualPackageUpdatesEnabled()) {
+    const result = linuxManualPackageUpdateCheckResult();
     setUpdateStatus(result);
     return result;
   }
@@ -321,6 +338,12 @@ export function initAutoUpdater(): void {
   if (!productionUpdatesEnabled()) {
     log.info("auto-update disabled in non-production");
     setUpdateStatus(developmentUpdateCheckResult());
+    return;
+  }
+
+  if (linuxManualPackageUpdatesEnabled()) {
+    log.info("auto-update disabled for Linux package builds");
+    setUpdateStatus(linuxManualPackageUpdateCheckResult());
     return;
   }
 

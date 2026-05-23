@@ -106,6 +106,25 @@ mac:
     - target: zip
       arch: [universal]
 
+linux:
+  icon: build/icon.png
+  executableName: pwragent
+  category: Development
+  maintainer: PwrDrvr LLC
+  synopsis: Thread-centric coding agent desktop app
+  description: PwrAgent is a thread-centric coding agent desktop app for local development workflows.
+  artifactName: "${productName}-${version}-linux-${arch}.${ext}"
+  target:
+    - target: deb
+      arch: [x64, arm64]
+  desktop:
+    Name: PwrAgent
+    Comment: Thread-centric coding agent desktop app
+    StartupWMClass: PwrAgent
+
+deb:
+  priority: optional
+
 dmg:
   background: build/dmg-background.png
   window:
@@ -123,12 +142,12 @@ dmg:
       path: /Applications
   writeUpdateInfo: false
 
-# Phase 1: github provider against the existing private pwrdrvr/PwrAgent repo.
-# Phase 2 channel migration is documented in
-# docs/desktop-distribution-phase-2-runbook.md.
+# GitHub Releases are the canonical desktop artifact channel. macOS update
+# metadata is still produced by electron-builder; Linux .deb packages are
+# uploaded by the release workflow after native packaging and checksum creation.
 publish:
   provider: github
   owner: pwrdrvr
   repo: PwrAgent
-  private: true
+  private: false
   releaseType: release

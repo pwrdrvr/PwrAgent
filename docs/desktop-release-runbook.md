@@ -7,7 +7,8 @@
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
 universal Apple Silicon + Intel binaries; distribution is outside the Mac App
 Store via signed/notarized DMG with auto-update through `electron-updater`
-against the private `pwrdrvr/PwrAgent` repo.
+against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship as manual
+Debian packages for x64/amd64 and arm64.
 
 ---
 
@@ -81,8 +82,8 @@ git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
 git push origin v1.0.0-alpha.7
 ```
 
-The `Release Desktop (macOS universal)` workflow on `macos-15` triggers as two
-separate jobs:
+The `Release Desktop (macOS universal + Linux DEB)` workflow triggers as four
+release jobs:
 
 1. `Test and prepare signing input`, with `contents: read`, explicit
    `id-token: none`, no Apple secrets, and checkout credentials disabled. It
@@ -94,6 +95,14 @@ separate jobs:
    scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only`
    with the environment-scoped Apple secrets.
+3. `Package Linux DEB`, running on native Ubuntu x64 and arm64 GitHub-hosted
+   runners. Each job runs `apps/desktop/scripts/release.mjs --linux
+   --no-publish`, verifies the packaged ASAR, writes a stable download alias,
+   and uploads the `.deb` files as short-retention workflow artifacts.
+4. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
+   GitHub Release exists, combines both Linux architecture artifacts, generates
+   `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
+   release.
 
 The no-secret prepare job:
 
@@ -140,6 +149,14 @@ Stable landing-page URL:
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg
 ```
 
+Stable Linux download URLs:
+
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.deb
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.deb
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/SHA256SUMS
+```
+
 For the current arm64-only beta, backfill the stable alias:
 
 ```bash
@@ -173,6 +190,7 @@ source .envrc.release
 pnpm --filter @pwragent/desktop package:dryrun  # unsigned, no publish
 pnpm --filter @pwragent/desktop package         # signed + notarized, no publish
 pnpm --filter @pwragent/desktop release         # signed + notarized + publish
+pnpm --filter @pwragent/desktop package:linux   # current-arch .deb, no publish
 ```
 
 The release orchestrator runs `pnpm licenses:check` before packaging. If
@@ -213,10 +231,9 @@ test -f "$APP/Contents/Resources/CHANGELOG.md"
 
 ## Auto-update on Phase 1
 
-The v1.x binary does NOT bake a `GH_TOKEN`. During Phase 1 (solo dogfooding,
-just the developer running the binary on their own Mac with access to the
-private `pwrdrvr/PwrAgent` repo) the token is read from `process.env.GH_TOKEN`
-at runtime. The cleanest one-liner is to launch via Terminal:
+The macOS v1.x binary reads release metadata from GitHub Releases. If a local
+run needs an explicit token, the app reads `process.env.GH_TOKEN` at runtime.
+The cleanest one-liner is to launch via Terminal:
 
 ```bash
 GH_TOKEN=ghp_fine_grained_PAT open /Applications/PwrAgent.app
@@ -231,6 +248,10 @@ without waiting for the auto-check on next launch.
 
 Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
+
+Linux builds intentionally skip `electron-updater`. Operators upgrade by
+installing the newer `.deb` from GitHub Releases; the in-app update status
+reports that Linux packages are updated manually.
 
 ---
 

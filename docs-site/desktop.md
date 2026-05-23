@@ -51,6 +51,10 @@ or `--profile <name>`). No cloud relay and no PwrAgent-owned
 account — see [Settings](../settings/) for how the desktop
 discovers your local Codex install and how authentication works.
 
+Install the desktop from GitHub Releases. macOS uses the signed DMG; Linux
+uses Debian packages with manual upgrades documented in
+[Linux Install](../linux/).
+
 The rest of this page is the operator-facing tour of what the
 desktop **does**, what's not in it yet, and what's on the roadmap.
 

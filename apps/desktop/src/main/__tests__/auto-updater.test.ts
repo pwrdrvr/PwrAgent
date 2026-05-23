@@ -69,10 +69,19 @@ async function importAutoUpdater() {
 
 describe("auto updater", () => {
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalPlatform = process.platform;
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: platform,
+    });
+  }
 
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
+    setPlatform("darwin");
     process.env.NODE_ENV = "production";
     ipcHandlers.clear();
     updateEventHandlers.clear();
@@ -96,6 +105,10 @@ describe("auto updater", () => {
   afterEach(() => {
     vi.useRealTimers();
     process.env.NODE_ENV = originalNodeEnv;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
   });
 
   it("checks on startup and then hourly", async () => {
@@ -124,6 +137,25 @@ describe("auto updater", () => {
     });
 
     expect(windowSendMock).not.toHaveBeenCalled();
+  });
+
+  it("skips electron-updater on Linux package builds", async () => {
+    setPlatform("linux");
+    const updater = await importAutoUpdater();
+
+    updater.initAutoUpdater();
+    const manualResult = await updater.checkForAppUpdatesNow();
+
+    expect(checkForUpdatesMock).not.toHaveBeenCalled();
+    expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+    expect(manualResult).toEqual({
+      status: "skipped",
+      reason: "Linux builds are updated by installing a newer package.",
+    });
+    expect(windowSendMock).toHaveBeenLastCalledWith(
+      "app:update-status-event",
+      manualResult,
+    );
   });
 });
 
