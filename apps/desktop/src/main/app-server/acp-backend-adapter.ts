@@ -72,7 +72,7 @@ export type AcpRuntimeClient = Pick<
   | "startPrompt"
   | "startSession"
 > &
-  Partial<Pick<AcpAgentClient, "setRuntimeOption">>;
+  Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
 
 export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
@@ -194,10 +194,35 @@ export function describeInstalledAcpBackend(
       "session/cancel",
     ],
     capabilities: buildAcpCapabilities(),
-    executionModes: [],
+    executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
     launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
     unavailableReason,
   };
+}
+
+function buildAcpExecutionModes(
+  agent: AcpInstalledAgentRecord,
+  available: boolean,
+  unavailableReason: string | undefined,
+): BackendSummary["executionModes"] {
+  if (agent.registryId !== "kimi") {
+    return [];
+  }
+  return [
+    {
+      mode: "default",
+      label: "Default Access",
+      available,
+      isDefault: true,
+      unavailableReason,
+    },
+    {
+      mode: "full-access",
+      label: "Full Access",
+      available,
+      unavailableReason,
+    },
+  ];
 }
 
 export function buildAcpLaunchpadOptions(

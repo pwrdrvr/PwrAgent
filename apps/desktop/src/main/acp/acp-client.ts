@@ -96,6 +96,7 @@ export class AcpAgentClient {
   >();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
   private readonly suppressLoadReplaySessions = new Set<string>();
+  private readonly suppressedControlPromptSessions = new Set<string>();
   private readonly hydratedTranscriptSessions = new Set<string>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
@@ -373,6 +374,22 @@ export class AcpAgentClient {
     });
   }
 
+  async sendControlPrompt(params: {
+    sessionId: string;
+    prompt: string;
+  }): Promise<void> {
+    const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
+    this.suppressedControlPromptSessions.add(protocolSessionId);
+    try {
+      await this.options.transport.request("session/prompt", {
+        sessionId: protocolSessionId,
+        prompt: textPrompt(params.prompt),
+      });
+    } finally {
+      this.suppressedControlPromptSessions.delete(protocolSessionId);
+    }
+  }
+
   async setRuntimeOption(params: {
     sessionId: string;
     source: BackendAcpRuntimeOptionSource;
@@ -465,6 +482,9 @@ export class AcpAgentClient {
       typeof params.sessionId === "string" ? params.sessionId : undefined;
     const update = asRecord(params.update);
     if (!protocolSessionId || !update) {
+      return;
+    }
+    if (this.suppressedControlPromptSessions.has(protocolSessionId)) {
       return;
     }
     const sessionId = this.appSessionIdFor(protocolSessionId);

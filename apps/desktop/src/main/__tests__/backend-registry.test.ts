@@ -2164,6 +2164,133 @@ describe("DesktopBackendRegistry", () => {
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("runs Kimi ACP execution mode changes through slash control prompts", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const sendControlPrompt = vi.fn(async () => undefined);
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "kimi-session-1",
+          title: "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      sendControlPrompt,
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "kimi",
+          name: "Kimi Code CLI",
+          version: "1.44.0",
+          distributionKind: "local",
+          distributionSource: "kimi acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-kimi-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "kimi",
+            distributionKind: "local",
+            command: "kimi",
+            args: ["acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    const backends = await registry.listBackends({ includeUnavailable: true });
+    expect(backends.backends.find((backend) => backend.kind === acpBackendId))
+      .toMatchObject({
+        executionModes: [
+          { mode: "default", available: true },
+          { mode: "full-access", available: true },
+        ],
+      });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "full-access",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "full-access",
+    });
+
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      prompt: "/yolo",
+    });
+
+    sendControlPrompt.mockClear();
+    await expect(
+      registry.setThreadExecutionMode({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        executionMode: "default",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "default",
+    });
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      prompt: "/yolo",
+    });
+    expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
   it("reads persisted ACP sessions locally and refreshes the agent in the background", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const localReplay: AppServerThreadReplay = {
