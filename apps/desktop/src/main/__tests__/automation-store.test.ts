@@ -189,6 +189,44 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("finds the active run for an automation execution lane", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+      now: 1_000,
+    });
+    const run = store.createRun({
+      id: "run-1",
+      automationId: "automation-1",
+      trigger: "scheduled",
+      scheduledFor: 10_000,
+      now: 10_000,
+    });
+    expect(run).toBeDefined();
+
+    expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
+      id: "run-1",
+      status: "pending",
+    });
+
+    store.markRunTerminal({
+      runId: "run-1",
+      status: "completed",
+      completedAt: 12_000,
+      now: 12_000,
+    });
+
+    expect(store.findActiveRunForAutomation("automation-1")).toBeUndefined();
+  });
+
   it("reconciles stale local runs on startup without creating catch-up rows", () => {
     store.createAutomation({
       id: "automation-1",

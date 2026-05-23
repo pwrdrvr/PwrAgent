@@ -143,12 +143,7 @@ export class AutomationScheduler {
     }
 
     if (automation.backlogPolicy === "drop_missed") {
-      if (
-        !this.options.queue.canStartImmediately({
-          backend: automation.backend,
-          threadId: automation.threadId,
-        })
-      ) {
+      if (this.options.store.findActiveRunForAutomation(automation.id)) {
         for (const window of windows) {
           const skipped = this.options.store.createRun({
             automationId: automation.id,
@@ -163,7 +158,8 @@ export class AutomationScheduler {
               runId: skipped.id,
               status: "skipped",
               completedAt: now,
-              errorMessage: "The assigned thread was busy when this schedule fired.",
+              errorMessage:
+                "The automation execution lane was busy when this schedule fired.",
               now,
             });
           }

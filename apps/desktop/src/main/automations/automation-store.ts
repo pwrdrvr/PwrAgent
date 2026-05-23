@@ -341,6 +341,15 @@ export class AutomationStore {
       .filter((run): run is AutomationRunSummary => Boolean(run));
   }
 
+  findActiveRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? AND status IN ('pending', 'queued', 'running') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
   markRunQueued(params: {
     runId: string;
     queueEntryId: string;

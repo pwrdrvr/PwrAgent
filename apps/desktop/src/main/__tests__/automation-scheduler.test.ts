@@ -189,7 +189,7 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
-  it("records skipped history for drop_missed while the thread is busy", async () => {
+  it("queues drop_missed runs when only the assigned Agent thread is busy", async () => {
     queue.active = true;
     createIntervalAutomation({
       backend: "codex",
@@ -210,10 +210,41 @@ describe("AutomationScheduler", () => {
 
     await scheduler.evaluateDueAutomations();
 
-    expect(queue.submitted).toEqual([]);
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        status: "queued",
+        scheduledWindows: [{ scheduledFor: 5 * 60 * 1000 }],
+      }),
+    ]);
+  });
+
+  it("records skipped history for drop_missed while the automation lane is busy", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      backlogPolicy: "drop_missed",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    now = 10 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
     expect(store.listRunsForAutomation("automation-1")).toEqual([
       expect.objectContaining({ status: "skipped", scheduledFor: 10 * 60 * 1000 }),
-      expect.objectContaining({ status: "skipped", scheduledFor: 5 * 60 * 1000 }),
+      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
     ]);
   });
 
