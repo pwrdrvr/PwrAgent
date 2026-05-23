@@ -276,3 +276,216 @@ test("keeps a bottom-pinned long transcript glued when a reply image preview res
     await app.close();
   }
 });
+
+test("clicking jump-to-latest reaches the bottom in a single click", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/long-thread-scroll-stability/replay.fixture.json"
+    ),
+    windowSize: {
+      width: 1280,
+      height: 720,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Long scroll stability thread/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Long scroll stability thread"
+      })
+    ).toBeVisible();
+
+    const list = app.window.locator(".transcript-list__items");
+    const jumpToLatest = app.window.getByRole("button", {
+      name: "Jump to latest message",
+    });
+
+    await expect
+      .poll(async () =>
+        await list.evaluate((element) =>
+          Math.round(Math.max(element.scrollHeight - element.clientHeight, 0))
+        )
+      )
+      .toBeGreaterThan(2000);
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeLessThanOrEqual(4);
+
+    // Manually scroll to the top so the jump-to-latest button is exposed.
+    await list.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+
+    await expect(jumpToLatest).toBeVisible();
+    await expect
+      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
+      .toBeLessThan(50);
+
+    // A single click must take the user all the way to the bottom — not 90%,
+    // then 95%, then 100% across three clicks. The window for the scroll to
+    // settle is intentionally tight so smooth-scroll regressions that need
+    // multiple clicks (or content growth that outraces a smooth-scroll
+    // target captured at click time) fail the assertion.
+    await jumpToLatest.click();
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list), {
+        timeout: 600,
+      })
+      .toBeLessThanOrEqual(4);
+    await expect(jumpToLatest).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("jump-to-latest re-enters glue mode so later content stays pinned", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/long-thread-scroll-stability/replay.fixture.json"
+    ),
+    windowSize: {
+      width: 1280,
+      height: 720,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Long scroll stability thread/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Long scroll stability thread"
+      })
+    ).toBeVisible();
+
+    const list = app.window.locator(".transcript-list__items");
+    const jumpToLatest = app.window.getByRole("button", {
+      name: "Jump to latest message",
+    });
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeLessThanOrEqual(4);
+
+    // Scroll to the top, then click jump-to-latest to re-enter glue mode.
+    await list.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(jumpToLatest).toBeVisible();
+    await jumpToLatest.click();
+
+    // Wait for the scroll to settle and the button to hide.
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list), {
+        timeout: 600,
+      })
+      .toBeLessThanOrEqual(4);
+    await expect(jumpToLatest).toHaveCount(0);
+
+    // Simulate content growing after we re-glued (mimics images / code
+    // blocks finishing their layout after the click landed). Glue should
+    // keep us pinned to the new bottom; if a stale smooth-scroll target
+    // left us unglued, we'd drift away from the bottom and the button
+    // would reappear.
+    await list.evaluate((element) => {
+      const content = element.querySelector<HTMLDivElement>(
+        ".transcript-list__content"
+      );
+      if (!content) {
+        throw new Error("transcript content not found");
+      }
+      const spacer = document.createElement("div");
+      spacer.style.height = "1200px";
+      spacer.dataset.testid = "post-jump-growth-spacer";
+      content.appendChild(spacer);
+    });
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list), {
+        timeout: 1000,
+      })
+      .toBeLessThanOrEqual(4);
+    await expect(jumpToLatest).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("opens at the bottom and stays glued when content grows after first paint", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/long-thread-scroll-stability/replay.fixture.json"
+    ),
+    windowSize: {
+      width: 1280,
+      height: 720,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Long scroll stability thread/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Long scroll stability thread"
+      })
+    ).toBeVisible();
+
+    const list = app.window.locator(".transcript-list__items");
+    const jumpToLatest = app.window.getByRole("button", {
+      name: "Jump to latest message",
+    });
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeLessThanOrEqual(4);
+    await expect(jumpToLatest).toHaveCount(0);
+
+    // Simulate post-initial-paint layout growth (e.g. an image finishing
+    // load, a code block finishing syntax highlighting). The transcript
+    // should re-anchor to the new bottom — opening a thread should leave
+    // the user looking at the latest message, not stranded above it.
+    await list.evaluate((element) => {
+      const content = element.querySelector<HTMLDivElement>(
+        ".transcript-list__content"
+      );
+      if (!content) {
+        throw new Error("transcript content not found");
+      }
+      const spacer = document.createElement("div");
+      spacer.style.height = "1800px";
+      spacer.dataset.testid = "post-open-growth-spacer";
+      content.appendChild(spacer);
+    });
+
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list), {
+        timeout: 1000,
+      })
+      .toBeLessThanOrEqual(4);
+    await expect(jumpToLatest).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});

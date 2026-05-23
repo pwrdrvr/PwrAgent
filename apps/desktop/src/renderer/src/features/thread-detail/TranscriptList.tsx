@@ -480,23 +480,60 @@ export function TranscriptList(props: TranscriptListProps) {
     }
   }, [captureSnapshot]);
 
-  const scrollToBottom = useCallback((mode: ScrollBottomMode = "smooth") => {
+  const scrollToBottom = useCallback((mode: ScrollBottomMode = "instant") => {
     const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
 
+    // Mark glued BEFORE issuing the scroll command so the
+    // ResizeObserver and onScroll callbacks that fire during /
+    // immediately after the scroll treat any concurrent layout shift
+    // as "stay pinned" rather than "user navigated away from the
+    // bottom."
+    isGluedToBottomRef.current = true;
+
     if (mode === "smooth" && typeof container.scrollTo === "function") {
       container.scrollTo({
         top: container.scrollHeight,
-        behavior: "smooth"
+        behavior: "smooth",
       });
-    } else {
-      container.scrollTop = container.scrollHeight;
+      // Smooth scrolls converge asynchronously — let the scroll events
+      // fired during the animation drive syncScrollState. Calling
+      // syncScrollState here would observe the pre-animation scrollTop
+      // and immediately flip isGluedToBottomRef back to false, which
+      // surfaces the "Jump to latest" button mid-animation and, worse,
+      // un-glues the transcript so subsequent content growth never
+      // re-anchors.
+      return;
     }
 
-    isGluedToBottomRef.current = true;
+    container.scrollTop = container.scrollHeight;
     syncScrollState();
+
+    // If the transcript's scrollHeight grows between this layout commit
+    // and the next paint (e.g. ThreadMarkdown finishing layout, a lazy
+    // image committing its intrinsic height), re-anchor on the next
+    // animation frame so the user lands at the actual latest message
+    // rather than the latest message at the moment scrollToBottom was
+    // first called.
+    requestAnimationFrame(() => {
+      if (!isGluedToBottomRef.current) {
+        return;
+      }
+      const liveContainer = scrollContainerRef.current;
+      if (!liveContainer) {
+        return;
+      }
+      const maxScrollTop = Math.max(
+        liveContainer.scrollHeight - liveContainer.clientHeight,
+        0
+      );
+      if (liveContainer.scrollTop < maxScrollTop - BOTTOM_THRESHOLD_PX) {
+        liveContainer.scrollTop = liveContainer.scrollHeight;
+        syncScrollState();
+      }
+    });
   }, [syncScrollState]);
 
   const disableBottomGlue = useCallback(() => {
@@ -563,10 +600,18 @@ export function TranscriptList(props: TranscriptListProps) {
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
           previousSnapshot.itemCount < visibleItemCount)
     );
+    // Re-anchor whenever a glued, same-thread render grows. The previous
+    // implementation also required firstMessageId equality, which broke
+    // the common navigation-preview → full-transcript transition: the
+    // preview entries (lastUserMessage / lastAssistantMessage from the
+    // navigation snapshot) have synthetic ids that don't match any
+    // entries in the eventual readThread response, so when the real
+    // transcript replaced them the renderer concluded "neither prepend,
+    // append, nor grow" and left scrollTop=0, stranding the user at the
+    // top of a thread they expected to open at the bottom.
     const hasGrownWhileFollowingBottom = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
-        previousSnapshot.firstMessageId === firstMessageId &&
         !hasPrependedMessages &&
         isGluedToBottomRef.current &&
         container.scrollHeight > previousSnapshot.scrollHeight
@@ -861,7 +906,7 @@ export function TranscriptList(props: TranscriptListProps) {
           type="button"
           aria-label="Jump to latest message"
           onClick={() => {
-            scrollToBottom();
+            scrollToBottom("instant");
           }}
         >
           <span className="transcript-list__scroll-bottom-icon" aria-hidden="true" />
