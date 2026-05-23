@@ -147,6 +147,82 @@ describe("AutomationStore", () => {
     });
   });
 
+  it("persists run artifacts and read-only transcript events", () => {
+    store.createAutomation({
+      id: "automation-1",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+      now: 1_000,
+    });
+    store.createRun({
+      id: "run-1",
+      automationId: "automation-1",
+      trigger: "manual",
+      now: 2_000,
+    });
+    store.markRunStarted({
+      runId: "run-1",
+      backendTurnId: "turn-1",
+      startedAt: 2_100,
+      now: 2_100,
+    });
+    store.markRunTerminal({
+      runId: "run-1",
+      status: "completed",
+      completedAt: 3_000,
+      now: 3_000,
+    });
+
+    expect(
+      store.upsertRunArtifact({
+        runId: "run-1",
+        status: "completed",
+        finalText: "Nothing urgent.",
+        transcriptEvents: [
+          {
+            id: "run-1:assistant-final",
+            at: 3_000,
+            kind: "assistant_final",
+            text: "Nothing urgent.",
+          },
+        ],
+        now: 3_000,
+      }),
+    ).toMatchObject({
+      runId: "run-1",
+      automationId: "automation-1",
+      status: "completed",
+      finalText: "Nothing urgent.",
+      createdAt: 3_000,
+      updatedAt: 3_000,
+    });
+    expect(store.getRunArtifact("run-1")).toEqual({
+      runId: "run-1",
+      automationId: "automation-1",
+      status: "completed",
+      finalText: "Nothing urgent.",
+      errorMessage: undefined,
+      outputDecision: undefined,
+      transcriptEvents: [
+        {
+          id: "run-1:assistant-final",
+          at: 3_000,
+          kind: "assistant_final",
+          text: "Nothing urgent.",
+        },
+      ],
+      createdAt: 3_000,
+      updatedAt: 3_000,
+    });
+  });
+
   it("coalesces later scheduled windows into the existing pending scheduled run", () => {
     store.createAutomation({
       id: "automation-1",

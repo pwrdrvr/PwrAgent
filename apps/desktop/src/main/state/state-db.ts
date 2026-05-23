@@ -368,6 +368,21 @@ CREATE INDEX IF NOT EXISTS idx_automation_runs_status
 CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_one_pending_scheduled
   ON automation_runs(automation_id)
   WHERE trigger = 'scheduled' AND status IN ('pending', 'queued');
+
+CREATE TABLE IF NOT EXISTS automation_run_artifacts (
+  run_id         TEXT PRIMARY KEY,
+  automation_id TEXT NOT NULL,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES automation_runs(run_id)
+    ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
+  ON automation_run_artifacts(automation_id, updated_at DESC);
 `;
 
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;

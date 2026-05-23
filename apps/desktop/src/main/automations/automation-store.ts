@@ -3,8 +3,11 @@ import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
   AutomationListItemSummary,
+  AutomationRunArtifact,
+  AutomationRunOutputDecision,
   AutomationRunStatus,
   AutomationRunSummary,
+  AutomationRunTranscriptEvent,
   AutomationRunTrigger,
   AutomationRunWindow,
   AutomationScheduleDefinition,
@@ -79,6 +82,16 @@ export type StartupReconciliationInput = {
   nextRunAtByAutomationId?: Record<string, number | undefined>;
 };
 
+export type UpsertAutomationRunArtifactInput = {
+  runId: string;
+  status: AutomationRunStatus;
+  finalText?: string;
+  errorMessage?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  transcriptEvents?: AutomationRunTranscriptEvent[];
+  now?: number;
+};
+
 type AutomationRow = {
   automation_id: string;
   backend: AppServerBackendKind;
@@ -112,6 +125,17 @@ type AutomationRunRow = {
   payload: string;
 };
 
+type AutomationRunArtifactRow = {
+  run_id: string;
+  automation_id: string;
+  backend: AppServerBackendKind;
+  thread_id: string;
+  status: AutomationRunStatus;
+  created_at: number;
+  updated_at: number;
+  payload: string;
+};
+
 type AutomationPayload = {
   taskPrompt: string;
   schedule: AutomationScheduleDefinition;
@@ -122,6 +146,13 @@ type AutomationPayload = {
 type AutomationRunPayload = {
   scheduledWindows: AutomationRunWindow[];
   errorMessage?: string;
+};
+
+type AutomationRunArtifactPayload = {
+  finalText?: string;
+  errorMessage?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  transcriptEvents: AutomationRunTranscriptEvent[];
 };
 
 export class AutomationStore {
@@ -413,6 +444,38 @@ export class AutomationStore {
   getRun(runId: string): AutomationRunSummary | undefined {
     const row = this.getRunRow(runId);
     return row ? this.runFromRow(row) : undefined;
+  }
+
+  upsertRunArtifact(
+    input: UpsertAutomationRunArtifactInput,
+  ): AutomationRunArtifact | undefined {
+    const runRow = this.getRunRow(input.runId);
+    if (!runRow) return undefined;
+    const existing = this.getRunArtifactRow(input.runId);
+    const existingArtifact = existing ? this.artifactFromRow(existing) : undefined;
+    const now = input.now ?? Date.now();
+    const artifact: AutomationRunArtifact = {
+      runId: input.runId,
+      automationId: runRow.automation_id,
+      status: input.status,
+      finalText: input.finalText ?? existingArtifact?.finalText,
+      errorMessage: input.errorMessage ?? existingArtifact?.errorMessage,
+      outputDecision: input.outputDecision ?? existingArtifact?.outputDecision,
+      transcriptEvents:
+        input.transcriptEvents ?? existingArtifact?.transcriptEvents ?? [],
+      createdAt: existing?.created_at ?? now,
+      updatedAt: now,
+    };
+    this.upsertArtifact(artifact, {
+      backend: runRow.backend,
+      threadId: runRow.thread_id,
+    });
+    return artifact;
+  }
+
+  getRunArtifact(runId: string): AutomationRunArtifact | undefined {
+    const row = this.getRunArtifactRow(runId);
+    return row ? this.artifactFromRow(row) : undefined;
   }
 
   listRunsForAutomation(automationId: string, limit = 50): AutomationRunSummary[] {
@@ -725,6 +788,48 @@ export class AutomationStore {
       );
   }
 
+  private upsertArtifact(
+    artifact: AutomationRunArtifact,
+    metadata: {
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+    },
+  ): void {
+    const payload: AutomationRunArtifactPayload = {
+      finalText: artifact.finalText,
+      errorMessage: artifact.errorMessage,
+      outputDecision: artifact.outputDecision,
+      transcriptEvents: artifact.transcriptEvents,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO automation_run_artifacts (
+          run_id,
+          automation_id,
+          backend,
+          thread_id,
+          status,
+          created_at,
+          updated_at,
+          payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          payload = excluded.payload`,
+      )
+      .run(
+        artifact.runId,
+        artifact.automationId,
+        metadata.backend,
+        metadata.threadId,
+        artifact.status,
+        artifact.createdAt,
+        artifact.updatedAt,
+        JSON.stringify(payload),
+      );
+  }
+
   private recordFromRow(row: AutomationRow): AutomationRecord | undefined {
     const payload = parseJson<AutomationPayload>(row.payload);
     if (!payload) return undefined;
@@ -766,10 +871,34 @@ export class AutomationStore {
     };
   }
 
+  private artifactFromRow(
+    row: AutomationRunArtifactRow,
+  ): AutomationRunArtifact | undefined {
+    const payload = parseJson<AutomationRunArtifactPayload>(row.payload);
+    if (!payload) return undefined;
+    return {
+      runId: row.run_id,
+      automationId: row.automation_id,
+      status: row.status,
+      finalText: payload.finalText,
+      errorMessage: payload.errorMessage,
+      outputDecision: payload.outputDecision,
+      transcriptEvents: payload.transcriptEvents ?? [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   private getRunRow(runId: string): AutomationRunRow | undefined {
     return this.stateDb.raw
       .prepare("SELECT * FROM automation_runs WHERE run_id = ?")
       .get(runId) as AutomationRunRow | undefined;
+  }
+
+  private getRunArtifactRow(runId: string): AutomationRunArtifactRow | undefined {
+    return this.stateDb.raw
+      .prepare("SELECT * FROM automation_run_artifacts WHERE run_id = ?")
+      .get(runId) as AutomationRunArtifactRow | undefined;
   }
 
   private countRunsForAutomation(automationId: string): {

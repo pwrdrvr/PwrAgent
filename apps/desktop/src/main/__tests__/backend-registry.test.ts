@@ -6555,7 +6555,11 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed", output: [] },
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [{ type: "text", text: "Automation finished." }],
+        },
       },
     });
 
@@ -6632,7 +6636,11 @@ command = "pnpm dev"
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed", output: [] },
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [{ type: "text", text: "Automation finished." }],
+        },
       },
     });
 
@@ -6655,6 +6663,7 @@ command = "pnpm dev"
             automationName: "Check email",
             status: "terminal",
             turnId: "turn-1",
+            finalText: "Automation finished.",
             terminalStatus: "turn/completed",
           },
         },
@@ -6666,7 +6675,11 @@ command = "pnpm dev"
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            turn: { id: "turn-1", status: "completed", output: [] },
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Automation finished." }],
+            },
           },
         },
       },

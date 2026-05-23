@@ -980,6 +980,38 @@ function turnIdFromTerminalNotification(
   return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
 }
 
+function finalTextFromTerminalNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  if (notification.method !== "turn/completed") {
+    return undefined;
+  }
+  const completed = notification as Extract<
+    AppServerNotification,
+    { method: "turn/completed" }
+  >;
+  const text = completed.params.turn.output
+    .filter((item) => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function errorMessageFromTerminalNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  if (notification.method !== "turn/failed") {
+    return undefined;
+  }
+  const failed = notification as Extract<
+    AppServerNotification,
+    { method: "turn/failed" }
+  >;
+  return failed.params.turn.error.message;
+}
+
 function logBackendLifecycleNotification(
   backend: AppServerBackendKind,
   notification: AppServerNotification,
@@ -5932,6 +5964,8 @@ export class DesktopBackendRegistry {
           automationName: run.automationName,
           status: "terminal",
           turnId,
+          errorMessage: errorMessageFromTerminalNotification(notification),
+          finalText: finalTextFromTerminalNotification(notification),
           terminalStatus: notification.method,
         },
       },

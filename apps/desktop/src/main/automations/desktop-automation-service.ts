@@ -3,6 +3,8 @@ import type {
   AutomationDetail,
   AutomationIdRequest,
   AutomationMutationResponse,
+  AutomationRunSummary,
+  AutomationRunTranscriptEvent,
   CreateAutomationRequest,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
@@ -263,6 +265,7 @@ export class DesktopAutomationService {
       turnId?: string;
       automationRunId?: string;
       errorMessage?: string;
+      finalText?: string;
       terminalStatus?: string;
     };
     await this.scheduler.handleTurnQueueUpdate({
@@ -278,6 +281,19 @@ export class DesktopAutomationService {
       const automation = run
         ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
         : undefined;
+      if (shouldRecordRunArtifact(params.status)) {
+        this.options.store.upsertRunArtifact({
+          runId: run.id,
+          status: run.status,
+          finalText: params.finalText,
+          errorMessage: params.errorMessage ?? run.errorMessage,
+          transcriptEvents: buildRunArtifactTranscript({
+            run,
+            finalText: params.finalText,
+            errorMessage: params.errorMessage ?? run.errorMessage,
+          }),
+        });
+      }
       await this.options.registry.publishLocalEvent({
         backend: event.backend,
         notification: {
@@ -360,4 +376,56 @@ function toAutomationDetail(record: AutomationRecord): AutomationDetail {
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,
   };
+}
+
+function shouldRecordRunArtifact(
+  status: "queued" | "started" | "failed" | "cancelled" | "terminal",
+): boolean {
+  return status === "terminal" || status === "failed" || status === "cancelled";
+}
+
+function buildRunArtifactTranscript(params: {
+  run: AutomationRunSummary;
+  finalText?: string;
+  errorMessage?: string;
+}): AutomationRunTranscriptEvent[] {
+  const at = params.run.completedAt ?? params.run.startedAt ?? Date.now();
+  const events: AutomationRunTranscriptEvent[] = [
+    {
+      id: `${params.run.id}:invocation`,
+      at: params.run.startedAt ?? params.run.queuedAt ?? at,
+      kind: "invocation",
+      metadata: {
+        trigger: params.run.trigger,
+        scheduledFor: params.run.scheduledFor,
+        scheduledWindows: params.run.scheduledWindows,
+      },
+    },
+  ];
+  if (params.finalText) {
+    events.push({
+      id: `${params.run.id}:assistant-final`,
+      at,
+      kind: "assistant_final",
+      text: params.finalText,
+    });
+  }
+  if (params.errorMessage) {
+    events.push({
+      id: `${params.run.id}:error`,
+      at,
+      kind: "error",
+      text: params.errorMessage,
+    });
+  }
+  events.push({
+    id: `${params.run.id}:terminal`,
+    at,
+    kind: "lifecycle",
+    metadata: {
+      status: params.run.status,
+      backendTurnId: params.run.backendTurnId,
+    },
+  });
+  return events;
 }

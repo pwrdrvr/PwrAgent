@@ -151,6 +151,40 @@ export type AutomationRunSummary = {
   errorMessage?: string;
 };
 
+export type AutomationRunOutputDecision =
+  | {
+      kind: "post_card";
+      summary: string;
+    }
+  | {
+      kind: "quiet";
+      summary?: string;
+    }
+  | {
+      kind: "parse_failed";
+      summary?: string;
+    };
+
+export type AutomationRunTranscriptEvent = {
+  id: string;
+  at: number;
+  kind: "invocation" | "lifecycle" | "assistant_final" | "error";
+  text?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type AutomationRunArtifact = {
+  runId: string;
+  automationId: string;
+  status: AutomationRunStatus;
+  finalText?: string;
+  errorMessage?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  transcriptEvents: AutomationRunTranscriptEvent[];
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
@@ -196,6 +230,14 @@ export type ListAutomationRunsRequest = {
 
 export type ListAutomationRunsResponse = {
   runs: AutomationRunSummary[];
+};
+
+export type GetAutomationRunArtifactRequest = {
+  runId: string;
+};
+
+export type GetAutomationRunArtifactResponse = {
+  artifact?: AutomationRunArtifact;
 };
 
 export type RunAutomationNowResponse = {

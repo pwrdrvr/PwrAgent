@@ -1032,6 +1032,7 @@ export type AppServerNotification =
         automationRunId?: string;
         automationName?: string;
         errorMessage?: string;
+        finalText?: string;
         terminalStatus?: string;
       };
     }

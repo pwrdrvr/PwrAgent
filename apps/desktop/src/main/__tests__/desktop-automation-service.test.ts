@@ -202,6 +202,7 @@ describe("DesktopAutomationService", () => {
               origin: "automation",
               status: "terminal",
               automationRunId: runNow.run.id,
+              finalText: "Inbox summary is ready.",
               terminalStatus: "turn/completed",
               turnId: "turn-1",
             },
@@ -221,6 +222,20 @@ describe("DesktopAutomationService", () => {
           threadId: "thread-1",
         },
       },
+    });
+    expect(store.getRunArtifact(runNow.run.id)).toMatchObject({
+      runId: runNow.run.id,
+      automationId: created.automation.id,
+      status: "completed",
+      finalText: "Inbox summary is ready.",
+      transcriptEvents: [
+        expect.objectContaining({ kind: "invocation" }),
+        expect.objectContaining({
+          kind: "assistant_final",
+          text: "Inbox summary is ready.",
+        }),
+        expect.objectContaining({ kind: "lifecycle" }),
+      ],
     });
   });
 
