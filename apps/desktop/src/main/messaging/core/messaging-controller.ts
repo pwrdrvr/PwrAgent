@@ -10,6 +10,7 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
   AppServerPendingRequestNotification,
@@ -114,6 +115,7 @@ import {
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
+  buildStatusAcpRuntimeModePickerIntent,
   buildBranchPickerPage,
   buildHandoffBranchPickerIntent,
   buildHandoffConfirmationIntent,
@@ -128,6 +130,10 @@ import {
   resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
+import {
+  buildMessagingAcpRuntimeModeSummary,
+  messagingAcpRuntimeValueLooksPrivileged,
+} from "./messaging-acp-runtime.js";
 import {
   buildSkillRemovedIntent,
   buildSkillSelectedIntent,
@@ -365,6 +371,25 @@ type FullAccessRiskWarningContext =
       threadId: ThreadIdentifier;
     };
 
+type AcpRuntimeRiskWarningContext =
+  | {
+      kind: "new-thread";
+      label: string;
+      optionId: string;
+      sessionId: string;
+      source: BackendAcpRuntimeOptionSource;
+      value: string;
+    }
+  | {
+      bindingId: string;
+      kind: "thread";
+      label: string;
+      optionId: string;
+      source: BackendAcpRuntimeOptionSource;
+      threadId: ThreadIdentifier;
+      value: string;
+    };
+
 type FullAccessRiskPresentation = {
   binding?: MessagingBindingRecord;
   surface?: MessagingSurfaceRef;
@@ -420,6 +445,7 @@ type PendingQueueAuditMessage = {
 
 const PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX = "permissions:queue:cancel:";
 const FULL_ACCESS_RISK_ACTION_PREFIX = "full-access-risk:";
+const ACP_RUNTIME_RISK_ACTION_PREFIX = "acp-runtime-risk:";
 
 type PendingNewThreadPromptWindow = {
   events: MessagingTurnInputEvent[];
@@ -1823,6 +1849,12 @@ export class MessagingController {
       return;
     }
 
+    const acpRuntimeRiskAction = readAcpRuntimeRiskAction(event);
+    if (acpRuntimeRiskAction) {
+      await this.handleAcpRuntimeRiskCallback(event, acpRuntimeRiskAction);
+      return;
+    }
+
     const statusAction = readStatusAction(event);
     if (statusAction) {
       await this.handleStatusCallback(event, statusAction);
@@ -3143,6 +3175,19 @@ export class MessagingController {
       await this.presentNewThreadBackendPicker(nextSession, event, navigation);
       return;
     }
+    if (actionId === "browse:new:runtime-mode") {
+      await this.presentNewThreadAcpRuntimeModePicker(
+        nextSession,
+        event,
+        nextSession.backend ?? navigation.launchpadDefaults.backend,
+        navigation,
+      );
+      return;
+    }
+    if (actionId === "browse:new:set-runtime-mode") {
+      await this.setNewThreadAcpRuntimeMode(nextSession, event, navigation);
+      return;
+    }
     if (actionId === "browse:new:set-backend") {
       const backend = readStringValue(event.value, "backend");
       const selectedBackend = await this.resolveNewThreadBackendForSession(
@@ -3633,6 +3678,12 @@ export class MessagingController {
     const supportsPermissionsControls =
       !isAcpBackendId(selectedBackend.kind) ||
       options.executionMode === "full-access";
+    const acpRuntimeMode = isAcpBackendId(selectedBackend.kind)
+      ? buildMessagingAcpRuntimeModeSummary({
+          backend: selectedBackend,
+          runtime: options.acpRuntime,
+        })
+      : undefined;
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -3699,6 +3750,16 @@ export class MessagingController {
                 label: `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
                 style: "secondary" as const,
                 fallbackText: "permissions",
+              },
+            ]
+          : []),
+        ...(acpRuntimeMode && acpRuntimeMode.choices.length > 0
+          ? [
+              {
+                id: "browse:new:runtime-mode",
+                label: `Runtime: ${acpRuntimeMode.currentLabel}`,
+                style: "secondary" as const,
+                fallbackText: "runtime",
               },
             ]
           : []),
@@ -3988,6 +4049,218 @@ export class MessagingController {
         updatedAt: this.now(),
       });
     }
+  }
+
+  private async presentNewThreadAcpRuntimeModePicker(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    backend: AppServerBackendKind,
+    navigation: NavigationSnapshot,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(backend);
+    if (!summary) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-runtime-unavailable"),
+          createdAt: this.now(),
+          title: "Runtime modes unavailable",
+          body: "This ACP backend did not report runtime mode choices.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const options = newThreadOptionsForSession(
+      session,
+      navigation,
+      directory,
+      this.streamingResponsesDefault,
+      summary,
+    );
+    const runtimeMode = buildMessagingAcpRuntimeModeSummary({
+      backend: summary,
+      runtime: options.acpRuntime,
+    });
+    if (runtimeMode.choices.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-runtime-unavailable"),
+          createdAt: this.now(),
+          title: "Runtime modes unavailable",
+          body: "This ACP backend did not report runtime mode choices.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("new-thread-runtime"),
+      capabilityProfile: this.capabilityProfile,
+      browseSessionId: session.id,
+      createdAt: this.now(),
+      delivery: session.surface
+        ? { mode: "update", replaceMarkup: true }
+        : undefined,
+      title: "Select runtime mode",
+      body: "Choose the runtime mode for the new thread.",
+      fallbackText: "Choose a runtime mode, or reply back.",
+      targetSurface: session.surface,
+      actions: [
+        ...runtimeMode.choices.map((choice, index) => ({
+          id: "browse:new:set-runtime-mode",
+          label: `${choice.label}${choice.selected ? " (current)" : ""}`,
+          style: "secondary" as const,
+          fallbackText: String(index + 1),
+          priority: 10 + index,
+          value: {
+            optionId: choice.optionId,
+            source: choice.source,
+            value: choice.value,
+          },
+        })),
+        {
+          id: session.workMode === "worktree"
+            ? "browse:new:workspace:worktree"
+            : "browse:new:workspace:local",
+          label: "Back",
+          style: "secondary" as const,
+          fallbackText: "back",
+          priority: 1,
+        },
+      ],
+    });
+    await this.storePendingIntent(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (result.surface) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        surface: result.surface,
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private async setNewThreadAcpRuntimeMode(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundCallbackEvent,
+    navigation: NavigationSnapshot,
+  ): Promise<void> {
+    const source = readAcpRuntimeOptionSource(event.value);
+    const optionId = readStringValue(event.value, "optionId");
+    const value = readStringValue(event.value, "value");
+    if (!source || !optionId || !value) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+
+    const backend = session.backend ?? navigation.launchpadDefaults.backend;
+    const summary = await this.getBackendSummary(backend);
+    if (!summary) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const options = newThreadOptionsForSession(
+      session,
+      navigation,
+      directory,
+      this.streamingResponsesDefault,
+      summary,
+    );
+    const currentRuntime = options.acpRuntime;
+    const currentRuntimeMode = buildMessagingAcpRuntimeModeSummary({
+      backend: summary,
+      runtime: currentRuntime,
+    });
+    const choice = currentRuntimeMode.choices.find(
+      (candidate) =>
+        candidate.source === source &&
+        candidate.optionId === optionId &&
+        candidate.value === value,
+    );
+    if (!choice) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+
+    const riskContext: AcpRuntimeRiskWarningContext = {
+      kind: "new-thread",
+      label: choice.label,
+      optionId,
+      sessionId: session.id,
+      source,
+      value,
+    };
+    if (
+      choice.privileged &&
+      !messagingAcpRuntimeValueLooksPrivileged(currentRuntimeMode.currentValue)
+    ) {
+      const allowed = await this.ensureAcpRuntimeModeAllowed(
+        riskContext,
+        event,
+      );
+      if (!allowed) {
+        return;
+      }
+    }
+
+    await this.applyNewThreadAcpRuntimeMode(session, event, navigation, riskContext);
+  }
+
+  private async applyNewThreadAcpRuntimeMode(
+    session: MessagingBrowseSessionRecord,
+    event: MessagingInboundEvent,
+    navigation: NavigationSnapshot,
+    selection: AcpRuntimeRiskWarningContext & { kind: "new-thread" },
+  ): Promise<void> {
+    const currentRuntime =
+      session.preferences?.acpRuntime ??
+      navigation.launchpadDefaults.acpRuntime;
+    const acpRuntime: BackendAcpSessionRuntimeState = {
+      ...currentRuntime,
+      configValues:
+        selection.source === "configOption"
+          ? {
+              ...(currentRuntime?.configValues ?? {}),
+              [selection.optionId]: selection.value,
+            }
+          : currentRuntime?.configValues,
+      currentModeId: selection.source === "mode" || selection.source === "configOption"
+        ? selection.value
+        : currentRuntime?.currentModeId,
+      updatedAt: this.now(),
+    };
+    const executionMode = messagingAcpRuntimeValueLooksPrivileged(selection.value)
+      ? "full-access"
+      : "default";
+    await this.updateNewThreadStickySettings(session, {
+      acpRuntime,
+      executionMode,
+    });
+    await this.presentNewThreadPromptGate(
+      {
+        ...session,
+        preferences: {
+          ...session.preferences,
+          acpRuntime,
+          executionMode,
+          permissionsMode: executionMode,
+          updatedAt: this.now(),
+        },
+      },
+      event,
+      navigation,
+    );
   }
 
   private async presentNewThreadReasoningPicker(
@@ -5335,12 +5608,20 @@ export class MessagingController {
       await this.presentReasoningPicker(binding, event);
       return;
     }
+    if (actionId === "status:runtime-mode") {
+      await this.presentStatusAcpRuntimeModePicker(binding, event);
+      return;
+    }
     if (actionId === "status:set-model") {
       await this.setBindingModel(binding, event);
       return;
     }
     if (actionId === "status:set-reasoning") {
       await this.setBindingReasoning(binding, event);
+      return;
+    }
+    if (actionId === "status:set-runtime-mode") {
+      await this.setBindingAcpRuntimeMode(binding, event);
       return;
     }
     if (actionId === "status:fast") {
@@ -6057,6 +6338,47 @@ export class MessagingController {
     );
   }
 
+  private async presentStatusAcpRuntimeModePicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(binding.backend);
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const runtimeMode = buildMessagingAcpRuntimeModeSummary({
+      backend: summary,
+      runtime: thread?.acpRuntime ?? binding.preferences?.acpRuntime,
+    });
+    if (!summary || runtimeMode.choices.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-runtime-unavailable"),
+          createdAt: this.now(),
+          title: "Runtime modes unavailable",
+          body: "This ACP backend did not report runtime mode choices. Use /status to refresh.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    await this.deliver(
+      buildStatusAcpRuntimeModePickerIntent({
+        id: this.newIntentId("status-runtime-picker"),
+        capabilityProfile: this.capabilityProfile,
+        binding,
+        choices: runtimeMode.choices,
+        createdAt: this.now(),
+      }),
+      binding,
+      event,
+    );
+  }
+
   private async setBindingModel(
     binding: MessagingBindingRecord,
     event: MessagingInboundCallbackEvent,
@@ -6106,6 +6428,109 @@ export class MessagingController {
     });
     // Refresh handled by the thread-state update bus on
     // thread/modelSettings/updated — see refreshStatusSurfacesForThread.
+  }
+
+  private async setBindingAcpRuntimeMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const source = readAcpRuntimeOptionSource(event.value);
+    const optionId = readStringValue(event.value, "optionId");
+    const value = readStringValue(event.value, "value");
+    if (!source || !optionId || !value) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+    if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+
+    const summary = await this.getBackendSummary(binding.backend);
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
+    const runtimeMode = buildMessagingAcpRuntimeModeSummary({
+      backend: summary,
+      runtime: currentRuntime,
+    });
+    const choice = runtimeMode.choices.find(
+      (candidate) =>
+        candidate.source === source &&
+        candidate.optionId === optionId &&
+        candidate.value === value,
+    );
+    if (!choice) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+
+    const riskContext: AcpRuntimeRiskWarningContext = {
+      bindingId: binding.id,
+      kind: "thread",
+      label: choice.label,
+      optionId,
+      source,
+      threadId: binding.threadId,
+      value,
+    };
+    if (
+      choice.privileged &&
+      !messagingAcpRuntimeValueLooksPrivileged(runtimeMode.currentValue)
+    ) {
+      const allowed = await this.ensureAcpRuntimeModeAllowed(
+        riskContext,
+        event,
+      );
+      if (!allowed) {
+        return;
+      }
+    }
+
+    await this.applyBindingAcpRuntimeMode(binding, event, riskContext);
+  }
+
+  private async applyBindingAcpRuntimeMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    selection: AcpRuntimeRiskWarningContext & { kind: "thread" },
+  ): Promise<void> {
+    if (!isAcpBackendId(binding.backend) || !this.options.backend.setAcpSessionRuntimeOption) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
+    const acpRuntime: BackendAcpSessionRuntimeState = {
+      ...currentRuntime,
+      configValues:
+        selection.source === "configOption"
+          ? {
+              ...(currentRuntime?.configValues ?? {}),
+              [selection.optionId]: selection.value,
+            }
+          : currentRuntime?.configValues,
+      currentModeId: selection.source === "mode" || selection.source === "configOption"
+        ? selection.value
+        : currentRuntime?.currentModeId,
+      updatedAt: this.now(),
+    };
+    await this.updateBindingPreferences(binding, {
+      acpRuntime,
+    });
+    await this.options.backend.setAcpSessionRuntimeOption({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      source: selection.source,
+      optionId: selection.optionId,
+      value: selection.value,
+    });
+    // Refresh handled by thread/acpRuntime/updated or queue audit refresh.
   }
 
   private async toggleFastMode(
@@ -6183,6 +6608,127 @@ export class MessagingController {
     });
     // Refresh handled by the thread-state update bus on
     // thread/executionMode/updated — see refreshStatusSurfacesForThread.
+  }
+
+  private async ensureAcpRuntimeModeAllowed(
+    context: AcpRuntimeRiskWarningContext,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const controls = await this.resolveFullAccessControls();
+    if (!controls.allowEscalation) {
+      await this.deliverFullAccessPolicyError(
+        context.kind === "thread"
+          ? await this.options.store.getBinding(context.bindingId)
+          : undefined,
+        event,
+        `Runtime mode ${context.label} is disabled from messaging by Full Access settings.`,
+      );
+      return false;
+    }
+
+    const warning = await this.resolveFullAccessWarning(controls, event);
+    if (!warning.shouldWarn) {
+      return true;
+    }
+
+    await this.presentAcpRuntimeRiskWarning(context, event);
+    return false;
+  }
+
+  private async presentAcpRuntimeRiskWarning(
+    context: AcpRuntimeRiskWarningContext,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const controls = await this.resolveFullAccessControls();
+    const warning = await this.resolveFullAccessWarning(controls, event);
+    const binding =
+      context.kind === "thread"
+        ? await this.options.store.getBinding(context.bindingId)
+        : undefined;
+    const session =
+      context.kind === "new-thread"
+        ? await this.options.store.getBrowseSession(context.sessionId, {
+            now: this.now(),
+          })
+        : undefined;
+    const surface =
+      context.kind === "thread"
+        ? binding?.statusSurface ?? binding?.pinnedStatusSurface
+        : session?.surface;
+    const actions: MessagingConfirmationIntent["actions"] = [
+      {
+        id: `${ACP_RUNTIME_RISK_ACTION_PREFIX}accept`,
+        label: "Yes",
+        style: "primary",
+        fallbackText: "yes",
+        value: context,
+      },
+      ...(warning.canDismiss
+        ? [
+            {
+              id: `${ACP_RUNTIME_RISK_ACTION_PREFIX}dismiss`,
+              label: "Yes - and stop warning me",
+              style: "primary" as const,
+              fallbackText: "yes and stop warning me",
+              value: context,
+            },
+          ]
+        : []),
+      {
+        id: `${ACP_RUNTIME_RISK_ACTION_PREFIX}cancel`,
+        label: "Cancel",
+        style: "secondary",
+        fallbackText: "cancel",
+        value: context,
+      },
+    ];
+
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("acp-runtime-risk"),
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      delivery: surface
+        ? {
+            mode: "update",
+            replaceMarkup: true,
+          }
+        : undefined,
+      title: `Enable ${context.label}?`,
+      body: [
+        `${context.label} may allow the ACP agent to run commands or edit files with fewer prompts.`,
+        "Only enable it for workspaces and prompts you trust.",
+      ].join("\n\n"),
+      fallbackText: warning.canDismiss
+        ? "Reply Yes, Yes - and stop warning me, or Cancel."
+        : "Reply Yes or Cancel.",
+      actions,
+      targetSurface: surface,
+    });
+    const expiresAt =
+      context.kind === "new-thread"
+        ? this.now() + MESSAGING_CALLBACK_HANDLE_TTL_MS
+        : undefined;
+    if (expiresAt !== undefined && session) {
+      await this.options.store.upsertBrowseSession({
+        ...session,
+        expiresAt: Math.max(session.expiresAt, expiresAt),
+        textInputExpiresAt: session.textInputExpiresAt ?? session.expiresAt,
+        updatedAt: this.now(),
+      });
+    }
+    const pending = await this.storePendingIntent(
+      intent,
+      binding,
+      event,
+      expiresAt === undefined ? undefined : { expiresAt },
+    );
+    const result = await this.deliver(intent, binding, event);
+    if (result.surface) {
+      await this.options.store.upsertPendingIntent({
+        ...pending,
+        surface: result.surface,
+      });
+    }
   }
 
   private async ensureFullAccessEscalationAllowed(
@@ -6496,6 +7042,95 @@ export class MessagingController {
       threadId: escalationContext.threadId,
       executionMode: "full-access",
     });
+  }
+
+  private async handleAcpRuntimeRiskCallback(
+    event: MessagingInboundCallbackEvent,
+    action: "accept" | "dismiss" | "cancel",
+  ): Promise<void> {
+    const context = readAcpRuntimeRiskContext(event.value);
+    if (!context) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+
+    if (action === "cancel") {
+      if (context.kind === "new-thread") {
+        const session = await this.options.store.getBrowseSession(context.sessionId, {
+          now: this.now(),
+        });
+        if (!session) {
+          await this.deliverStaleFullAccessWarning(event);
+          return;
+        }
+        const navigation = await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+        });
+        await this.presentNewThreadPromptGate(session, event, navigation);
+        return;
+      }
+      const binding = await this.options.store.getBinding(context.bindingId);
+      if (!binding) {
+        await this.deliverInvalidStatusSelection(event);
+        return;
+      }
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+
+    if (!(await this.ensureAcpRuntimeRiskCallbackAllowed(context, event))) {
+      return;
+    }
+    if (action === "dismiss") {
+      const controls = await this.resolveFullAccessControls();
+      const warning = await this.resolveFullAccessWarning(controls, event);
+      if (warning.canDismiss) {
+        await controls.dismissWarning?.({
+          actorId: event.actor.platformUserId,
+          channel: event.channel.channel,
+        });
+      }
+    }
+
+    if (context.kind === "new-thread") {
+      const session = await this.options.store.getBrowseSession(context.sessionId, {
+        now: this.now(),
+      });
+      if (!session) {
+        await this.deliverStaleFullAccessWarning(event);
+        return;
+      }
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      await this.applyNewThreadAcpRuntimeMode(session, event, navigation, context);
+      return;
+    }
+
+    const binding = await this.options.store.getBinding(context.bindingId);
+    if (!binding) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+    await this.applyBindingAcpRuntimeMode(binding, event, context);
+  }
+
+  private async ensureAcpRuntimeRiskCallbackAllowed(
+    context: AcpRuntimeRiskWarningContext,
+    event: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const controls = await this.resolveFullAccessControls();
+    if (controls.allowEscalation) {
+      return true;
+    }
+    await this.deliverFullAccessPolicyError(
+      context.kind === "thread"
+        ? await this.options.store.getBinding(context.bindingId)
+        : undefined,
+      event,
+      `Runtime mode ${context.label} is disabled from messaging by Full Access settings.`,
+    );
+    return false;
   }
 
   private async resolveFullAccessRiskCallbackContext(
@@ -7259,10 +7894,14 @@ export class MessagingController {
       binding,
       "status_refresh",
     );
+    const backendSummary = isAcpBackendId(binding.backend)
+      ? await this.getBackendSummary(binding.backend)
+      : undefined;
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       allowFullAccessEscalation: (await this.resolveFullAccessControls())
         .allowEscalation,
+      backendSummary,
       binding,
       capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
@@ -8917,6 +9556,70 @@ function readFullAccessRiskAction(
     : undefined;
 }
 
+function readAcpRuntimeRiskAction(
+  event: MessagingInboundCallbackEvent,
+): "accept" | "dismiss" | "cancel" | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  if (!actionId.startsWith(ACP_RUNTIME_RISK_ACTION_PREFIX)) {
+    return undefined;
+  }
+  const action = actionId.slice(ACP_RUNTIME_RISK_ACTION_PREFIX.length);
+  return action === "accept" || action === "dismiss" || action === "cancel"
+    ? action
+    : undefined;
+}
+
+function readAcpRuntimeRiskContext(
+  value: MessagingJsonValue | undefined,
+): AcpRuntimeRiskWarningContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const source =
+    value.source === "mode" ||
+    value.source === "configOption" ||
+    value.source === "model"
+      ? value.source
+      : undefined;
+  if (
+    value.kind === "new-thread" &&
+    typeof value.sessionId === "string" &&
+    typeof value.optionId === "string" &&
+    typeof value.value === "string" &&
+    typeof value.label === "string" &&
+    source
+  ) {
+    return {
+      kind: "new-thread",
+      label: value.label,
+      optionId: value.optionId,
+      sessionId: value.sessionId,
+      source,
+      value: value.value,
+    };
+  }
+  if (
+    value.kind === "thread" &&
+    typeof value.bindingId === "string" &&
+    typeof value.threadId === "string" &&
+    typeof value.optionId === "string" &&
+    typeof value.value === "string" &&
+    typeof value.label === "string" &&
+    source
+  ) {
+    return {
+      bindingId: value.bindingId,
+      kind: "thread",
+      label: value.label,
+      optionId: value.optionId,
+      source,
+      threadId: value.threadId,
+      value: value.value,
+    };
+  }
+  return undefined;
+}
+
 function readFullAccessRiskContext(
   value: MessagingJsonValue | undefined,
 ): FullAccessRiskWarningContext | undefined {
@@ -9173,9 +9876,6 @@ function normalizeNewThreadSessionForBackend(
   const preferences = { ...session.preferences };
   if (isAcpBackendId(backend.kind)) {
     delete preferences.permissionsMode;
-    if (preferences.executionMode === "full-access") {
-      delete preferences.executionMode;
-    }
   } else {
     delete preferences.acpRuntime;
   }
@@ -9352,6 +10052,12 @@ function newThreadPromptGateBody(
   options: NewThreadOptionsSummary,
   backend: BackendSummary,
 ): string {
+  const acpRuntimeMode = isAcpBackendId(options.backend)
+    ? buildMessagingAcpRuntimeModeSummary({
+        backend,
+        runtime: options.acpRuntime,
+      })
+    : undefined;
   return [
     `Send the first instruction for ${session.selectedProject?.label ?? "this project"}.`,
     "The thread will be created when that message arrives.",
@@ -9361,8 +10067,8 @@ function newThreadPromptGateBody(
     !isAcpBackendId(options.backend) || options.executionMode === "full-access"
       ? `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`
       : undefined,
-    isAcpBackendId(options.backend)
-      ? `Runtime mode: ${formatMessagingAcpRuntimeLineLabel(options.acpRuntime)} (desktop-only)`
+    acpRuntimeMode
+      ? `Runtime mode: ${acpRuntimeMode.currentLabel}`
       : undefined,
     options.supportsModel ? `Model: ${options.model}` : undefined,
     options.supportsReasoning && options.reasoningEffort
@@ -9377,37 +10083,6 @@ function newThreadPromptGateBody(
 
 function formatPermissionsShortLabel(mode: ThreadExecutionMode): string {
   return mode === "full-access" ? "Full" : "Default";
-}
-
-function formatMessagingAcpRuntimeLineLabel(
-  runtime: BackendAcpSessionRuntimeState | undefined,
-): string {
-  const mode =
-    runtime?.currentModeId ??
-    (runtime?.configValues
-      ? Object.entries(runtime.configValues).find(([key]) =>
-          isMessagingAcpRuntimeModeConfigKey(key),
-        )?.[1]
-      : undefined);
-  return mode ? formatMessagingAcpRuntimeModeLabel(mode) : "Agent default";
-}
-
-function isMessagingAcpRuntimeModeConfigKey(key: string): boolean {
-  return key.trim().toLowerCase().endsWith("mode");
-}
-
-function formatMessagingAcpRuntimeModeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function resolveNewThreadBaseBranch(
@@ -10283,6 +10958,15 @@ function readStringValue(
 
   const result = value[key];
   return typeof result === "string" ? result : undefined;
+}
+
+function readAcpRuntimeOptionSource(
+  value: MessagingJsonValue | undefined,
+): BackendAcpRuntimeOptionSource | undefined {
+  const source = readStringValue(value, "source");
+  return source === "mode" || source === "configOption" || source === "model"
+    ? source
+    : undefined;
 }
 
 function describeOutboundIntent(intent: MessagingSurfaceIntent): string {

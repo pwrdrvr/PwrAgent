@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  BackendSummary,
   NavigationSnapshot,
 } from "@pwragent/shared";
 import type {
@@ -301,13 +302,20 @@ describe("buildBindingStatusIntent", () => {
     const intent = buildBindingStatusIntent({
       id: "status-acp-runtime",
       createdAt: 1000,
+      backendSummary: buildAcpBackendSummary(),
       binding,
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
     expect(intent.text).toContain("Binding: Thread one (acp:gemini)");
-    expect(intent.text).toContain("Runtime mode: Yolo (desktop-only)");
+    expect(intent.text).toContain("Runtime mode: Yolo");
     expect(intent.text).not.toContain("Permissions:");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:runtime-mode",
+        label: "Runtime: Yolo",
+      }),
+    );
     expect(intent.actions).not.toContainEqual(
       expect.objectContaining({
         id: "status:permissions",
@@ -335,12 +343,41 @@ describe("buildBindingStatusIntent", () => {
     const intent = buildBindingStatusIntent({
       id: "status-acp-model-config",
       createdAt: 1000,
+      backendSummary: {
+        ...buildAcpBackendSummary(),
+        acp: {
+          ...buildAcpBackendSummary().acp!,
+          runtime: {
+            schemaVersion: 1,
+            status: "discovered",
+            configOptions: [
+              {
+                id: "model",
+                label: "Model",
+                type: "select",
+                category: "model",
+                values: [
+                  {
+                    value: "gemini-3-flash-preview",
+                    label: "Gemini 3 Flash Preview",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
       binding,
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Runtime mode: Agent default (desktop-only)");
+    expect(intent.text).toContain("Runtime mode: Agent default");
     expect(intent.text).not.toContain("Runtime mode: Gemini 3 Flash Preview");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({
+        id: "status:runtime-mode",
+      }),
+    );
   });
 
   it("renders live thread state ahead of stale binding display metadata", () => {
@@ -737,5 +774,49 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       },
     ],
     unchanged: false,
+  };
+}
+
+function buildAcpBackendSummary(): BackendSummary {
+  return {
+    kind: "acp:gemini",
+    source: "acp",
+    label: "Gemini CLI",
+    available: true,
+    methods: [],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: false,
+      transcriptPagination: false,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    },
+    executionModes: [],
+    acp: {
+      registryId: "gemini",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "auto_edit", label: "Auto Edit" },
+            { id: "yolo", label: "Yolo" },
+          ],
+        },
+      },
+    },
   };
 }

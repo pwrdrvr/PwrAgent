@@ -14,6 +14,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MessagingToolUpdateMode,
   NavigationSnapshot,
+  SetAcpSessionRuntimeOptionRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
   StartThreadRequest,
@@ -31,6 +32,7 @@ import type {
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
   MessagingInboundTextEvent,
+  MessagingJsonValue,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
@@ -2698,13 +2700,320 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Agent default (desktop-only)"),
+      body: expect.stringContaining("Runtime mode: Agent default"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       body: expect.stringContaining("Model: gemini-3-flash-preview"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       body: expect.not.stringContaining("Runtime mode: Gemini 3 Flash Preview"),
+    });
+  });
+
+  it("lets ACP messaging choose a runtime mode before starting a new thread", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Runtime mode: Default"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:runtime-mode",
+          label: "Runtime: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:runtime-mode" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select runtime mode",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-runtime-mode",
+          label: "Yolo",
+          value: {
+            optionId: "mode",
+            source: "mode",
+            value: "yolo",
+          },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-runtime-mode",
+        value: {
+          optionId: "mode",
+          source: "mode",
+          value: "yolo",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringMatching(
+        /Permissions: Full[\s\S]*Runtime mode: Yolo|Runtime mode: Yolo[\s\S]*Permissions: Full/,
+      ),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use yolo"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "acp:gemini",
+        executionMode: "full-access",
+        acpRuntime: expect.objectContaining({
+          currentModeId: "yolo",
+        }),
+      }),
+    });
+  });
+
+  it("uses inherited ACP runtime state when opening the new-thread picker", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "acp:gemini",
+        executionMode: "full-access",
+        acpRuntime: {
+          currentModeId: "yolo",
+          updatedAt: 1000,
+        },
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Runtime mode: Yolo"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:runtime-mode" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select runtime mode",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-runtime-mode",
+          label: "Yolo (current)",
+          value: {
+            optionId: "mode",
+            source: "mode",
+            value: "yolo",
+          },
+        }),
+      ]),
+    });
+  });
+
+  it("keeps a permissions action when ACP inherits full access defaults", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      executionMode: "full-access",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:permissions",
+          label: "Permissions: Full",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.not.stringContaining("Permissions: Full"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:permissions",
+          label: "Permissions: Full",
+        }),
+      ]),
+    });
+  });
+
+  it("warning-gates risky ACP runtime modes from messaging", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      fullAccessControls: {
+        allowEscalation: true,
+        allowThreadResume: true,
+        warningPolicy: "always",
+      },
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-runtime-mode",
+        value: {
+          optionId: "mode",
+          source: "mode",
+          value: "yolo",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Enable Yolo?",
+      body: expect.stringContaining("Yolo may allow the ACP agent"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "acp-runtime-risk:accept",
+        }),
+      ]),
+    });
+
+    const warningIntent = harness.delivered.at(-1) as {
+      actions?: Array<{ id: string; value?: unknown }>;
+    };
+    const acceptAction = warningIntent.actions?.find(
+      (action) => action.id === "acp-runtime-risk:accept",
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "acp-runtime-risk:accept",
+        value: acceptAction?.value as MessagingJsonValue | undefined,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Runtime mode: Yolo"),
     });
   });
 
@@ -7897,6 +8206,87 @@ describe("MessagingController", () => {
     );
   });
 
+  it("lets ACP messaging change runtime mode from the status card", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      executionMode: "default",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:acp:gemini:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "acp:gemini",
+      channel: buildCommandEvent("/status").channel,
+      createdAt: 900,
+      threadId: "thread-1",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Runtime mode: Default"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:runtime-mode",
+          label: "Runtime: Default",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:runtime-mode" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Runtime Mode",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-runtime-mode",
+          label: "Yolo",
+          value: {
+            optionId: "mode",
+            source: "mode",
+            value: "yolo",
+          },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-runtime-mode",
+        value: {
+          optionId: "mode",
+          source: "mode",
+          value: "yolo",
+        },
+      }),
+    );
+
+    expect(harness.setAcpSessionRuntimeOption).toHaveBeenCalledWith({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      source: "mode",
+      optionId: "mode",
+      value: "yolo",
+    });
+  });
+
   it("uses live thread permissions instead of stale binding preferences", async () => {
     const harness = await createHarness();
     const navigation = buildNavigationSnapshot();
@@ -8522,6 +8912,9 @@ async function createHarness(options?: {
   readThreadLastAssistantReply?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantReply"]
   >;
+  setAcpSessionRuntimeOption?: NonNullable<
+    MessagingBackendBridge["setAcpSessionRuntimeOption"]
+  >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -8541,6 +8934,7 @@ async function createHarness(options?: {
   readThreadLastAssistantReply: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   recordMessagingBindingTransition: ReturnType<typeof vi.fn>;
+  setAcpSessionRuntimeOption: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
@@ -8694,6 +9088,47 @@ async function createHarness(options?: {
     }
     return request;
   });
+  const setAcpSessionRuntimeOption = vi.fn(
+    options?.setAcpSessionRuntimeOption ??
+      (async (request: SetAcpSessionRuntimeOptionRequest) => {
+        if (controllerRef) {
+          await controllerRef.handleBackendEvent({
+            backend: request.backend,
+            notification: {
+              method: "thread/acpRuntime/updated",
+              params: {
+                threadId: request.threadId,
+                acpRuntime: {
+                  ...(request.source === "configOption"
+                    ? { configValues: { [request.optionId]: request.value } }
+                    : {}),
+                  ...(request.source === "mode" || request.source === "configOption"
+                    ? { currentModeId: request.value }
+                    : {}),
+                  ...(request.source === "model"
+                    ? { currentModelId: request.value }
+                    : {}),
+                  updatedAt: 1000,
+                },
+              },
+            },
+          });
+        }
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          runtimeState: {
+            ...(request.source === "configOption"
+              ? { configValues: { [request.optionId]: request.value } }
+              : {}),
+            ...(request.source === "mode" || request.source === "configOption"
+              ? { currentModeId: request.value }
+              : {}),
+            updatedAt: 1000,
+          },
+        };
+      }),
+  );
   const cancelThreadExecutionModeQueue = vi.fn(
     async (request: CancelThreadExecutionModeQueueRequest) => ({
       backend: request.backend,
@@ -8805,6 +9240,7 @@ async function createHarness(options?: {
     readThreadLastAssistantMessage,
     readThreadStatus,
     recordMessagingBindingTransition,
+    setAcpSessionRuntimeOption,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
@@ -8861,6 +9297,7 @@ async function createHarness(options?: {
     readThreadLastAssistantReply,
     readThreadStatus,
     recordMessagingBindingTransition,
+    setAcpSessionRuntimeOption,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
@@ -8948,6 +9385,42 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
     executionModes: overrides.executionModes ?? base.executionModes,
     launchpadOptions: overrides.launchpadOptions ?? base.launchpadOptions,
   };
+}
+
+function buildAcpRuntimeBackendSummary(
+  overrides: Partial<BackendSummary> = {},
+): BackendSummary {
+  return buildBackendSummary({
+    kind: "acp:gemini",
+    label: "Gemini CLI",
+    source: "acp",
+    executionModes: [],
+    acp: {
+      registryId: "gemini",
+      distributionKinds: ["local"],
+      installStatus: "installed",
+      authStatus: "authenticated",
+      verificationStatus: "not-applicable",
+      runtime: {
+        schemaVersion: 1,
+        status: "discovered",
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", label: "Default" },
+            { id: "auto_edit", label: "Auto Edit" },
+            { id: "yolo", label: "Yolo" },
+          ],
+        },
+      },
+    },
+    launchpadOptions: {
+      models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+      reasoningEfforts: [],
+      supportsFastMode: false,
+    },
+    ...overrides,
+  });
 }
 
 function buildNavigationSnapshot(): NavigationSnapshot {

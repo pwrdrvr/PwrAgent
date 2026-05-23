@@ -18,6 +18,8 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -151,6 +153,9 @@ export type MessagingBackendBridge = {
   setThreadExecutionMode?(
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse>;
+  setAcpSessionRuntimeOption?(
+    request: SetAcpSessionRuntimeOptionRequest,
+  ): Promise<SetAcpSessionRuntimeOptionResponse>;
   cancelThreadExecutionModeQueue?(
     request: CancelThreadExecutionModeQueueRequest,
   ): Promise<CancelThreadExecutionModeQueueResponse>;
