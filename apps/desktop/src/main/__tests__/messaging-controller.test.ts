@@ -1616,11 +1616,32 @@ describe("MessagingController", () => {
         ],
       }),
     );
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "activity",
-      activity: "typing",
-      state: "active",
-    });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Did we get an update?"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            text: "Did we get an update?",
+            type: "text",
+          },
+        ],
+        threadId: "thread-1",
+      }),
+    );
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "confirmation" && intent.title === "Message queued",
+      ),
+    ).toEqual([]);
   });
 
   it("keeps automation messaging quiet until the final assistant response", async () => {
@@ -1764,11 +1785,13 @@ describe("MessagingController", () => {
         ],
       }),
     );
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "activity",
-      activity: "typing",
-      state: "idle",
-    });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "idle",
+      }),
+    );
   });
 
   it("echoes binding routing state into typing activity intents", async () => {

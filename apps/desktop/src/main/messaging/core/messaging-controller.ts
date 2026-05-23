@@ -737,7 +737,13 @@ export class MessagingController {
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
-      if (lifecycle) {
+      const eventTurnId = turnIdForBackendEvent(event);
+      const automationTurnEvent = this.isAutomationTurnEvent(
+        event,
+        binding,
+        eventTurnId ?? lifecycle?.turnId ?? activeTurn?.turnId,
+      );
+      if (lifecycle && !automationTurnEvent) {
         const previousTurn = activeTurn;
         activeTurn = lifecycle;
         turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
@@ -787,7 +793,7 @@ export class MessagingController {
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
       if (assistantDelta) {
-        if (!this.isAutomationTurnEvent(event, binding, activeTurn?.turnId)) {
+        if (!automationTurnEvent) {
           await this.deliverAssistantStreamUpdate(assistantDelta, binding);
         }
       }
@@ -795,7 +801,7 @@ export class MessagingController {
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
         if (
-          !this.isAutomationTurnEvent(event, binding, activeTurn?.turnId) ||
+          !automationTurnEvent ||
           !isNonFinalAssistantTextForBackendEvent(event)
         ) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
@@ -851,7 +857,6 @@ export class MessagingController {
         if (latestActiveTurn?.status !== "working") {
           continue;
         }
-        const eventTurnId = turnIdForBackendEvent(event);
         if (eventTurnId && latestActiveTurn.turnId !== eventTurnId) {
           continue;
         }
@@ -8410,29 +8415,10 @@ export class MessagingController {
     });
 
     for (const binding of params.bindings) {
-      const activeTurn: MessagingActiveTurnSummary = {
-        turnId: params.turnId,
-        status: "working",
-        updatedAt: this.now(),
-      };
-      const previousTurn = this.getActiveTurn(binding);
-      if (!isSameActiveTurnState(previousTurn, activeTurn)) {
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          "thread/turnQueue/updated:automation",
-        );
-      }
       await this.deliverAutomationStartedMessage(binding, {
         automationName: params.automationName,
         automationRunId: params.automationRunId,
         turnId: params.turnId,
-      });
-      await this.signalTurnActivity(binding, activeTurn, {
-        force: true,
-        reason: "thread/turnQueue/updated:automation",
       });
     }
   }
@@ -8449,26 +8435,6 @@ export class MessagingController {
       if (params.finalText?.trim()) {
         await this.deliverAssistantMessage(params.finalText, params.event, binding);
       }
-      const activeTurn: MessagingActiveTurnSummary = {
-        turnId: params.turnId,
-        status: "completed",
-        updatedAt: this.now(),
-      };
-      const previousTurn = this.getActiveTurn(binding);
-      if (!isSameActiveTurnState(previousTurn, activeTurn)) {
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          "thread/turnQueue/updated:automation:terminal",
-        );
-      }
-      await this.signalTurnActivity(binding, activeTurn, {
-        force: true,
-        reason: "thread/turnQueue/updated:automation:terminal",
-      });
-      await this.startNextQueuedTurn(binding);
     }
     this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
   }
