@@ -9,14 +9,13 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatAutomationRelative,
   formatAutomationStatus,
-  formatAutomationTimestamp,
   formatBacklogPolicy,
-  formatRunStatus,
 } from "./automation-format";
 import {
   AutomationEditor,
   type AutomationEditorSubmit,
 } from "./AutomationEditor";
+import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
 
 type AutomationsScreenProps = {
@@ -322,6 +321,7 @@ function AutomationTableHistory(props: {
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
+  const [expandedRunId, setExpandedRunId] = useState<string>();
 
   return (
     <div className="automations-table__history">
@@ -334,28 +334,17 @@ function AutomationTableHistory(props: {
       ) : (
         <ol className="automation-run-history">
           {runs.runs.map((run) => (
-            <li key={run.id} className="automation-run-history__item">
-              <span className={`automation-run-status automation-run-status--${run.status}`}>
-                {formatRunStatus(run.status)}
-              </span>
-              <span>
-                {run.trigger}
-                {run.scheduledFor
-                  ? ` for ${formatAutomationTimestamp(run.scheduledFor)}`
-                  : ""}
-              </span>
-              <span className="automation-run-history__time">
-                {formatAutomationTimestamp(run.completedAt ?? run.startedAt ?? run.queuedAt)}
-              </span>
-              {run.scheduledWindows.length > 1 ? (
-                <span className="automation-run-history__time">
-                  {run.scheduledWindows.length} windows
-                </span>
-              ) : null}
-              {run.errorMessage ? (
-                <span className="automation-run-history__error">{run.errorMessage}</span>
-              ) : null}
-            </li>
+            <AutomationRunHistoryItem
+              key={run.id}
+              desktopApi={props.desktopApi}
+              expanded={expandedRunId === run.id}
+              run={run}
+              onToggle={() =>
+                setExpandedRunId((current) =>
+                  current === run.id ? undefined : run.id,
+                )
+              }
+            />
           ))}
         </ol>
       )}

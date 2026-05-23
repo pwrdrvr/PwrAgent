@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AutomationDetail,
   AutomationIdRequest,
+  AutomationRunArtifact,
   AutomationRunSummary,
   CreateAutomationRequest,
   ListAutomationsRequest,
@@ -231,6 +232,52 @@ export function useAutomationRuns(
   }, [automationId, desktopApi, refresh]);
 
   return { error, loading, refresh, runs };
+}
+
+export function useAutomationRunArtifact(
+  desktopApi: DesktopApi | undefined,
+  runId: string | undefined,
+): {
+  artifact?: AutomationRunArtifact;
+  error?: string;
+  loading: boolean;
+} {
+  const [artifact, setArtifact] = useState<AutomationRunArtifact>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!runId || !desktopApi?.getAutomationRunArtifact) {
+      setArtifact(undefined);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(undefined);
+    void desktopApi
+      .getAutomationRunArtifact({ runId })
+      .then((response) => {
+        if (!cancelled) {
+          setArtifact(response.artifact);
+        }
+      })
+      .catch((candidate) => {
+        if (!cancelled) {
+          setError(formatAutomationError(candidate, "Automation artifact could not be loaded."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi, runId]);
+
+  return { artifact, error, loading };
 }
 
 export function sameAutomationThread(

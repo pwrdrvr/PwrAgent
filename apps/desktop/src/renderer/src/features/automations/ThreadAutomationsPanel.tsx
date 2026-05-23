@@ -17,6 +17,7 @@ import {
 } from "./AutomationEditor";
 import {
   sameAutomationThread,
+  useAutomationRunArtifact,
   useAutomationRuns,
   useAutomations,
 } from "./useAutomations";
@@ -249,6 +250,7 @@ export function AutomationRunHistory(props: {
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
+  const [expandedRunId, setExpandedRunId] = useState<string>();
 
   if (runs.loading) {
     return <p className="automation-run-history__empty">Loading run history...</p>;
@@ -265,28 +267,93 @@ export function AutomationRunHistory(props: {
   return (
     <ol className="automation-run-history">
       {runs.runs.map((run) => (
-        <li key={run.id} className="automation-run-history__item">
-          <span className={`automation-run-status automation-run-status--${run.status}`}>
-            {formatRunStatus(run.status)}
-          </span>
-          <span>
-            {run.trigger}
-            {run.scheduledFor ? ` for ${formatAutomationTimestamp(run.scheduledFor)}` : ""}
-          </span>
-          <span className="automation-run-history__time">
-            {formatAutomationTimestamp(run.completedAt ?? run.startedAt ?? run.queuedAt)}
-          </span>
-          {run.scheduledWindows.length > 1 ? (
-            <span className="automation-run-history__time">
-              {run.scheduledWindows.length} windows
-            </span>
-          ) : null}
-          {run.errorMessage ? (
-            <span className="automation-run-history__error">{run.errorMessage}</span>
-          ) : null}
-        </li>
+        <AutomationRunHistoryItem
+          key={run.id}
+          desktopApi={props.desktopApi}
+          expanded={expandedRunId === run.id}
+          run={run}
+          onToggle={() =>
+            setExpandedRunId((current) => (current === run.id ? undefined : run.id))
+          }
+        />
       ))}
     </ol>
+  );
+}
+
+export function AutomationRunHistoryItem(props: {
+  desktopApi?: DesktopApi;
+  expanded: boolean;
+  run: ReturnType<typeof useAutomationRuns>["runs"][number];
+  onToggle: () => void;
+}) {
+  const artifact = useAutomationRunArtifact(
+    props.desktopApi,
+    props.expanded ? props.run.id : undefined,
+  );
+  return (
+    <li className="automation-run-history__item">
+      <span className={`automation-run-status automation-run-status--${props.run.status}`}>
+        {formatRunStatus(props.run.status)}
+      </span>
+      <span>
+        {props.run.trigger}
+        {props.run.scheduledFor
+          ? ` for ${formatAutomationTimestamp(props.run.scheduledFor)}`
+          : ""}
+      </span>
+      <span className="automation-run-history__time">
+        {formatAutomationTimestamp(
+          props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
+        )}
+      </span>
+      {props.run.scheduledWindows.length > 1 ? (
+        <span className="automation-run-history__time">
+          {props.run.scheduledWindows.length} windows
+        </span>
+      ) : null}
+      {props.run.errorMessage ? (
+        <span className="automation-run-history__error">{props.run.errorMessage}</span>
+      ) : null}
+      <button className="context-list__action" type="button" onClick={props.onToggle}>
+        {props.expanded ? "Hide details" : "Details"}
+      </button>
+      {props.expanded ? (
+        <AutomationRunArtifactDetails
+          error={artifact.error}
+          finalText={artifact.artifact?.finalText}
+          loading={artifact.loading}
+          outputDecision={artifact.artifact?.outputDecision?.kind}
+        />
+      ) : null}
+    </li>
+  );
+}
+
+function AutomationRunArtifactDetails(props: {
+  error?: string;
+  finalText?: string;
+  loading: boolean;
+  outputDecision?: string;
+}) {
+  if (props.loading) {
+    return <p className="automation-run-history__time">Loading details...</p>;
+  }
+  if (props.error) {
+    return <p className="automation-run-history__error">{props.error}</p>;
+  }
+  if (!props.finalText && !props.outputDecision) {
+    return <p className="automation-run-history__time">No artifact details stored.</p>;
+  }
+  return (
+    <div className="automation-run-history__artifact">
+      {props.outputDecision ? (
+        <p className="automation-run-history__time">
+          Output decision: {props.outputDecision}
+        </p>
+      ) : null}
+      {props.finalText ? <pre>{props.finalText}</pre> : null}
+    </div>
   );
 }
 
