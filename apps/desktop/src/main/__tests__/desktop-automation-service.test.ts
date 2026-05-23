@@ -624,6 +624,85 @@ describe("DesktopAutomationService", () => {
     });
   });
 
+  it("recovers automation completion from a structured assistant final when terminal correlation is missed", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    const run = store.createRun({
+      id: "run-weather",
+      automationId: created.automation.id,
+      trigger: "manual",
+      now: 1_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunStarted({
+      runId: "run-weather",
+      backendThreadId: "headless-thread-1",
+      backendTurnId: "turn-weather",
+      startedAt: 1_100,
+      now: 1_100,
+    });
+    publishedEvents = [];
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-weather",
+              item: {
+                id: "assistant-final",
+                text: JSON.stringify({
+                  decision: "post_card",
+                  summary: "Rain is expected today.",
+                  details: "Forecast confidence is high this afternoon.",
+                }),
+                type: "agentMessage",
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(store.getRun("run-weather")).toMatchObject({
+      status: "completed",
+      backendTurnId: "turn-weather",
+    });
+    expect(store.getRunArtifact("run-weather")).toMatchObject({
+      finalText: expect.stringContaining("Rain is expected today."),
+      outputDecision: {
+        kind: "post_card",
+        summary: "Rain is expected today.",
+      },
+    });
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          automationId: created.automation.id,
+          runId: "run-weather",
+          status: "completed",
+          threadId: "thread-1",
+        },
+      },
+    });
+  });
+
   it("cancels every queued automation turn when deleting an automation", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({

@@ -481,6 +481,18 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
+  findRunByBackendTurnId(params: {
+    backend: AppServerBackendKind;
+    backendTurnId: string;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE backend = ? AND backend_turn_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(params.backend, params.backendTurnId) as AutomationRunRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
   upsertRunArtifact(
     input: UpsertAutomationRunArtifactInput,
   ): AutomationRunArtifact | undefined {

@@ -339,7 +339,7 @@ export class DesktopAutomationService {
 
   private async handleRegistryEvent(event: AgentEvent): Promise<void> {
     if (event.notification.method !== "thread/turnQueue/updated") {
-      this.captureAutomationRunTranscriptEvent(event);
+      await this.captureAutomationRunTranscriptEvent(event);
       if (isTerminalTurnNotification(event.notification)) {
         await this.handleBackendTerminalTurnEvent(event);
       }
@@ -387,6 +387,21 @@ export class DesktopAutomationService {
       backendTurnId: turnId,
     });
     if (!activeRun) {
+      const resolvedRun = this.options.store.findRunByBackendTurnId({
+        backend: event.backend,
+        backendTurnId: turnId,
+      });
+      if (resolvedRun && isTerminalAutomationRunStatus(resolvedRun.status)) {
+        automationServiceLog.debug("terminal backend turn already resolved automation", {
+          backend: event.backend,
+          method: event.notification.method,
+          runId: resolvedRun.id,
+          runStatus: resolvedRun.status,
+          threadId: event.notification.params.threadId,
+          turnId,
+        });
+        return;
+      }
       automationServiceLog.warn("terminal backend turn did not match a running automation", {
         backend: event.backend,
         method: event.notification.method,
@@ -522,7 +537,7 @@ export class DesktopAutomationService {
     }
   }
 
-  private captureAutomationRunTranscriptEvent(event: AgentEvent): void {
+  private async captureAutomationRunTranscriptEvent(event: AgentEvent): Promise<void> {
     const turnId = turnIdFromAutomationNotification(event.notification);
     if (!turnId) return;
     const run = this.options.store.findRunningRunByBackendTurnId({
@@ -550,6 +565,42 @@ export class DesktopAutomationService {
       runId: run.id,
       event: transcriptEvent,
       now: transcriptEvent.at,
+    });
+    if (transcriptEvent.kind !== "assistant_final" || !transcriptEvent.text?.trim()) {
+      return;
+    }
+
+    const finalText = transcriptEvent.text.trim();
+    const outputDecision = parseAutomationOutputDecision(finalText);
+    if (
+      outputDecision?.kind !== "post_card" &&
+      outputDecision?.kind !== "quiet"
+    ) {
+      return;
+    }
+    automationServiceLog.info("completing automation run from captured assistant final", {
+      backend: event.backend,
+      outputDecision: outputDecision.kind,
+      runId: run.id,
+      textLength: finalText.length,
+      threadId: notificationThreadId(event.notification),
+      turnId,
+    });
+    await this.scheduler.handleTurnQueueUpdate({
+      automationRunId: run.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      turnId,
+    });
+    const automation = this.options.store.getAutomation(run.automationId, {
+      includeDeleted: true,
+    });
+    await this.publishAutomationRunUpdate({
+      backend: event.backend,
+      runId: run.id,
+      status: "terminal",
+      threadId: automation?.threadId ?? notificationThreadId(event.notification) ?? run.id,
+      finalText,
     });
   }
 
