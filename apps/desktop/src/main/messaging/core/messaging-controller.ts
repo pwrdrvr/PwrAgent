@@ -717,6 +717,20 @@ export class MessagingController {
           turnId: turnQueueUpdate.turnId,
         });
       }
+      if (
+        turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.status === "terminal" &&
+        turnQueueUpdate.turnId
+      ) {
+        await this.handleAutomationTurnTerminal({
+          backend: event.backend,
+          bindings,
+          event,
+          finalText: turnQueueUpdate.finalText,
+          threadId,
+          turnId: turnQueueUpdate.turnId,
+        });
+      }
       return;
     }
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
@@ -8423,6 +8437,42 @@ export class MessagingController {
     }
   }
 
+  private async handleAutomationTurnTerminal(params: {
+    backend: AppServerBackendKind;
+    bindings: MessagingBindingRecord[];
+    event: AgentEvent;
+    finalText?: string;
+    threadId: ThreadIdentifier;
+    turnId: string;
+  }): Promise<void> {
+    for (const binding of params.bindings) {
+      if (params.finalText?.trim()) {
+        await this.deliverAssistantMessage(params.finalText, params.event, binding);
+      }
+      const activeTurn: MessagingActiveTurnSummary = {
+        turnId: params.turnId,
+        status: "completed",
+        updatedAt: this.now(),
+      };
+      const previousTurn = this.getActiveTurn(binding);
+      if (!isSameActiveTurnState(previousTurn, activeTurn)) {
+        this.setActiveTurn(binding, activeTurn);
+        this.logBindingTurnStateChange(
+          binding,
+          previousTurn,
+          activeTurn,
+          "thread/turnQueue/updated:automation:terminal",
+        );
+      }
+      await this.signalTurnActivity(binding, activeTurn, {
+        force: true,
+        reason: "thread/turnQueue/updated:automation:terminal",
+      });
+      await this.startNextQueuedTurn(binding);
+    }
+    this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
+  }
+
   private rememberAutomationTurn(params: {
     automationName?: string;
     automationRunId?: string;
@@ -10384,6 +10434,7 @@ function automationTurnKey(params: {
 function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   automationName?: string;
   automationRunId?: string;
+  finalText?: string;
   origin?: string;
   status?: string;
   turnId?: string;
@@ -10394,6 +10445,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
   const params = event.notification.params as {
     automationName?: unknown;
     automationRunId?: unknown;
+    finalText?: unknown;
     origin?: unknown;
     status?: unknown;
     turnId?: unknown;
@@ -10403,6 +10455,7 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
       typeof params.automationName === "string" ? params.automationName : undefined,
     automationRunId:
       typeof params.automationRunId === "string" ? params.automationRunId : undefined,
+    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
     origin: typeof params.origin === "string" ? params.origin : undefined,
     status: typeof params.status === "string" ? params.status : undefined,
     turnId: typeof params.turnId === "string" ? params.turnId : undefined,

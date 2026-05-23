@@ -1715,6 +1715,62 @@ describe("MessagingController", () => {
     );
   });
 
+  it("delivers headless automation final text from terminal queue events", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "terminal",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Batphone",
+          finalText: "Final headless automation response.",
+          terminalStatus: "turn/completed",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Final headless automation response.",
+          }),
+        ],
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+  });
+
   it("echoes binding routing state into typing activity intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
