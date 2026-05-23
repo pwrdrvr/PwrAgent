@@ -23,14 +23,11 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadReplay,
-  type AppServerThreadMessagePart,
-  type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
-  type BackendAcpRuntimeCapabilities,
   type BackendAcpRuntimeOptionSource,
   type BackendAcpSessionRuntimeState,
   type BackendCapabilities,
@@ -106,26 +103,24 @@ import {
   isAcpBackendId,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
-import type { AcpAgentStore } from "../acp/acp-agent-store";
-import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
-  acpAgentCapabilitiesForRegistryId,
-  type AcpAgentCapabilities,
-} from "../acp/acp-agent-capabilities";
-import {
-  AcpAgentClient,
-  type AcpPromptContentBlock,
-} from "../acp/acp-client";
-import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
-import type { AcpSessionMetadata, AcpSessionStore } from "../acp/acp-session-store";
-import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
-import { acpSessionRuntimeStateFromUpdate } from "../acp/acp-runtime-capabilities";
-import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
-import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
-import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
-import { AcpAgentStore as SqliteAcpAgentStore } from "../acp/acp-agent-store";
-import { AcpSessionStore as SqliteAcpSessionStore } from "../acp/acp-session-store";
+  ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
+  AcpBackendAdapter,
+  acpRuntimeValueLooksPrivileged,
+  acpSessionHasConversationHistory,
+  acpSessionToThreadSummary,
+  formatAcpRuntimeLabel,
+  inputToAcpPrompt,
+  isAcpSessionMissingForProjectError,
+  mergeAcpRuntimeState,
+  withAcpModelRuntimeSelection,
+  type AcpBackendAdapterOptions,
+  type AcpClientFactory,
+  type AcpRuntimeClient,
+  type AcpSessionMetadata,
+  type AcpSessionStoreLike,
+  type LocalAcpDiscovery,
+} from "./acp-backend-adapter";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import { createScratchProjectDirectory } from "./scratch-projects";
@@ -184,8 +179,6 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 5_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
-const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
-  "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -236,28 +229,6 @@ function assistantOutputForTurn(
   }
 
   return [];
-}
-
-function readAcpUpdateKind(update: Record<string, unknown>): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
-  return typeof kind === "string" ? kind : undefined;
-}
-
-function readAcpUpdateText(update: Record<string, unknown>): string | undefined {
-  if (typeof update.text === "string") {
-    return update.text;
-  }
-  if (typeof update.outputText === "string") {
-    return update.outputText;
-  }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
-    return undefined;
-  }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
-    : undefined;
 }
 
 type BackendClient = {
@@ -362,27 +333,6 @@ type BackendClient = {
     configPath?: string;
   }): Promise<{ projectPath: string; configPath?: string }>;
 };
-
-type AcpRuntimeClient = Pick<
-  AcpAgentClient,
-  | "cancelSession"
-  | "dispose"
-  | "ensureSession"
-  | "initialize"
-  | "loadSession"
-  | "readReplay"
-  | "refreshSession"
-  | "startPrompt"
-  | "startSession"
-> &
-  Partial<Pick<AcpAgentClient, "setRuntimeOption">>;
-
-type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
-type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
-
-type AcpSessionStoreLike =
-  Pick<AcpSessionStore, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStore, "upsertSession">>;
 
 /**
  * Resolve the live workspace CWD for thread-scoped commands.
@@ -921,270 +871,6 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
   };
 }
 
-function buildAcpCapabilities(): BackendCapabilities {
-  return {
-    listThreads: true,
-    createThread: true,
-    resumeThread: true,
-    archiveThread: true,
-    restoreThread: true,
-    archiveWorktree: false,
-    restoreWorktree: false,
-    renameThread: true,
-    readThread: true,
-    startTurn: true,
-    startReview: false,
-    interruptTurn: true,
-    steerTurn: false,
-    transcriptPagination: false,
-    toolUse: true,
-    approvalRequests: true,
-    multiDirectoryThreads: true,
-  };
-}
-
-function describeInstalledAcpBackend(agent: AcpInstalledAgentRecord): BackendSummary {
-  const available =
-    agent.installStatus === "installed" &&
-    (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
-  const unavailableReason =
-    available
-      ? undefined
-      : agent.lastError ??
-        (agent.authStatus === "required"
-          ? "ACP agent authentication required"
-          : "ACP agent unavailable");
-
-  return {
-    kind: agent.backendId,
-    source: "acp",
-    label: agent.name,
-    available,
-    acp: {
-      registryId: agent.registryId,
-      version: agent.version,
-      distributionKinds: [agent.distributionKind],
-      installStatus: agent.installStatus,
-      authStatus: agent.authStatus,
-      verificationStatus: agent.verificationStatus,
-      installedAt: agent.installedAt,
-      updatedAt: agent.updatedAt,
-      repositoryUrl: agent.registryAgent?.repositoryUrl,
-      websiteUrl: agent.registryAgent?.websiteUrl,
-      allowlistRuleId: agent.allowlistRuleId,
-      license: agent.registryAgent?.license,
-      runtime: agent.runtimeCapabilities,
-    },
-    methods: ["session/new", "session/load", "session/prompt", "session/cancel"],
-    capabilities: buildAcpCapabilities(),
-    executionModes: [],
-    launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
-    unavailableReason,
-  };
-}
-
-function buildAcpLaunchpadOptions(
-  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
-): BackendLaunchpadOptions | undefined {
-  const modelOptions = runtimeCapabilities?.models?.availableModels.map(
-    (model): BackendModelOption => ({
-      id: model.id,
-      label: model.label,
-      current: runtimeCapabilities.models?.currentModelId === model.id,
-    }),
-  ) ?? [];
-  const configModelOption = runtimeCapabilities?.configOptions
-    ?.find((option) => option.category === "model")
-    ?.values.map(
-      (value): BackendModelOption => ({
-        id: value.value,
-        label: value.label,
-        current: runtimeCapabilities.configOptions?.some(
-          (option) =>
-            option.category === "model" &&
-            option.currentValue === value.value,
-        ),
-      }),
-    ) ?? [];
-  const models = modelOptions.length > 0 ? modelOptions : configModelOption;
-  return models.length > 0 ? { models } : undefined;
-}
-
-function findAcpModelConfigOption(
-  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
-) {
-  return runtimeCapabilities?.configOptions?.find(
-    (option) => option.category === "model",
-  );
-}
-
-function withAcpModelRuntimeSelection(params: {
-  runtime: BackendAcpSessionRuntimeState | undefined;
-  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined;
-  model: string | undefined;
-  now: number;
-}): BackendAcpSessionRuntimeState | undefined {
-  const model = params.model?.trim();
-  if (!model) {
-    return params.runtime;
-  }
-
-  const modelConfigOption = findAcpModelConfigOption(params.runtimeCapabilities);
-  const hasModelList = Array.isArray(params.runtimeCapabilities?.models?.availableModels);
-  const hasAdvertisedModel =
-    params.runtimeCapabilities?.models?.availableModels.some(
-      (option) => option.id === model,
-    ) ?? false;
-  const shouldSetCurrentModelId =
-    hasAdvertisedModel || (!modelConfigOption && !hasModelList);
-  const configValues = modelConfigOption
-    ? {
-        ...(params.runtime?.configValues ?? {}),
-        [modelConfigOption.id]: model,
-      }
-    : params.runtime?.configValues;
-
-  return {
-    ...params.runtime,
-    ...(shouldSetCurrentModelId ? { currentModelId: model } : {}),
-    ...(configValues ? { configValues } : {}),
-    updatedAt: Math.max(params.runtime?.updatedAt ?? 0, params.now),
-  };
-}
-
-function acpSessionToThreadSummary(
-  session: AcpSessionMetadata,
-  capabilities?: AcpAgentCapabilities,
-): AppServerThreadSummary {
-  const workspaceHandoffAvailable =
-    !acpSessionHasConversationHistory(session) ||
-    capabilities?.liveWorkspaceHandoff === true;
-  const acpRuntime = mergeAcpRuntimeState(
-    session.acpRuntime,
-    deriveAcpRuntimeStateFromTranscript(session),
-  );
-  return {
-    id: session.sessionId,
-    title: session.title,
-    titleSource:
-      session.titleSource ??
-      (session.title === "ACP session" ? "fallback" : "derived"),
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    archivedAt: session.archivedAt,
-    linkedDirectories: session.cwd
-      ? [
-          {
-            id: session.cwd,
-            label: path.basename(session.cwd) || session.cwd,
-            path: session.cwd,
-            kind: "local",
-          },
-        ]
-      : [],
-    source: session.backendId,
-    executionMode: session.executionMode,
-    acpRuntime,
-    workspaceHandoff: workspaceHandoffAvailable
-      ? { available: true }
-      : {
-          available: false,
-          unavailableReason: ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
-        },
-  };
-}
-
-function acpSessionLoadFallbackReplay(
-  session: AcpSessionMetadata,
-  error: unknown,
-): AppServerThreadReplay {
-  const persistedReplay = replayPersistedAcpTranscript(session);
-  if (persistedReplay.entries.length > 0 || persistedReplay.messages.length > 0) {
-    return persistedReplay;
-  }
-
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    entries: [
-      {
-        type: "activity",
-        id: `acp-load-failed:${session.sessionId}`,
-        createdAt: Date.now(),
-        summary: "ACP transcript unavailable",
-        status: "failed",
-        details: [
-          {
-            id: `acp-load-failed:${session.sessionId}:detail`,
-            kind: "read",
-            label: message,
-          },
-        ],
-      },
-    ],
-    messages: [],
-    pagination: {
-      supportsPagination: false,
-      hasPreviousPage: false,
-    },
-    threadStatus: acpSessionThreadStatus(session.status),
-  };
-}
-
-function replayPersistedAcpTranscript(
-  session: AcpSessionMetadata,
-): AppServerThreadReplay {
-  const normalizer = new AcpSessionReplayNormalizer();
-  let replay = normalizer.replay();
-  for (const item of session.transcriptUpdates ?? []) {
-    replay = normalizer.apply({
-      sessionId: session.sessionId,
-      update: item.update,
-      receivedAt: item.receivedAt,
-    });
-  }
-  return {
-    ...replay,
-    threadStatus: acpSessionThreadStatus(session.status),
-  };
-}
-
-function deriveAcpRuntimeStateFromTranscript(
-  session: AcpSessionMetadata,
-): BackendAcpSessionRuntimeState | undefined {
-  let runtimeState: BackendAcpSessionRuntimeState | undefined;
-  for (const item of session.transcriptUpdates ?? []) {
-    runtimeState = mergeAcpRuntimeState(
-      runtimeState,
-      acpSessionRuntimeStateFromUpdate(item.update, item.receivedAt),
-    );
-  }
-  return runtimeState;
-}
-
-function acpSessionThreadStatus(
-  status: AcpSessionMetadata["status"],
-): AppServerThreadStatus {
-  return status === "active" || status === "idle" || status === "unknown"
-    ? status
-    : "unknown";
-}
-
-function isAcpSessionMissingForProjectError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("No previous sessions found for this project");
-}
-
-function acpSessionHasConversationHistory(session: AcpSessionMetadata): boolean {
-  return (session.transcriptUpdates ?? []).some((item) => {
-    const kind = item.update.kind ?? item.update.type ?? item.update.sessionUpdate;
-    return (
-      kind === "pwragent_user_prompt" ||
-      kind === "user_message_chunk" ||
-      kind === "agent_message_chunk"
-    );
-  });
-}
-
 function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   const args = [
     "-c",
@@ -1231,41 +917,6 @@ function buildTurnStartReservationKey(
   threadId: string,
 ): string {
   return `${backend}\u0000${threadId}`;
-}
-
-function mergeAcpRuntimeState(
-  current: BackendAcpSessionRuntimeState | undefined,
-  patch: BackendAcpSessionRuntimeState | undefined,
-): BackendAcpSessionRuntimeState | undefined {
-  if (!current && !patch) {
-    return undefined;
-  }
-  return {
-    ...current,
-    ...patch,
-    configValues: {
-      ...(current?.configValues ?? {}),
-      ...(patch?.configValues ?? {}),
-    },
-  };
-}
-
-function acpRuntimeValueLooksPrivileged(value: string | undefined): boolean {
-  return value === "yolo" || value === "autoEdit" || value === "auto_edit";
-}
-
-function formatAcpRuntimeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -1724,80 +1375,6 @@ function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): strin
   return text || undefined;
 }
 
-type AcpPromptPayload = {
-  prompt: string;
-  promptContent: AcpPromptContentBlock[];
-  parts: AppServerThreadMessagePart[];
-};
-
-function inputToAcpPrompt(
-  input: AppServerTurnInputItem[],
-): AcpPromptPayload | undefined {
-  const promptContent: AcpPromptContentBlock[] = [];
-  const parts: AppServerThreadMessagePart[] = [];
-
-  for (const item of input) {
-    if (item.type === "text") {
-      const text = item.text.trim();
-      if (text) {
-        promptContent.push({ type: "text", text });
-        parts.push({ type: "text", text });
-      }
-      continue;
-    }
-
-    if (item.type === "image") {
-      parts.push({ type: "image", url: item.url });
-      const image = parseImageDataUrl(item.url);
-      if (image) {
-        promptContent.push({
-          type: "image",
-          mimeType: image.mimeType,
-          data: image.data,
-        });
-      } else {
-        promptContent.push({ type: "text", text: "[Image attachment]" });
-      }
-      continue;
-    }
-
-    const fileName = path.basename(item.path);
-    const text = `[Local image: ${fileName}]`;
-    promptContent.push({ type: "text", text });
-    parts.push({ type: "text", text });
-  }
-
-  if (promptContent.length === 0 && parts.length === 0) {
-    return undefined;
-  }
-
-  return {
-    prompt: parts
-      .filter((part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
-        part.type === "text",
-      )
-      .map((part) => part.text)
-      .join("\n"),
-    promptContent,
-    parts,
-  };
-}
-
-function parseImageDataUrl(
-  url: string,
-): { mimeType: string; data: string } | undefined {
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/iu.exec(
-    url,
-  );
-  if (!match) {
-    return undefined;
-  }
-  return {
-    mimeType: match[1],
-    data: match[2],
-  };
-}
-
 function buildTitleGenerationKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -1997,15 +1574,7 @@ export class DesktopBackendRegistry {
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
-  private readonly acpAgentStore?: Pick<
-    AcpAgentStore,
-    "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
-  >;
-  private readonly acpSessionStore?: AcpSessionStoreLike;
-  private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
-  private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
-  private readonly createAcpClient: AcpClientFactory;
-  private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
+  private readonly acpBackend: AcpBackendAdapter;
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -2117,10 +1686,7 @@ export class DesktopBackendRegistry {
     gitDirectoryService?: GitDirectoryService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
-    acpAgentStore?: Pick<
-      AcpAgentStore,
-      "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
-    > | null;
+    acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     createAcpClient?: AcpClientFactory;
@@ -2224,230 +1790,16 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
-    this.acpAgentStore =
-      options?.acpAgentStore === null
-        ? undefined
-        : options?.acpAgentStore ??
-          (isAppStateInitialized()
-            ? new SqliteAcpAgentStore(getAppStateDb())
-            : undefined);
-    this.acpSessionStore =
-      options?.acpSessionStore === null
-        ? undefined
-        : options?.acpSessionStore ??
-          (isAppStateInitialized()
-            ? new SqliteAcpSessionStore(getAppStateDb())
-            : undefined);
-    this.discoverLocalAcpAgents =
-      options?.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
-    this.createAcpClient =
-      options?.createAcpClient ??
-      ((agent) => {
-        if (!agent.launchDescriptor) {
-          throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
-        }
-        if (!this.acpSessionStore?.upsertSession) {
-          throw new Error("ACP session store is unavailable");
-        }
-        const acpCapture = createProtocolCaptureFromEnv({
-          backend: agent.backendId,
-          backendInstance: "default",
-        });
-        if (acpCapture) {
-          this.captureStores.push(acpCapture.store);
-        }
-        return new AcpAgentClient({
-          backendId: agent.backendId,
-          store: this.acpSessionStore as AcpSessionStore,
-          transport: new AcpStdioJsonRpcTransport({
-            launchDescriptor: agent.launchDescriptor,
-            observer: createCompositeJsonRpcObserver([
-              acpCapture?.observer,
-              createProtocolLogObserverFromEnv({
-                backend: agent.backendId,
-              }),
-            ]),
-          }),
-          onSessionUpdate: async ({ sessionId, replay, title, turnId, update }) => {
-            const updateKind = readAcpUpdateKind(update);
-            if (title) {
-              await this.emit({
-                backend: agent.backendId,
-                notification: {
-                  method: "thread/name/updated",
-                  params: {
-                    threadId: sessionId,
-                    threadName: title,
-                  },
-                },
-              });
-            }
-            if (updateKind === "agent_message_chunk") {
-              const delta = readAcpUpdateText(update);
-              if (delta) {
-                await this.emit({
-                  backend: agent.backendId,
-                  notification: {
-                    method: "item/agentMessage/delta",
-                    params: {
-                      threadId: sessionId,
-                      turnId,
-                      itemId: `assistant:${turnId ?? sessionId}`,
-                      delta,
-                    },
-                  },
-                });
-              }
-            }
-            for (const notification of acpToolUpdateNotifications({
-              threadId: sessionId,
-              turnId,
-              update,
-            })) {
-              await this.emit({
-                backend: agent.backendId,
-                notification,
-              });
-            }
-            if (updateKind === "turn_finished" && turnId) {
-              const outputText = readAcpUpdateText(update);
-              await this.emit({
-                backend: agent.backendId,
-                notification: {
-                  method: "turn/completed",
-                  params: {
-                    threadId: sessionId,
-                    turnId,
-                    turn: {
-                      id: turnId,
-                      status: "completed",
-                      completedAt: Date.now(),
-                      output: outputText ? [{ type: "text", text: outputText }] : [],
-                    },
-                  },
-                },
-              });
-            }
-            await this.emit({
-              backend: agent.backendId,
-              notification: {
-                method: "thread/status/changed",
-                params: {
-                  threadId: sessionId,
-                  status: {
-                    type: replay.threadStatus ?? "unknown",
-                  },
-                },
-              },
-            });
-          },
-          onPromptError: async ({ sessionId, turnId, error }) => {
-            await this.emit({
-              backend: agent.backendId,
-              notification: {
-                method: "turn/failed",
-                params: {
-                  threadId: sessionId,
-                  turnId,
-                  turn: {
-                    id: turnId,
-                    status: "failed",
-                    completedAt: Date.now(),
-                    error: {
-                      message: error instanceof Error ? error.message : String(error),
-                    },
-                  },
-                },
-              },
-            });
-          },
-          onRuntimeCapabilities: async ({
-            runtimeCapabilities,
-            runtimeState,
-            sessionId,
-          }) => {
-            const now = Date.now();
-            const current =
-              this.acpAgentStore?.getInstalledAgent(agent.backendId) ?? agent;
-            this.acpAgentStore?.upsertInstalledAgent({
-              ...current,
-              runtimeCapabilities,
-              lastDiscoveredAt: runtimeCapabilities.discoveredAt ?? now,
-              lastDiscoveryError: runtimeCapabilities.lastError,
-              updatedAt: Math.max(current.updatedAt, now),
-            });
-            if (sessionId && runtimeState && this.acpSessionStore?.upsertSession) {
-              const metadata = this.acpSessionStore.getSession(
-                agent.backendId,
-                sessionId,
-              );
-              if (metadata) {
-                this.acpSessionStore.upsertSession({
-                  ...metadata,
-                  acpRuntime: {
-                    ...metadata.acpRuntime,
-                    ...runtimeState,
-                    configValues: {
-                      ...(metadata.acpRuntime?.configValues ?? {}),
-                      ...(runtimeState.configValues ?? {}),
-                    },
-                  },
-                  updatedAt: Math.max(
-                    metadata.updatedAt,
-                    runtimeState.updatedAt ?? now,
-                  ),
-                });
-              }
-            }
-          },
-          onSessionRuntimeStateChange: async ({ sessionId, runtimeState }) => {
-            if (!this.acpSessionStore?.upsertSession) {
-              return;
-            }
-            const metadata = this.acpSessionStore.getSession(
-              agent.backendId,
-              sessionId,
-            );
-            if (!metadata) {
-              return;
-            }
-            this.acpSessionStore.upsertSession({
-              ...metadata,
-              acpRuntime: {
-                ...metadata.acpRuntime,
-                ...runtimeState,
-                configValues: {
-                  ...(metadata.acpRuntime?.configValues ?? {}),
-                  ...(runtimeState.configValues ?? {}),
-                },
-              },
-              updatedAt: Math.max(
-                metadata.updatedAt,
-                runtimeState.updatedAt ?? Date.now(),
-              ),
-            });
-            await this.emit({
-              backend: agent.backendId,
-              notification: {
-                method: "thread/acpRuntime/updated",
-                params: {
-                  threadId: sessionId,
-                  acpRuntime: {
-                    ...metadata.acpRuntime,
-                    ...runtimeState,
-                    configValues: {
-                      ...(metadata.acpRuntime?.configValues ?? {}),
-                      ...(runtimeState.configValues ?? {}),
-                    },
-                  },
-                },
-              },
-            });
-          },
-          onRequest: async (request) =>
-            await this.handleServerRequest(agent.backendId, request),
-        });
-      });
+    this.acpBackend = new AcpBackendAdapter({
+      acpAgentStore: options?.acpAgentStore,
+      acpSessionStore: options?.acpSessionStore,
+      captureStores: this.captureStores,
+      createAcpClient: options?.createAcpClient,
+      discoverLocalAcpAgents: options?.discoverLocalAcpAgents,
+      emit: async (event) => await this.emit(event),
+      handleServerRequest: async (backend, request) =>
+        await this.handleServerRequest(backend, request),
+    });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;
     this.gitWorkspaceHandoffService =
@@ -2693,7 +2045,7 @@ export class DesktopBackendRegistry {
       this.describeCodexBackend(),
       this.describeSingleBackend("grok", this.grokClient),
     ]);
-    const acpSummaries = await this.describeInstalledAcpBackends();
+    const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {
       fetchedAt: Date.now(),
@@ -2974,7 +2326,7 @@ export class DesktopBackendRegistry {
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
-    return (await this.listAvailableAcpAgents()).flatMap((agent) =>
+    return (await this.acpBackend.listAvailableAgents()).flatMap((agent) =>
       this.listInstalledAcpThreads(agent.backendId, filter, archived),
     );
   }
@@ -2988,12 +2340,9 @@ export class DesktopBackendRegistry {
       return [];
     }
     const normalizedFilter = filter?.trim().toLowerCase();
-    const agent = this.acpAgentStore?.getInstalledAgent(backendId);
-    const capabilities =
-      agent?.capabilities ??
-      (agent ? acpAgentCapabilitiesForRegistryId(agent.registryId) : undefined);
-    return (this.acpSessionStore?.listSessions(backendId, { archived }) ?? [])
-      .map((session) => acpSessionToThreadSummary(session, capabilities))
+    return this.acpBackend
+      .listSessions(backendId, { archived })
+      .map((session) => this.acpBackend.sessionToThreadSummary(session))
       .filter(
         (thread) =>
           !normalizedFilter ||
@@ -3006,12 +2355,12 @@ export class DesktopBackendRegistry {
     request: AppServerReadThreadRequest,
     backend: AcpBackendId,
   ): Promise<AppServerReadThreadResponse> {
-    const session = this.acpSessionStore?.getSession(backend, request.threadId);
+    const session = this.acpBackend.getSession(backend, request.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${request.threadId}`);
     }
 
-    const replay = await this.readAcpReplay(backend, request.threadId);
+    const replay = await this.acpBackend.readReplay(backend, request.threadId);
     return {
       backend,
       fetchedAt: Date.now(),
@@ -3027,7 +2376,7 @@ export class DesktopBackendRegistry {
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<{ threadId: string }> {
-    const client = await this.getAcpClient(params.backend);
+    const client = await this.acpBackend.getClient(params.backend);
     const session = await client.startSession({
       cwd: params.cwd,
       executionMode: params.executionMode,
@@ -3047,8 +2396,8 @@ export class DesktopBackendRegistry {
       throw new Error("ACP turns require text or image input");
     }
 
-    const client = await this.getAcpClient(params.backend);
-    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    const client = await this.acpBackend.getClient(params.backend);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
@@ -3161,10 +2510,7 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(params.backend)) {
       throw new Error("ACP runtime options are only available for ACP backends");
     }
-    if (!this.acpSessionStore) {
-      throw new Error("ACP session store is not available");
-    }
-    const session = this.acpSessionStore.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
@@ -3257,11 +2603,11 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(params.backend)) {
       throw new Error("ACP runtime options are only available for ACP backends");
     }
-    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
-    const client = await this.getAcpClient(params.backend);
+    const client = await this.acpBackend.getClient(params.backend);
     await client.ensureSession?.(session);
     const fromValue =
       options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
@@ -3275,13 +2621,11 @@ export class DesktopBackendRegistry {
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
-    if (this.acpSessionStore?.upsertSession) {
-      this.acpSessionStore.upsertSession({
-        ...session,
-        acpRuntime: mergedRuntime,
-        updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
-      });
-    }
+    this.acpBackend.upsertSession({
+      ...session,
+      acpRuntime: mergedRuntime,
+      updatedAt: Math.max(session.updatedAt, runtimeState?.updatedAt ?? Date.now()),
+    });
 
     const fromLabel =
       options?.fromLabel ??
@@ -3492,7 +2836,7 @@ export class DesktopBackendRegistry {
     if (!isAcpBackendId(backend)) {
       return false;
     }
-    const agent = this.acpAgentStore?.getInstalledAgent(backend);
+    const agent = this.acpBackend.getInstalledAgent(backend);
     return (
       agent?.runtimeCapabilities?.configOptions?.some(
         (option) => option.id === optionId && option.category === "mode",
@@ -3508,7 +2852,7 @@ export class DesktopBackendRegistry {
     if (!value) {
       return undefined;
     }
-    const runtime = this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities;
+    const runtime = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
     if (params.source === "configOption") {
       const option = runtime?.configOptions?.find((item) => item.id === params.optionId);
       const label = option?.values.find((item) => item.value === value)?.label;
@@ -3571,80 +2915,6 @@ export class DesktopBackendRegistry {
       return;
     }
     throw new Error(ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR);
-  }
-
-  private async readAcpReplay(
-    backend: AcpBackendId,
-    sessionId: string,
-  ): Promise<AppServerThreadReplay> {
-    const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
-    if (cachedClient) {
-      return cachedClient.readReplay(sessionId);
-    }
-
-    const session = this.acpSessionStore?.getSession(backend, sessionId);
-    if (!session) {
-      return new AcpSessionReplayNormalizer().replay();
-    }
-
-    const client = await this.getAcpClient(backend);
-    try {
-      const replay = await client.loadSession(session);
-      void client.refreshSession(session).catch((error) => {
-        backendRegistryLog.warn("acp_session_load_failed", {
-          backend,
-          error: error instanceof Error ? error.message : String(error),
-          sessionId,
-        });
-      });
-      return replay;
-    } catch (error) {
-      backendRegistryLog.warn("acp_session_load_failed", {
-        backend,
-        error: error instanceof Error ? error.message : String(error),
-        sessionId,
-      });
-      return acpSessionLoadFallbackReplay(session, error);
-    }
-  }
-
-  private async getAcpClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
-    const cached = this.acpClients.get(backend);
-    if (cached) {
-      return await cached;
-    }
-
-    const agent = await this.resolveInstalledAcpAgent(backend);
-    const clientPromise = (async () => {
-      const client = this.createAcpClient(agent);
-      await client.initialize();
-      return client;
-    })();
-    this.acpClients.set(backend, clientPromise);
-    clientPromise.catch(() => {
-      if (this.acpClients.get(backend) === clientPromise) {
-        this.acpClients.delete(backend);
-      }
-    });
-    return await clientPromise;
-  }
-
-  private async resolveInstalledAcpAgent(
-    backend: AcpBackendId,
-  ): Promise<AcpInstalledAgentRecord> {
-    const agent = (await this.listAvailableAcpAgents()).find(
-      (candidate) => candidate.backendId === backend,
-    );
-    if (!agent) {
-      throw new Error(`ACP backend is not installed: ${backend}`);
-    }
-    if (agent.installStatus !== "installed") {
-      throw new Error(`ACP backend is not installed: ${backend}`);
-    }
-    if (agent.authStatus !== "not-required" && agent.authStatus !== "authenticated") {
-      throw new Error(`ACP backend authentication required: ${backend}`);
-    }
-    return agent;
   }
 
   async archiveThread(
@@ -3774,16 +3044,12 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
   }): Promise<ArchiveThreadResponse> {
-    const store = this.acpSessionStore;
-    if (!store?.upsertSession) {
-      throw new Error("ACP session store is unavailable.");
-    }
-    const session = store.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
     const archivedAt = Date.now();
-    store.upsertSession({
+    this.acpBackend.upsertSession({
       ...session,
       archivedAt,
       updatedAt: Math.max(session.updatedAt, archivedAt),
@@ -3806,18 +3072,14 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
   }): Promise<RestoreThreadResponse> {
-    const store = this.acpSessionStore;
-    if (!store?.upsertSession) {
-      throw new Error("ACP session store is unavailable.");
-    }
-    const session = store.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
     const restoredAt = Date.now();
     const restoredSession = { ...session };
     delete restoredSession.archivedAt;
-    store.upsertSession({
+    this.acpBackend.upsertSession({
       ...restoredSession,
       updatedAt: Math.max(session.updatedAt, restoredAt),
     });
@@ -3966,7 +3228,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     threadId: string;
   }): Promise<void> {
-    const session = this.acpSessionStore?.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session || !acpSessionHasConversationHistory(session)) {
       return;
     }
@@ -3979,11 +3241,7 @@ export class DesktopBackendRegistry {
   private async acpBackendSupportsLiveWorkspaceHandoff(
     backend: AcpBackendId,
   ): Promise<boolean> {
-    const agent = await this.resolveInstalledAcpAgent(backend);
-    return (
-      agent.capabilities ??
-      acpAgentCapabilitiesForRegistryId(agent.registryId)
-    ).liveWorkspaceHandoff;
+    return await this.acpBackend.supportsLiveWorkspaceHandoff(backend);
   }
 
   private updateAcpSessionWorkspaceAfterHandoff(params: {
@@ -3991,14 +3249,14 @@ export class DesktopBackendRegistry {
     threadId: string;
     cwd: string;
   }): void {
-    if (!isAcpBackendId(params.backend) || !this.acpSessionStore?.upsertSession) {
+    if (!isAcpBackendId(params.backend)) {
       return;
     }
-    const session = this.acpSessionStore.getSession(params.backend, params.threadId);
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session || session.cwd === params.cwd) {
       return;
     }
-    this.acpSessionStore.upsertSession({
+    this.acpBackend.upsertSession({
       ...session,
       cwd: params.cwd,
       requiresAgentSessionRebind: true,
@@ -4042,13 +3300,12 @@ export class DesktopBackendRegistry {
     if (!nextName) {
       throw new Error("Thread name cannot be blank.");
     }
-    const store = this.acpSessionStore;
-    const session = store?.getSession(backend, threadId);
-    if (!store?.upsertSession || !session) {
+    const session = this.acpBackend.getSession(backend, threadId);
+    if (!session) {
       throw new Error("Selected ACP thread was not found.");
     }
     const updatedAt = Date.now();
-    store.upsertSession({
+    this.acpBackend.upsertSession({
       ...session,
       title: nextName,
       titleSource: "explicit",
@@ -4189,7 +3446,7 @@ export class DesktopBackendRegistry {
       ? withAcpModelRuntimeSelection({
           runtime: request.acpRuntime,
           runtimeCapabilities:
-            this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities,
+            this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
           model: modelSettings.model,
           now: Date.now(),
         })
@@ -4593,7 +3850,7 @@ export class DesktopBackendRegistry {
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (isAcpBackendId(params.backend)) {
-      const client = await this.getAcpClient(params.backend);
+      const client = await this.acpBackend.getClient(params.backend);
       await client.cancelSession(params.threadId);
       await this.emit({
         backend: params.backend,
@@ -6287,14 +5544,7 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
-    const acpClients = [...this.acpClients.values()];
-    this.acpClients.clear();
-    await Promise.all(
-      acpClients.map(async (clientPromise) => {
-        const client = await clientPromise.catch(() => undefined);
-        await client?.dispose();
-      }),
-    );
+    await this.acpBackend.close();
     await this.codexClient.close();
     await this.grokClient.close();
     await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
@@ -6390,9 +5640,7 @@ export class DesktopBackendRegistry {
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (isAcpBackendId(backend)) {
-      return buildAcpLaunchpadOptions(
-        this.acpAgentStore?.getInstalledAgent(backend)?.runtimeCapabilities,
-      );
+      return this.acpBackend.getLaunchpadOptions(backend);
     }
 
     if (backend === "codex") {
@@ -7299,44 +6547,6 @@ export class DesktopBackendRegistry {
       ],
       unavailableReason: available ? undefined : unavailableReason || "Codex unavailable",
     };
-  }
-
-  private async describeInstalledAcpBackends(): Promise<BackendSummary[]> {
-    const installedAgents = await this.listAvailableAcpAgents();
-    return installedAgents.map((agent) => describeInstalledAcpBackend(agent));
-  }
-
-  private async listAvailableAcpAgents(): Promise<AcpInstalledAgentRecord[]> {
-    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? []).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
-    const installedBackendIds = new Set(
-      installedAgents.map((agent) => agent.backendId),
-    );
-    const discoveredAgents = (await this.readLocalAcpAgentsOnce()).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
-    for (const agent of discoveredAgents) {
-      if (!installedBackendIds.has(agent.backendId)) {
-        this.acpAgentStore?.upsertInstalledAgent(agent);
-      }
-    }
-    return [
-      ...installedAgents,
-      ...discoveredAgents.filter(
-        (agent) => !installedBackendIds.has(agent.backendId),
-      ),
-    ];
-  }
-
-  private async readLocalAcpAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
-    this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch((error) => {
-      backendRegistryLog.debug("local_acp_discovery_failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    });
-    return await this.localAcpAgentsPromise;
   }
 
   private async describeSingleBackend(
