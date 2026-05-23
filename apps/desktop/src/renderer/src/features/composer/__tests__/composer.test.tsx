@@ -3234,6 +3234,55 @@ describe("Composer", () => {
     });
   });
 
+  it("shows ACP thread access in the composer", async () => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("acp:kimi"),
+            label: "Kimi Code CLI",
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        disabled={false}
+        fullAccessRiskWarningDismissed
+        onSetExecutionMode={onSetExecutionMode}
+        skills={[]}
+        thread={{
+          id: "kimi-session-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
+
+    chooseDropdownOption("Access mode", "Full Access");
+
+    await waitFor(() => {
+      expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
   it("submits a local-to-worktree handoff on a new branch", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 

@@ -4524,7 +4524,7 @@ export function Composer(props: ComposerProps) {
           ) : null}
 
           {availableExecutionModes.length > 0 &&
-          (props.launchpad || (props.thread?.source === "codex" && props.onSetExecutionMode)) ? (
+          (props.launchpad || (props.thread && props.onSetExecutionMode)) ? (
             <ComposerDropdown
               ariaLabel="Access mode"
               compact
