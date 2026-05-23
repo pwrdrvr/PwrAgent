@@ -59,6 +59,8 @@ export type CreateAutomationInput = {
 };
 
 export type UpdateAutomationInput = {
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
   name?: string;
   taskPrompt?: string;
   gate?: AutomationGateConfig | null;
@@ -198,6 +200,8 @@ export class AutomationStore {
       input.nextRunAt === null ? undefined : input.nextRunAt ?? current.nextRunAt;
     const record: AutomationRecord = {
       ...current,
+      backend: input.backend ?? current.backend,
+      threadId: input.threadId ?? current.threadId,
       name: input.name ?? current.name,
       taskPrompt: input.taskPrompt ?? current.taskPrompt,
       gate: input.gate === null ? undefined : input.gate ?? current.gate,

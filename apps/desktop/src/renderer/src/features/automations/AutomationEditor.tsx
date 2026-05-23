@@ -58,6 +58,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
     props.mode.kind === "edit" ? props.mode.automation : undefined;
   const initialSchedule = initialAutomation?.schedule;
   const initialAssignment = readInitialAssignment(props);
+  const initialThreadKey = initialAssignment
+    ? buildThreadKey(initialAssignment.backend, initialAssignment.threadId)
+    : "";
   const [name, setName] = useState(initialAutomation?.name ?? "");
   const [taskPrompt, setTaskPrompt] = useState(initialAutomation?.taskPrompt ?? "");
   const [gateEnabled, setGateEnabled] = useState(Boolean(initialAutomation?.gate));
@@ -73,9 +76,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     initialAutomation?.backlogPolicy ?? "coalesce",
   );
   const [threadKey, setThreadKey] = useState(
-    initialAssignment
-      ? buildThreadKey(initialAssignment.backend, initialAssignment.threadId)
-      : "",
+    initialThreadKey,
   );
   const [scheduleKind, setScheduleKind] = useState<ScheduleFormKind>(
     initialSchedule?.kind ?? "interval",
@@ -102,15 +103,30 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [validationError, setValidationError] = useState<string>();
 
   const threadOptions = useMemo(
-    () =>
-      (props.threads ?? [])
+    () => {
+      const options = (props.threads ?? [])
         .filter((thread) => thread.agent)
         .map((thread) => ({
           key: buildThreadKey(thread.source, thread.id),
           label: thread.agent?.name ?? thread.title,
           title: thread.title,
-        })),
-    [props.threads],
+        }));
+      if (
+        initialThreadKey &&
+        !options.some((thread) => thread.key === initialThreadKey)
+      ) {
+        const currentThread = (props.threads ?? []).find(
+          (thread) => buildThreadKey(thread.source, thread.id) === initialThreadKey,
+        );
+        options.unshift({
+          key: initialThreadKey,
+          label: `${currentThread?.title ?? initialAssignment?.threadId ?? "Current thread"} (current)`,
+          title: currentThread?.title ?? "Current assigned thread",
+        });
+      }
+      return options;
+    },
+    [initialAssignment?.threadId, initialThreadKey, props.threads],
   );
   const selectedSchedule = buildSchedule({
     daysOfWeek,
@@ -158,10 +174,16 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
 
     if (props.mode.kind === "edit") {
+      const assignment = readAssignmentFromThreadKey(threadKey);
+      if (!assignment) {
+        setValidationError("Choose an Agent for this automation.");
+        return;
+      }
       await props.onSubmit({
         kind: "update",
         request: {
           automationId: props.mode.automation.id,
+          ...assignment,
           backlogPolicy,
           enabled,
           gate: gate.gate,
@@ -213,7 +235,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         />
       </label>
 
-      {props.mode.kind === "create" && !props.mode.assignment ? (
+      {shouldShowAgentPicker(props) ? (
         <label className="automation-field">
           <span>Agent</span>
           <select
@@ -438,6 +460,10 @@ function readInitialAssignment(props: AutomationEditorProps):
     };
   }
   return props.mode.assignment;
+}
+
+function shouldShowAgentPicker(props: AutomationEditorProps): boolean {
+  return props.mode.kind === "edit" || !props.mode.assignment;
 }
 
 function buildThreadKey(

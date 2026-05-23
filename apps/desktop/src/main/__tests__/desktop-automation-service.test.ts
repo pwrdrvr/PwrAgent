@@ -286,6 +286,59 @@ describe("DesktopAutomationService", () => {
     expect(updated.automation.nextRunAt).toBeGreaterThan(Date.now());
   });
 
+  it("reassigns an automation to another Agent thread", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    publishedEvents = [];
+
+    const updated = await service.update({
+      automationId: created.automation.id,
+      backend: "codex",
+      threadId: "thread-2",
+    });
+
+    expect(updated.automation).toMatchObject({
+      backend: "codex",
+      threadId: "thread-2",
+    });
+    expect(registry.getThreadAgentMetadata).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-2",
+    });
+    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
+      .toEqual([]);
+    expect(service.list({ backend: "codex", threadId: "thread-2" }).automations)
+      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    expect(publishedEvents).toEqual(
+      expect.arrayContaining([
+        {
+          backend: "codex",
+          notification: {
+            method: "thread/automations/updated",
+            params: { threadId: "thread-1" },
+          },
+        },
+        {
+          backend: "codex",
+          notification: {
+            method: "thread/automations/updated",
+            params: { threadId: "thread-2" },
+          },
+        },
+      ]),
+    );
+  });
+
   it("publishes run updates for queue lifecycle events by run id", async () => {
     const service = new DesktopAutomationService({ registry, store });
     service.start();

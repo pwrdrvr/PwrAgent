@@ -215,6 +215,24 @@ export class DesktopAutomationService {
     if (request.schedule) {
       this.assertValidSchedule(request.schedule);
     }
+    if ((request.backend === undefined) !== (request.threadId === undefined)) {
+      throw new Error("Automation Agent reassignment requires backend and threadId.");
+    }
+    const reassignment =
+      request.backend !== undefined && request.threadId !== undefined
+        ? {
+            backend: request.backend,
+            threadId: request.threadId,
+          }
+        : undefined;
+    const assignmentChanged = Boolean(
+      reassignment &&
+        (reassignment.backend !== current.backend ||
+          reassignment.threadId !== current.threadId),
+    );
+    if (assignmentChanged && reassignment) {
+      await this.assertAgentThreadTarget(reassignment);
+    }
     const now = Date.now();
     const schedule = request.schedule ?? current.schedule;
     const enablingFromPaused = request.enabled === true && current.status !== "enabled";
@@ -224,6 +242,8 @@ export class DesktopAutomationService {
       !disabling &&
       (enablingFromPaused || (request.schedule !== undefined && current.status === "enabled"));
     const updated = this.options.store.updateAutomation(request.automationId, {
+      backend: reassignment?.backend,
+      threadId: reassignment?.threadId,
       name: request.name,
       taskPrompt: request.taskPrompt,
       gate: request.gate,
@@ -246,6 +266,9 @@ export class DesktopAutomationService {
       now,
     });
     if (!updated) throw new Error("Automation not found.");
+    if (assignmentChanged) {
+      await this.notifyThreadAutomationsUpdated(current);
+    }
     await this.notifyThreadAutomationsUpdated(updated);
     this.scheduler.start();
     return { automation: toAutomationDetail(updated) };

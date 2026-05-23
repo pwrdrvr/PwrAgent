@@ -48,13 +48,17 @@ describe("AutomationStore", () => {
     });
 
     store.updateAutomation("automation-1", {
+      threadId: "thread-2",
       name: "Review inbox",
       backlogPolicy: "drop_missed",
       now: 2_000,
     });
     expect(store.listAutomationsForThread({ backend: "codex", threadId: "thread-1" }))
+      .toEqual([]);
+    expect(store.listAutomationsForThread({ backend: "codex", threadId: "thread-2" }))
       .toEqual([
         expect.objectContaining({
+          threadId: "thread-2",
           name: "Review inbox",
           backlogPolicy: "drop_missed",
           updatedAt: 2_000,

@@ -234,6 +234,8 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
 
 export type UpdateAutomationRequest = {
   automationId: string;
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
   name?: string;
   taskPrompt?: string;
   gate?: AutomationGateConfig | null;

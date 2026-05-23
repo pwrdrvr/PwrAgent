@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
 import { AutomationEditor } from "../AutomationEditor";
 
 afterEach(() => {
@@ -97,6 +98,49 @@ describe("AutomationEditor", () => {
     expect(screen.queryByRole("option", { name: "Ordinary work" })).not.toBeInTheDocument();
   });
 
+  it("can reassign an existing automation to another Agent", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const automation = buildAutomation({
+      threadId: "old-thread",
+    });
+
+    render(
+      <AutomationEditor
+        mode={{ automation, kind: "edit" }}
+        threads={[
+          buildThread({
+            agentName: "Old Jarvis",
+            id: "old-thread",
+            title: "Old Jarvis transcript",
+          }),
+          buildThread({
+            agentName: "New Jarvis",
+            id: "new-thread",
+            title: "New Jarvis transcript",
+          }),
+        ]}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByLabelText("Agent")).toHaveDisplayValue("Old Jarvis");
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: "codex:new-thread" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "update",
+      request: expect.objectContaining({
+        automationId: "automation-1",
+        backend: "codex",
+        threadId: "new-thread",
+      }),
+    });
+  });
+
   it("shows inline validation instead of submitting an invalid interval", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
@@ -174,3 +218,49 @@ describe("AutomationEditor", () => {
     );
   });
 });
+
+function buildAutomation(overrides: Partial<AutomationDetail> = {}): AutomationDetail {
+  return {
+    backend: "codex",
+    backlogPolicy: "coalesce",
+    createdAt: 1,
+    id: "automation-1",
+    name: "Check email",
+    schedule: {
+      every: 5,
+      kind: "interval",
+      unit: "minutes",
+    },
+    scheduleSummary: "every 5 minutes",
+    status: "enabled",
+    taskPrompt: "Check email.",
+    threadId: "thread-1",
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function buildThread(params: {
+  agentName?: string;
+  id: string;
+  title: string;
+}): NavigationThreadSummary {
+  return {
+    agent: params.agentName
+      ? {
+          name: params.agentName,
+          instructionLineCount: 0,
+          instructionsTooLong: false,
+          updatedAt: 1,
+        }
+      : undefined,
+    executionMode: "default",
+    id: params.id,
+    inbox: { inInbox: false },
+    linkedDirectories: [],
+    source: "codex",
+    title: params.title,
+    titleSource: "explicit",
+    updatedAt: 1,
+  };
+}
