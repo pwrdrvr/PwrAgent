@@ -43,6 +43,8 @@ import type {
   AppServerListSkillsResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
+  GetAutomationRunArtifactRequest,
+  GetAutomationRunArtifactResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
@@ -207,6 +209,7 @@ import {
   ACP_AGENTS_LIST_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL,
   AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
@@ -431,6 +434,10 @@ const desktopApi = Object.freeze({
     request: ListAutomationCardsRequest,
   ): Promise<ListAutomationCardsResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_LIST_CARDS_CHANNEL, request),
+  getAutomationRunArtifact: async (
+    request: GetAutomationRunArtifactRequest,
+  ): Promise<GetAutomationRunArtifactResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (

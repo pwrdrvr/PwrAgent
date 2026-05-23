@@ -7,6 +7,8 @@ import type {
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
   CreateAutomationRequest,
+  GetAutomationRunArtifactRequest,
+  GetAutomationRunArtifactResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
   ListAutomationRunsRequest,
@@ -141,6 +143,14 @@ export class DesktopAutomationService {
       })
       .filter((card): card is AutomationTimelineCard => Boolean(card));
     return { cards };
+  }
+
+  getRunArtifact(
+    request: GetAutomationRunArtifactRequest,
+  ): GetAutomationRunArtifactResponse {
+    return {
+      artifact: this.options.store.getRunArtifact(request.runId),
+    };
   }
 
   async create(request: CreateAutomationRequest): Promise<AutomationMutationResponse> {

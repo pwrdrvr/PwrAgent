@@ -251,6 +251,12 @@ describe("DesktopAutomationService", () => {
         summary: "Check email: Inbox summary is ready.",
       }),
     ]);
+    expect(service.getRunArtifact({ runId: runNow.run.id })).toMatchObject({
+      artifact: {
+        runId: runNow.run.id,
+        finalText: "Inbox summary is ready.",
+      },
+    });
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {

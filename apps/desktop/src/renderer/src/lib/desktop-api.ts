@@ -25,6 +25,8 @@ import type {
   FocusedDiffAnalysisResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  GetAutomationRunArtifactRequest,
+  GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
@@ -241,6 +243,9 @@ export type DesktopApi = {
   listAutomationCards?: (
     request: ListAutomationCardsRequest,
   ) => Promise<ListAutomationCardsResponse>;
+  getAutomationRunArtifact?: (
+    request: GetAutomationRunArtifactRequest,
+  ) => Promise<GetAutomationRunArtifactResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
