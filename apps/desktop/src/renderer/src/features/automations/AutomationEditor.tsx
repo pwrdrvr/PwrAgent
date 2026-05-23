@@ -95,10 +95,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
   const threadOptions = useMemo(
     () =>
-      (props.threads ?? []).map((thread) => ({
-        key: buildThreadKey(thread.source, thread.id),
-        label: thread.title,
-      })),
+      (props.threads ?? [])
+        .filter((thread) => thread.agent)
+        .map((thread) => ({
+          key: buildThreadKey(thread.source, thread.id),
+          label: thread.agent?.name ?? thread.title,
+          title: thread.title,
+        })),
     [props.threads],
   );
   const selectedSchedule = buildSchedule({
@@ -153,7 +156,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
     const assignment = readAssignmentFromThreadKey(threadKey);
     if (!assignment) {
-      setValidationError("Choose a thread for this automation.");
+      setValidationError("Choose an Agent for this automation.");
       return;
     }
 
@@ -192,7 +195,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
       {props.mode.kind === "create" && !props.mode.assignment ? (
         <label className="automation-field">
-          <span>Thread</span>
+          <span>Agent</span>
           <select
             value={threadKey}
             onChange={(event) => {
@@ -200,9 +203,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
               setValidationError(undefined);
             }}
           >
-            <option value="">Choose thread</option>
+            <option value="">Choose Agent</option>
             {threadOptions.map((thread) => (
-              <option key={thread.key} value={thread.key}>
+              <option key={thread.key} title={thread.title} value={thread.key}>
                 {thread.label}
               </option>
             ))}

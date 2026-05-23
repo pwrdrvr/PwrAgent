@@ -103,7 +103,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
         <div className="automations-content">
           <div className="automations-toolbar">
             <div>
-              <p className="eyebrow">Serial thread queues</p>
+              <p className="eyebrow">Serial Agent queues</p>
               <h2>Automations</h2>
             </div>
             <button
@@ -145,7 +145,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             <div className="automations-table" role="table" aria-label="Automations">
               <div className="automations-table__header" role="row">
                 <span role="columnheader">Automation</span>
-                <span role="columnheader">Thread</span>
+                <span role="columnheader">Agent</span>
                 <span role="columnheader">Schedule</span>
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Actions</span>
@@ -247,12 +247,12 @@ function AutomationTableRow(props: {
               type="button"
               onClick={props.onSelectThread}
             >
-              {props.thread?.title ?? props.automation.threadId}
+              {formatAutomationAgentLabel(props)}
             </button>
           ) : (
-            <span>{props.thread?.title ?? props.automation.threadId}</span>
+            <span>{formatAutomationAgentLabel(props)}</span>
           )}
-          <p>{props.automation.backend}</p>
+          <p>{props.thread?.agent ? props.thread.title : "legacy thread"}</p>
         </div>
         <div role="cell">
           <span>{props.automation.scheduleSummary}</span>
@@ -308,6 +308,13 @@ function AutomationTableRow(props: {
       ) : null}
     </>
   );
+}
+
+function formatAutomationAgentLabel(props: {
+  automation: AutomationDetail;
+  thread?: NavigationThreadSummary;
+}): string {
+  return props.thread?.agent?.name ?? props.thread?.title ?? props.automation.threadId;
 }
 
 function AutomationTableHistory(props: {

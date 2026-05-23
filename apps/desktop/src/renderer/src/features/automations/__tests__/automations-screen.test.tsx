@@ -6,6 +6,12 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationsScreen } from "../AutomationsScreen";
 
 const thread: NavigationThreadSummary = {
+  agent: {
+    name: "Email Agent",
+    instructionLineCount: 0,
+    instructionsTooLong: false,
+    updatedAt: 1,
+  },
   executionMode: "default",
   id: "thread-1",
   inbox: { inInbox: false },
@@ -40,7 +46,7 @@ afterEach(() => {
 });
 
 describe("AutomationsScreen", () => {
-  it("lists automations without adding a thread lens and navigates to the assigned thread", async () => {
+  it("lists automations without adding a thread lens and navigates to the assigned Agent", async () => {
     const onSelectThread = vi.fn();
     const desktopApi: DesktopApi = {
       listAutomations: vi.fn(async () => ({ automations: [automation] })),
@@ -61,12 +67,12 @@ describe("AutomationsScreen", () => {
     expect(screen.getByText("every 5 minutes")).toBeInTheDocument();
     expect(screen.queryByRole("tablist", { name: "Thread lenses" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Email triage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Email Agent" }));
 
     expect(onSelectThread).toHaveBeenCalledWith(thread);
   });
 
-  it("creates an automation with an assigned thread from the global editor", async () => {
+  it("creates an automation with an assigned Agent from the global editor", async () => {
     const createAutomation = vi.fn(async () => ({ automation }));
     const desktopApi: DesktopApi = {
       createAutomation,
@@ -91,7 +97,7 @@ describe("AutomationsScreen", () => {
     fireEvent.change(within(editor).getByLabelText("Name"), {
       target: { value: "Check email" },
     });
-    fireEvent.change(within(editor).getByLabelText("Thread"), {
+    fireEvent.change(within(editor).getByLabelText("Agent"), {
       target: { value: "codex:thread-1" },
     });
     fireEvent.change(within(editor).getByLabelText("Task prompt"), {

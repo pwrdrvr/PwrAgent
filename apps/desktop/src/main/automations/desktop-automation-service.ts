@@ -126,6 +126,10 @@ export class DesktopAutomationService {
 
   async create(request: CreateAutomationRequest): Promise<AutomationMutationResponse> {
     this.assertValidSchedule(request.schedule);
+    await this.assertAgentThreadTarget({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
     const now = Date.now();
     const automation = this.options.store.createAutomation({
       backend: request.backend,
@@ -315,6 +319,16 @@ export class DesktopAutomationService {
     const validation = validateAutomationScheduleDefinition(schedule);
     if (!validation.ok) {
       throw new Error(validation.error);
+    }
+  }
+
+  private async assertAgentThreadTarget(params: {
+    backend: AutomationRecord["backend"];
+    threadId: AutomationRecord["threadId"];
+  }): Promise<void> {
+    const agent = await this.options.registry.getThreadAgentMetadata(params);
+    if (!agent) {
+      throw new Error("Automations must be attached to an Agent thread.");
     }
   }
 

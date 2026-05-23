@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("AutomationEditor", () => {
-  it("submits a coalescing interval automation for the assigned thread", async () => {
+  it("submits a coalescing interval automation for the assigned Agent", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
     render(
@@ -51,6 +51,50 @@ describe("AutomationEditor", () => {
         threadId: "thread-1",
       },
     });
+  });
+
+  it("only offers Agent threads from the global picker", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{ kind: "create" }}
+        threads={[
+          {
+            executionMode: "default",
+            id: "agent-thread",
+            inbox: { inInbox: false },
+            linkedDirectories: [],
+            source: "codex",
+            title: "Agent transcript",
+            titleSource: "explicit",
+            updatedAt: 1,
+            agent: {
+              name: "Inbox Agent",
+              instructionLineCount: 0,
+              instructionsTooLong: false,
+              updatedAt: 1,
+            },
+          },
+          {
+            executionMode: "default",
+            id: "ordinary-thread",
+            inbox: { inInbox: false },
+            linkedDirectories: [],
+            source: "codex",
+            title: "Ordinary work",
+            titleSource: "explicit",
+            updatedAt: 1,
+          },
+        ]}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByLabelText("Agent")).toHaveDisplayValue("Choose Agent");
+    expect(screen.getByRole("option", { name: "Inbox Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Ordinary work" })).not.toBeInTheDocument();
   });
 
   it("shows inline validation instead of submitting an invalid interval", async () => {

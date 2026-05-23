@@ -93,6 +93,12 @@ export type AutomationThreadAssignment = {
   threadId: ThreadIdentifier;
 };
 
+/**
+ * Automations attach to an Agent thread. The backend/thread identity remains
+ * the durable pointer because Agent metadata is stored on the thread overlay.
+ */
+export type AutomationAgentAssignment = AutomationThreadAssignment;
+
 export type AutomationListItemSummary = AutomationThreadAssignment & {
   id: string;
   name: string;
@@ -145,7 +151,7 @@ export type AutomationRunSummary = {
   errorMessage?: string;
 };
 
-export type CreateAutomationRequest = AutomationThreadAssignment & {
+export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
   schedule: AutomationScheduleDefinition;

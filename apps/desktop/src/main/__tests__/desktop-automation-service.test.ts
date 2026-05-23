@@ -34,6 +34,12 @@ beforeEach(() => {
       turnId: "turn-1",
     })),
     updateQueuedTurnInput: vi.fn(),
+    getThreadAgentMetadata: vi.fn(async () => ({
+      name: "Automation Agent",
+      instructionLineCount: 0,
+      instructionsTooLong: false,
+      updatedAt: 1_000,
+    })),
     onEvent: vi.fn((listener) => {
       registryListeners.push(listener);
       return () => {
@@ -83,6 +89,25 @@ describe("DesktopAutomationService", () => {
         params: { threadId: "thread-1" },
       },
     });
+  });
+
+  it("rejects new automations targeting ordinary work threads", async () => {
+    registry.getThreadAgentMetadata = vi.fn(async () => undefined);
+    const service = new DesktopAutomationService({ registry, store });
+
+    await expect(
+      service.create({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Check email",
+        taskPrompt: "Check mail",
+        schedule: {
+          kind: "interval",
+          every: 5,
+          unit: "minutes",
+        },
+      }),
+    ).rejects.toThrow("Automations must be attached to an Agent thread.");
   });
 
   it("runs automations now through the shared turn queue", async () => {

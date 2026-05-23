@@ -81,6 +81,7 @@ import {
   type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
+  type ThreadAgentMetadata,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -2217,6 +2218,14 @@ export class DesktopBackendRegistry {
       });
     this.threadListCache.set(cacheKey, { promise });
     return await promise;
+  }
+
+  async getThreadAgentMetadata(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAgentMetadata | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return overlay?.agent;
   }
 
   private async readThreadList(params: {

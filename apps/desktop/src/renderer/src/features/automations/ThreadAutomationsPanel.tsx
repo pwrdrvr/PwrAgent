@@ -28,6 +28,7 @@ type ThreadAutomationsPanelProps = {
 };
 
 export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
+  const isAgentThread = Boolean(props.thread.agent);
   const automations = useAutomations(props.desktopApi, {
     backend: props.thread.source,
     threadId: props.thread.id,
@@ -73,6 +74,12 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
         </div>
         <button
           className="context-list__action"
+          disabled={!isAgentThread}
+          title={
+            isAgentThread
+              ? "Add automation"
+              : "Mark this thread as an Agent first"
+          }
           type="button"
           onClick={() => setEditorMode({ kind: "create" })}
         >
@@ -103,10 +110,16 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
         <p className="context-empty context-empty--error">{automations.error}</p>
       ) : null}
 
+      {!isAgentThread ? (
+        <p className="context-empty">Automations attach to Agent threads.</p>
+      ) : null}
+
       {automations.loading ? (
         <p className="context-empty">Loading automations...</p>
       ) : automations.automations.length === 0 && !editorMode ? (
-        <p className="context-empty">No automations on this thread.</p>
+        isAgentThread ? (
+          <p className="context-empty">No automations on this Agent.</p>
+        ) : null
       ) : (
         <ul className="automation-list">
           {automations.automations.map((automation) => (
@@ -280,7 +293,7 @@ export function AutomationRunHistory(props: {
 function formatThreadAutomationSummary(thread: NavigationThreadSummary): string {
   const summary = thread.automationSummary;
   if (!summary || summary.totalCount === 0) {
-    return "One serial queue per thread.";
+    return thread.agent ? "One serial queue per Agent." : "No Agent automation queue.";
   }
   const queued = summary.pendingRunCount
     ? ` - ${summary.pendingRunCount} queued`
