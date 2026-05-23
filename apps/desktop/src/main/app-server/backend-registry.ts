@@ -990,6 +990,34 @@ function buildHeadlessAutomationRequestCancelResponse(
   return { decision: "cancel" };
 }
 
+function formatAutomationContextForTurnInput(
+  context: AppServerTurnInputItem[],
+): AppServerTurnInputItem[] {
+  const textParts = context
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+      item.type === "text",
+    )
+    .map((item) => item.text.trim())
+    .filter(Boolean);
+  const nonTextParts = context.filter((item) => item.type !== "text");
+  if (textParts.length === 0) {
+    return context;
+  }
+
+  return [
+    {
+      type: "text",
+      text: [
+        "## Automation Context",
+        ...textParts,
+        "## User Message",
+        "",
+      ].join("\n\n"),
+    },
+    ...nonTextParts,
+  ];
+}
+
 function readStatusType(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || !("type" in value)) {
     return undefined;
@@ -5953,7 +5981,7 @@ export class DesktopBackendRegistry {
       if (context.length === 0) {
         return params.input;
       }
-      return [...context, ...params.input];
+      return [...formatAutomationContextForTurnInput(context), ...params.input];
     } catch (error) {
       backendRegistryLog.warn("automation turn context provider failed", {
         backend: params.backend,

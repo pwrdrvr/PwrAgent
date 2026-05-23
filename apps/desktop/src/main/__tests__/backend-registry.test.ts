@@ -6973,7 +6973,12 @@ command = "pnpm dev"
     expect(codexClient.lastStartTurnParams?.input).toEqual([
       {
         type: "text",
-        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
+        text: [
+          "## Automation Context",
+          "Recent automation updates for this Agent thread:\n- Weather: rain.",
+          "## User Message",
+          "",
+        ].join("\n\n"),
       },
       { type: "text", text: "What happened?" },
     ]);
@@ -10055,6 +10060,7 @@ command = "pnpm dev"
           status: { type: "idle" },
         },
       });
+      await Promise.resolve();
       const startTurnPromise = registry.startTurn({
         backend: "codex",
         threadId: "thread-1",
