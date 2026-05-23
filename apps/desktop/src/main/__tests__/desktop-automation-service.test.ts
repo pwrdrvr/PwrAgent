@@ -255,8 +255,80 @@ describe("DesktopAutomationService", () => {
       artifact: {
         runId: runNow.run.id,
         finalText: "Inbox summary is ready.",
+        outputDecision: {
+          kind: "parse_failed",
+          summary: "Inbox summary is ready.",
+        },
       },
     });
+  });
+
+  it("keeps quiet structured scheduled results out of timeline cards", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "weekdays",
+        timeOfDay: { hour: 9, minute: 0 },
+      },
+    });
+    const run = store.createRun({
+      id: "run-quiet",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 1_000,
+      now: 1_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunStarted({
+      runId: "run-quiet",
+      backendTurnId: "turn-quiet",
+      startedAt: 1_100,
+      now: 1_100,
+    });
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: "headless:run-quiet",
+              origin: "automation",
+              status: "terminal",
+              automationRunId: "run-quiet",
+              terminalStatus: "turn/completed",
+              turnId: "turn-quiet",
+              finalText: JSON.stringify({
+                decision: "quiet",
+                summary: "No important mail.",
+              }),
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(service.getRunArtifact({ runId: "run-quiet" })).toMatchObject({
+      artifact: {
+        outputDecision: {
+          kind: "quiet",
+          summary: "No important mail.",
+        },
+      },
+    });
+    expect(
+      service.listCards({
+        backend: "codex",
+        threadId: "thread-1",
+      }).cards,
+    ).toEqual([]);
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {
