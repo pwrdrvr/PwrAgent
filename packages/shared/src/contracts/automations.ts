@@ -88,6 +88,24 @@ export type AutomationScheduleValidationResult =
       error: string;
     };
 
+export type AutomationGateConfig = {
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+  outputLimitChars?: number;
+};
+
+export type AutomationGateRunResult = {
+  status: "proceed" | "skip" | "failed";
+  command: string;
+  cwd?: string;
+  exitCode?: number;
+  durationMs: number;
+  output: string;
+  outputTruncated?: boolean;
+  errorMessage?: string;
+};
+
 export type AutomationThreadAssignment = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -116,6 +134,7 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
 
 export type AutomationDetail = AutomationListItemSummary & {
   taskPrompt: string;
+  gate?: AutomationGateConfig;
   createdAt: number;
   deletedAt?: number;
 };
@@ -168,7 +187,7 @@ export type AutomationRunOutputDecision =
 export type AutomationRunTranscriptEvent = {
   id: string;
   at: number;
-  kind: "invocation" | "lifecycle" | "assistant_final" | "error";
+  kind: "invocation" | "gate" | "lifecycle" | "assistant_final" | "error";
   text?: string;
   metadata?: Record<string, unknown>;
 };
@@ -198,6 +217,7 @@ export type AutomationTimelineCard = AutomationAgentAssignment & {
 export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
+  gate?: AutomationGateConfig;
   schedule: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   enabled?: boolean;
@@ -208,6 +228,7 @@ export type UpdateAutomationRequest = {
   automationId: string;
   name?: string;
   taskPrompt?: string;
+  gate?: AutomationGateConfig | null;
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   enabled?: boolean;

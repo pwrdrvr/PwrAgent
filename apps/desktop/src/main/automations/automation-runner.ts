@@ -1,4 +1,5 @@
 import type { AutomationRunSummary } from "@pwragent/shared";
+import type { AutomationGateRunResult } from "@pwragent/shared";
 import type {
   ThreadTurnQueueEntry,
   ThreadTurnQueueSubmissionResult,
@@ -21,6 +22,7 @@ export type AutomationTurnQueue = {
 export type AutomationRunner = {
   submitRun(params: {
     automation: AutomationRecord;
+    gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
   }): Promise<ThreadTurnQueueSubmissionResult>;
   updateQueuedRunInput?(params: {
@@ -49,6 +51,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
 
   async submitRun(params: {
     automation: AutomationRecord;
+    gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
   }): Promise<ThreadTurnQueueSubmissionResult> {
     const input = buildAutomationTurnInput(params);
@@ -81,6 +84,7 @@ export class ThreadQueueAutomationRunner implements AutomationRunner {
 
   async submitRun(params: {
     automation: AutomationRecord;
+    gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
   }): Promise<ThreadTurnQueueSubmissionResult> {
     return await this.queue.submit({

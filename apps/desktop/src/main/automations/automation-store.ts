@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
+  AutomationGateConfig,
   AutomationListItemSummary,
   AutomationRunArtifact,
   AutomationRunOutputDecision,
@@ -30,6 +31,7 @@ export type AutomationRecord = {
   threadId: ThreadIdentifier;
   name: string;
   taskPrompt: string;
+  gate?: AutomationGateConfig;
   status: AutomationStatus;
   schedule: AutomationScheduleDefinition;
   scheduleSummary: string;
@@ -48,6 +50,7 @@ export type CreateAutomationInput = {
   threadId: ThreadIdentifier;
   name: string;
   taskPrompt: string;
+  gate?: AutomationGateConfig;
   schedule: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   status?: AutomationStatus;
@@ -58,6 +61,7 @@ export type CreateAutomationInput = {
 export type UpdateAutomationInput = {
   name?: string;
   taskPrompt?: string;
+  gate?: AutomationGateConfig | null;
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   status?: AutomationStatus;
@@ -138,6 +142,7 @@ type AutomationRunArtifactRow = {
 
 type AutomationPayload = {
   taskPrompt: string;
+  gate?: AutomationGateConfig;
   schedule: AutomationScheduleDefinition;
   scheduleSummary: string;
   lastRunStatus?: AutomationRunStatus;
@@ -169,6 +174,7 @@ export class AutomationStore {
       threadId: input.threadId,
       name: input.name,
       taskPrompt: input.taskPrompt,
+      gate: input.gate,
       status: input.status ?? "enabled",
       schedule: input.schedule,
       scheduleSummary: formatAutomationScheduleSummary(input.schedule),
@@ -193,6 +199,7 @@ export class AutomationStore {
       ...current,
       name: input.name ?? current.name,
       taskPrompt: input.taskPrompt ?? current.taskPrompt,
+      gate: input.gate === null ? undefined : input.gate ?? current.gate,
       status: input.status ?? current.status,
       schedule,
       scheduleSummary: formatAutomationScheduleSummary(schedule),
@@ -677,6 +684,7 @@ export class AutomationStore {
   private upsertAutomationRecord(record: AutomationRecord): void {
     const payload: AutomationPayload = {
       taskPrompt: record.taskPrompt,
+      gate: record.gate,
       schedule: record.schedule,
       scheduleSummary: record.scheduleSummary,
       lastRunStatus: record.lastRunStatus,
@@ -839,6 +847,7 @@ export class AutomationStore {
       threadId: row.thread_id,
       name: row.name,
       taskPrompt: payload.taskPrompt,
+      gate: payload.gate,
       status: row.status,
       schedule: payload.schedule,
       scheduleSummary: payload.scheduleSummary,

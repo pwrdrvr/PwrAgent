@@ -23,6 +23,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
+import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
@@ -69,6 +70,7 @@ export class DesktopAutomationService {
     this.scheduler = new AutomationScheduler({
       store: options.store,
       runner: new HeadlessAutomationRunner(options.registry),
+      gateRunner: new ShellAutomationGateRunner(),
     });
     this.reconcileStartupRuns();
   }
@@ -165,6 +167,7 @@ export class DesktopAutomationService {
       threadId: request.threadId,
       name: request.name,
       taskPrompt: request.taskPrompt,
+      gate: request.gate,
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
       status: request.enabled === false ? "paused" : "enabled",
@@ -199,6 +202,7 @@ export class DesktopAutomationService {
     const updated = this.options.store.updateAutomation(request.automationId, {
       name: request.name,
       taskPrompt: request.taskPrompt,
+      gate: request.gate,
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
       status:
@@ -397,6 +401,7 @@ function toAutomationDetail(record: AutomationRecord): AutomationDetail {
     threadId: record.threadId,
     name: record.name,
     taskPrompt: record.taskPrompt,
+    gate: record.gate,
     status: record.status,
     schedule: record.schedule,
     scheduleSummary: record.scheduleSummary,

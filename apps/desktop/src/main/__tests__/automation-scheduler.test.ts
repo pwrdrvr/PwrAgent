@@ -6,6 +6,7 @@ import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../automations/automation-store";
+import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
 
 class FakeQueue {
@@ -93,6 +94,17 @@ function buildScheduler(): AutomationScheduler {
   return new AutomationScheduler({
     store,
     runner: new ThreadQueueAutomationRunner(queue),
+    now: () => now,
+    setTimer: (() => 0) as unknown as typeof setTimeout,
+    clearTimer: () => undefined,
+  });
+}
+
+function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationScheduler {
+  return new AutomationScheduler({
+    store,
+    runner: new ThreadQueueAutomationRunner(queue),
+    gateRunner,
     now: () => now,
     setTimer: (() => 0) as unknown as typeof setTimeout,
     clearTimer: () => undefined,
@@ -339,6 +351,133 @@ describe("AutomationScheduler", () => {
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
       trigger: "manual",
       status: "running",
+    });
+  });
+
+  it("includes successful gate output in the automation run prompt", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: { command: "echo ready" },
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildSchedulerWithGate({
+      runGate: async (config) => ({
+        status: "proceed",
+        command: config.command,
+        durationMs: 5,
+        output: "ready\n",
+      }),
+    });
+    now = 5 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted[0]?.input).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("Gate output:\nready"),
+      }),
+    ]);
+  });
+
+  it("records skipped gate runs without invoking the model", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: { command: "exit 10" },
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildSchedulerWithGate({
+      runGate: async (config) => ({
+        status: "skip",
+        command: config.command,
+        durationMs: 5,
+        exitCode: 10,
+        output: "not needed\n",
+      }),
+    });
+    now = 5 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(0);
+    const [run] = store.listRunsForAutomation("automation-1");
+    expect(run).toMatchObject({
+      status: "skipped",
+      errorMessage: "Automation gate skipped this run.",
+    });
+    expect(store.getRunArtifact(run!.id)).toMatchObject({
+      status: "skipped",
+      outputDecision: {
+        kind: "quiet",
+        summary: "Automation gate skipped this run.",
+      },
+      transcriptEvents: [
+        expect.objectContaining({
+          kind: "gate",
+          text: "not needed\n",
+        }),
+      ],
+    });
+  });
+
+  it("records failed gate runs without invoking the model", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: { command: "exit 1" },
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    const scheduler = buildSchedulerWithGate({
+      runGate: async (config) => ({
+        status: "failed",
+        command: config.command,
+        durationMs: 5,
+        exitCode: 1,
+        output: "boom\n",
+        errorMessage: "Automation gate exited with 1.",
+      }),
+    });
+    now = 5 * 60 * 1000;
+
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(0);
+    const [run] = store.listRunsForAutomation("automation-1");
+    expect(run).toMatchObject({
+      status: "failed",
+      errorMessage: "Automation gate exited with 1.",
+    });
+    expect(store.getRunArtifact(run!.id)).toMatchObject({
+      status: "failed",
+      outputDecision: {
+        kind: "post_card",
+        summary: "Automation gate exited with 1.",
+      },
     });
   });
 

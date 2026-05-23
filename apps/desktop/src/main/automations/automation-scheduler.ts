@@ -1,4 +1,5 @@
 import type {
+  AutomationGateRunResult,
   AutomationRunStatus,
   AutomationRunWindow,
 } from "@pwragent/shared";
@@ -6,12 +7,14 @@ import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
 } from "./automation-schedule.js";
+import type { AutomationGateRunner } from "./automation-gate-runner.js";
 import type { AutomationRunner } from "./automation-runner.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 
 export type AutomationSchedulerOptions = {
   store: AutomationStore;
   runner: AutomationRunner;
+  gateRunner?: AutomationGateRunner;
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
@@ -248,8 +251,17 @@ export class AutomationScheduler {
     if (!run) return undefined;
 
     try {
+      const gateResult = await this.runGateIfNeeded({
+        automation: params.automation,
+        runId: params.runId,
+        now: params.now,
+      });
+      if (gateResult?.status === "skip" || gateResult?.status === "failed") {
+        return undefined;
+      }
       const result = await this.options.runner.submitRun({
         automation: params.automation,
+        gateResult,
         run,
       });
       if (result.status === "queued") {
@@ -278,6 +290,60 @@ export class AutomationScheduler {
       });
       return undefined;
     }
+  }
+
+  private async runGateIfNeeded(params: {
+    automation: AutomationRecord;
+    runId: string;
+    now: number;
+  }): Promise<AutomationGateRunResult | undefined> {
+    if (!params.automation.gate) return undefined;
+    const gateResult = await this.options.gateRunner?.runGate(params.automation.gate);
+    if (!gateResult) {
+      return undefined;
+    }
+    if (gateResult.status === "proceed") {
+      return gateResult;
+    }
+    const terminalStatus = gateResult.status === "skip" ? "skipped" : "failed";
+    this.options.store.markRunTerminal({
+      runId: params.runId,
+      status: terminalStatus,
+      completedAt: params.now,
+      errorMessage:
+        gateResult.status === "skip"
+          ? "Automation gate skipped this run."
+          : gateResult.errorMessage,
+      now: params.now,
+    });
+    this.options.store.upsertRunArtifact({
+      runId: params.runId,
+      status: terminalStatus,
+      errorMessage:
+        gateResult.status === "failed" ? gateResult.errorMessage : undefined,
+      outputDecision:
+        gateResult.status === "skip"
+          ? { kind: "quiet", summary: "Automation gate skipped this run." }
+          : { kind: "post_card", summary: gateResult.errorMessage ?? "Gate failed." },
+      transcriptEvents: [
+        {
+          id: `${params.runId}:gate`,
+          at: params.now,
+          kind: "gate",
+          text: gateResult.output,
+          metadata: {
+            command: gateResult.command,
+            cwd: gateResult.cwd,
+            durationMs: gateResult.durationMs,
+            exitCode: gateResult.exitCode,
+            outputTruncated: gateResult.outputTruncated,
+            status: gateResult.status,
+          },
+        },
+      ],
+      now: params.now,
+    });
+    return gateResult;
   }
 
   private async startNextPendingRun(

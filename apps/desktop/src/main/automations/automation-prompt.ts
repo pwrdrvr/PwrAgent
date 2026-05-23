@@ -1,8 +1,13 @@
-import type { AppServerTurnInputItem, AutomationRunSummary } from "@pwragent/shared";
+import type {
+  AppServerTurnInputItem,
+  AutomationGateRunResult,
+  AutomationRunSummary,
+} from "@pwragent/shared";
 import type { AutomationRecord } from "./automation-store.js";
 
 export function buildAutomationTurnInput(params: {
   automation: AutomationRecord;
+  gateResult?: AutomationGateRunResult;
   run: AutomationRunSummary;
 }): AppServerTurnInputItem[] {
   const { automation, run } = params;
@@ -33,10 +38,24 @@ export function buildAutomationTurnInput(params: {
         coalescedLine,
         "Scheduled windows covered:",
         scheduledWindows || "- none; this was manually triggered",
+        ...formatGateOutput(params.gateResult),
         "",
         "Task:",
         automation.taskPrompt,
       ].join("\n"),
     },
   ];
+}
+
+function formatGateOutput(gateResult: AutomationGateRunResult | undefined): string[] {
+  if (!gateResult || gateResult.status !== "proceed") {
+    return [];
+  }
+  const output = gateResult.output.trim();
+  return [
+    "",
+    "Gate output:",
+    output || "- gate passed with no output",
+    gateResult.outputTruncated ? "[gate output truncated]" : "",
+  ].filter(Boolean);
 }
