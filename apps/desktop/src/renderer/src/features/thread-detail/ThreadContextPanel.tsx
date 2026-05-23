@@ -59,6 +59,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
   const [resizing, setResizing] = useState(false);
+  const [agentSaving, setAgentSaving] = useState(false);
+  const [agentError, setAgentError] = useState<string>();
   const [tooltip, setTooltip] = useState<{
     left?: number;
     text: string;
@@ -210,6 +212,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }, []);
 
   useEffect(() => {
+    setAgentError(undefined);
+    setAgentSaving(false);
+  }, [props.thread.id, props.thread.source]);
+
+  useEffect(() => {
     if (pinned || !revealed) {
       return;
     }
@@ -347,6 +354,26 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
+  };
+
+  const setThreadAgent = async (agent: { name: string } | null): Promise<void> => {
+    if (!props.desktopApi?.setThreadAgent) {
+      return;
+    }
+    setAgentSaving(true);
+    setAgentError(undefined);
+    try {
+      await props.desktopApi.setThreadAgent({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        agent,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setAgentError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentSaving(false);
+    }
   };
 
   return (
@@ -588,6 +615,46 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             {props.worktreeArchiveError ? (
               <p className="context-empty context-empty--error">
                 {props.worktreeArchiveError}
+              </p>
+            ) : null}
+          </section>
+
+          <section className="context-panel__section">
+            <h3>Agent</h3>
+            {props.thread.agent ? (
+              <div className="context-list__item">
+                <div>
+                  <p className="context-list__label">{props.thread.agent.name}</p>
+                  <p className="context-list__meta">
+                    {props.thread.agent.instructionLineCount} instruction line
+                    {props.thread.agent.instructionLineCount === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <button
+                  className="context-list__action"
+                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                  type="button"
+                  onClick={() => void setThreadAgent(null)}
+                >
+                  Clear
+                </button>
+              </div>
+            ) : (
+              <div className="context-list__item">
+                <p className="context-empty">Ordinary work thread</p>
+                <button
+                  className="context-list__action"
+                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                  type="button"
+                  onClick={() => void setThreadAgent({ name: props.thread.title })}
+                >
+                  Mark as Agent
+                </button>
+              </div>
+            )}
+            {agentError ? (
+              <p className="context-empty context-empty--error" role="alert">
+                {agentError}
               </p>
             ) : null}
           </section>

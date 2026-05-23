@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -425,6 +432,75 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+  });
+
+  it("marks an ordinary thread as an Agent from the context panel", async () => {
+    const setThreadAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      agent: {
+        name: "Thread",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      },
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <ThreadContextPanel
+        backends={[baseBackend]}
+        desktopApi={{ setThreadAgent }}
+        pinned
+        thread={baseThread}
+        onRefreshNavigation={onRefreshNavigation}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
+
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
+    expect(setThreadAgent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      agent: {
+        name: "Thread",
+      },
+    });
+    expect(onRefreshNavigation).toHaveBeenCalledOnce();
+  });
+
+  it("clears Agent metadata from the context panel", async () => {
+    const setThreadAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+    }));
+
+    render(
+      <ThreadContextPanel
+        backends={[baseBackend]}
+        desktopApi={{ setThreadAgent }}
+        pinned
+        thread={{
+          ...baseThread,
+          agent: {
+            name: "Inbox Agent",
+            instructionLineCount: 0,
+            instructionsTooLong: false,
+            updatedAt: 1,
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+    await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
+    expect(setThreadAgent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      agent: null,
+    });
   });
 
   it("labels Spark rate limits when Spark has usage", () => {
