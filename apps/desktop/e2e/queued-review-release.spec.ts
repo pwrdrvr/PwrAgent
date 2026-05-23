@@ -328,7 +328,7 @@ test("background queued review releases after active turn branch adoption", asyn
   }
 });
 
-test("duplicate Codex turn starts are rejected while the thread is active", async () => {
+test("duplicate Codex turn starts queue through the desktop API while the thread is active", async () => {
   const fixture = await createDuplicateTurnStartGuardFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -394,8 +394,13 @@ test("duplicate Codex turn starts are rejected while the thread is active", asyn
       }
     });
     expect(second).toMatchObject({
-      ok: false,
-      message: expect.stringContaining("already active"),
+      ok: true,
+      response: {
+        backend: "codex",
+        threadId: "thread-active",
+        queueStatus: "queued",
+        queueEntryId: expect.any(String),
+      },
     });
   } finally {
     await app.close();
