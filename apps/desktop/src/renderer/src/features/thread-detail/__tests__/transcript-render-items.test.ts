@@ -498,6 +498,48 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("renders terminal turn failures as top-level activity instead of nested work", () => {
+    const turn = failedTurn("turn-1");
+    const toolActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used one tool",
+      details: [],
+      turn,
+    };
+    const turnFailedActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "turn-failed:turn-1",
+      summary: "Turn failed",
+      status: "failed",
+      tone: "warning",
+      details: [
+        {
+          id: "turn-failed:turn-1:detail",
+          kind: "read",
+          label: "json-rpc error (500): quota exhausted",
+          status: "failed",
+        },
+      ],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [toolActivity, turnFailedActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [toolActivity],
+        label: "Previous work",
+      },
+      { type: "entry", entry: turnFailedActivity },
+    ]);
+  });
+
   it("only collapses consecutive commentary in the fallback path", () => {
     const first = commentary("c1", "First scan.");
     const answer = final("f1", "Interim answer.");
@@ -574,5 +616,13 @@ function completedTurn(id: string, durationMs: number): AppServerThreadMessageEn
     id,
     status: "completed",
     durationMs,
+  };
+}
+
+function failedTurn(id: string): AppServerThreadMessageEntry["turn"] {
+  return {
+    id,
+    status: "failed",
+    completedAt: 2_000,
   };
 }

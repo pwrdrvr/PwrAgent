@@ -267,7 +267,7 @@ function isWorkPhaseEntry(
   | AppServerThreadActivityEntry
   | AppServerThreadPlanEntry {
   if (entry.type === "activity") {
-    return !isFileDiffActivity(entry);
+    return !isTerminalTurnFailureActivity(entry) && !isFileDiffActivity(entry);
   }
 
   if (entry.type === "plan") {
@@ -286,7 +286,19 @@ function isConcreteWorkEntry(
 ): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
   return (
     entry.type === "plan" ||
-    (entry.type === "activity" && !isFileDiffActivity(entry))
+    (entry.type === "activity" &&
+      !isTerminalTurnFailureActivity(entry) &&
+      !isFileDiffActivity(entry))
+  );
+}
+
+function isTerminalTurnFailureActivity(
+  entry: AppServerThreadActivityEntry
+): boolean {
+  return (
+    entry.id.startsWith("turn-failed:") &&
+    entry.status === "failed" &&
+    entry.turn?.status === "failed"
   );
 }
 
