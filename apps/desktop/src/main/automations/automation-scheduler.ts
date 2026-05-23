@@ -2,32 +2,16 @@ import type {
   AutomationRunStatus,
   AutomationRunWindow,
 } from "@pwragent/shared";
-import type {
-  ThreadTurnQueueEntry,
-  ThreadTurnQueueSubmissionResult,
-} from "../app-server/thread-turn-queue.js";
 import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
 } from "./automation-schedule.js";
-import { buildAutomationTurnInput } from "./automation-prompt.js";
+import type { AutomationRunner } from "./automation-runner.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
-
-export type AutomationTurnQueue = {
-  canStartImmediately(params: {
-    backend: AutomationRecord["backend"];
-    threadId: AutomationRecord["threadId"];
-  }): boolean;
-  submit(
-    entry: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
-      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-  ): Promise<ThreadTurnQueueSubmissionResult>;
-  updateQueuedInput?(entryId: string, input: ThreadTurnQueueEntry["input"]): void;
-};
 
 export type AutomationSchedulerOptions = {
   store: AutomationStore;
-  queue: AutomationTurnQueue;
+  runner: AutomationRunner;
   now?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
@@ -68,7 +52,10 @@ export class AutomationScheduler {
     this.scheduleNextTimer();
   }
 
-  async runNow(automationId: string, now = this.now()): Promise<ThreadTurnQueueSubmissionResult | undefined> {
+  async runNow(
+    automationId: string,
+    now = this.now(),
+  ): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return undefined;
     const run = this.options.store.createRun({
@@ -180,10 +167,11 @@ export class AutomationScheduler {
           now,
         });
         if (coalesced?.queueEntryId) {
-          this.options.queue.updateQueuedInput?.(
-            coalesced.queueEntryId,
-            buildAutomationTurnInput({ automation, run: coalesced }),
-          );
+          this.options.runner.updateQueuedRunInput?.({
+            automation,
+            queueEntryId: coalesced.queueEntryId,
+            run: coalesced,
+          });
         }
       } else {
         await this.enqueueScheduledRun({ automation, windows, now });
@@ -200,7 +188,7 @@ export class AutomationScheduler {
     automation: AutomationRecord;
     windows: AutomationRunWindow[];
     now: number;
-  }): Promise<ThreadTurnQueueSubmissionResult | undefined> {
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const run = this.options.store.createRun({
       automationId: params.automation.id,
       trigger: "scheduled",
@@ -222,23 +210,16 @@ export class AutomationScheduler {
     runId: string;
     windows: AutomationRunWindow[];
     now: number;
-  }): Promise<ThreadTurnQueueSubmissionResult | undefined> {
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const run = this.options.store
       .listRunsForAutomation(params.automation.id, 1)
       .find((candidate) => candidate.id === params.runId);
     if (!run) return undefined;
 
     try {
-      const result = await this.options.queue.submit({
-        backend: params.automation.backend,
-        threadId: params.automation.threadId,
-        origin: "automation",
-        automationRunId: params.runId,
-        automationName: params.automation.name,
-        input: buildAutomationTurnInput({
-          automation: params.automation,
-          run,
-        }),
+      const result = await this.options.runner.submitRun({
+        automation: params.automation,
+        run,
       });
       if (result.status === "queued") {
         this.options.store.markRunQueued({

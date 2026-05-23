@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
+import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
 import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../automations/automation-store";
 import { StateDb } from "../state/state-db";
@@ -91,7 +92,7 @@ function createIntervalAutomation(
 function buildScheduler(): AutomationScheduler {
   return new AutomationScheduler({
     store,
-    queue,
+    runner: new ThreadQueueAutomationRunner(queue),
     now: () => now,
     setTimer: (() => 0) as unknown as typeof setTimeout,
     clearTimer: () => undefined,
@@ -103,7 +104,7 @@ describe("AutomationScheduler", () => {
     const timerDelays: number[] = [];
     const scheduler = new AutomationScheduler({
       store,
-      queue,
+      runner: new ThreadQueueAutomationRunner(queue),
       now: () => now,
       setTimer: ((_callback: () => void, delayMs: number) => {
         timerDelays.push(delayMs);
