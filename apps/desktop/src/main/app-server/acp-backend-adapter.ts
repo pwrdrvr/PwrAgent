@@ -771,6 +771,7 @@ export class AcpBackendAdapter {
     }
     return new AcpAgentClient({
       backendId: agent.backendId,
+      agentDisplayName: agent.name,
       initialRuntimeCapabilities: agent.runtimeCapabilities,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport: new AcpStdioJsonRpcTransport({

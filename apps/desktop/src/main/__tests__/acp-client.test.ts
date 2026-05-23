@@ -245,7 +245,8 @@ describe("AcpAgentClient", () => {
     const transport = new FakeAcpAgentTransport();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const client = new AcpAgentClient({
-      backendId: "acp:gemini",
+      backendId: "acp:kimi",
+      agentDisplayName: "Kimi Code CLI",
       store,
       transport,
       now: () => 1000,
@@ -304,6 +305,8 @@ describe("AcpAgentClient", () => {
         threadId: "session-1",
         turnId: "turn-1",
         requestId: "0",
+        prompt: "Kimi Code CLI wants to run execute: npm view openclaw",
+        reason: "Kimi Code CLI wants to run execute: npm view openclaw",
         command: "npm view openclaw",
         acpMethod: "session/request_permission",
         acpToolCallId: "run_shell_command_1",
