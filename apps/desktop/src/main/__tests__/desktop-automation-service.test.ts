@@ -687,8 +687,24 @@ describe("DesktopAutomationService", () => {
       outputDecision: {
         kind: "post_card",
         summary: "Rain is expected today.",
+        details: "Forecast confidence is high this afternoon.",
       },
     });
+    expect(
+      service.listCards({
+        backend: "codex",
+        threadId: "thread-1",
+      }).cards,
+    ).toEqual([
+      expect.objectContaining({
+        automationId: created.automation.id,
+        automationName: "Check weather",
+        details: "Forecast confidence is high this afternoon.",
+        runId: "run-weather",
+        status: "completed",
+        summary: "Check weather: Rain is expected today.",
+      }),
+    ]);
     expect(publishedEvents).toContainEqual({
       backend: "codex",
       notification: {

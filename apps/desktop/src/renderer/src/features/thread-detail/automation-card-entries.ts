@@ -23,6 +23,15 @@ export function buildAutomationCardActivityEntries(
         : undefined,
     status: toActivityStatus(card.status),
     details: [
+      ...(card.details?.trim()
+        ? [
+            {
+              id: `${card.runId}:details`,
+              kind: "read" as const,
+              label: card.details.trim(),
+            },
+          ]
+        : []),
       {
         id: `${card.runId}:source`,
         kind: "read",

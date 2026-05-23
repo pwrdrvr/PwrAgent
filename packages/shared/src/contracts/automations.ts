@@ -176,14 +176,17 @@ export type AutomationRunOutputDecision =
   | {
       kind: "post_card";
       summary: string;
+      details?: string;
     }
   | {
       kind: "quiet";
       summary?: string;
+      details?: string;
     }
   | {
       kind: "parse_failed";
       summary?: string;
+      details?: string;
     };
 
 export type AutomationRunTranscriptEvent = {
@@ -219,6 +222,7 @@ export type AutomationTimelineCard = AutomationAgentAssignment & {
   runId: string;
   status: AutomationRunStatus;
   summary: string;
+  details?: string;
   occurredAt: number;
 };
 

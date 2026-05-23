@@ -173,6 +173,7 @@ import {
   type MessagingTurnAdmissionBundle,
   type MessagingTurnInputEvent,
 } from "./messaging-turn-admission.js";
+import { renderAutomationOutputForMessaging } from "../../automations/automation-output-decision.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
@@ -8432,8 +8433,9 @@ export class MessagingController {
     turnId: string;
   }): Promise<void> {
     for (const binding of params.bindings) {
-      if (params.finalText?.trim()) {
-        await this.deliverAssistantMessage(params.finalText, params.event, binding);
+      const messageText = renderAutomationOutputForMessaging(params.finalText);
+      if (messageText) {
+        await this.deliverAssistantMessage(messageText, params.event, binding);
       }
     }
     this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);

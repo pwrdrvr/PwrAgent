@@ -6,7 +6,6 @@ import type {
   AutomationMutationResponse,
   AutomationRunSummary,
   AutomationRunStatus,
-  AutomationRunOutputDecision,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
   CreateAutomationRequest,
@@ -28,6 +27,7 @@ import { getMainLogger } from "../log.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
+import { parseAutomationOutputDecision } from "./automation-output-decision.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
@@ -980,6 +980,7 @@ function buildAutomationTimelineCard(params: {
     runId: params.run.id,
     status: params.run.status,
     summary: summarizeAutomationCard(params),
+    details: params.artifact?.outputDecision?.details,
     occurredAt:
       params.run.completedAt ??
       params.run.startedAt ??
@@ -1011,60 +1012,4 @@ function summarizeAutomationCard(params: {
 function firstLine(value: string | undefined): string | undefined {
   const line = value?.split(/\r?\n/).find((candidate) => candidate.trim());
   return line?.trim();
-}
-
-function parseAutomationOutputDecision(
-  finalText: string | undefined,
-): AutomationRunOutputDecision | undefined {
-  if (!finalText?.trim()) return undefined;
-  const candidate = extractJsonObject(finalText);
-  if (!candidate) {
-    return {
-      kind: "parse_failed",
-      summary: firstLine(finalText),
-    };
-  }
-  try {
-    const parsed = JSON.parse(candidate) as {
-      decision?: unknown;
-      post_card?: unknown;
-      summary?: unknown;
-    };
-    const summary =
-      typeof parsed.summary === "string" && parsed.summary.trim()
-        ? parsed.summary.trim()
-        : firstLine(finalText);
-    if (parsed.decision === "quiet" || parsed.post_card === false) {
-      return { kind: "quiet", summary };
-    }
-    if (parsed.decision === "post_card" || parsed.post_card === true) {
-      return { kind: "post_card", summary: summary ?? "Automation completed." };
-    }
-    return {
-      kind: "parse_failed",
-      summary,
-    };
-  } catch {
-    return {
-      kind: "parse_failed",
-      summary: firstLine(finalText),
-    };
-  }
-}
-
-function extractJsonObject(value: string): string | undefined {
-  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  if (fenced?.startsWith("{") && fenced.endsWith("}")) {
-    return fenced;
-  }
-  const trimmed = value.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
-  const first = trimmed.indexOf("{");
-  const last = trimmed.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    return trimmed.slice(first, last + 1);
-  }
-  return undefined;
 }

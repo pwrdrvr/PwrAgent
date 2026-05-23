@@ -18,6 +18,7 @@ describe("automation-card-entries", () => {
           runId: "run-1",
           status: "completed",
           summary: "Inbox watch: nothing urgent",
+          details: "No unread priority messages.",
           occurredAt: 1_000,
         },
       ]),
@@ -29,6 +30,7 @@ describe("automation-card-entries", () => {
         createdAt: 1_000,
         status: "completed",
         details: [
+          expect.objectContaining({ label: "No unread priority messages." }),
           expect.objectContaining({ label: "Source: Inbox watch" }),
           expect.objectContaining({ label: "Run status: completed" }),
         ],

@@ -1794,6 +1794,110 @@ describe("MessagingController", () => {
     );
   });
 
+  it("renders structured automation post_card output as the delivered message", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Check weather",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "terminal",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Check weather",
+          finalText: JSON.stringify({
+            decision: "post_card",
+            summary: "Rain is already underway.",
+            details: "Hourly forecast shows rain through at least 5 AM.",
+          }),
+          terminalStatus: "turn/completed",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Rain is already underway.\n\nHourly forecast shows rain through at least 5 AM.",
+          }),
+        ],
+      }),
+    );
+    expect(JSON.stringify(harness.delivered)).not.toContain('"decision":"post_card"');
+  });
+
+  it("suppresses structured automation quiet output in messaging", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "started",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Check weather",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "headless:run-1",
+          origin: "automation",
+          status: "terminal",
+          turnId: "turn-1",
+          automationRunId: "run-1",
+          automationName: "Check weather",
+          finalText: JSON.stringify({
+            decision: "quiet",
+            summary: "No rain expected.",
+          }),
+          terminalStatus: "turn/completed",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([]);
+  });
+
   it("echoes binding routing state into typing activity intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
