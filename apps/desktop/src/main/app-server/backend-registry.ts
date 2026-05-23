@@ -1268,7 +1268,7 @@ function resolveCodexEnvironmentSelection(
   launchpad: NavigationLaunchpadDraft,
   options: CodexEnvironmentOption[],
 ): CodexEnvironmentSelection | undefined {
-  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId) {
     return undefined;
   }
 
@@ -1296,7 +1296,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKey: launchpad.directoryKey,
   });
 
-  if (launchpad.backend !== "codex" || !launchpad.codexEnvironmentId) {
+  if (!launchpad.codexEnvironmentId) {
     return;
   }
 
@@ -1306,7 +1306,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     directoryKind: launchpad.directoryKind,
     directoryLabel: launchpad.directoryLabel,
     directoryPath: launchpad.directoryPath,
-    backend: "codex",
+    backend: defaults.backend,
     executionMode: defaults.executionMode,
     model: defaults.model,
     reasoningEffort: defaults.reasoningEffort,
@@ -3553,13 +3553,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
-      if (request.codexEnvironmentRuntime) {
-        await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-          backend,
-          threadId: result.threadId,
-          codexEnvironmentRuntime: request.codexEnvironmentRuntime,
-        });
-      }
+    }
+    if (request.codexEnvironmentRuntime) {
+      await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+        backend,
+        threadId: result.threadId,
+        codexEnvironmentRuntime: request.codexEnvironmentRuntime,
+      });
     }
     if (
       modelSettings.model !== undefined ||
@@ -3663,7 +3663,11 @@ export class DesktopBackendRegistry {
       });
       cwd =
         params.backend === "codex"
-          ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
+          ? await this.resolveThreadEnvironmentCwd(
+              params.backend,
+              params.threadId,
+              overlay,
+            )
           : undefined;
       await this.emit({
         backend: params.backend,
@@ -5199,10 +5203,6 @@ export class DesktopBackendRegistry {
   async runCodexEnvironmentAction(
     request: RunCodexEnvironmentActionRequest,
   ): Promise<RunCodexEnvironmentActionResponse> {
-    if (request.backend !== "codex") {
-      throw new Error("Codex environment actions are only available for Codex threads.");
-    }
-
     // Serialise the read-modify-write under the per-thread lock so two
     // concurrent Run-button clicks can't clobber each other's appended
     // run entry.
@@ -5216,14 +5216,16 @@ export class DesktopBackendRegistry {
         });
         const runtime = overlay?.codexEnvironmentRuntime;
         if (!runtime) {
-          throw new Error(
-            "This thread does not have a selected Codex environment.",
-          );
+          throw new Error("This thread does not have a selected environment.");
         }
 
         const currentCwd =
           request.cwd?.trim() ||
-          (await this.resolveCodexThreadTurnCwd(request.threadId, overlay));
+          (await this.resolveThreadEnvironmentCwd(
+            request.backend,
+            request.threadId,
+            overlay,
+          ));
         const runtimeForAction = await this.refreshCodexEnvironmentRuntimeActions(
           currentCwd?.trim() ? { ...runtime, cwd: currentCwd.trim() } : runtime,
           request.actionId,
@@ -5328,10 +5330,6 @@ export class DesktopBackendRegistry {
   async setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse> {
-    if (request.backend !== "codex") {
-      throw new Error("Codex environments are only available for Codex threads.");
-    }
-
     if (!request.environmentId) {
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: request.backend,
@@ -5354,13 +5352,17 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
     });
-    const cwd = await this.resolveCodexThreadTurnCwd(request.threadId, overlay);
+    const cwd = await this.resolveThreadEnvironmentCwd(
+      request.backend,
+      request.threadId,
+      overlay,
+    );
     const options = await listCodexEnvironmentOptions(cwd);
     const environment = options.find(
       (candidate) => candidate.id === request.environmentId,
     );
     if (!environment) {
-      throw new Error("Selected Codex environment is not available for this thread.");
+      throw new Error("Selected environment is not available for this thread.");
     }
 
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
@@ -5666,36 +5668,34 @@ export class DesktopBackendRegistry {
       queuedActionDetachedOutputs.length = 0;
       queuedActionDetachedOutputs.push(event);
     };
-    if (launchpad.backend === "codex") {
-      try {
-        codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
-          commandRunner: this.codexEnvironmentCommandRunner,
-          cwd: workspace.cwd,
-          env: this.codexEnvironmentCommandEnv,
-          onSetupProgress: options?.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                options.onCodexEnvironmentSetupProgress?.({
-                  directoryKey: launchpad.directoryKey,
-                  ...event,
-                });
-              }
-            : undefined,
-          onActionDetachedExit,
-          onActionDetachedOutput,
-          actionRunId: autoActionRunId,
-          selection: codexEnvironmentSelection,
-        });
-      } catch (error) {
-        if (!(error instanceof CodexEnvironmentStartupError)) {
-          throw error;
-        }
-        codexEnvironmentRuntime = error.runtime;
-        codexEnvironmentStartupFailure = {
-          message: error.message,
-          phase: error.phase,
-          worktreeCleanupAvailable: workspace.workMode === "worktree",
-        };
+    try {
+      codexEnvironmentRuntime = await applyLocalCodexEnvironmentSelection({
+        commandRunner: this.codexEnvironmentCommandRunner,
+        cwd: workspace.cwd,
+        env: this.codexEnvironmentCommandEnv,
+        onSetupProgress: options?.onCodexEnvironmentSetupProgress
+          ? (event) => {
+              options.onCodexEnvironmentSetupProgress?.({
+                directoryKey: launchpad.directoryKey,
+                ...event,
+              });
+            }
+          : undefined,
+        onActionDetachedExit,
+        onActionDetachedOutput,
+        actionRunId: autoActionRunId,
+        selection: codexEnvironmentSelection,
+      });
+    } catch (error) {
+      if (!(error instanceof CodexEnvironmentStartupError)) {
+        throw error;
       }
+      codexEnvironmentRuntime = error.runtime;
+      codexEnvironmentStartupFailure = {
+        message: error.message,
+        phase: error.phase,
+        worktreeCleanupAvailable: workspace.workMode === "worktree",
+      };
     }
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
@@ -6990,7 +6990,8 @@ export class DesktopBackendRegistry {
       .catch(() => undefined);
   }
 
-  private async resolveCodexThreadTurnCwd(
+  private async resolveThreadEnvironmentCwd(
+    backend: AppServerBackendKind,
     threadId: string,
     overlay?: ThreadOverlayState,
   ): Promise<string | undefined> {
@@ -7001,14 +7002,14 @@ export class DesktopBackendRegistry {
       return overlayCwd.trim();
     }
 
-    const pendingThread = this.pendingStartedThreads.get(`codex:${threadId}`);
+    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
     const pendingCwd = resolveThreadWorkspaceCwd(pendingThread);
     if (pendingCwd?.trim()) {
       return pendingCwd.trim();
     }
 
     const thread = await this.findThreadForWorkspaceHandoff({
-      backend: "codex",
+      backend,
       callerReason: "turn-cwd",
       threadId,
     });

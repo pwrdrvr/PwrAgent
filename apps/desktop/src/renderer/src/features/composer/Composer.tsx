@@ -3184,7 +3184,6 @@ export function Composer(props: ComposerProps) {
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
     if (
       !props.thread ||
-      props.thread.source !== "codex" ||
       !props.desktopApi?.runCodexEnvironmentAction ||
       !selectedThreadCodexAction
     ) {
@@ -3213,7 +3212,6 @@ export function Composer(props: ComposerProps) {
   ): Promise<void> => {
     if (
       !props.thread ||
-      props.thread.source !== "codex" ||
       !props.desktopApi?.setCodexThreadEnvironment
     ) {
       return;
@@ -3222,7 +3220,7 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     setSelectedThreadCodexActionId("");
     props.onPendingStatusChange?.(
-      environmentId ? "Selecting Codex environment" : "Clearing Codex environment",
+      environmentId ? "Selecting environment" : "Clearing environment",
     );
     try {
       await props.desktopApi.setCodexThreadEnvironment({
@@ -3351,24 +3349,18 @@ export function Composer(props: ComposerProps) {
       ? props.launchpad.workMode
       : "local";
   const launchpadCodexEnvironmentOptions =
-    props.launchpad?.backend === "codex"
-      ? props.launchpad.codexEnvironmentOptions ?? []
-      : [];
+    props.launchpad?.codexEnvironmentOptions ?? [];
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(
     (environment) => environment.id === props.launchpad?.codexEnvironmentId,
   );
   const threadCodexEnvironmentOptions =
-    props.thread?.source === "codex"
-      ? props.thread.codexEnvironmentOptions ?? []
-      : [];
+    props.thread?.codexEnvironmentOptions ?? [];
   const selectedThreadCodexEnvironmentOption = threadCodexEnvironmentOptions.find(
     (environment) =>
       environment.id === props.thread?.codexEnvironmentRuntime?.environmentId,
   );
   const runtimeThreadCodexEnvironmentActions =
-    props.thread?.source === "codex"
-      ? props.thread.codexEnvironmentRuntime?.actions ?? []
-      : [];
+    props.thread?.codexEnvironmentRuntime?.actions ?? [];
   const threadCodexEnvironmentActions =
     runtimeThreadCodexEnvironmentActions.length > 0
       ? runtimeThreadCodexEnvironmentActions
@@ -4897,7 +4889,7 @@ export function Composer(props: ComposerProps) {
           <div className="composer__application-actions" aria-label="Composer tools">
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
-                ariaLabel="Codex environment"
+                ariaLabel="Environment"
                 compact
                 disabled={launchpadSubmitting}
                 icon={FileCodeIcon}
@@ -4945,7 +4937,7 @@ export function Composer(props: ComposerProps) {
 
             {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
-                ariaLabel="Codex environment"
+                ariaLabel="Environment"
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
                 icon={FileCodeIcon}

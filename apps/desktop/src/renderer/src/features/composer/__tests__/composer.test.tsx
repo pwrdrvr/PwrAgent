@@ -535,7 +535,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
     expect(screen.getByLabelText("Environment command")).toHaveTextContent(
       "Dev - Messaging",
     );
@@ -549,7 +549,7 @@ describe("Composer", () => {
       });
     });
 
-    chooseDropdownOption("Codex environment", "No environment");
+    chooseDropdownOption("Environment", "No environment");
     await waitFor(() => {
       expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
         backend: "codex",
@@ -596,7 +596,7 @@ describe("Composer", () => {
       "No commands",
     );
     expect(screen.getByLabelText("Environment command")).toBeDisabled();
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
   });
 
   it("hides thread environment commands when no environment is selected", () => {
@@ -632,7 +632,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent(
+    expect(screen.getByLabelText("Environment")).toHaveTextContent(
       "No environment",
     );
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
@@ -685,10 +685,62 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Codex environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
     expect(screen.getByText("Run setup")).toBeInTheDocument();
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["acp:gemini", acpGeminiBackendSummary()],
+    ["acp:kimi", backendSummary("acp:kimi")],
+  ] as const)("shows the launchpad environment picker for %s", (_backendId, backend) => {
+    const updateLaunchpad = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backend]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: backend.kind,
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          codexEnvironmentOptions: [
+            {
+              id: "environment",
+              name: "PwrAgnt",
+              sourcePath: "/repo/.codex/environments/environment.toml",
+              setupScript: "pnpm install",
+              actions: [],
+            },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={updateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+      "No environment",
+    );
+
+    chooseDropdownOption("Environment", "PwrAgnt");
+
+    expect(updateLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo/PwrAgent",
+      expect.objectContaining({
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentSetupEnabled: true,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("shows an orange moon for reported context window usage", () => {
