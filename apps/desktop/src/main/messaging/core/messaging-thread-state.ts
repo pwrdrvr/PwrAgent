@@ -3,6 +3,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
+  BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import type {
@@ -13,6 +14,7 @@ import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type MessagingResolvedThreadState = {
   activeTurn?: MessagingActiveTurnSummary;
+  acpRuntime?: BackendAcpSessionRuntimeState;
   directoryPath?: string;
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
@@ -76,6 +78,7 @@ export function resolveMessagingThreadState(params: {
 
   return {
     activeTurn: params.activeTurn,
+    acpRuntime: thread.acpRuntime,
     directoryPath: linkedDirectory?.path ?? directory?.path,
     executionMode: thread.executionMode,
     fastMode: thread.fastMode,

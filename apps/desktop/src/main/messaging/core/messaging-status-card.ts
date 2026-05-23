@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  BackendAcpSessionRuntimeState,
   HandoffThreadWorkspaceRequest,
   MessagingToolUpdateMode,
   ThreadExecutionMode,
@@ -14,7 +15,7 @@ import type {
   MessagingSurfaceAction,
   MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
-import { shortenDerivedThreadTitle } from "@pwragent/shared";
+import { isAcpBackendId, shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -95,6 +96,9 @@ export function buildBindingStatusIntent(params: {
     streamingMode,
     params.streamingResponsesDefault,
   );
+  const acpRuntimeLabel = isAcpBackendId(params.binding.backend)
+    ? formatAcpRuntimeLineLabel(params.threadState.acpRuntime)
+    : undefined;
 
   return {
     id: params.id,
@@ -120,7 +124,9 @@ export function buildBindingStatusIntent(params: {
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
       "Plan mode: unavailable",
-      `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
+      acpRuntimeLabel
+        ? `Runtime mode: ${acpRuntimeLabel} (desktop-only)`
+        : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
       params.binding.pendingSkillSelection
@@ -140,6 +146,7 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
+      supportsPermissionsAction: !acpRuntimeLabel,
       queuedExecutionMode,
       reasoning,
       streamingMode,
@@ -163,12 +170,44 @@ function mentionRequiredLine(
     ?? capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
+function formatAcpRuntimeLineLabel(
+  runtime: BackendAcpSessionRuntimeState | undefined,
+): string {
+  const mode =
+    runtime?.currentModeId ??
+    (runtime?.configValues
+      ? Object.entries(runtime.configValues).find(([key]) =>
+          isAcpRuntimeModeConfigKey(key),
+        )?.[1]
+      : undefined);
+  return mode ? formatAcpRuntimeModeLabel(mode) : "Agent default";
+}
+
+function isAcpRuntimeModeConfigKey(key: string): boolean {
+  return key.trim().toLowerCase().endsWith("mode");
+}
+
+function formatAcpRuntimeModeLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  if (trimmed.toLowerCase() === "yolo") {
+    return "Yolo";
+  }
+  return trimmed
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function buildStatusActions(params: {
   allowFullAccessEscalation?: boolean;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
+  supportsPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
   streamingMode: MessagingStreamingResponseMode;
@@ -183,7 +222,8 @@ function buildStatusActions(params: {
   const permissionsAction:
     | MessagingSurfaceAction
     | undefined =
-    params.permissionsMode === "full-access" || params.allowFullAccessEscalation !== false
+    params.supportsPermissionsAction !== false &&
+    (params.permissionsMode === "full-access" || params.allowFullAccessEscalation !== false)
       ? {
           id: "status:permissions",
           label: formatPermissionsActionLabel(

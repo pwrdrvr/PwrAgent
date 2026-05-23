@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  BackendAcpSessionRuntimeState,
   LaunchpadWorkMode,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
@@ -951,6 +952,7 @@ export type MessagingInboundEvent =
 export type MessagingPermissionsMode = "default" | "full-access";
 
 export type MessagingBindingPreferences = {
+  acpRuntime?: BackendAcpSessionRuntimeState;
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
   model?: string;
