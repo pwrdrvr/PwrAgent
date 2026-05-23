@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StateDb } from "../state/state-db";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
 let tempDir: string;
@@ -32,6 +32,8 @@ describe("StateDb", () => {
       "acp_registry_cache",
       "acp_sessions",
     ]);
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(9);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
   });
 });
