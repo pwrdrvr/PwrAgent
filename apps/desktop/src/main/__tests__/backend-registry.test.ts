@@ -5173,6 +5173,64 @@ command = "pnpm dev:messaging"
     }
   });
 
+  it("surfaces environment options on existing ACP threads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-thread-env-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      sessions: [
+        {
+          backendId: "acp:kimi" as AcpBackendId,
+          sessionId: "kimi-session-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          cwd: root,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    try {
+      await expect(registry.listThreads({ backend: acpBackendId })).resolves.toEqual([
+        expect.objectContaining({
+          id: "kimi-session-1",
+          source: acpBackendId,
+          codexEnvironmentOptions: [
+            expect.objectContaining({
+              id: "environment",
+              name: "PwrAgnt",
+              actions: [
+                expect.objectContaining({
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("lets existing Codex threads select a local environment for command actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-select-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });

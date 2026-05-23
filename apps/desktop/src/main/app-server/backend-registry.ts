@@ -2341,29 +2341,51 @@ export class DesktopBackendRegistry {
     filter?: string,
     archived?: boolean,
   ): Promise<AppServerThreadSummary[]> {
-    return (await this.acpBackend.listAvailableAgents()).flatMap((agent) =>
-      this.listInstalledAcpThreads(agent.backendId, filter, archived),
+    const threadLists = await Promise.all(
+      (await this.acpBackend.listAvailableAgents()).map((agent) =>
+        this.listInstalledAcpThreads(agent.backendId, filter, archived),
+      ),
     );
+    return threadLists.flat();
   }
 
-  private listInstalledAcpThreads(
+  private async listInstalledAcpThreads(
     backendId: AppServerBackendKind,
     filter?: string,
     archived?: boolean,
-  ): AppServerThreadSummary[] {
+  ): Promise<AppServerThreadSummary[]> {
     if (!isAcpBackendId(backendId)) {
       return [];
     }
     const normalizedFilter = filter?.trim().toLowerCase();
-    return this.acpBackend
+    const threads = this.acpBackend
       .listSessions(backendId, { archived })
-      .map((session) => this.acpBackend.sessionToThreadSummary(session))
-      .filter(
-        (thread) =>
-          !normalizedFilter ||
-          thread.title.toLowerCase().includes(normalizedFilter) ||
-          thread.id.toLowerCase().includes(normalizedFilter),
-      );
+      .map((session) => this.acpBackend.sessionToThreadSummary(session));
+    const enrichedThreads = await Promise.all(
+      threads.map(async (thread) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: backendId,
+          threadId: thread.id,
+        });
+        const cwd = resolveThreadWorkspaceCwd(
+          thread,
+          overlay?.extraLinkedDirectories ?? [],
+        );
+        const codexEnvironmentOptions = cwd
+          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
+          : [];
+        return {
+          ...thread,
+          codexEnvironmentOptions,
+        };
+      }),
+    );
+    return enrichedThreads.filter(
+      (thread) =>
+        !normalizedFilter ||
+        thread.title.toLowerCase().includes(normalizedFilter) ||
+        thread.id.toLowerCase().includes(normalizedFilter),
+    );
   }
 
   private async readAcpThread(
