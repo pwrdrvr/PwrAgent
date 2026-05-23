@@ -765,7 +765,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
