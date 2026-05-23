@@ -2497,7 +2497,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("materializes Kimi worktree launchpads without running Codex environment setup", async () => {
+  it("materializes Kimi worktree launchpads with local environment setup", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-kimi-launchpad-"));
     const worktreePath = path.join(root, ".worktrees", "thread-1", "app");
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
@@ -2561,9 +2561,24 @@ script = "echo setup"
           worktreePath,
         },
       });
-      expect(response.codexEnvironmentRuntime).toBeUndefined();
+      expect(response.codexEnvironmentRuntime).toMatchObject({
+        environmentId: "environment",
+        environmentName: "Repo Environment",
+        executionTarget: "local",
+        cwd: worktreePath,
+        setupEnabled: true,
+        setupStatus: "completed",
+        setupCommand: "echo setup",
+        setupOutput: "setup",
+      });
       expect(response.codexEnvironmentStartupFailure).toBeUndefined();
-      expect(commandRunner).not.toHaveBeenCalled();
+      expect(commandRunner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: worktreePath,
+          command: "echo setup",
+          mode: "wait",
+        }),
+      );
       expect(recordCodexWorktreeOwnerThread).not.toHaveBeenCalled();
       expect(sendControlPrompt).toHaveBeenCalledWith({
         sessionId: "kimi-session-1",
