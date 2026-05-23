@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   buildThreadIdentityKey,
+  isAcpBackendId,
   isAppServerBackendKind,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
@@ -9,6 +10,7 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  BackendAcpSessionRuntimeState,
   BackendSummary,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
@@ -3052,10 +3054,22 @@ export class MessagingController {
       return;
     }
     if (actionId === "browse:new:permissions") {
+      const directory = nextSession.selectedProject
+        ? directoryForProjectSelection(navigation, nextSession.selectedProject)
+        : undefined;
       const currentMode =
         nextSession.preferences?.executionMode ??
+        directory?.launchpad?.executionMode ??
         navigation.launchpadDefaults.executionMode;
       const executionMode = currentMode === "full-access" ? "default" : "full-access";
+      if (
+        nextSession.backend &&
+        isAcpBackendId(nextSession.backend) &&
+        executionMode === "full-access"
+      ) {
+        await this.presentNewThreadPromptGate(nextSession, event, navigation);
+        return;
+      }
       if (executionMode === "full-access") {
         const allowed = await this.ensureFullAccessEscalationAllowed(
           { kind: "new-thread", session: nextSession },
@@ -3616,6 +3630,9 @@ export class MessagingController {
       Boolean(
         selectedBackend.launchpadOptions?.models?.some((model) => model.supportsFast),
       );
+    const supportsPermissionsControls =
+      !isAcpBackendId(selectedBackend.kind) ||
+      options.executionMode === "full-access";
     await this.options.store.upsertBrowseSession(effectiveSession);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("new-thread-ready"),
@@ -3673,8 +3690,9 @@ export class MessagingController {
               },
             ]
           : []),
-        ...(options.executionMode === "full-access" ||
-        fullAccessControls.allowEscalation
+        ...((supportsPermissionsControls &&
+        (options.executionMode === "full-access" ||
+        fullAccessControls.allowEscalation))
           ? [
               {
                 id: "browse:new:permissions",
@@ -4134,6 +4152,7 @@ export class MessagingController {
             now: this.now(),
             workMode: options.workMode,
             branchName: options.branchName,
+            acpRuntime: options.acpRuntime,
           }),
         })
       : undefined;
@@ -4145,6 +4164,7 @@ export class MessagingController {
       model: options.supportsModel ? options.model : undefined,
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
       serviceTier: preferences?.serviceTier,
+      acpRuntime: options.acpRuntime,
       ...(options.workMode === "worktree"
         ? {
             workMode: "worktree" as const,
@@ -4177,6 +4197,7 @@ export class MessagingController {
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
       serviceTier: preferences?.serviceTier,
       fastMode: options.supportsFast ? options.fastMode : undefined,
+      acpRuntime: options.acpRuntime,
       preferences,
       project,
       threadId: started.threadId,
@@ -6110,6 +6131,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    if (isAcpBackendId(binding.backend)) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
@@ -9146,6 +9171,14 @@ function normalizeNewThreadSessionForBackend(
   }
 
   const preferences = { ...session.preferences };
+  if (isAcpBackendId(backend.kind)) {
+    delete preferences.permissionsMode;
+    if (preferences.executionMode === "full-access") {
+      delete preferences.executionMode;
+    }
+  } else {
+    delete preferences.acpRuntime;
+  }
   const models = backend.launchpadOptions?.models ?? [];
   if (preferences.model !== undefined) {
     const modelIsValid = models.some((model) => model.id === preferences.model);
@@ -9203,6 +9236,7 @@ function defaultBackendModel(
 }
 
 type NewThreadOptionsSummary = {
+  acpRuntime?: BackendAcpSessionRuntimeState;
   backend: AppServerBackendKind;
   backendLabel: string;
   branchName: string;
@@ -9254,6 +9288,11 @@ function newThreadOptionsForSession(
     Boolean(modelOption?.supportsFast);
   const supportsReasoning =
     reasoningEfforts.length > 0 || Boolean(modelOption?.supportsReasoning);
+  const acpRuntime = isAcpBackendId(backend.kind)
+    ? session.preferences?.acpRuntime ??
+      directory?.launchpad?.acpRuntime ??
+      navigation.launchpadDefaults.acpRuntime
+    : undefined;
   const executionMode =
     session.preferences?.executionMode ??
     directory?.launchpad?.executionMode ??
@@ -9266,6 +9305,7 @@ function newThreadOptionsForSession(
   return {
     backend: backend.kind,
     backendLabel: backend.label,
+    acpRuntime,
     branchName: resolveNewThreadBaseBranch(session, navigation, directory),
     executionMode,
     executionModeSource,
@@ -9318,7 +9358,12 @@ function newThreadPromptGateBody(
     `Provider: ${backend.label}`,
     `Workspace: ${options.workMode === "worktree" ? "New Worktree" : "Local"}`,
     options.workMode === "worktree" ? `Base branch: ${options.branchName}` : undefined,
-    `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`,
+    !isAcpBackendId(options.backend) || options.executionMode === "full-access"
+      ? `Permissions: ${formatPermissionsShortLabel(options.executionMode)}`
+      : undefined,
+    isAcpBackendId(options.backend)
+      ? `Runtime mode: ${formatMessagingAcpRuntimeLineLabel(options.acpRuntime)} (desktop-only)`
+      : undefined,
     options.supportsModel ? `Model: ${options.model}` : undefined,
     options.supportsReasoning && options.reasoningEffort
       ? `Reasoning: ${options.reasoningEffort}`
@@ -9332,6 +9377,37 @@ function newThreadPromptGateBody(
 
 function formatPermissionsShortLabel(mode: ThreadExecutionMode): string {
   return mode === "full-access" ? "Full" : "Default";
+}
+
+function formatMessagingAcpRuntimeLineLabel(
+  runtime: BackendAcpSessionRuntimeState | undefined,
+): string {
+  const mode =
+    runtime?.currentModeId ??
+    (runtime?.configValues
+      ? Object.entries(runtime.configValues).find(([key]) =>
+          isMessagingAcpRuntimeModeConfigKey(key),
+        )?.[1]
+      : undefined);
+  return mode ? formatMessagingAcpRuntimeModeLabel(mode) : "Agent default";
+}
+
+function isMessagingAcpRuntimeModeConfigKey(key: string): boolean {
+  return key.trim().toLowerCase().endsWith("mode");
+}
+
+function formatMessagingAcpRuntimeModeLabel(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+  if (trimmed.toLowerCase() === "yolo") {
+    return "Yolo";
+  }
+  return trimmed
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function resolveNewThreadBaseBranch(
@@ -9912,6 +9988,7 @@ type TurnLifecycleParams = {
 };
 
 function navigationWithStartedThread(params: {
+  acpRuntime?: BackendAcpSessionRuntimeState;
   backend: AppServerBackendKind;
   directory?: NavigationDirectorySummary;
   executionMode?: ThreadExecutionMode;
@@ -9961,6 +10038,7 @@ function navigationWithStartedThread(params: {
         createdAt: params.now,
         updatedAt: params.now,
         executionMode: params.executionMode,
+        acpRuntime: params.acpRuntime,
         model: params.model,
         reasoningEffort: params.reasoningEffort,
         serviceTier: params.serviceTier,
@@ -9991,6 +10069,7 @@ function navigationWithStartedThread(params: {
 }
 
 function launchpadForMessagingProject(params: {
+  acpRuntime?: BackendAcpSessionRuntimeState;
   backend: AppServerBackendKind;
   branchName: string;
   directory?: NavigationDirectorySummary;
@@ -10027,6 +10106,7 @@ function launchpadForMessagingProject(params: {
   return {
     ...base,
     backend: params.backend,
+    acpRuntime: params.acpRuntime ?? params.preferences?.acpRuntime ?? base.acpRuntime,
     executionMode: params.preferences?.executionMode ?? base.executionMode,
     model: params.preferences?.model ?? base.model,
     reasoningEffort: params.preferences?.reasoningEffort ?? base.reasoningEffort,

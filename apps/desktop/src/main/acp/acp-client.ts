@@ -14,6 +14,7 @@ import {
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
+  acpRuntimeSupportsSessionLoad,
   acpSessionRuntimeStateFromCapabilities,
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
@@ -54,6 +55,7 @@ type AcpSessionStoreLike = Pick<
 
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
+  initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
@@ -104,6 +106,7 @@ export class AcpAgentClient {
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
+    this.runtimeCapabilities = options.initialRuntimeCapabilities;
   }
 
   async initialize(): Promise<void> {
@@ -275,12 +278,18 @@ export class AcpAgentClient {
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    if (!this.supportsSessionLoad()) {
+      return;
+    }
     await this.loadSessionFromAgent(metadata);
   }
 
   async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    if (!this.supportsSessionLoad()) {
+      return;
+    }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     if (
@@ -699,6 +708,9 @@ export class AcpAgentClient {
   }
 
   private async loadSessionFromAgent(metadata: AcpSessionMetadata): Promise<unknown> {
+    if (!this.supportsSessionLoad()) {
+      return undefined;
+    }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     this.suppressLoadReplaySessions.add(protocolSessionId);
@@ -725,6 +737,10 @@ export class AcpAgentClient {
     });
     this.loadedSessionCwds.set(protocolSessionId, cwd);
     return result;
+  }
+
+  private supportsSessionLoad(): boolean {
+    return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
   private clearLoadReplaySuppression(sessionId: string): void {

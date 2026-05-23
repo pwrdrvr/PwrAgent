@@ -33,7 +33,10 @@ import {
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
-import { acpSessionRuntimeStateFromUpdate } from "../acp/acp-runtime-capabilities";
+import {
+  acpRuntimeSupportsSessionLoad,
+  acpSessionRuntimeStateFromUpdate,
+} from "../acp/acp-runtime-capabilities";
 import {
   AcpSessionStore,
   type AcpSessionMetadata,
@@ -182,7 +185,14 @@ export function describeInstalledAcpBackend(
       license: agent.registryAgent?.license,
       runtime: agent.runtimeCapabilities,
     },
-    methods: ["session/new", "session/load", "session/prompt", "session/cancel"],
+    methods: [
+      "session/new",
+      ...(acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities)
+        ? ["session/load"]
+        : []),
+      "session/prompt",
+      "session/cancel",
+    ],
     capabilities: buildAcpCapabilities(),
     executionModes: [],
     launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
@@ -601,6 +611,13 @@ export class AcpBackendAdapter {
       return new AcpSessionReplayNormalizer().replay();
     }
 
+    if (
+      !acpRuntimeSupportsSessionLoad(
+        this.getInstalledAgent(backend)?.runtimeCapabilities,
+      )
+    ) {
+      return replayPersistedAcpTranscript(session);
+    }
     const client = await this.getClient(backend);
     try {
       const replay = await client.loadSession(session);
@@ -729,6 +746,7 @@ export class AcpBackendAdapter {
     }
     return new AcpAgentClient({
       backendId: agent.backendId,
+      initialRuntimeCapabilities: agent.runtimeCapabilities,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport: new AcpStdioJsonRpcTransport({
         launchDescriptor: agent.launchDescriptor,

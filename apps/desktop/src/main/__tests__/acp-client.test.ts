@@ -722,6 +722,41 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("does not call session/load when the ACP agent says loading is unsupported", async () => {
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: false,
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    });
+
+    await client.initialize();
+    await client.ensureSession(store.getSession("acp:gemini", "session-1")!);
+    await client.refreshSession(store.getSession("acp:gemini", "session-1")!);
+
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+    ]);
+  });
+
   it("can start prompts without waiting for completion and cancel sessions", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({

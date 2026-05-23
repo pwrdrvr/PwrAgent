@@ -2576,6 +2576,138 @@ describe("MessagingController", () => {
     });
   });
 
+  it("lets ACP messaging clear an inherited Full Access launchpad default", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      executionMode: "full-access",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            executionModes: [],
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Permissions: Full"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:permissions",
+          label: "Permissions: Full",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:permissions" }),
+    );
+
+    const defaultReadyIntent = harness.delivered.at(-1);
+    expect(defaultReadyIntent).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.not.stringContaining("Permissions: Full"),
+    });
+    expect(defaultReadyIntent).toMatchObject({
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:permissions" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "acp:gemini",
+        executionMode: "default",
+      }),
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:gemini",
+        threadId: "new-thread-1",
+      }),
+    );
+  });
+
+  it("does not label ACP model config as runtime mode in the new-thread prompt", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      acpRuntime: {
+        configValues: {
+          model: "gemini-3-flash-preview",
+        },
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            executionModes: [],
+            launchpadOptions: {
+              models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+            },
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Runtime mode: Agent default (desktop-only)"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.stringContaining("Model: gemini-3-flash-preview"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.not.stringContaining("Runtime mode: Gemini 3 Flash Preview"),
+    });
+  });
+
   it("does not fall back to another provider when the selected backend becomes unavailable before creation", async () => {
     const codexBackend = buildBackendSummary({
       kind: "codex",

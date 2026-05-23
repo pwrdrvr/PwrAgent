@@ -98,6 +98,12 @@ export function acpSessionRuntimeStateFromCapabilities(
   return Object.keys(state).length > 1 ? state : undefined;
 }
 
+export function acpRuntimeSupportsSessionLoad(
+  capabilities: BackendAcpRuntimeCapabilities | undefined,
+): boolean {
+  return capabilities?.agentCapabilities?.loadSession !== false;
+}
+
 export function acpSessionRuntimeStateFromUpdate(
   update: Record<string, unknown>,
   now: number,

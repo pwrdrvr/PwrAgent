@@ -279,6 +279,70 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
+  it("renders ACP runtime mode instead of Codex permission controls", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults.acpRuntime = {
+      currentModeId: "default",
+      updatedAt: 1000,
+    };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      acpRuntime: {
+        currentModeId: "yolo",
+        updatedAt: 1000,
+      },
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:gemini",
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-acp-runtime",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Binding: Thread one (acp:gemini)");
+    expect(intent.text).toContain("Runtime mode: Yolo (desktop-only)");
+    expect(intent.text).not.toContain("Permissions:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+      }),
+    );
+  });
+
+  it("does not treat ACP model config values as runtime modes", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:gemini",
+      acpRuntime: {
+        configValues: {
+          model: "gemini-3-flash-preview",
+        },
+        updatedAt: 1000,
+      },
+    };
+    const binding = {
+      ...buildBinding(),
+      backend: "acp:gemini",
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-acp-model-config",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Runtime mode: Agent default (desktop-only)");
+    expect(intent.text).not.toContain("Runtime mode: Gemini 3 Flash Preview");
+  });
+
   it("renders live thread state ahead of stale binding display metadata", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.title = "Renamed in Desktop";
