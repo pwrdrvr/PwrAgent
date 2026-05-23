@@ -60,6 +60,14 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const initialAssignment = readInitialAssignment(props);
   const [name, setName] = useState(initialAutomation?.name ?? "");
   const [taskPrompt, setTaskPrompt] = useState(initialAutomation?.taskPrompt ?? "");
+  const [gateEnabled, setGateEnabled] = useState(Boolean(initialAutomation?.gate));
+  const [gateCommand, setGateCommand] = useState(initialAutomation?.gate?.command ?? "");
+  const [gateCwd, setGateCwd] = useState(initialAutomation?.gate?.cwd ?? "");
+  const [gateTimeoutMs, setGateTimeoutMs] = useState(
+    initialAutomation?.gate?.timeoutMs
+      ? String(initialAutomation.gate.timeoutMs)
+      : "60000",
+  );
   const [enabled, setEnabled] = useState(initialAutomation?.status !== "paused");
   const [backlogPolicy, setBacklogPolicy] = useState<AutomationBacklogPolicy>(
     initialAutomation?.backlogPolicy ?? "coalesce",
@@ -131,6 +139,16 @@ export function AutomationEditor(props: AutomationEditorProps) {
       setValidationError(selectedSchedule.error);
       return;
     }
+    const gate = buildGate({
+      command: gateCommand,
+      cwd: gateCwd,
+      enabled: gateEnabled,
+      timeoutMs: gateTimeoutMs,
+    });
+    if (!gate.ok) {
+      setValidationError(gate.error);
+      return;
+    }
     const scheduleValidation = validateAutomationScheduleDefinition(
       selectedSchedule.schedule,
     );
@@ -146,6 +164,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           automationId: props.mode.automation.id,
           backlogPolicy,
           enabled,
+          gate: gate.gate,
           name: trimmedName,
           schedule: selectedSchedule.schedule,
           taskPrompt: trimmedPrompt,
@@ -166,6 +185,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         ...assignment,
         backlogPolicy,
         enabled,
+        gate: gate.gate,
         name: trimmedName,
         schedule: selectedSchedule.schedule,
         taskPrompt: trimmedPrompt,
@@ -312,6 +332,59 @@ export function AutomationEditor(props: AutomationEditorProps) {
         <p className="automation-editor__summary">{selectedScheduleSummary}</p>
       </fieldset>
 
+      <fieldset className="automation-fieldset">
+        <legend>Gate</legend>
+        <label className="automation-checkbox">
+          <input
+            checked={gateEnabled}
+            type="checkbox"
+            onChange={(event) => {
+              setGateEnabled(event.currentTarget.checked);
+              setValidationError(undefined);
+            }}
+          />
+          <span>Run script before starting</span>
+        </label>
+        {gateEnabled ? (
+          <>
+            <label className="automation-field">
+              <span>Command</span>
+              <input
+                value={gateCommand}
+                onChange={(event) => {
+                  setGateCommand(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              />
+            </label>
+            <div className="automation-inline-fields">
+              <label className="automation-field">
+                <span>Working directory</span>
+                <input
+                  value={gateCwd}
+                  onChange={(event) => {
+                    setGateCwd(event.currentTarget.value);
+                    setValidationError(undefined);
+                  }}
+                />
+              </label>
+              <label className="automation-field">
+                <span>Timeout ms</span>
+                <input
+                  min={1}
+                  type="number"
+                  value={gateTimeoutMs}
+                  onChange={(event) => {
+                    setGateTimeoutMs(event.currentTarget.value);
+                    setValidationError(undefined);
+                  }}
+                />
+              </label>
+            </div>
+          </>
+        ) : null}
+      </fieldset>
+
       <label className="automation-field">
         <span>Backlog</span>
         <select
@@ -437,6 +510,42 @@ function buildSchedule(params: {
       kind: "weekly",
       timeOfDay,
     },
+  };
+}
+
+function buildGate(params: {
+  command: string;
+  cwd: string;
+  enabled: boolean;
+  timeoutMs: string;
+}):
+  | {
+      gate: CreateAutomationRequest["gate"];
+      ok: true;
+    }
+  | {
+      error: string;
+      ok: false;
+    } {
+  if (!params.enabled) {
+    return { gate: undefined, ok: true };
+  }
+  const command = params.command.trim();
+  if (!command) {
+    return { error: "Gate command is required.", ok: false };
+  }
+  const timeoutMs = Number(params.timeoutMs);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+    return { error: "Gate timeout must be a whole number greater than zero.", ok: false };
+  }
+  const cwd = params.cwd.trim();
+  return {
+    gate: {
+      command,
+      ...(cwd ? { cwd } : {}),
+      timeoutMs,
+    },
+    ok: true,
   };
 }
 

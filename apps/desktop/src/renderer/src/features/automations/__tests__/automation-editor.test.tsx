@@ -127,4 +127,50 @@ describe("AutomationEditor", () => {
     );
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it("submits gate configuration when enabled", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+
+    render(
+      <AutomationEditor
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Check email" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Check email and summarize anything urgent." },
+    });
+    fireEvent.click(screen.getByLabelText("Run script before starting"));
+    fireEvent.change(screen.getByLabelText("Command"), {
+      target: { value: "node scripts/check-mail.js" },
+    });
+    fireEvent.change(screen.getByLabelText("Working directory"), {
+      target: { value: "/tmp/mail-agent" },
+    });
+    fireEvent.change(screen.getByLabelText("Timeout ms"), {
+      target: { value: "120000" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          gate: {
+            command: "node scripts/check-mail.js",
+            cwd: "/tmp/mail-agent",
+            timeoutMs: 120000,
+          },
+        }),
+      }),
+    );
+  });
 });
