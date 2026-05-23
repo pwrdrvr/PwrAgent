@@ -69,13 +69,13 @@ export class SqliteOverlayStore {
     >;
     automationsByThreadKey?: Record<string, AutomationThreadSummary | undefined>;
     /**
-     * In-memory permission-mode queue map keyed by `threadId`. The queue
+     * In-memory permission-mode queue map keyed by thread identity. The queue
      * lives on the registry (not in sqlite) but must be merged onto the
      * snapshot so renderers connecting after the queued bus event still
      * see the queued state. Also feeds the snapshot hash so changes
      * invalidate the cache.
      */
-    queuedExecutionModesByThreadId?: Record<
+    queuedExecutionModesByThreadKey?: Record<
       string,
       { mode: ThreadExecutionMode; queuedAt: number } | undefined
     >;
@@ -120,7 +120,7 @@ export class SqliteOverlayStore {
       params.threads.map((thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const overlay = this.getThread(threadKey);
-        const queue = params.queuedExecutionModesByThreadId?.[thread.id];
+        const queue = params.queuedExecutionModesByThreadKey?.[threadKey];
         if (queue) {
           // Merge the in-memory queue onto the persisted overlay so
           // mid-restart / mid-connect renderers see the queued state

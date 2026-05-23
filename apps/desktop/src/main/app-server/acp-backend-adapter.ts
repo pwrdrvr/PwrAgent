@@ -15,6 +15,7 @@ import {
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendSummary,
+  type ThreadExecutionMode,
   isAcpBackendId,
 } from "@pwragent/shared";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../acp/acp-agent-capabilities";
 import {
   AcpAgentClient,
+  type AcpJsonRpcTransport,
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
@@ -75,6 +77,9 @@ export type AcpRuntimeClient = Pick<
   Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
 
 export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
+export type AcpTransportFactory = (
+  agent: AcpInstalledAgentRecord,
+) => AcpJsonRpcTransport;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 
 export type AcpSessionStoreLike =
@@ -95,6 +100,7 @@ export type AcpBackendAdapterOptions = {
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   createAcpClient?: AcpClientFactory;
+  createAcpTransport?: AcpTransportFactory;
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
@@ -127,6 +133,22 @@ export function readAcpUpdateText(
   return contentRecord.type === "text" && typeof contentRecord.text === "string"
     ? contentRecord.text
     : undefined;
+}
+
+export function readKimiYoloExecutionModeFromText(
+  text: string,
+): ThreadExecutionMode | undefined {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("all actions will be auto-approved")) {
+    return "full-access";
+  }
+  if (normalized.includes("tool calls remain auto-approved")) {
+    return "full-access";
+  }
+  if (normalized.includes("actions will require approval")) {
+    return "default";
+  }
+  return undefined;
 }
 
 export function buildAcpCapabilities(): BackendCapabilities {
@@ -542,6 +564,7 @@ export class AcpBackendAdapter {
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly createAcpClient: AcpClientFactory;
+  private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
@@ -571,6 +594,7 @@ export class AcpBackendAdapter {
             : undefined);
     this.discoverLocalAcpAgents =
       options.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
+    this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =
       options.createAcpClient ?? ((agent) => this.createDefaultClient(agent));
   }
@@ -774,15 +798,17 @@ export class AcpBackendAdapter {
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: agent.runtimeCapabilities,
       store: this.acpSessionStore as AcpSessionStoreContract,
-      transport: new AcpStdioJsonRpcTransport({
-        launchDescriptor: agent.launchDescriptor,
-        observer: createCompositeJsonRpcObserver([
-          acpCapture?.observer,
-          createProtocolLogObserverFromEnv({
-            backend: agent.backendId,
-          }),
-        ]),
-      }),
+      transport:
+        this.createAcpTransport?.(agent) ??
+        new AcpStdioJsonRpcTransport({
+          launchDescriptor: agent.launchDescriptor,
+          observer: createCompositeJsonRpcObserver([
+            acpCapture?.observer,
+            createProtocolLogObserverFromEnv({
+              backend: agent.backendId,
+            }),
+          ]),
+        }),
       onSessionUpdate: async ({ sessionId, replay, title, turnId, update }) => {
         const updateKind = readAcpUpdateKind(update);
         if (title) {
@@ -796,6 +822,33 @@ export class AcpBackendAdapter {
               },
             },
           });
+        }
+        const kimiYoloExecutionMode =
+          agent.registryId === "kimi"
+            ? readKimiYoloExecutionModeFromText(readAcpUpdateText(update) ?? "")
+            : undefined;
+        if (kimiYoloExecutionMode) {
+          const metadata = this.getSession(agent.backendId, sessionId);
+          if (
+            metadata &&
+            (metadata.executionMode ?? "default") !== kimiYoloExecutionMode
+          ) {
+            this.acpSessionStore?.upsertSession?.({
+              ...metadata,
+              executionMode: kimiYoloExecutionMode,
+              updatedAt: Math.max(metadata.updatedAt, Date.now()),
+            });
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "thread/executionMode/updated",
+                params: {
+                  threadId: sessionId,
+                  executionMode: kimiYoloExecutionMode,
+                },
+              },
+            });
+          }
         }
         if (updateKind === "agent_message_chunk") {
           const delta = readAcpUpdateText(update);

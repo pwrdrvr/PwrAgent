@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   AcpBackendId,
   AgentEvent,
@@ -1024,6 +1025,128 @@ function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
         records[index] = metadata;
       }
     },
+  };
+}
+
+function createKimiAgentRecord(
+  backendId: AcpBackendId = "acp:kimi" as AcpBackendId,
+): AcpInstalledAgentRecord {
+  return {
+    backendId,
+    registryId: "kimi",
+    name: "Kimi Code CLI",
+    version: "1.44.0",
+    distributionKind: "local",
+    distributionSource: "kimi acp",
+    installStatus: "installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    allowlistRuleId: "local-kimi-cli",
+    installedAt: 1000,
+    updatedAt: 2000,
+    launchDescriptor: {
+      backendId,
+      registryId: "kimi",
+      distributionKind: "local",
+      command: "kimi",
+      args: ["acp"],
+      env: {},
+    },
+  };
+}
+
+type KimiSendControlPrompt = (params: {
+  sessionId: string;
+  prompt: string;
+}) => Promise<{ text: string }>;
+
+type KimiStartPrompt = (params: {
+  sessionId: string;
+  prompt: string;
+  promptContent?: unknown[];
+  parts?: unknown[];
+  turnId?: string;
+}) => { sessionId: string; turnId: string };
+
+function createKimiAcpRegistry(options?: {
+  acpBackendId?: AcpBackendId;
+  sessionId?: string;
+  sessions?: AcpSessionMetadata[];
+  sendControlPrompt?: KimiSendControlPrompt;
+  startPrompt?: KimiStartPrompt;
+  overlayStore?: ReturnType<typeof createOverlayStoreMock>;
+  codexClient?: MockBackendClient;
+}) {
+  const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
+  const sessions = options?.sessions ?? [];
+  const sessionId = options?.sessionId ?? "kimi-session-1";
+  const sendControlPrompt: KimiSendControlPrompt =
+    options?.sendControlPrompt ??
+    vi.fn(async () => ({
+      text: "You only live once! All actions will be auto-approved.",
+    }));
+  const startPrompt: KimiStartPrompt =
+    options?.startPrompt ??
+    vi.fn(() => ({ sessionId, turnId: "turn-1" }));
+  const acpClient = {
+    initialize: vi.fn(async () => undefined),
+    dispose: vi.fn(),
+    startSession: vi.fn(async (params: {
+      cwd?: string;
+      executionMode: "default" | "full-access";
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId,
+        title: "ACP session",
+        cwd: params.cwd,
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: params.executionMode,
+        status: "idle",
+      };
+      sessions.push(metadata);
+      return metadata;
+    }),
+    startPrompt,
+    sendControlPrompt,
+    ensureSession: vi.fn(async () => undefined),
+    loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    })),
+    refreshSession: vi.fn(async () => undefined),
+    cancelSession: vi.fn(),
+    readReplay: vi.fn((): AppServerThreadReplay => ({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    })),
+  };
+  const registry = new DesktopBackendRegistry({
+    codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
+    grokClient: new MockBackendClient({ threads: [] }),
+    overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
+    acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
+    acpSessionStore: createAcpSessionStoreMock(sessions),
+    createAcpClient: () => acpClient,
+  });
+  return {
+    acpBackendId,
+    acpClient,
+    registry,
+    sendControlPrompt,
+    sessions,
+    startPrompt,
   };
 }
 
@@ -2167,7 +2290,14 @@ describe("DesktopBackendRegistry", () => {
   it("runs Kimi ACP execution mode changes through slash control prompts", async () => {
     const sessions: AcpSessionMetadata[] = [];
     const acpBackendId = "acp:kimi" as AcpBackendId;
-    const sendControlPrompt = vi.fn(async () => undefined);
+    const sendControlPrompt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        text: "You only live once! All actions will be auto-approved.",
+      })
+      .mockResolvedValueOnce({
+        text: "You only die once! Actions will require approval.",
+      });
     const acpClient = {
       initialize: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -2287,6 +2417,246 @@ describe("DesktopBackendRegistry", () => {
       prompt: "/yolo",
     });
     expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
+  it("does not persist Kimi execution mode when /yolo confirms the wrong state", async () => {
+    const { acpBackendId, registry, sendControlPrompt, sessions } =
+      createKimiAcpRegistry({
+        sessions: [
+          {
+            backendId: "acp:kimi" as AcpBackendId,
+            sessionId: "kimi-session-1",
+            title: "ACP session",
+            createdAt: 1000,
+            updatedAt: 1000,
+            executionMode: "default",
+            status: "idle",
+          },
+        ],
+        sendControlPrompt: vi.fn(async () => ({
+          text: "You only die once! Actions will require approval.",
+        })),
+      });
+
+    await expect(
+      registry.setThreadExecutionMode({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        executionMode: "full-access",
+      }),
+    ).rejects.toThrow(/did not confirm Full Access/);
+
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      prompt: "/yolo",
+    });
+    expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
+  it("keeps new Kimi sessions at default when startup /yolo fails", async () => {
+    const { acpBackendId, registry, sessions } = createKimiAcpRegistry({
+      sendControlPrompt: vi.fn(async () => {
+        throw new Error("control prompt failed");
+      }),
+    });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "full-access",
+      }),
+    ).rejects.toThrow("control prompt failed");
+
+    expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
+  it("queues Kimi ACP execution mode changes during active turns and flushes once", async () => {
+    const events: AgentEvent[] = [];
+    const { acpBackendId, registry, sendControlPrompt, sessions } =
+      createKimiAcpRegistry({
+        sessions: [
+          {
+            backendId: "acp:kimi" as AcpBackendId,
+            sessionId: "kimi-session-1",
+            title: "ACP session",
+            createdAt: 1000,
+            updatedAt: 1000,
+            executionMode: "default",
+            status: "idle",
+          },
+        ],
+        sendControlPrompt: vi.fn(async () => ({
+          text: "You only live once! All actions will be auto-approved.",
+        })),
+      });
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: "work" }],
+    });
+
+    await expect(
+      registry.setThreadExecutionMode({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        executionMode: "full-access",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "full-access",
+    });
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+
+    await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "kimi-session-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    expect(sessions[0]?.executionMode).toBe("full-access");
+    const methods = events.map((event) => event.notification.method);
+    expect(methods).toContain("thread/executionMode/queued");
+    expect(methods).toContain("thread/executionMode/updated");
+    expect(methods).toContain("thread/executionMode/queueCleared");
+
+    await registry.close();
+  });
+
+  it("serializes Kimi control prompts before starting the next ACP turn", async () => {
+    const controlPrompt = createDeferred<{ text: string }>();
+    const startPrompt = vi.fn(() => ({
+      sessionId: "kimi-session-1",
+      turnId: "turn-1",
+    }));
+    const sendControlPrompt = vi.fn(() => controlPrompt.promise);
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      sessions: [
+        {
+          backendId: "acp:kimi" as AcpBackendId,
+          sessionId: "kimi-session-1",
+          title: "ACP session",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+      sendControlPrompt,
+      startPrompt,
+    });
+
+    const modeChange = registry.setThreadExecutionMode({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "full-access",
+    });
+    await vi.waitFor(() => {
+      expect(sendControlPrompt).toHaveBeenCalledTimes(1);
+    });
+    const turnStart = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      input: [{ type: "text", text: "after mode change" }],
+    });
+    await flushAsync();
+    expect(startPrompt).not.toHaveBeenCalled();
+
+    controlPrompt.resolve({
+      text: "You only live once! All actions will be auto-approved.",
+    });
+    await expect(modeChange).resolves.toMatchObject({
+      backend: acpBackendId,
+      executionMode: "full-access",
+    });
+    await expect(turnStart).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      turnId: "turn-1",
+    });
+    expect(startPrompt).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("isolates queued execution modes by backend when thread ids collide", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/resume"] },
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      sessions: [
+        {
+          backendId: "acp:kimi" as AcpBackendId,
+          sessionId: "same-thread",
+          title: "ACP session",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    await registry.queueThreadExecutionMode({
+      backend: "codex",
+      threadId: "same-thread",
+      executionMode: "full-access",
+    });
+    await registry.queueThreadExecutionMode({
+      backend: acpBackendId,
+      threadId: "same-thread",
+      executionMode: "full-access",
+    });
+
+    expect(registry.getQueuedExecutionModesSnapshot()).toMatchObject({
+      [buildThreadIdentityKey("codex", "same-thread")]: {
+        mode: "full-access",
+      },
+      [buildThreadIdentityKey(acpBackendId, "same-thread")]: {
+        mode: "full-access",
+      },
+    });
+
+    await registry.cancelThreadExecutionModeQueue({
+      backend: "codex",
+      threadId: "same-thread",
+    });
+
+    expect(registry.getQueuedExecutionModesSnapshot()).toMatchObject({
+      [buildThreadIdentityKey(acpBackendId, "same-thread")]: {
+        mode: "full-access",
+      },
+    });
+    expect(
+      registry.getQueuedExecutionModesSnapshot()[
+        buildThreadIdentityKey("codex", "same-thread")
+      ],
+    ).toBeUndefined();
 
     await registry.close();
   });
