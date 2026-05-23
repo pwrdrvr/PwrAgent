@@ -24,6 +24,7 @@ import type {
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
+import { appendCoalescedTranscriptUpdate } from "./acp-session-store.js";
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
@@ -43,6 +44,7 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
+const DEFAULT_TRANSCRIPT_PERSISTENCE_FLUSH_DELAY_MS = 1000;
 
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
@@ -84,6 +86,7 @@ export type AcpAgentClientOptions = {
   onRequest?: (
     request: AppServerPendingRequestNotification
   ) => Promise<unknown> | unknown;
+  transcriptPersistenceFlushDelayMs?: number;
 };
 
 export class AcpAgentClient {
@@ -106,6 +109,15 @@ export class AcpAgentClient {
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
+  private readonly transcriptPersistenceFlushDelayMs: number;
+  private readonly pendingTranscriptUpdates = new Map<
+    string,
+    AcpPersistedTranscriptUpdate[]
+  >();
+  private readonly transcriptPersistenceTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
@@ -114,6 +126,9 @@ export class AcpAgentClient {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
     this.approvalRequesterName = approvalRequesterNameForOptions(options);
+    this.transcriptPersistenceFlushDelayMs =
+      options.transcriptPersistenceFlushDelayMs ??
+      DEFAULT_TRANSCRIPT_PERSISTENCE_FLUSH_DELAY_MS;
   }
 
   async initialize(): Promise<void> {
@@ -154,6 +169,7 @@ export class AcpAgentClient {
     this.unsubscribe = undefined;
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = undefined;
+    this.flushAllPendingTranscriptUpdates();
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
@@ -533,10 +549,14 @@ export class AcpAgentClient {
       update,
       receivedAt,
     } satisfies AcpSessionUpdate);
-    this.persistTranscriptUpdate(sessionId, {
-      receivedAt,
-      update,
-    });
+    this.persistTranscriptUpdate(
+      sessionId,
+      {
+        receivedAt,
+        update,
+      },
+      { flush: "deferred" },
+    );
     void this.notifySessionUpdate({
       sessionId,
       replay,
@@ -669,15 +689,58 @@ export class AcpAgentClient {
   private persistTranscriptUpdate(
     sessionId: string,
     update: AcpPersistedTranscriptUpdate,
+    options?: { flush?: "deferred" | "immediate" },
   ): void {
+    const pending = this.pendingTranscriptUpdates.get(sessionId) ?? [];
+    appendCoalescedTranscriptUpdate(pending, update);
+    this.pendingTranscriptUpdates.set(sessionId, pending);
+    if (
+      options?.flush !== "deferred" ||
+      this.transcriptPersistenceFlushDelayMs <= 0
+    ) {
+      this.flushPendingTranscriptUpdates(sessionId);
+      return;
+    }
+    if (this.transcriptPersistenceTimers.has(sessionId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.transcriptPersistenceTimers.delete(sessionId);
+      this.flushPendingTranscriptUpdates(sessionId);
+    }, this.transcriptPersistenceFlushDelayMs);
+    timer.unref?.();
+    this.transcriptPersistenceTimers.set(sessionId, timer);
+  }
+
+  private flushAllPendingTranscriptUpdates(): void {
+    for (const sessionId of [...this.pendingTranscriptUpdates.keys()]) {
+      this.flushPendingTranscriptUpdates(sessionId);
+    }
+  }
+
+  private flushPendingTranscriptUpdates(sessionId: string): void {
+    const timer = this.transcriptPersistenceTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.transcriptPersistenceTimers.delete(sessionId);
+    }
+    const pending = this.pendingTranscriptUpdates.get(sessionId);
+    if (!pending?.length) {
+      return;
+    }
+    this.pendingTranscriptUpdates.delete(sessionId);
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
       return;
     }
+    const updatedAt = pending.reduce(
+      (latest, item) => Math.max(latest, item.receivedAt),
+      metadata.updatedAt,
+    );
     this.options.store.upsertSession({
       ...metadata,
-      updatedAt: Math.max(metadata.updatedAt, update.receivedAt),
-      transcriptUpdates: [...(metadata.transcriptUpdates ?? []), update],
+      updatedAt,
+      transcriptUpdates: [...(metadata.transcriptUpdates ?? []), ...pending],
     });
   }
 

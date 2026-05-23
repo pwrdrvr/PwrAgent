@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -45,6 +46,7 @@ describe("AcpAgentClient", () => {
       store,
       transport,
       now: () => 1000,
+      transcriptPersistenceFlushDelayMs: 0,
       onSessionUpdate: ({ sessionId }) => {
         sessionUpdates.push(sessionId);
       },
@@ -1437,5 +1439,134 @@ describe("AcpAgentClient", () => {
     });
     expect(updateEvents).toEqual([]);
     expect(client.readReplay("session-1").lastAssistantMessage).toBe("Previous answer.");
+  });
+
+  it("batches and coalesces streaming transcript persistence", async () => {
+    vi.useFakeTimers();
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const upsertSession = vi.spyOn(store, "upsertSession");
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+      transcriptPersistenceFlushDelayMs: 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const upsertCountAfterStart = upsertSession.mock.calls.length;
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "turn-1",
+    });
+    const upsertCountAfterPrompt = upsertSession.mock.calls.length;
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Hel" },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "lo" },
+    });
+
+    expect(upsertSession.mock.calls.length).toBe(upsertCountAfterPrompt);
+    expect(store.getSession("acp:kimi", session.sessionId)?.transcriptUpdates)
+      .toEqual([
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "hello",
+            turnId: "turn-1",
+          },
+        },
+      ]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(upsertSession.mock.calls.length).toBe(upsertCountAfterPrompt + 1);
+    expect(store.getSession("acp:kimi", session.sessionId)?.transcriptUpdates)
+      .toEqual([
+        {
+          receivedAt: 1000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "hello",
+            turnId: "turn-1",
+          },
+        },
+        {
+          receivedAt: 1000,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Hello" },
+          },
+        },
+      ]);
+    expect(upsertCountAfterStart).toBeGreaterThan(0);
+
+    promptResponse.resolve({ turnId: "turn-1" });
+    await Promise.resolve();
+    await client.dispose();
+  });
+
+  it("compacts adjacent text chunks when upserting stored sessions", () => {
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 950,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Thinking " },
+          },
+        },
+        {
+          receivedAt: 975,
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "hard." },
+          },
+        },
+        {
+          receivedAt: 1000,
+          update: {
+            sessionUpdate: "turn_finished",
+          },
+        },
+      ],
+    });
+
+    expect(store.getSession("acp:kimi", "session-1")?.transcriptUpdates).toEqual([
+      {
+        receivedAt: 975,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Thinking hard." },
+        },
+      },
+      {
+        receivedAt: 1000,
+        update: {
+          sessionUpdate: "turn_finished",
+        },
+      },
+    ]);
   });
 });
