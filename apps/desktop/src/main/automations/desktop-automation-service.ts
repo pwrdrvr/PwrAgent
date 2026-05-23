@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AppServerNotification,
   AutomationDetail,
   AutomationIdRequest,
   AutomationMutationResponse,
@@ -292,7 +293,12 @@ export class DesktopAutomationService {
   }
 
   private async handleRegistryEvent(event: AgentEvent): Promise<void> {
-    if (event.notification.method !== "thread/turnQueue/updated") return;
+    if (event.notification.method !== "thread/turnQueue/updated") {
+      if (isTerminalTurnNotification(event.notification)) {
+        await this.handleBackendTerminalTurnEvent(event);
+      }
+      return;
+    }
     const params = event.notification.params as {
       threadId: string;
       queueEntryId: string;
@@ -313,40 +319,90 @@ export class DesktopAutomationService {
       errorMessage: params.errorMessage,
     });
     if (params.automationRunId) {
-      const run = this.options.store.getRun(params.automationRunId);
-      if (!run) return;
-      const automation = run
-        ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
-        : undefined;
-      if (shouldRecordRunArtifact(params.status)) {
-        this.options.store.upsertRunArtifact({
-          runId: run.id,
-          status: run.status,
+      await this.publishAutomationRunUpdate({
+        backend: event.backend,
+        runId: params.automationRunId,
+        status: params.status,
+        threadId: params.threadId,
+        finalText: params.finalText,
+        errorMessage: params.errorMessage,
+      });
+    }
+  }
+
+  private async handleBackendTerminalTurnEvent(event: AgentEvent): Promise<void> {
+    if (!isTerminalTurnNotification(event.notification)) return;
+    const turnId = event.notification.params.turnId ?? event.notification.params.turn.id;
+    if (!turnId) return;
+    const activeRun = this.options.store.findRunningRunByBackendTurnId({
+      backend: event.backend,
+      backendTurnId: turnId,
+    });
+    if (!activeRun) return;
+
+    const finalText = finalTextFromTerminalTurnNotification(event.notification);
+    const errorMessage = errorMessageFromTerminalTurnNotification(event.notification);
+    await this.scheduler.handleTurnQueueUpdate({
+      automationRunId: activeRun.id,
+      status: "terminal",
+      terminalStatus: event.notification.method,
+      turnId,
+      errorMessage,
+    });
+    const automation = this.options.store.getAutomation(activeRun.automationId, {
+      includeDeleted: true,
+    });
+    await this.publishAutomationRunUpdate({
+      backend: event.backend,
+      runId: activeRun.id,
+      status: "terminal",
+      threadId: automation?.threadId ?? event.notification.params.threadId,
+      finalText,
+      errorMessage,
+    });
+  }
+
+  private async publishAutomationRunUpdate(params: {
+    backend: AutomationRecord["backend"];
+    runId: string;
+    status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+    threadId: string;
+    finalText?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    const run = this.options.store.getRun(params.runId);
+    if (!run) return;
+    const automation = this.options.store.getAutomation(run.automationId, {
+      includeDeleted: true,
+    });
+    if (shouldRecordRunArtifact(params.status)) {
+      this.options.store.upsertRunArtifact({
+        runId: run.id,
+        status: run.status,
+        finalText: params.finalText,
+        errorMessage: params.errorMessage ?? run.errorMessage,
+        outputDecision: parseAutomationOutputDecision(params.finalText),
+        transcriptEvents: buildRunArtifactTranscript({
+          run,
           finalText: params.finalText,
           errorMessage: params.errorMessage ?? run.errorMessage,
-          outputDecision: parseAutomationOutputDecision(params.finalText),
-          transcriptEvents: buildRunArtifactTranscript({
-            run,
-            finalText: params.finalText,
-            errorMessage: params.errorMessage ?? run.errorMessage,
-          }),
-        });
-      }
-      await this.options.registry.publishLocalEvent({
-        backend: event.backend,
-        notification: {
-          method: "automation/run/updated",
-          params: {
-            threadId: params.threadId,
-            automationId: run.automationId,
-            runId: params.automationRunId,
-            status: run.status,
-          },
-        },
+        }),
       });
-      if (automation) {
-        await this.notifyThreadAutomationsUpdated(automation);
-      }
+    }
+    await this.options.registry.publishLocalEvent({
+      backend: params.backend,
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          threadId: automation?.threadId ?? params.threadId,
+          automationId: run.automationId,
+          runId: params.runId,
+          status: run.status,
+        },
+      },
+    });
+    if (automation) {
+      await this.notifyThreadAutomationsUpdated(automation);
     }
   }
 
@@ -421,6 +477,41 @@ function shouldRecordRunArtifact(
   status: "queued" | "started" | "failed" | "cancelled" | "terminal",
 ): boolean {
   return status === "terminal" || status === "failed" || status === "cancelled";
+}
+
+type TerminalTurnNotification = Extract<
+  AppServerNotification,
+  { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+>;
+
+function isTerminalTurnNotification(
+  notification: AppServerNotification,
+): notification is TerminalTurnNotification {
+  return (
+    notification.method === "turn/completed" ||
+    notification.method === "turn/failed" ||
+    notification.method === "turn/cancelled"
+  );
+}
+
+function finalTextFromTerminalTurnNotification(
+  notification: TerminalTurnNotification,
+): string | undefined {
+  if (notification.method !== "turn/completed") return undefined;
+  const text = notification.params.turn.output
+    .filter((item) => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function errorMessageFromTerminalTurnNotification(
+  notification: TerminalTurnNotification,
+): string | undefined {
+  if (notification.method !== "turn/failed") return undefined;
+  return notification.params.turn.error.message;
 }
 
 function buildRunArtifactTranscript(params: {

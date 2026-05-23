@@ -331,6 +331,105 @@ describe("DesktopAutomationService", () => {
     ).toEqual([]);
   });
 
+  it("recovers automation completion from the backend terminal event when the headless queue event is missed", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    const run = store.createRun({
+      id: "run-weather",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 1_000,
+      now: 1_000,
+    });
+    expect(run).toBeDefined();
+    store.markRunStarted({
+      runId: "run-weather",
+      backendTurnId: "turn-weather",
+      startedAt: 1_100,
+      now: 1_100,
+    });
+    const queuedRun = store.createRun({
+      id: "run-weather-queued",
+      automationId: created.automation.id,
+      trigger: "scheduled",
+      scheduledFor: 2_000,
+      now: 2_000,
+    });
+    expect(queuedRun).toBeDefined();
+    store.markRunQueued({
+      runId: "run-weather-queued",
+      queueEntryId: "automation-lane:run-weather-queued",
+      queuedAt: 2_100,
+      now: 2_100,
+    });
+    publishedEvents = [];
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-weather",
+              turn: {
+                id: "turn-weather",
+                status: "completed",
+                output: [{ type: "text", text: "No rain is expected soon." }],
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(store.getRun("run-weather")).toMatchObject({
+      status: "completed",
+      backendTurnId: "turn-weather",
+    });
+    expect(store.getRun("run-weather-queued")).toMatchObject({
+      status: "running",
+      backendTurnId: "turn-1",
+    });
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        automationName: "Check weather",
+        automationRunId: "run-weather-queued",
+      }),
+    );
+    expect(store.getRunArtifact("run-weather")).toMatchObject({
+      finalText: "No rain is expected soon.",
+      outputDecision: {
+        kind: "parse_failed",
+        summary: "No rain is expected soon.",
+      },
+    });
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/updated",
+        params: {
+          automationId: created.automation.id,
+          runId: "run-weather",
+          status: "completed",
+          threadId: "thread-1",
+        },
+      },
+    });
+  });
+
   it("cancels every queued automation turn when deleting an automation", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({
