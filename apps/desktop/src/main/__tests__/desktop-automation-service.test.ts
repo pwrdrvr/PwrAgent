@@ -237,6 +237,20 @@ describe("DesktopAutomationService", () => {
         expect.objectContaining({ kind: "lifecycle" }),
       ],
     });
+    expect(
+      service.listCards({
+        backend: "codex",
+        threadId: "thread-1",
+      }).cards,
+    ).toEqual([
+      expect.objectContaining({
+        automationId: created.automation.id,
+        automationName: "Check email",
+        runId: runNow.run.id,
+        status: "completed",
+        summary: "Check email: Inbox summary is ready.",
+      }),
+    ]);
   });
 
   it("cancels every queued automation turn when deleting an automation", async () => {

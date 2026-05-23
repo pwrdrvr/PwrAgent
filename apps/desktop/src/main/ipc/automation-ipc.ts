@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import type {
   AutomationIdRequest,
+  ListAutomationCardsRequest,
+  ListAutomationCardsResponse,
   AutomationMutationResponse,
   CreateAutomationRequest,
   ListAutomationRunsRequest,
@@ -13,6 +15,7 @@ import type {
 import {
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
@@ -101,6 +104,13 @@ export function registerAutomationIpcHandlers(): void {
     (_event, request: ListAutomationRunsRequest): ListAutomationRunsResponse =>
       getDesktopAutomationService().listRuns(request),
   );
+
+  ipcMain.removeHandler(AUTOMATIONS_LIST_CARDS_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_LIST_CARDS_CHANNEL,
+    (_event, request: ListAutomationCardsRequest): ListAutomationCardsResponse =>
+      getDesktopAutomationService().listCards(request),
+  );
 }
 
 export function disposeAutomationIpcHandlers(): void {
@@ -112,5 +122,6 @@ export function disposeAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_RESUME_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_RUN_NOW_CHANNEL);
   ipcMain.removeHandler(AUTOMATIONS_LIST_RUNS_CHANNEL);
+  ipcMain.removeHandler(AUTOMATIONS_LIST_CARDS_CHANNEL);
   disposeDesktopAutomationService();
 }

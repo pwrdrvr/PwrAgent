@@ -93,6 +93,7 @@ export const AUTOMATIONS_PAUSE_CHANNEL = "automations:pause";
 export const AUTOMATIONS_RESUME_CHANNEL = "automations:resume";
 export const AUTOMATIONS_RUN_NOW_CHANNEL = "automations:run-now";
 export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
+export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window
  * (or focuses it if already open). The activity surface is a separate

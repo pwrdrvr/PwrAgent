@@ -15,6 +15,8 @@ import type {
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  ListAutomationCardsRequest,
+  ListAutomationCardsResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -205,6 +207,7 @@ import {
   ACP_AGENTS_LIST_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_LIST_CARDS_CHANNEL,
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
@@ -424,6 +427,10 @@ const desktopApi = Object.freeze({
     request: ListAutomationRunsRequest,
   ): Promise<ListAutomationRunsResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_LIST_RUNS_CHANNEL, request),
+  listAutomationCards: async (
+    request: ListAutomationCardsRequest,
+  ): Promise<ListAutomationCardsResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_LIST_CARDS_CHANNEL, request),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (

@@ -33,6 +33,8 @@ import type {
   InterruptTurnRequest,
   InterruptTurnResponse,
   LatestCodexConfigWarningResponse,
+  ListAutomationCardsRequest,
+  ListAutomationCardsResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationsRequest,
@@ -236,6 +238,9 @@ export type DesktopApi = {
   listAutomationRuns?: (
     request: ListAutomationRunsRequest,
   ) => Promise<ListAutomationRunsResponse>;
+  listAutomationCards?: (
+    request: ListAutomationCardsRequest,
+  ) => Promise<ListAutomationCardsResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,

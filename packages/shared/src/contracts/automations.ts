@@ -185,6 +185,16 @@ export type AutomationRunArtifact = {
   updatedAt: number;
 };
 
+export type AutomationTimelineCard = AutomationAgentAssignment & {
+  id: string;
+  automationId: string;
+  automationName: string;
+  runId: string;
+  status: AutomationRunStatus;
+  summary: string;
+  occurredAt: number;
+};
+
 export type CreateAutomationRequest = AutomationAgentAssignment & {
   name: string;
   taskPrompt: string;
@@ -230,6 +240,14 @@ export type ListAutomationRunsRequest = {
 
 export type ListAutomationRunsResponse = {
   runs: AutomationRunSummary[];
+};
+
+export type ListAutomationCardsRequest = AutomationAgentAssignment & {
+  limit?: number;
+};
+
+export type ListAutomationCardsResponse = {
+  cards: AutomationTimelineCard[];
 };
 
 export type GetAutomationRunArtifactRequest = {
