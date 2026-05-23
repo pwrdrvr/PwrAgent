@@ -315,6 +315,65 @@ export type MessagingAdapterRenderingPreferencesUpdate = {
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
 
+export type MessagingManagedConversationOperation =
+  | "create_child"
+  | "close"
+  | "reopen"
+  | "delete";
+
+export type MessagingManagedConversationOperationSupport = {
+  operation: MessagingManagedConversationOperation;
+  supported: boolean;
+  missingPermission?: string;
+  reason?: string;
+};
+
+export type MessagingManagedConversationRightsRequest = {
+  actor?: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingManagedConversationRightsResult = {
+  channel: MessagingChannelKind;
+  conversation: MessagingConversationRef;
+  errorMessage?: string;
+  operations: MessagingManagedConversationOperationSupport[];
+  outcome: "ok" | "unsupported" | "failed";
+  updatedAt: number;
+};
+
+export type MessagingManagedConversationCreateRequest = {
+  actor?: MessagingActorIdentity;
+  parent: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+  title: string;
+};
+
+export type MessagingManagedConversationCreateResult = {
+  channel: MessagingChannelKind;
+  conversation?: MessagingConversationRef;
+  errorMessage?: string;
+  outcome: "created" | "unsupported" | "failed";
+  routingState?: MessagingAdapterState;
+  updatedAt: number;
+};
+
+export type MessagingManagedConversationActionRequest = {
+  actor?: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingManagedConversationActionResult = {
+  channel: MessagingChannelKind;
+  conversation: MessagingConversationRef;
+  errorMessage?: string;
+  operation: Exclude<MessagingManagedConversationOperation, "create_child">;
+  outcome: "updated" | "unsupported" | "failed";
+  updatedAt: number;
+};
+
 export type MessagingChannelRef = {
   channel: MessagingChannelKind;
   conversation: MessagingConversationRef;
@@ -930,6 +989,84 @@ export type MessagingMonitorSubscriptionRecord = {
   revokedAt?: number;
   monitor: MessagingMonitorState;
   monitorSurface?: MessagingSurfaceRef;
+};
+
+export type MessagingManagedTopicSource =
+  | "owned"
+  | "created"
+  | "observed"
+  | "adopted"
+  | "linked";
+
+export type MessagingManagedTopicLifecycle =
+  | "open"
+  | "closed"
+  | "deleted"
+  | "unknown";
+
+export type MessagingManagedTopicCleanupRecommendation =
+  | "keep"
+  | "adopt"
+  | "close"
+  | "delete"
+  | "unknown";
+
+export type MessagingManagedTopicRecord = {
+  id: string;
+  channel: MessagingChannelKind;
+  supergroupId: string;
+  topicId: string;
+  conversation: MessagingConversationRef;
+  authorizedActorIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  adoptedAt?: number;
+  closedAt?: number;
+  deletedAt?: number;
+  lastObservedAt?: number;
+  lifecycle: MessagingManagedTopicLifecycle;
+  recommendation?: MessagingManagedTopicCleanupRecommendation;
+  routingState?: MessagingAdapterState;
+  source: MessagingManagedTopicSource;
+  title?: string;
+};
+
+export type MessagingThreadTopicLinkRecord = {
+  id: string;
+  backend: AppServerBackendKind;
+  channel: MessagingChannelKind;
+  supergroupId: string;
+  threadId: ThreadIdentifier;
+  topicRecordId: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type MessagingTopicCleanupProposalAction =
+  | "keep"
+  | "close"
+  | "delete";
+
+export type MessagingTopicCleanupProposalItem = {
+  id: string;
+  action: MessagingTopicCleanupProposalAction;
+  reason: string;
+  topicRecordId: string;
+  title?: string;
+};
+
+export type MessagingTopicCleanupProposalRecord = {
+  id: string;
+  channel: MessagingChannelKind;
+  supergroupId: string;
+  controlTopicRecordId?: string;
+  authorizedActorIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  appliedAt?: number;
+  expiresAt?: number;
+  items: MessagingTopicCleanupProposalItem[];
+  status: "pending" | "applied" | "expired" | "cancelled";
 };
 
 export type MessagingThreadDisplaySummary = {

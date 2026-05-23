@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
+export const CURRENT_STATE_DB_USER_VERSION = 8;
+
 const SCHEMA_V1 = `
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
@@ -234,6 +236,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_composer_draft_journal_scope_hash_status
   ON composer_draft_journal(scope_key, content_hash, status);
 `;
 
+const MESSAGING_TOPIC_MANAGEMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_managed_topics (
+  topic_record_id TEXT PRIMARY KEY,
+  channel_kind    TEXT NOT NULL,
+  supergroup_id   TEXT NOT NULL,
+  topic_id        TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_managed_topics_conversation
+  ON messaging_managed_topics(channel_kind, supergroup_id, topic_id);
+CREATE INDEX IF NOT EXISTS idx_messaging_managed_topics_supergroup
+  ON messaging_managed_topics(channel_kind, supergroup_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messaging_thread_topic_links (
+  link_id         TEXT PRIMARY KEY,
+  channel_kind    TEXT NOT NULL,
+  supergroup_id   TEXT NOT NULL,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  topic_record_id TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  payload         TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_thread_topic_links_unique
+  ON messaging_thread_topic_links(channel_kind, supergroup_id, backend, thread_id);
+
+CREATE TABLE IF NOT EXISTS messaging_topic_cleanup_proposals (
+  proposal_id   TEXT PRIMARY KEY,
+  channel_kind  TEXT NOT NULL,
+  supergroup_id TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  applied_at    INTEGER,
+  expires_at    INTEGER,
+  payload       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_topic_cleanup_proposals_supergroup
+  ON messaging_topic_cleanup_proposals(channel_kind, supergroup_id, updated_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -322,6 +369,12 @@ export class StateDb {
         // converge.
         db.exec(DIRECTORY_OVERLAY_SCHEMA);
         db.pragma("user_version = 7");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 8) {
+      db.transaction(() => {
+        db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
 
@@ -464,6 +517,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
     db.exec(DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
+    db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

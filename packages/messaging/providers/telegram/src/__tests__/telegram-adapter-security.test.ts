@@ -366,10 +366,21 @@ function fakeBot(): TelegramBotLike & {
   return {
     api: {
       answerCallbackQuery: vi.fn(async () => true),
+      closeForumTopic: vi.fn(async () => true),
+      createForumTopic: vi.fn(async () => ({
+        message_thread_id: 44,
+        name: "Topic",
+      })),
       deleteWebhook: vi.fn(async () => true),
+      deleteForumTopic: vi.fn(async () => true),
       editForumTopic: vi.fn(async () => true),
       editMessageText: vi.fn(async () => sentMessage),
       getFile: vi.fn(async () => ({})),
+      getChatMember: vi.fn(async () => ({
+        can_delete_messages: true,
+        can_manage_topics: true,
+        status: "administrator" as const,
+      })),
       getMe: vi.fn(async () => ({ id: 999, is_bot: true, username: "PwrAgentBot" })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(async () => true),
@@ -377,6 +388,7 @@ function fakeBot(): TelegramBotLike & {
       sendDocument: vi.fn(async () => sentMessage),
       sendMessage: vi.fn(async () => sentMessage),
       sendPhoto: vi.fn(async () => sentMessage),
+      reopenForumTopic: vi.fn(async () => true),
       setMyCommands: vi.fn(async () => true),
       unpinChatMessage: vi.fn(async () => true),
     },

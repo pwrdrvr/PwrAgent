@@ -3,8 +3,11 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingDeliveryResult,
+  MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingThreadTopicLinkRecord,
+  MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 
 // SCHEMA-DRIFT-CHECKPOINT: when bumping CURRENT_MESSAGING_STORE_VERSION,
@@ -30,6 +33,9 @@ export type MessagingStoreData = {
   bindings: Record<string, MessagingBindingRecord>;
   callbackHandles: Record<string, MessagingCallbackHandleRecord>;
   monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord>;
+  topicCleanupProposals: Record<string, MessagingTopicCleanupProposalRecord>;
+  topicLinks: Record<string, MessagingThreadTopicLinkRecord>;
+  topics: Record<string, MessagingManagedTopicRecord>;
   pendingIntents: Record<string, MessagingPendingIntentRecord>;
   deliveries: Record<string, MessagingDeliveryRecord>;
 };
@@ -40,6 +46,9 @@ const EMPTY_MESSAGING_STORE_DATA: MessagingStoreData = {
   bindings: {},
   callbackHandles: {},
   monitorSubscriptions: {},
+  topicCleanupProposals: {},
+  topicLinks: {},
+  topics: {},
   pendingIntents: {},
   deliveries: {},
 };
@@ -59,6 +68,12 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
       record.monitorSubscriptions,
       isMessagingMonitorSubscriptionRecord,
     ),
+    topicCleanupProposals: migrateRecord(
+      record.topicCleanupProposals,
+      isMessagingTopicCleanupProposalRecord,
+    ),
+    topicLinks: migrateRecord(record.topicLinks, isMessagingThreadTopicLinkRecord),
+    topics: migrateRecord(record.topics, isMessagingManagedTopicRecord),
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
@@ -150,6 +165,61 @@ function isMessagingMonitorSubscriptionRecord(
       typeof monitor.enabled === "boolean" &&
       typeof monitor.intervalMs === "number" &&
       typeof monitor.updatedAt === "number",
+  );
+}
+
+function isMessagingManagedTopicRecord(
+  value: unknown,
+): value is MessagingManagedTopicRecord {
+  const record = asRecord(value);
+  const conversation = asRecord(record?.conversation);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      typeof record.channel === "string" &&
+      typeof record.supergroupId === "string" &&
+      typeof record.topicId === "string" &&
+      typeof conversation?.id === "string" &&
+      typeof conversation?.kind === "string" &&
+      Array.isArray(record.authorizedActorIds) &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      typeof record.lifecycle === "string" &&
+      typeof record.source === "string",
+  );
+}
+
+function isMessagingThreadTopicLinkRecord(
+  value: unknown,
+): value is MessagingThreadTopicLinkRecord {
+  const record = asRecord(value);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      typeof record.backend === "string" &&
+      typeof record.channel === "string" &&
+      typeof record.supergroupId === "string" &&
+      typeof record.threadId === "string" &&
+      typeof record.topicRecordId === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number",
+  );
+}
+
+function isMessagingTopicCleanupProposalRecord(
+  value: unknown,
+): value is MessagingTopicCleanupProposalRecord {
+  const record = asRecord(value);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      typeof record.channel === "string" &&
+      typeof record.supergroupId === "string" &&
+      Array.isArray(record.authorizedActorIds) &&
+      Array.isArray(record.items) &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      typeof record.status === "string",
   );
 }
 

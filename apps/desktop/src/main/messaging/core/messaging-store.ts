@@ -8,8 +8,11 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
   MessagingJsonValue,
+  MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingThreadTopicLinkRecord,
+  MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import {
   CURRENT_MESSAGING_STORE_VERSION,
@@ -182,6 +185,113 @@ export class MessagingStore {
       );
       return revoked ? structuredClone(revoked) : undefined;
     });
+  }
+
+  async upsertManagedTopic(
+    topic: MessagingManagedTopicRecord,
+  ): Promise<MessagingManagedTopicRecord> {
+    const sanitized = sanitizeManagedTopic(topic);
+    return await this.withData((data) => {
+      data.topics[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
+  async getManagedTopic(
+    id: string,
+  ): Promise<MessagingManagedTopicRecord | undefined> {
+    return await this.withReadData((data) => cloneOptional(data.topics[id]));
+  }
+
+  async findManagedTopicsForSupergroup(params: {
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+  }): Promise<MessagingManagedTopicRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.topics)
+        .filter(
+          (topic) =>
+            topic.channel === params.channel &&
+            topic.supergroupId === params.supergroupId,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+        .map((topic) => structuredClone(topic)),
+    );
+  }
+
+  async findManagedTopicByConversation(params: {
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+    topicId: string;
+  }): Promise<MessagingManagedTopicRecord | undefined> {
+    return await this.withReadData((data) =>
+      cloneOptional(
+        Object.values(data.topics).find(
+          (topic) =>
+            topic.channel === params.channel &&
+            topic.supergroupId === params.supergroupId &&
+            topic.topicId === params.topicId,
+        ),
+      ),
+    );
+  }
+
+  async upsertThreadTopicLink(
+    link: MessagingThreadTopicLinkRecord,
+  ): Promise<MessagingThreadTopicLinkRecord> {
+    const sanitized = structuredClone(link);
+    return await this.withData((data) => {
+      for (const [id, existing] of Object.entries(data.topicLinks)) {
+        if (
+          id !== sanitized.id &&
+          existing.channel === sanitized.channel &&
+          existing.supergroupId === sanitized.supergroupId &&
+          existing.backend === sanitized.backend &&
+          existing.threadId === sanitized.threadId
+        ) {
+          delete data.topicLinks[id];
+        }
+      }
+      data.topicLinks[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
+  async findThreadTopicLink(params: {
+    backend: MessagingThreadTopicLinkRecord["backend"];
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+    threadId: string;
+  }): Promise<MessagingThreadTopicLinkRecord | undefined> {
+    return await this.withReadData((data) =>
+      cloneOptional(
+        Object.values(data.topicLinks).find(
+          (link) =>
+            link.backend === params.backend &&
+            link.channel === params.channel &&
+            link.supergroupId === params.supergroupId &&
+            link.threadId === params.threadId,
+        ),
+      ),
+    );
+  }
+
+  async upsertTopicCleanupProposal(
+    proposal: MessagingTopicCleanupProposalRecord,
+  ): Promise<MessagingTopicCleanupProposalRecord> {
+    const sanitized = structuredClone(proposal);
+    return await this.withData((data) => {
+      data.topicCleanupProposals[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
+  async getTopicCleanupProposal(
+    id: string,
+  ): Promise<MessagingTopicCleanupProposalRecord | undefined> {
+    return await this.withReadData((data) =>
+      cloneOptional(data.topicCleanupProposals[id]),
+    );
   }
 
   async upsertPendingIntent(
@@ -582,6 +692,16 @@ function sanitizeMonitorSubscription(
     ...subscription,
     authorizedActorIds: [...new Set(subscription.authorizedActorIds)],
     monitorSurface: sanitizeSurfaceRef(subscription.monitorSurface),
+  };
+}
+
+function sanitizeManagedTopic(
+  topic: MessagingManagedTopicRecord,
+): MessagingManagedTopicRecord {
+  return {
+    ...topic,
+    authorizedActorIds: [...new Set(topic.authorizedActorIds)],
+    routingState: sanitizeAdapterState(topic.routingState),
   };
 }
 

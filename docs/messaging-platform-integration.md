@@ -11,7 +11,7 @@ truth for:
   reference for every field above and below the Test button.
 - **Usage** — bound threads, slash commands, at-mention commands,
   resume browser, new-thread starter, start card, debounce / queue
-  / steer, monitor cards, detach, archive — all at
+  / steer, monitor cards, Telegram topic cleanup/fanout, detach, archive — all at
   <https://docs.pwragent.ai/using-codex/>.
 - **Rate limits and budgets** —
   <https://docs.pwragent.ai/rate-limits/> with per-platform measured

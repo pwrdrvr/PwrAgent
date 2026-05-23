@@ -5,8 +5,11 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
   MessagingJsonValue,
+  MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingThreadTopicLinkRecord,
+  MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import type { StateDb } from "./state-db.js";
 import type {
@@ -219,6 +222,137 @@ export class SqliteMessagingStore {
     await this.upsertMonitorSubscription(revoked);
     await this.deletePendingIntentsForChannel({ channel: current.channel });
     return structuredClone(revoked);
+  }
+
+  async upsertManagedTopic(
+    topic: MessagingManagedTopicRecord,
+  ): Promise<MessagingManagedTopicRecord> {
+    const sanitized = sanitizeManagedTopic(topic);
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO messaging_managed_topics(topic_record_id, channel_kind, supergroup_id, topic_id, status, created_at, updated_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sanitized.id,
+        sanitized.channel,
+        sanitized.supergroupId,
+        sanitized.topicId,
+        sanitized.lifecycle,
+        sanitized.createdAt,
+        sanitized.updatedAt,
+        JSON.stringify(sanitized),
+      );
+    return structuredClone(sanitized);
+  }
+
+  async getManagedTopic(
+    id: string,
+  ): Promise<MessagingManagedTopicRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare("SELECT payload FROM messaging_managed_topics WHERE topic_record_id = ?")
+      .get(id) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async findManagedTopicsForSupergroup(params: {
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+  }): Promise<MessagingManagedTopicRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_managed_topics WHERE channel_kind = ? AND supergroup_id = ? ORDER BY updated_at DESC, created_at DESC",
+      )
+      .all(params.channel, params.supergroupId) as { payload: string }[];
+    return rows.map((row) => JSON.parse(row.payload) as MessagingManagedTopicRecord);
+  }
+
+  async findManagedTopicByConversation(params: {
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+    topicId: string;
+  }): Promise<MessagingManagedTopicRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_managed_topics WHERE channel_kind = ? AND supergroup_id = ? AND topic_id = ?",
+      )
+      .get(params.channel, params.supergroupId, params.topicId) as
+      | { payload: string }
+      | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async upsertThreadTopicLink(
+    link: MessagingThreadTopicLinkRecord,
+  ): Promise<MessagingThreadTopicLinkRecord> {
+    const sanitized = structuredClone(link);
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO messaging_thread_topic_links(link_id, channel_kind, supergroup_id, backend, thread_id, topic_record_id, created_at, updated_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sanitized.id,
+        sanitized.channel,
+        sanitized.supergroupId,
+        sanitized.backend,
+        sanitized.threadId,
+        sanitized.topicRecordId,
+        sanitized.createdAt,
+        sanitized.updatedAt,
+        JSON.stringify(sanitized),
+      );
+    return structuredClone(sanitized);
+  }
+
+  async findThreadTopicLink(params: {
+    backend: MessagingThreadTopicLinkRecord["backend"];
+    channel: MessagingChannelRef["channel"];
+    supergroupId: string;
+    threadId: string;
+  }): Promise<MessagingThreadTopicLinkRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_thread_topic_links WHERE channel_kind = ? AND supergroup_id = ? AND backend = ? AND thread_id = ?",
+      )
+      .get(params.channel, params.supergroupId, params.backend, params.threadId) as
+      | { payload: string }
+      | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async upsertTopicCleanupProposal(
+    proposal: MessagingTopicCleanupProposalRecord,
+  ): Promise<MessagingTopicCleanupProposalRecord> {
+    const sanitized = structuredClone(proposal);
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO messaging_topic_cleanup_proposals(proposal_id, channel_kind, supergroup_id, status, created_at, updated_at, applied_at, expires_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sanitized.id,
+        sanitized.channel,
+        sanitized.supergroupId,
+        sanitized.status,
+        sanitized.createdAt,
+        sanitized.updatedAt,
+        sanitized.appliedAt ?? null,
+        sanitized.expiresAt ?? null,
+        JSON.stringify(sanitized),
+      );
+    return structuredClone(sanitized);
+  }
+
+  async getTopicCleanupProposal(
+    id: string,
+  ): Promise<MessagingTopicCleanupProposalRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_topic_cleanup_proposals WHERE proposal_id = ?",
+      )
+      .get(id) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
   }
 
   async upsertPendingIntent(
@@ -655,6 +789,9 @@ export class SqliteMessagingStore {
     const browseSessions: Record<string, MessagingBrowseSessionRecord> = {};
     const callbackHandles: Record<string, MessagingCallbackHandleRecord> = {};
     const deliveries: Record<string, MessagingDeliveryRecord> = {};
+    const topicCleanupProposals: Record<string, MessagingTopicCleanupProposalRecord> = {};
+    const topicLinks: Record<string, MessagingThreadTopicLinkRecord> = {};
+    const topics: Record<string, MessagingManagedTopicRecord> = {};
 
     for (const row of this.stateDb.raw
       .prepare("SELECT binding_id, payload FROM bindings")
@@ -686,11 +823,29 @@ export class SqliteMessagingStore {
       .all() as { delivery_id: string; payload: string }[]) {
       deliveries[row.delivery_id] = JSON.parse(row.payload);
     }
+    for (const row of this.stateDb.raw
+      .prepare("SELECT topic_record_id, payload FROM messaging_managed_topics")
+      .all() as { topic_record_id: string; payload: string }[]) {
+      topics[row.topic_record_id] = JSON.parse(row.payload);
+    }
+    for (const row of this.stateDb.raw
+      .prepare("SELECT link_id, payload FROM messaging_thread_topic_links")
+      .all() as { link_id: string; payload: string }[]) {
+      topicLinks[row.link_id] = JSON.parse(row.payload);
+    }
+    for (const row of this.stateDb.raw
+      .prepare("SELECT proposal_id, payload FROM messaging_topic_cleanup_proposals")
+      .all() as { proposal_id: string; payload: string }[]) {
+      topicCleanupProposals[row.proposal_id] = JSON.parse(row.payload);
+    }
 
     return {
       version: CURRENT_MESSAGING_STORE_VERSION,
       bindings,
       monitorSubscriptions,
+      topicCleanupProposals,
+      topicLinks,
+      topics,
       pendingIntents,
       browseSessions,
       callbackHandles,
@@ -753,6 +908,16 @@ function sanitizeMonitorSubscription(
     ...subscription,
     authorizedActorIds: [...new Set(subscription.authorizedActorIds)],
     monitorSurface: sanitizeSurfaceRef(subscription.monitorSurface),
+  };
+}
+
+function sanitizeManagedTopic(
+  topic: MessagingManagedTopicRecord,
+): MessagingManagedTopicRecord {
+  return {
+    ...topic,
+    authorizedActorIds: [...new Set(topic.authorizedActorIds)],
+    routingState: sanitizeAdapterState(topic.routingState),
   };
 }
 
@@ -835,6 +1000,14 @@ export type MessagingStoreLike = Pick<
   | "findActiveMonitorSubscriptionForChannel"
   | "findActiveMonitorSubscriptionsForChannelKind"
   | "revokeMonitorSubscription"
+  | "upsertManagedTopic"
+  | "getManagedTopic"
+  | "findManagedTopicsForSupergroup"
+  | "findManagedTopicByConversation"
+  | "upsertThreadTopicLink"
+  | "findThreadTopicLink"
+  | "upsertTopicCleanupProposal"
+  | "getTopicCleanupProposal"
   | "upsertPendingIntent"
   | "getPendingIntent"
   | "findActivePendingIntentForChannel"

@@ -46,12 +46,18 @@ import type {
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingMessageIntent,
+  MessagingManagedConversationActionResult,
+  MessagingManagedConversationOperationSupport,
+  MessagingManagedTopicRecord,
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
+  MessagingThreadTopicLinkRecord,
+  MessagingTopicCleanupProposalItem,
+  MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import { MESSAGING_CALLBACK_HANDLE_TTL_MS } from "@pwragent/messaging-interface";
 import {
@@ -178,6 +184,9 @@ type MonitorCommandAction =
   | { kind: "start" }
   | { kind: "stop" }
   | { kind: "refresh" }
+  | { kind: "topics-adopt" }
+  | { kind: "topics-cleanup" }
+  | { kind: "topics-fanout" }
   | { kind: "cycle-interval" }
   | { kind: "cycle-pinned" }
   | { kind: "cycle-recent" }
@@ -576,8 +585,9 @@ export class MessagingController {
     // source of truth for routing. Log and continue.
     try {
       await this.refreshBindingFromInbound(event);
+      await this.observeManagedTopicFromInbound(event);
     } catch (error) {
-      this.logger.debug?.("messaging binding refresh failed", {
+      this.logger.debug?.("messaging inbound metadata refresh failed", {
         eventId: event.id,
         platform: event.channel.channel,
         error: error instanceof Error ? error.message : String(error),
@@ -4218,6 +4228,14 @@ export class MessagingController {
 
   private async handleMonitorCommand(event: MessagingInboundCommandEvent): Promise<void> {
     const action = normalizeMonitorCommandAction(event.args);
+    if (
+      action.kind === "topics-adopt" ||
+      action.kind === "topics-cleanup" ||
+      action.kind === "topics-fanout"
+    ) {
+      await this.handleMonitorTopicCommand(event, action);
+      return;
+    }
     if (action.kind === "stop") {
       await this.stopMonitoringForChannel(event);
       return;
@@ -4230,12 +4248,654 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
+    if (actionId === "monitor:topics" || actionId.startsWith("monitor:topics:")) {
+      await this.handleMonitorTopicCallback(event, actionId);
+      return;
+    }
     if (actionId === "monitor:stop") {
       await this.stopMonitoringForChannel(event);
       return;
     }
 
     await this.enableAndRenderChannelMonitor(event, normalizeMonitorCallbackAction(actionId));
+  }
+
+  private async handleMonitorTopicCommand(
+    event: MessagingInboundCommandEvent,
+    action: Extract<
+      MonitorCommandAction,
+      { kind: "topics-adopt" | "topics-cleanup" | "topics-fanout" }
+    >,
+  ): Promise<void> {
+    if (event.channel.channel !== "telegram") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-unsupported"),
+          createdAt: this.now(),
+          title: "Topic management unavailable",
+          body: "Topic cleanup and fanout are currently implemented for Telegram supergroup topics only.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const topic = await this.resolveMonitorControlTopic(event);
+    if (!topic) {
+      return;
+    }
+    const topicEvent = this.eventForManagedTopic(
+      event,
+      topic,
+      action.kind === "topics-cleanup"
+        ? ["topics", "cleanup"]
+        : action.kind === "topics-fanout"
+          ? ["topics", "fanout"]
+          : ["topics"],
+    );
+    if (action.kind === "topics-cleanup") {
+      await this.renderTopicCleanupProposal(topicEvent, topic);
+      return;
+    }
+    if (action.kind === "topics-fanout") {
+      await this.runTopicMonitorFanout(topicEvent, topic);
+      return;
+    }
+
+    await this.renderTopicControlStatus(topicEvent, topic);
+  }
+
+  private supportsMonitorTopicControls(channel: MessagingChannelRef): boolean {
+    return channel.channel === "telegram" &&
+      (channel.conversation.kind === "topic" || channel.conversation.kind === "channel");
+  }
+
+  private async resolveMonitorControlTopic(
+    event: MessagingInboundCommandEvent,
+  ): Promise<MessagingManagedTopicRecord | undefined> {
+    if (event.channel.conversation.kind === "topic") {
+      return await this.upsertManagedTopicFromChannel(event, {
+        source: "owned",
+        lifecycle: "open",
+        recommendation: "keep",
+      });
+    }
+
+    if (event.channel.conversation.kind !== "channel") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-not-supergroup"),
+          createdAt: this.now(),
+          title: "Telegram supergroup required",
+          body: "Open Monitor from a Telegram supergroup or one of its topics so PwrAgent can manage forum topics.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    const supergroupId = event.channel.conversation.id;
+    const knownTopics = await this.options.store.findManagedTopicsForSupergroup({
+      channel: event.channel.channel,
+      supergroupId,
+    });
+    const existing = knownTopics.find(
+      (topic) => topic.source === "owned" && topic.lifecycle !== "deleted",
+    );
+    if (existing) {
+      return existing;
+    }
+
+    if (!this.options.adapter.createManagedConversation) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-create-unsupported"),
+          createdAt: this.now(),
+          title: "Topic creation unavailable",
+          body: "This adapter cannot create a PwrAgent control topic. Run this from an existing Telegram topic to adopt it instead.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    const result = await this.options.adapter.createManagedConversation({
+      actor: event.actor,
+      parent: event.channel,
+      routingState: event.routingState,
+      title: "PwrAgent topic owner",
+    });
+    if (result.outcome !== "created" || !result.conversation) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-create-failed"),
+          createdAt: this.now(),
+          title: "Topic creation failed",
+          body: result.errorMessage ?? "Telegram could not create the PwrAgent control topic.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return undefined;
+    }
+
+    return await this.options.store.upsertManagedTopic(
+      managedTopicRecordFromConversation({
+        actorIds: this.monitorAuthorizedActorIds(event),
+        channel: event.channel.channel,
+        conversation: result.conversation,
+        now: this.now(),
+        routingState: result.routingState,
+        source: "owned",
+      }),
+    );
+  }
+
+  private eventForManagedTopic(
+    event: MessagingInboundEvent,
+    topic: MessagingManagedTopicRecord,
+    args: string[],
+  ): MessagingInboundCommandEvent {
+    return {
+      ...event,
+      id: `${event.id}:topic:${topic.id}`,
+      kind: "command",
+      channel: topicChannelRef(topic),
+      command: "monitor",
+      args,
+      rawText: `/monitor ${args.join(" ")}`,
+      routingState: topic.routingState ?? event.routingState,
+    };
+  }
+
+  private async handleMonitorTopicCallback(
+    event: MessagingInboundCallbackEvent,
+    actionId: string,
+  ): Promise<void> {
+    if (actionId === "monitor:topics:cleanup") {
+      await this.handleMonitorTopicCommand(
+        {
+          ...event,
+          kind: "command",
+          command: "monitor",
+          args: ["topics", "cleanup"],
+          rawText: "/monitor topics cleanup",
+        },
+        { kind: "topics-cleanup" },
+      );
+      return;
+    }
+    if (actionId === "monitor:topics:fanout") {
+      await this.handleMonitorTopicCommand(
+        {
+          ...event,
+          kind: "command",
+          command: "monitor",
+          args: ["topics", "fanout"],
+          rawText: "/monitor topics fanout",
+        },
+        { kind: "topics-fanout" },
+      );
+      return;
+    }
+    const approvePrefix = "monitor:topics:approve:";
+    if (!actionId.startsWith(approvePrefix)) {
+      await this.handleMonitorTopicCommand(
+        {
+          ...event,
+          kind: "command",
+          command: "monitor",
+          args: ["topics"],
+          rawText: "/monitor topics",
+        },
+        { kind: "topics-adopt" },
+      );
+      return;
+    }
+
+    const approvalKey = actionId.slice(approvePrefix.length);
+    const separatorIndex = approvalKey.lastIndexOf(":");
+    const proposalId = separatorIndex > 0 ? approvalKey.slice(0, separatorIndex) : "";
+    const itemId = separatorIndex > 0 ? approvalKey.slice(separatorIndex + 1) : "";
+    if (!proposalId || !itemId) {
+      await this.deliverInvalidTopicApproval(event);
+      return;
+    }
+    const proposal = await this.options.store.getTopicCleanupProposal(proposalId);
+    const item = proposal?.items.find((candidate) => candidate.id === itemId);
+    if (!proposal || proposal.status !== "pending" || !item) {
+      await this.deliverInvalidTopicApproval(event);
+      return;
+    }
+
+    const topic = await this.options.store.getManagedTopic(item.topicRecordId);
+    if (!topic) {
+      await this.deliverInvalidTopicApproval(event);
+      return;
+    }
+
+    let result: MessagingManagedConversationActionResult | undefined;
+    if (item.action === "close") {
+      result = await this.options.adapter.closeManagedConversation?.({
+        actor: event.actor,
+        channel: topicChannelRef(topic),
+        routingState: topic.routingState,
+      });
+    } else if (item.action === "delete") {
+      result = await this.options.adapter.deleteManagedConversation?.({
+        actor: event.actor,
+        channel: topicChannelRef(topic),
+        routingState: topic.routingState,
+      });
+    }
+    const now = this.now();
+    if (!result || result.outcome !== "updated") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-approval-failed"),
+          createdAt: now,
+          title: "Topic action failed",
+          body: result?.errorMessage ?? "The Telegram adapter could not apply that topic action.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    await this.options.store.upsertManagedTopic({
+      ...topic,
+      closedAt: item.action === "close" ? now : topic.closedAt,
+      deletedAt: item.action === "delete" ? now : topic.deletedAt,
+      lifecycle: item.action === "delete" ? "deleted" : "closed",
+      recommendation: item.action,
+      updatedAt: now,
+    });
+    await this.options.store.upsertTopicCleanupProposal({
+      ...proposal,
+      appliedAt: now,
+      status: "applied",
+      updatedAt: now,
+    });
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("topics-action-applied"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: now,
+        title: "Topic action applied",
+        body: `${item.action === "delete" ? "Deleted" : "Closed"} ${topic.title ?? topic.topicId}.`,
+        actions: [],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async deliverInvalidTopicApproval(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("topics-approval-invalid"),
+        createdAt: this.now(),
+        title: "Topic action expired",
+        body: "That cleanup proposal is no longer active. Run /monitor topics cleanup to refresh it.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async renderTopicControlStatus(
+    event: MessagingInboundEvent,
+    topic: MessagingManagedTopicRecord,
+  ): Promise<void> {
+    const rights = await this.options.adapter.getManagedConversationRights?.({
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState,
+    });
+    const topics = await this.options.store.findManagedTopicsForSupergroup({
+      channel: event.channel.channel,
+      supergroupId: topic.supergroupId,
+    });
+    const rightsLines = rights
+      ? formatManagedTopicRights(rights.operations)
+      : ["Topic operations: unsupported by this adapter"];
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("topics-control"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "PwrAgent topic owner",
+        body: [
+          `Control topic: ${topic.title ?? topic.topicId}`,
+          `Known topics: ${topics.length}`,
+          "",
+          ...rightsLines,
+          "",
+          "Use /monitor topics cleanup for a dry-run cleanup proposal.",
+          "Use /monitor topics fanout to create or reuse per-thread monitor topics.",
+        ].join("\n"),
+        actions: [
+          {
+            id: "monitor:topics:cleanup",
+            label: "Dry Run Cleanup",
+            style: "secondary",
+            fallbackText: "/monitor topics cleanup",
+          },
+          {
+            id: "monitor:topics:fanout",
+            label: "Fanout",
+            style: "secondary",
+            fallbackText: "/monitor topics fanout",
+          },
+        ],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async renderTopicCleanupProposal(
+    event: MessagingInboundEvent,
+    controlTopic: MessagingManagedTopicRecord,
+  ): Promise<void> {
+    const topics = await this.options.store.findManagedTopicsForSupergroup({
+      channel: event.channel.channel,
+      supergroupId: controlTopic.supergroupId,
+    });
+    const now = this.now();
+    const items = topics
+      .filter((topic) => topic.lifecycle !== "deleted")
+      .map((topic): MessagingTopicCleanupProposalItem => {
+        const action =
+          topic.id === controlTopic.id ||
+          topic.source === "owned" ||
+          topic.source === "linked"
+            ? "keep"
+            : topic.lifecycle === "closed"
+              ? "delete"
+              : "close";
+        return {
+          id: topic.topicId,
+          action,
+          reason:
+            action === "keep"
+              ? "owned or linked topic"
+              : action === "delete"
+                ? "already closed known topic"
+                : "known topic not owned or linked to a PwrAgent thread",
+          title: topic.title,
+          topicRecordId: topic.id,
+        };
+      });
+    const proposal: MessagingTopicCleanupProposalRecord = {
+      id: `topic-cleanup:${controlTopic.supergroupId}:${now}`,
+      authorizedActorIds: this.monitorAuthorizedActorIds(event),
+      channel: event.channel.channel,
+      controlTopicRecordId: controlTopic.id,
+      createdAt: now,
+      items,
+      status: "pending",
+      supergroupId: controlTopic.supergroupId,
+      updatedAt: now,
+    };
+    await this.options.store.upsertTopicCleanupProposal(proposal);
+    const actions = items
+      .filter((item) => item.action === "close" || item.action === "delete")
+      .slice(0, 6)
+      .map((item) => ({
+        id: `monitor:topics:approve:${proposal.id}:${item.id}`,
+        label: `${item.action === "delete" ? "Delete" : "Close"} ${item.title ?? item.id}`,
+        style: item.action === "delete" ? "danger" as const : "secondary" as const,
+        fallbackText: `/monitor topics approve ${proposal.id} ${item.id}`,
+      }));
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("topics-cleanup"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: now,
+        title: "Topic cleanup dry run",
+        body: formatTopicCleanupProposalBody(items),
+        actions,
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async runTopicMonitorFanout(
+    event: MessagingInboundEvent,
+    controlTopic: MessagingManagedTopicRecord,
+  ): Promise<void> {
+    if (!this.options.adapter.createManagedConversation) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("topics-fanout-unsupported"),
+          createdAt: this.now(),
+          title: "Topic creation unavailable",
+          body: "This adapter cannot create managed topics.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const snapshot = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const selected = selectMonitorThreads({ navigation: snapshot }).threads.slice(0, 3);
+    const created: string[] = [];
+    const reused: string[] = [];
+    const failed: string[] = [];
+    for (const thread of selected) {
+      const existing = await this.options.store.findThreadTopicLink({
+        backend: thread.source,
+        channel: event.channel.channel,
+        supergroupId: controlTopic.supergroupId,
+        threadId: thread.id,
+      });
+      if (existing) {
+        const topic = await this.options.store.getManagedTopic(existing.topicRecordId);
+        if (topic) {
+          await this.ensureManagedTopicBinding(event, topic, thread);
+        }
+        reused.push(thread.title);
+        continue;
+      }
+      const result = await this.options.adapter.createManagedConversation({
+        actor: event.actor,
+        parent: event.channel,
+        routingState: event.routingState,
+        title: topicTitleForThread(thread),
+      });
+      if (result.outcome !== "created" || !result.conversation) {
+        failed.push(thread.title);
+        continue;
+      }
+      const topic = await this.options.store.upsertManagedTopic(
+        managedTopicRecordFromConversation({
+          actorIds: this.monitorAuthorizedActorIds(event),
+          channel: event.channel.channel,
+          conversation: result.conversation,
+          now: this.now(),
+          routingState: result.routingState,
+          source: "linked",
+        }),
+      );
+      await this.options.store.upsertThreadTopicLink({
+        id: `topic-link:${event.channel.channel}:${controlTopic.supergroupId}:${thread.source}:${thread.id}`,
+        backend: thread.source,
+        channel: event.channel.channel,
+        createdAt: this.now(),
+        supergroupId: controlTopic.supergroupId,
+        threadId: thread.id,
+        topicRecordId: topic.id,
+        updatedAt: this.now(),
+      });
+      const bindingOutcome = await this.ensureManagedTopicBinding(event, topic, thread);
+      if (bindingOutcome === "conflict") {
+        failed.push(thread.title);
+        continue;
+      }
+      await this.deliverTopicSeed(event, topic, thread);
+      created.push(thread.title);
+    }
+
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("topics-fanout"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "Topic fanout complete",
+        body: [
+          `Created: ${created.length}${created.length ? ` (${created.join(", ")})` : ""}`,
+          `Reused: ${reused.length}${reused.length ? ` (${reused.join(", ")})` : ""}`,
+          `Failed: ${failed.length}${failed.length ? ` (${failed.join(", ")})` : ""}`,
+        ].join("\n"),
+        actions: [],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async deliverTopicSeed(
+    event: MessagingInboundEvent,
+    topic: MessagingManagedTopicRecord,
+    thread: NavigationThreadSummary,
+  ): Promise<void> {
+    const project =
+      thread.linkedDirectories[0]?.label ??
+      thread.linkedDirectories[0]?.path;
+    await this.deliver({
+      id: this.newIntentId("topic-seed"),
+      kind: "message",
+      createdAt: this.now(),
+      audit: buildMessagingAuditContext({
+        action: "topics.seed",
+        actor: event.actor,
+        backend: thread.source,
+        channel: topicChannelRef(topic),
+        now: this.now(),
+        threadId: thread.id,
+      }),
+      parts: [
+        {
+          type: "text",
+          text: [
+            `Monitoring: ${thread.title}`,
+            `Backend: ${thread.source}`,
+            project ? `Project: ${project}` : undefined,
+            thread.updatedAt ? `Updated: ${formatTimeOfDay(thread.updatedAt)}` : undefined,
+            "",
+            "This topic is attached to the thread for follow-up messages.",
+          ].filter(Boolean).join("\n"),
+        },
+      ],
+    });
+  }
+
+  private async ensureManagedTopicBinding(
+    event: MessagingInboundEvent,
+    topic: MessagingManagedTopicRecord,
+    thread: NavigationThreadSummary,
+  ): Promise<"bound" | "existing" | "conflict"> {
+    const channel = topicChannelRef(topic);
+    const existing = await this.options.store.findActiveBindingForChannel(channel);
+    if (existing) {
+      if (existing.backend === thread.source && existing.threadId === thread.id) {
+        return "existing";
+      }
+      this.logger.debug?.("managed topic already bound to another thread", {
+        backend: existing.backend,
+        bindingId: existing.id,
+        threadId: existing.threadId,
+        topicId: topic.topicId,
+      });
+      return "conflict";
+    }
+
+    await this.bindChannelToThread(
+      {
+        ...event,
+        id: `${event.id}:topic-bind:${topic.id}`,
+        kind: "command",
+        channel,
+        command: "monitor",
+        args: ["topics", "fanout"],
+        rawText: "/monitor topics fanout",
+        receivedAt: this.now(),
+        routingState: topic.routingState ?? event.routingState,
+      } satisfies MessagingInboundCommandEvent,
+      {
+        backend: thread.source,
+        threadId: thread.id,
+      },
+    );
+    return "bound";
+  }
+
+  private async observeManagedTopicFromInbound(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (
+      event.channel.conversation.kind !== "topic" ||
+      !event.channel.conversation.parentId
+    ) {
+      return;
+    }
+    await this.upsertManagedTopicFromChannel(event, {
+      source: "observed",
+      lifecycle: "open",
+    });
+  }
+
+  private async upsertManagedTopicFromChannel(
+    event: MessagingInboundEvent,
+    options: Pick<
+      MessagingManagedTopicRecord,
+      "source" | "lifecycle" | "recommendation"
+    >,
+  ): Promise<MessagingManagedTopicRecord> {
+    const now = this.now();
+    const existing = await this.options.store.findManagedTopicByConversation({
+      channel: event.channel.channel,
+      supergroupId: event.channel.conversation.parentId ?? "",
+      topicId: event.channel.conversation.id,
+    });
+    return await this.options.store.upsertManagedTopic({
+      ...managedTopicRecordFromConversation({
+        actorIds: this.monitorAuthorizedActorIds(event),
+        channel: event.channel.channel,
+        conversation: event.channel.conversation,
+        now,
+        routingState: event.routingState,
+        source: options.source,
+      }),
+      ...existing,
+      authorizedActorIds: existing?.authorizedActorIds.length
+        ? existing.authorizedActorIds
+        : this.monitorAuthorizedActorIds(event),
+      lastObservedAt: now,
+      lifecycle: options.lifecycle,
+      recommendation: options.recommendation ?? existing?.recommendation,
+      routingState: event.routingState ?? existing?.routingState,
+      source: existing?.source === "owned" || existing?.source === "linked"
+        ? existing.source
+        : options.source,
+      updatedAt: now,
+    });
   }
 
   private async enableAndRenderChannelMonitor(
@@ -6607,6 +7267,7 @@ export class MessagingController {
       id: this.newIntentId("monitor"),
       navigation: snapshot,
       snippetsByThreadKey,
+      topicControls: this.supportsMonitorTopicControls(event?.channel ?? binding.channel),
     });
     const result = await this.deliver(intent, binding, event);
     const latestBinding = await this.options.store.getBinding(binding.id);
@@ -6663,6 +7324,7 @@ export class MessagingController {
         monitorSurface: subscription.monitorSurface,
         navigation: snapshot,
         snippetsByThreadKey,
+        topicControls: this.supportsMonitorTopicControls(event?.channel ?? subscription.channel),
       }),
       allowedActorIds: subscription.authorizedActorIds,
       ...(event
@@ -7811,6 +8473,24 @@ function normalizeMonitorCommandAction(
   if (normalized === "refresh" || normalized === "now") {
     return { kind: "refresh" };
   }
+  if (normalized === "topic" || normalized === "topics") {
+    const topicAction = args?.[1]?.trim().toLowerCase();
+    if (
+      topicAction === "cleanup" ||
+      topicAction === "clean" ||
+      topicAction === "sweep"
+    ) {
+      return { kind: "topics-cleanup" };
+    }
+    if (
+      topicAction === "fanout" ||
+      topicAction === "fan-out" ||
+      topicAction === "attach"
+    ) {
+      return { kind: "topics-fanout" };
+    }
+    return { kind: "topics-adopt" };
+  }
   if (
     normalized === "interval" ||
     normalized === "every" ||
@@ -7982,6 +8662,9 @@ function resolveMonitorStateOptions(
     case "refresh":
     case "start":
     case "stop":
+    case "topics-adopt":
+    case "topics-cleanup":
+    case "topics-fanout":
       return {
         intervalMs: currentIntervalMs,
         pinnedThreadLimit: currentPinned,
@@ -8057,6 +8740,89 @@ function parseMonitorBooleanArg(arg: string | undefined): boolean | undefined {
 
 function buildMonitorSubscriptionId(channel: MessagingChannelRef): string {
   return `monitor:${buildMessagingConversationKey(channel)}`;
+}
+
+function managedTopicRecordFromConversation(params: {
+  actorIds: string[];
+  channel: MessagingChannelKind;
+  conversation: MessagingChannelRef["conversation"];
+  now: number;
+  routingState?: MessagingAdapterState;
+  source: MessagingManagedTopicRecord["source"];
+}): MessagingManagedTopicRecord {
+  const supergroupId = params.conversation.parentId ?? params.conversation.id;
+  const topicId = params.conversation.kind === "topic"
+    ? params.conversation.id
+    : "";
+  return {
+    id: `topic:${params.channel}:${supergroupId}:${topicId}`,
+    authorizedActorIds: params.actorIds,
+    channel: params.channel,
+    conversation: params.conversation,
+    createdAt: params.now,
+    lastObservedAt: params.now,
+    lifecycle: "open",
+    routingState: params.routingState,
+    source: params.source,
+    supergroupId,
+    title: params.conversation.title,
+    topicId,
+    updatedAt: params.now,
+  };
+}
+
+function topicChannelRef(topic: MessagingManagedTopicRecord): MessagingChannelRef {
+  return {
+    channel: topic.channel,
+    conversation: topic.conversation,
+  };
+}
+
+function topicTitleForThread(thread: NavigationThreadSummary): string {
+  const trimmed = thread.title.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 120) : `${thread.source} thread`;
+}
+
+function formatManagedTopicRights(
+  operations: readonly MessagingManagedConversationOperationSupport[],
+): string[] {
+  return operations.map((operation) => {
+    const label =
+      operation.operation === "create_child"
+        ? "create"
+        : operation.operation;
+    if (operation.supported) {
+      return `${label}: available`;
+    }
+    return `${label}: unavailable${operation.missingPermission ? ` (${operation.missingPermission})` : operation.reason ? ` (${operation.reason})` : ""}`;
+  });
+}
+
+function formatTopicCleanupProposalBody(
+  items: readonly MessagingTopicCleanupProposalItem[],
+): string {
+  if (items.length === 0) {
+    return [
+      "No known topics yet.",
+      "",
+      "Telegram bots cannot list every historical topic. Adopt topics from inside the topic first, then run cleanup again.",
+    ].join("\n");
+  }
+  const grouped = {
+    keep: items.filter((item) => item.action === "keep"),
+    close: items.filter((item) => item.action === "close"),
+    delete: items.filter((item) => item.action === "delete"),
+  };
+  return [
+    "Dry run only. No topic will be closed or deleted until you approve one of the actions below.",
+    "",
+    `Keep: ${grouped.keep.length}`,
+    ...grouped.keep.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+    `Close candidates: ${grouped.close.length}`,
+    ...grouped.close.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+    `Delete candidates: ${grouped.delete.length}`,
+    ...grouped.delete.slice(0, 5).map((item) => `- ${item.title ?? item.id}: ${item.reason}`),
+  ].join("\n");
 }
 
 /**

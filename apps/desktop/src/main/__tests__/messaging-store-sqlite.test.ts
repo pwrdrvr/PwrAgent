@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
+  MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingThreadTopicLinkRecord,
+  MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -63,6 +66,69 @@ function buildMonitorSubscription(
       intervalMs: 60_000,
       updatedAt: 1000,
     },
+    ...overrides,
+  };
+}
+
+function buildManagedTopic(
+  overrides: Partial<MessagingManagedTopicRecord> = {},
+): MessagingManagedTopicRecord {
+  return {
+    id: "topic:telegram:-1001:100",
+    authorizedActorIds: ["user-1"],
+    channel: "telegram",
+    conversation: {
+      id: "100",
+      kind: "topic",
+      parentId: "-1001",
+      title: "PwrAgent",
+    },
+    createdAt: 1000,
+    lifecycle: "open",
+    source: "owned",
+    supergroupId: "-1001",
+    title: "PwrAgent",
+    topicId: "100",
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildTopicLink(
+  overrides: Partial<MessagingThreadTopicLinkRecord> = {},
+): MessagingThreadTopicLinkRecord {
+  return {
+    id: "topic-link:telegram:-1001:codex:thread-1",
+    backend: "codex",
+    channel: "telegram",
+    createdAt: 1000,
+    supergroupId: "-1001",
+    threadId: "thread-1",
+    topicRecordId: "topic:telegram:-1001:100",
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildCleanupProposal(
+  overrides: Partial<MessagingTopicCleanupProposalRecord> = {},
+): MessagingTopicCleanupProposalRecord {
+  return {
+    id: "proposal-1",
+    authorizedActorIds: ["user-1"],
+    channel: "telegram",
+    createdAt: 1000,
+    items: [
+      {
+        id: "100",
+        action: "close",
+        reason: "inactive",
+        topicRecordId: "topic:telegram:-1001:100",
+      },
+    ],
+    status: "pending",
+    supergroupId: "-1001",
+    updatedAt: 1000,
     ...overrides,
   };
 }
@@ -451,5 +517,55 @@ describe("SqliteMessagingStore", () => {
       .toMatchObject({
         id: "other-callback",
       });
+  });
+
+  it("persists managed topics, thread-topic links, and cleanup proposals", async () => {
+    const store = await createStore();
+
+    await store.upsertManagedTopic(buildManagedTopic());
+    await store.upsertThreadTopicLink(buildTopicLink());
+    await store.upsertTopicCleanupProposal(buildCleanupProposal());
+
+    await expect(
+      store.findManagedTopicByConversation({
+        channel: "telegram",
+        supergroupId: "-1001",
+        topicId: "100",
+      }),
+    ).resolves.toMatchObject({
+      id: "topic:telegram:-1001:100",
+      source: "owned",
+    });
+    await expect(
+      store.findThreadTopicLink({
+        backend: "codex",
+        channel: "telegram",
+        supergroupId: "-1001",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      topicRecordId: "topic:telegram:-1001:100",
+    });
+    await expect(store.getTopicCleanupProposal("proposal-1")).resolves.toMatchObject({
+      status: "pending",
+      items: [expect.objectContaining({ action: "close" })],
+    });
+    await expect(store.readSnapshot()).resolves.toMatchObject({
+      topics: {
+        "topic:telegram:-1001:100": expect.objectContaining({
+          source: "owned",
+        }),
+      },
+      topicLinks: {
+        "topic-link:telegram:-1001:codex:thread-1": expect.objectContaining({
+          threadId: "thread-1",
+        }),
+      },
+      topicCleanupProposals: {
+        "proposal-1": expect.objectContaining({
+          status: "pending",
+        }),
+      },
+    });
   });
 });

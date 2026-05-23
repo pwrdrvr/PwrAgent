@@ -725,12 +725,23 @@ desktop.
 | **Pins** | Cycle pinned-thread count: `0` → `5` → `10` (default 5) |
 | **Recent** | Cycle recent-thread count: `0` → `5` → `10` (default 5) |
 | **Snippet** | Toggle the per-thread response snippet on / off (default on; fixed ~100-character preview when on) |
+| **Topics** | Open Telegram topic-owner controls when the monitor is running in a Telegram supergroup or topic |
 | **Refresh** | Re-render right now |
 | **Stop** | Convert the monitor binding back to a regular conversation (no binding) |
 
 Running `/monitor` in a conversation that already has a monitor
 binding refreshes the existing card rather than posting a duplicate.
 Each monitor-bound conversation hosts exactly one monitor card.
+
+In Telegram forum supergroups, use the monitor card's **Topics** button to open
+PwrAgent's topic-owner controls. From a normal supergroup surface, PwrAgent
+creates or reuses its control topic; from inside an existing topic, it adopts
+that topic as the owner surface. `/monitor topics` is the typed fallback for the
+same flow. The owner controls can post a dry-run cleanup proposal for known or
+adopted topics, and fan out selected recent threads into one topic per thread.
+Telegram bots cannot list every historical topic in a supergroup, so cleanup
+only covers topics PwrAgent has created, observed, or you have adopted from
+inside the topic.
 
 The monitor binding survives PwrAgent restarts — on startup, every
 monitor-bound conversation resumes its refresh ticks automatically.

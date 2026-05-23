@@ -59,6 +59,7 @@ export function buildMonitorStatusIntent(params: {
   navigation: NavigationSnapshot;
   snippetsByThreadKey?: ReadonlyMap<string, string>;
   threadLimit?: number;
+  topicControls?: boolean;
 }): MessagingStatusIntent {
   const monitor = params.binding?.monitor ?? params.monitor;
   const monitorSurface = params.binding?.monitorSurface ?? params.monitorSurface;
@@ -114,6 +115,7 @@ export function buildMonitorStatusIntent(params: {
       recentThreadLimit: selection.recentThreadLimit,
       showSnippets: monitor?.showLastResponseSnippet === true,
       showStatusLine: monitor?.showStatusLine === true,
+      topicControls: params.topicControls === true,
     }),
   };
 }
@@ -204,6 +206,7 @@ function buildMonitorActions(params: {
   recentThreadLimit: number;
   showSnippets: boolean;
   showStatusLine: boolean;
+  topicControls: boolean;
 }): MessagingSurfaceAction[] {
   const { profile } = params;
   if (profile && !capabilityProfileSupportsActionCount(profile, MONITOR_MIN_ACTIONS)) {
@@ -263,6 +266,17 @@ function buildMonitorActions(params: {
         fallbackText: `monitor snippet ${params.showSnippets ? "off" : "on"}`,
         priority: 7,
       },
+      ...(params.topicControls
+        ? [
+            {
+              id: "monitor:topics",
+              label: "Topics",
+              style: "secondary" as const,
+              fallbackText: "monitor topics",
+              priority: 8,
+            },
+          ]
+        : []),
     ],
     profile,
   );

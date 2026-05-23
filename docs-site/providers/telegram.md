@@ -92,6 +92,18 @@ supported platform; the screenshots there happen to be Telegram.
   supergroup, they share the supergroup's ~20 msg/min budget. Use one
   supergroup per active thread for serious work; topics are fine for
   read-mostly bindings.
+- **Forum topic ownership needs admin rights.** To let PwrAgent create,
+  rename, close, or reopen topics, make the bot an admin with topic
+  management rights. To let PwrAgent delete a topic, also grant delete
+  message rights. Telegram deletion removes the topic and its messages,
+  so PwrAgent treats cleanup as a dry run until you approve a specific
+  action. Start with `/monitor`, then use the monitor card's **Topics**
+  button to create or reuse the PwrAgent control topic.
+- **Telegram bots cannot list every historical topic.** PwrAgent can
+  manage topics it creates, topics it observes through normal traffic or
+  forum-topic service messages, and topics you adopt from inside the
+  topic. A first cleanup sweep may therefore say it only knows about
+  adopted/observed topics.
 - **DM budget is roughly 60 msg/min.** Plenty for normal use, but
   streaming-on responses can burn through this in a single long turn.
 - **PwrAgent clears any configured Telegram webhook on startup.** If

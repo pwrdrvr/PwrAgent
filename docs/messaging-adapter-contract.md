@@ -24,6 +24,8 @@ Adapters should support:
 - best-effort dismiss or update when the platform supports it
 - attachment capability metadata for provider-owned download and upload limits
 - optional assistant response stream updates
+- optional managed-conversation operations such as creating, closing, reopening,
+  deleting, or probing rights for topic-like child conversations
 
 ## Outputs
 
@@ -57,6 +59,14 @@ Adapters own routing and surface state. PwrAgent may persist and echo
 `MessagingAdapterState`, but workflow code must not parse it. Platform message
 IDs, interaction tokens, thread IDs, callback payloads, and permission details
 belong inside adapter-owned opaque state.
+
+Managed-conversation operations follow the same rule. A controller may request
+"create a child conversation under this channel" or "close this topic-like
+conversation" using `MessagingChannelRef` plus opaque routing state, but only
+the adapter may parse Telegram chat IDs, forum topic IDs, Discord thread IDs, or
+provider permission payloads. Unsupported providers should omit the optional
+methods so workflow code can render an unavailable capability instead of
+branching on platform names.
 
 Interactive callbacks should use compact opaque platform handles backed by
 long-lived sqlite records:
