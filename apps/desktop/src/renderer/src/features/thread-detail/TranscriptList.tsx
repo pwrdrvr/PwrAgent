@@ -97,7 +97,6 @@ type SyncScrollStateOptions = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
-type ScrollBottomMode = "instant" | "smooth";
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
@@ -480,23 +479,44 @@ export function TranscriptList(props: TranscriptListProps) {
     }
   }, [captureSnapshot]);
 
-  const scrollToBottom = useCallback((mode: ScrollBottomMode = "smooth") => {
+  const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
 
-    if (mode === "smooth" && typeof container.scrollTo === "function") {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "smooth"
-      });
-    } else {
-      container.scrollTop = container.scrollHeight;
-    }
-
+    // Mark glued BEFORE issuing the scroll command so the
+    // ResizeObserver and onScroll callbacks that fire during /
+    // immediately after the scroll treat any concurrent layout shift
+    // as "stay pinned" rather than "user navigated away from the
+    // bottom."
     isGluedToBottomRef.current = true;
+    container.scrollTop = container.scrollHeight;
     syncScrollState();
+
+    // If the transcript's scrollHeight grows between this layout commit
+    // and the next paint (e.g. ThreadMarkdown finishing layout, a lazy
+    // image committing its intrinsic height), re-anchor on the next
+    // animation frame so the user lands at the actual latest message
+    // rather than the latest message at the moment scrollToBottom was
+    // first called.
+    requestAnimationFrame(() => {
+      if (!isGluedToBottomRef.current) {
+        return;
+      }
+      const liveContainer = scrollContainerRef.current;
+      if (!liveContainer) {
+        return;
+      }
+      const maxScrollTop = Math.max(
+        liveContainer.scrollHeight - liveContainer.clientHeight,
+        0
+      );
+      if (liveContainer.scrollTop < maxScrollTop - BOTTOM_THRESHOLD_PX) {
+        liveContainer.scrollTop = liveContainer.scrollHeight;
+        syncScrollState();
+      }
+    });
   }, [syncScrollState]);
 
   const disableBottomGlue = useCallback(() => {
@@ -518,7 +538,7 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     appliedReglueRequestKeyRef.current = props.reglueRequestKey;
-    scrollToBottom("instant");
+    scrollToBottom();
   }, [props.reglueRequestKey, scrollToBottom]);
 
   useEffect(() => {
@@ -555,10 +575,21 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.lastMessageId === lastMessageId &&
         previousSnapshot.firstMessageId !== firstMessageId
     );
+    // hasAppendedMessages and hasGrownWhileFollowingBottom both intentionally
+    // skip the firstMessageId equality check that earlier versions of this
+    // file enforced. That check broke the common navigation-preview →
+    // full-transcript transition: the preview entries (lastUserMessage /
+    // lastAssistantMessage from the navigation snapshot) have synthetic ids
+    // that don't match any entries in the eventual readThread response, so
+    // when the real transcript replaced them BOTH firstMessageId and
+    // lastMessageId changed and neither branch fired — leaving the user
+    // staring at the top of a thread they expected to open at the bottom.
+    // hasPrependedMessages already covers the only case the equality check
+    // was protecting against (older messages paginated in at the top).
     const hasAppendedMessages = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
-        previousSnapshot.firstMessageId === firstMessageId &&
+        !hasPrependedMessages &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
           previousSnapshot.itemCount < visibleItemCount)
@@ -566,7 +597,6 @@ export function TranscriptList(props: TranscriptListProps) {
     const hasGrownWhileFollowingBottom = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
-        previousSnapshot.firstMessageId === firstMessageId &&
         !hasPrependedMessages &&
         isGluedToBottomRef.current &&
         container.scrollHeight > previousSnapshot.scrollHeight
@@ -582,7 +612,7 @@ export function TranscriptList(props: TranscriptListProps) {
           restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX;
         if (shouldRestoreBottom) {
           isGluedToBottomRef.current = true;
-          scrollToBottom("instant");
+          scrollToBottom();
         } else {
           isGluedToBottomRef.current = false;
           container.scrollTop = Math.min(
@@ -595,21 +625,21 @@ export function TranscriptList(props: TranscriptListProps) {
         return;
       }
 
-      scrollToBottom("instant");
+      scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       shouldScrollToBottomRef.current ||
       !previousSnapshot
     ) {
-      scrollToBottom("instant");
+      scrollToBottom();
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       isGluedToBottomRef.current &&
       (hasAppendedMessages || hasGrownWhileFollowingBottom)
     ) {
-      scrollToBottom("instant");
+      scrollToBottom();
       return;
     }
 
@@ -637,7 +667,7 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const observer = new ResizeObserver(() => {
       if (isGluedToBottomRef.current) {
-        scrollToBottom("instant");
+        scrollToBottom();
       } else {
         syncScrollState({ preserveGlueOnResize: true });
       }

@@ -1638,7 +1638,7 @@ describe("TranscriptList", () => {
     expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
   });
 
-  it("uses smooth scrolling only for the explicit jump-to-latest action", () => {
+  it("jumps instantly to the bottom when jump-to-latest is clicked", () => {
     render(
       <TranscriptList
         entries={[
@@ -1669,10 +1669,17 @@ describe("TranscriptList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
 
-    expect(scrollToMock).toHaveBeenCalledWith({
-      behavior: "smooth",
-      top: 480
-    });
+    // Clicking jump-to-latest goes all the way to the bottom NOW, not
+    // via a smooth animation that captures a stale scrollHeight target
+    // and stops partway when content grows mid-animation. The user
+    // contract is single-click → at the bottom → glued.
+    expect(list.scrollTop).toBe(480);
+    expect(scrollToMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: "smooth" })
+    );
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest message" })
+    ).not.toBeInTheDocument();
   });
 
   it("restores the previous viewport when switching back to a cached thread", () => {
@@ -2535,12 +2542,10 @@ describe("TranscriptList", () => {
     list.scrollTop = 80;
     fireEvent.scroll(list);
     fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
-    expect(scrollToMock).toHaveBeenLastCalledWith({
-      behavior: "smooth",
-      top: 720
-    });
+    // Instant scroll: lands at scrollHeight in a single click, no
+    // smooth animation that could stop partway.
+    expect(list.scrollTop).toBe(720);
 
-    list.scrollTop = 480;
     fireEvent.scroll(list);
     scrollHeight = 860;
     rerender(
@@ -2646,6 +2651,82 @@ describe("TranscriptList", () => {
     );
 
     expect(list.scrollTop).toBe(860);
+  });
+
+  it("re-anchors to the bottom when navigation preview entries are replaced by the full transcript", () => {
+    // Regression: opening a thread for the first time briefly shows a
+    // single navigation-preview entry (lastAssistantMessage) before
+    // readThread resolves with the full transcript. The preview's
+    // synthetic id never appears in the full entries, so the
+    // first→full transition rewrites BOTH firstMessageId and
+    // lastMessageId. Previously hasGrownWhileFollowingBottom required
+    // firstMessageId equality, which made the renderer conclude "no
+    // change worth re-anchoring," leaving the user looking at the top
+    // of a thread they expected to open at the bottom.
+    scrollHeight = 240;
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "preview-assistant",
+            role: "assistant",
+            text: "Preview of the last assistant message from the navigation snapshot.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    // No assertion about the initial scrollTop here: jsdom doesn't clamp
+    // scrollTop to (scrollHeight - clientHeight) the way Chromium does,
+    // so the value after the preview-only render isn't meaningful. The
+    // contract under test is the AFTER-rerender scrollTop, below.
+
+    scrollHeight = 4800;
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "msg-1",
+            role: "user",
+            text: "Real first message",
+          },
+          {
+            type: "message",
+            id: "msg-2",
+            role: "assistant",
+            text: "Real assistant reply",
+          },
+          {
+            type: "message",
+            id: "msg-3",
+            role: "user",
+            text: "Real follow-up",
+          },
+          {
+            type: "message",
+            id: "msg-final",
+            role: "assistant",
+            text: "Real last message — different id than the preview.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(4800);
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest message" })
+    ).not.toBeInTheDocument();
   });
 
   it("shows command approval reason and command when no prompt is provided", () => {
