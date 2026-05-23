@@ -280,6 +280,7 @@ type BackendClient = {
   }): Promise<AppServerReadThreadResponse["replay"]>;
   startThread(params: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -920,6 +921,14 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function buildHeadlessAutomationTurnKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
 function buildTurnStartReservationKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -961,14 +970,14 @@ function turnIdFromStartedNotification(
 function turnIdFromTerminalNotification(
   notification: {
     params: {
-      turnId?: string;
+      turnId?: string | null;
       turn?: {
-        id?: string;
+        id?: string | null;
       };
     };
   },
 ): string | undefined {
-  return notification.params.turnId ?? notification.params.turn?.id;
+  return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
 }
 
 function logBackendLifecycleNotification(
@@ -1619,6 +1628,15 @@ export class DesktopBackendRegistry {
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
   private readonly threadTurnQueue: ThreadTurnQueue;
+  private readonly headlessAutomationTurns = new Map<
+    string,
+    {
+      agentThreadId: string;
+      automationName?: string;
+      automationRunId: string;
+      queueEntryId: string;
+    }
+  >();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -2017,6 +2035,62 @@ export class DesktopBackendRegistry {
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
     await this.emit(event);
+  }
+
+  async startAutomationHeadlessTurn(params: {
+    backend: AppServerBackendKind;
+    agentThreadId: string;
+    automationName?: string;
+    automationRunId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{
+    backend: AppServerBackendKind;
+    headlessThreadId: string;
+    queueEntryId: string;
+    threadId: string;
+    turnId: string;
+  }> {
+    this.assertNotBootstrap("startAutomationHeadlessTurn");
+    const client = this.getClient(params.backend);
+    const headlessThread = await client.startThread({
+      ephemeral: params.backend === "codex" ? true : undefined,
+    });
+    const turn = await client.startTurn({
+      threadId: headlessThread.threadId,
+      input: params.input,
+    });
+    const queueEntryId = `headless:${params.automationRunId}`;
+    this.headlessAutomationTurns.set(
+      buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
+      {
+        agentThreadId: params.agentThreadId,
+        automationName: params.automationName,
+        automationRunId: params.automationRunId,
+        queueEntryId,
+      },
+    );
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: params.agentThreadId,
+          queueEntryId,
+          origin: "automation",
+          automationRunId: params.automationRunId,
+          automationName: params.automationName,
+          status: "started",
+          turnId: turn.turnId,
+        },
+      },
+    });
+    return {
+      backend: params.backend,
+      headlessThreadId: turn.threadId,
+      queueEntryId,
+      threadId: params.agentThreadId,
+      turnId: turn.turnId,
+    };
   }
 
   private async emitTurnQueueLifecycle(
@@ -5800,6 +5874,7 @@ export class DesktopBackendRegistry {
             threadId: notification.params.threadId,
           });
         }
+        await this.emitHeadlessAutomationLifecycle(backend, notification);
         await this.emit({ backend, notification });
       }),
     );
@@ -5809,6 +5884,58 @@ export class DesktopBackendRegistry {
         client.onRequest(async (request) => await this.handleServerRequest(backend, request)),
       );
     }
+  }
+
+  private async emitHeadlessAutomationLifecycle(
+    backend: AppServerBackendKind,
+    notification: AppServerNotification,
+  ): Promise<void> {
+    if (
+      notification.method !== "turn/completed" &&
+      notification.method !== "turn/failed" &&
+      notification.method !== "turn/cancelled"
+    ) {
+      return;
+    }
+
+    const turnId = turnIdFromTerminalNotification(notification);
+    if (!turnId) {
+      return;
+    }
+    const run = this.headlessAutomationTurns.get(
+      buildHeadlessAutomationTurnKey(
+        backend,
+        notification.params.threadId,
+        turnId,
+      ),
+    );
+    if (!run) {
+      return;
+    }
+    this.headlessAutomationTurns.delete(
+      buildHeadlessAutomationTurnKey(
+        backend,
+        notification.params.threadId,
+        turnId,
+      ),
+    );
+
+    await this.emit({
+      backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: run.agentThreadId,
+          queueEntryId: run.queueEntryId,
+          origin: "automation",
+          automationRunId: run.automationRunId,
+          automationName: run.automationName,
+          status: "terminal",
+          turnId,
+          terminalStatus: notification.method,
+        },
+      },
+    });
   }
 
   private getClient(

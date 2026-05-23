@@ -4498,6 +4498,7 @@ export class CodexAppServerClient {
 
   async startThread(params: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;

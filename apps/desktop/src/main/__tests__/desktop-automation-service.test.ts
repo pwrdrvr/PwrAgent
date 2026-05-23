@@ -34,6 +34,13 @@ beforeEach(() => {
       turnId: "turn-1",
     })),
     updateQueuedTurnInput: vi.fn(),
+    startAutomationHeadlessTurn: vi.fn(async (params) => ({
+      backend: params.backend,
+      headlessThreadId: "headless-thread-1",
+      queueEntryId: `headless:${params.automationRunId}`,
+      threadId: params.agentThreadId,
+      turnId: "turn-1",
+    })),
     getThreadAgentMetadata: vi.fn(async () => ({
       name: "Automation Agent",
       instructionLineCount: 0,
@@ -110,7 +117,7 @@ describe("DesktopAutomationService", () => {
     ).rejects.toThrow("Automations must be attached to an Agent thread.");
   });
 
-  it("runs automations now through the shared turn queue", async () => {
+  it("runs automations now through the headless automation runner", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({
       backend: "codex",
@@ -133,12 +140,14 @@ describe("DesktopAutomationService", () => {
         status: "running",
       }),
     });
-    expect(registry.submitTurn).toHaveBeenCalledWith(
+    expect(registry.startAutomationHeadlessTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        origin: "automation",
+        agentThreadId: "thread-1",
+        automationName: "Check email",
         automationRunId: expect.any(String),
       }),
     );
+    expect(registry.submitTurn).not.toHaveBeenCalled();
   });
 
   it("schedules from now when update enables a paused automation", async () => {

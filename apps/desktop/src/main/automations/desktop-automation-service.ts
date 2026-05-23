@@ -16,7 +16,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
-import { ThreadQueueAutomationRunner } from "./automation-runner.js";
+import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 
@@ -61,13 +61,7 @@ export class DesktopAutomationService {
   ) {
     this.scheduler = new AutomationScheduler({
       store: options.store,
-      runner: new ThreadQueueAutomationRunner({
-        canStartImmediately: (params) =>
-          options.registry.canStartThreadTurnImmediately(params),
-        submit: async (entry) => await options.registry.submitTurn(entry),
-        updateQueuedInput: (entryId, input) =>
-          options.registry.updateQueuedTurnInput(entryId, input),
-      }),
+      runner: new HeadlessAutomationRunner(options.registry),
     });
     this.reconcileStartupRuns();
   }
@@ -271,7 +265,7 @@ export class DesktopAutomationService {
       errorMessage?: string;
       terminalStatus?: string;
     };
-    this.scheduler.handleTurnQueueUpdate({
+    await this.scheduler.handleTurnQueueUpdate({
       automationRunId: params.automationRunId,
       status: params.status,
       terminalStatus: params.terminalStatus,

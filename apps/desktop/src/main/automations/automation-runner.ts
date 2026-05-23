@@ -30,6 +30,52 @@ export type AutomationRunner = {
   }): void;
 };
 
+export type HeadlessAutomationLauncher = {
+  startAutomationHeadlessTurn(params: {
+    backend: AutomationRecord["backend"];
+    agentThreadId: AutomationRecord["threadId"];
+    automationName?: string;
+    automationRunId: string;
+    input: ThreadTurnQueueEntry["input"];
+  }): Promise<{
+    queueEntryId: string;
+    threadId: string;
+    turnId: string;
+  }>;
+};
+
+export class HeadlessAutomationRunner implements AutomationRunner {
+  constructor(private readonly launcher: HeadlessAutomationLauncher) {}
+
+  async submitRun(params: {
+    automation: AutomationRecord;
+    run: AutomationRunSummary;
+  }): Promise<ThreadTurnQueueSubmissionResult> {
+    const input = buildAutomationTurnInput(params);
+    const result = await this.launcher.startAutomationHeadlessTurn({
+      backend: params.automation.backend,
+      agentThreadId: params.automation.threadId,
+      automationName: params.automation.name,
+      automationRunId: params.run.id,
+      input,
+    });
+    return {
+      status: "started",
+      entry: {
+        id: result.queueEntryId,
+        backend: params.automation.backend,
+        threadId: params.automation.threadId,
+        origin: "automation",
+        automationRunId: params.run.id,
+        automationName: params.automation.name,
+        input,
+        createdAt: Date.now(),
+      },
+      turnId: result.turnId,
+    };
+  }
+}
+
 export class ThreadQueueAutomationRunner implements AutomationRunner {
   constructor(private readonly queue: AutomationTurnQueue) {}
 

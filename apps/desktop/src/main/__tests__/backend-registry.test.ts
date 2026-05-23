@@ -508,6 +508,7 @@ class MockBackendClient {
   };
   lastStartThreadParams?: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -753,6 +754,7 @@ class MockBackendClient {
 
   async startThread(params?: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -6566,6 +6568,111 @@ command = "pnpm dev"
       { type: "text", text: "second" },
     ]);
 
+    await registry.close();
+  });
+
+  it("mirrors headless automation turn lifecycle onto the Agent thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const started = await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check email",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Run the scheduled task." }],
+    });
+
+    expect(started).toEqual({
+      backend: "codex",
+      headlessThreadId: "thread-1",
+      queueEntryId: "headless:run-1",
+      threadId: "agent-thread-1",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Run the scheduled task." }],
+    });
+    expect(events).toEqual([
+      {
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "agent-thread-1",
+            queueEntryId: "headless:run-1",
+            origin: "automation",
+            automationRunId: "run-1",
+            automationName: "Check email",
+            status: "started",
+            turnId: "turn-1",
+          },
+        },
+      },
+    ]);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          method: "thread/turnQueue/updated",
+          params: expect.objectContaining({ status: "started" }),
+        }),
+      }),
+      {
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "agent-thread-1",
+            queueEntryId: "headless:run-1",
+            origin: "automation",
+            automationRunId: "run-1",
+            automationName: "Check email",
+            status: "terminal",
+            turnId: "turn-1",
+            terminalStatus: "turn/completed",
+          },
+        },
+      },
+      {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] },
+          },
+        },
+      },
+    ]);
+
+    unsubscribe();
     await registry.close();
   });
 

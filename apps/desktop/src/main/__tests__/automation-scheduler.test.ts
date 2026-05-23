@@ -190,6 +190,47 @@ describe("AutomationScheduler", () => {
     ]);
   });
 
+  it("queues coalesced windows while a run is active and starts them after terminal", async () => {
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+    const [activeRun] = store.listRunsForAutomation("automation-1");
+
+    now = 10 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+    now = 15 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")).toEqual([
+      expect.objectContaining({
+        status: "queued",
+        scheduledWindows: [
+          { scheduledFor: 10 * 60 * 1000 },
+          { scheduledFor: 15 * 60 * 1000 },
+        ],
+      }),
+      expect.objectContaining({ status: "running", scheduledFor: 5 * 60 * 1000 }),
+    ]);
+
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: activeRun?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now: 16 * 60 * 1000,
+    });
+
+    expect(queue.submitted).toHaveLength(2);
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      status: "running",
+      scheduledWindows: [
+        { scheduledFor: 10 * 60 * 1000 },
+        { scheduledFor: 15 * 60 * 1000 },
+      ],
+    });
+  });
+
   it("queues drop_missed runs when only the assigned Agent thread is busy", async () => {
     queue.active = true;
     createIntervalAutomation({
@@ -270,6 +311,37 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("serializes manual run-now behind an active automation run", async () => {
+    createIntervalAutomation();
+    const scheduler = buildScheduler();
+    now = 5 * 60 * 1000;
+    await scheduler.evaluateDueAutomations();
+    const [activeRun] = store.listRunsForAutomation("automation-1");
+
+    now = 6 * 60 * 1000;
+    const queued = await scheduler.runNow("automation-1");
+
+    expect(queued?.status).toBe("queued");
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      trigger: "manual",
+      status: "queued",
+    });
+
+    await scheduler.handleTurnQueueUpdate({
+      automationRunId: activeRun?.id,
+      status: "terminal",
+      terminalStatus: "turn/completed",
+      now: 7 * 60 * 1000,
+    });
+
+    expect(queue.submitted).toHaveLength(2);
+    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
+      trigger: "manual",
+      status: "running",
+    });
+  });
+
   it("maps terminal backend failure notifications to failed runs", async () => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
@@ -277,7 +349,7 @@ describe("AutomationScheduler", () => {
     await scheduler.evaluateDueAutomations();
     const [run] = store.listRunsForAutomation("automation-1");
 
-    scheduler.handleTurnQueueUpdate({
+    await scheduler.handleTurnQueueUpdate({
       automationRunId: run?.id,
       status: "terminal",
       terminalStatus: "turn/failed",
@@ -297,7 +369,7 @@ describe("AutomationScheduler", () => {
     await scheduler.evaluateDueAutomations();
     const [run] = store.listRunsForAutomation("automation-1");
 
-    scheduler.handleTurnQueueUpdate({
+    await scheduler.handleTurnQueueUpdate({
       automationRunId: run?.id,
       status: "terminal",
       terminalStatus: "turn/cancelled",

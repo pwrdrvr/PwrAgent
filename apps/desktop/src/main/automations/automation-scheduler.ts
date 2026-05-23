@@ -58,6 +58,7 @@ export class AutomationScheduler {
   ): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return undefined;
+    const active = this.options.store.findActiveRunForAutomation(automationId);
     const run = this.options.store.createRun({
       automationId,
       trigger: "manual",
@@ -65,20 +66,34 @@ export class AutomationScheduler {
       now,
     });
     if (!run) return undefined;
+    if (active) {
+      const queued = this.options.store.markRunQueued({
+        runId: run.id,
+        queueEntryId: buildLaneQueueEntryId(run.id),
+        queuedAt: now,
+        now,
+      });
+      return buildLaneQueuedResult({
+        automation,
+        run: queued ?? run,
+        position: 1,
+      });
+    }
     return await this.submitRun({ automation, runId: run.id, windows: [], now });
   }
 
-  handleTurnQueueUpdate(params: {
+  async handleTurnQueueUpdate(params: {
     automationRunId?: string;
     status: "queued" | "started" | "failed" | "cancelled" | "terminal";
     terminalStatus?: string;
     turnId?: string;
     errorMessage?: string;
     now?: number;
-  }): void {
+  }): Promise<void> {
     if (!params.automationRunId) return;
     if (params.status === "queued") return;
     const now = params.now ?? this.now();
+    const currentRun = this.options.store.getRun(params.automationRunId);
     if (params.status === "started" && params.turnId) {
       this.options.store.markRunStarted({
         runId: params.automationRunId,
@@ -96,6 +111,7 @@ export class AutomationScheduler {
         completedAt: now,
         now,
       });
+      await this.startNextPendingRun(currentRun?.automationId, now);
       return;
     }
     if (params.status === "terminal") {
@@ -108,6 +124,7 @@ export class AutomationScheduler {
         completedAt: now,
         now,
       });
+      await this.startNextPendingRun(currentRun?.automationId, now);
     }
   }
 
@@ -173,6 +190,22 @@ export class AutomationScheduler {
             run: coalesced,
           });
         }
+      } else if (this.options.store.findActiveRunForAutomation(automation.id)) {
+        const run = this.options.store.createRun({
+          automationId: automation.id,
+          trigger: "scheduled",
+          scheduledFor: windows[0]?.scheduledFor,
+          scheduledWindows: windows,
+          now,
+        });
+        if (run) {
+          this.options.store.markRunQueued({
+            runId: run.id,
+            queueEntryId: buildLaneQueueEntryId(run.id),
+            queuedAt: now,
+            now,
+          });
+        }
       } else {
         await this.enqueueScheduledRun({ automation, windows, now });
       }
@@ -211,9 +244,7 @@ export class AutomationScheduler {
     windows: AutomationRunWindow[];
     now: number;
   }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
-    const run = this.options.store
-      .listRunsForAutomation(params.automation.id, 1)
-      .find((candidate) => candidate.id === params.runId);
+    const run = this.options.store.getRun(params.runId);
     if (!run) return undefined;
 
     try {
@@ -247,6 +278,23 @@ export class AutomationScheduler {
       });
       return undefined;
     }
+  }
+
+  private async startNextPendingRun(
+    automationId: string | undefined,
+    now: number,
+  ): Promise<void> {
+    if (!automationId) return;
+    const automation = this.options.store.getAutomation(automationId);
+    if (!automation) return;
+    const pending = this.options.store.findPendingRunForAutomation(automationId);
+    if (!pending) return;
+    await this.submitRun({
+      automation,
+      runId: pending.id,
+      windows: pending.scheduledWindows,
+      now,
+    });
   }
 
   private scheduleNextTimer(): void {
@@ -300,4 +348,31 @@ function classifyTerminalStatus(
     return "cancelled";
   }
   return "completed";
+}
+
+function buildLaneQueueEntryId(runId: string): string {
+  return `automation-lane:${runId}`;
+}
+
+function buildLaneQueuedResult(params: {
+  automation: AutomationRecord;
+  position: number;
+  run: {
+    id: string;
+  };
+}): Awaited<ReturnType<AutomationRunner["submitRun"]>> {
+  return {
+    status: "queued",
+    entry: {
+      id: buildLaneQueueEntryId(params.run.id),
+      backend: params.automation.backend,
+      threadId: params.automation.threadId,
+      origin: "automation",
+      automationRunId: params.run.id,
+      automationName: params.automation.name,
+      input: [],
+      createdAt: Date.now(),
+    },
+    position: params.position,
+  };
 }

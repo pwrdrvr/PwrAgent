@@ -906,6 +906,7 @@ export class GrokAppServerClient {
 
   async startThread(params: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -915,7 +916,8 @@ export class GrokAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.request("thread/start", params);
+    const { ephemeral: _ephemeral, ...requestParams } = params;
+    const result = await this.request("thread/start", requestParams);
     const threadId = extractThreadId(result);
     if (!threadId) {
       throw new Error("grok app server thread/start did not return threadId");
