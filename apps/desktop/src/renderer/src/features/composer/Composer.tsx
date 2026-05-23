@@ -3414,6 +3414,7 @@ export function Composer(props: ComposerProps) {
   const canHandoffThreadWorkspace = Boolean(
     props.thread &&
       threadWorkspace &&
+      isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace }) &&
       props.onHandoffThreadWorkspace &&
       props.thread.workspaceHandoff?.available !== false &&
       !sending &&
@@ -5412,6 +5413,8 @@ function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | 
 
 type ThreadWorkspace = {
   mode: "local" | "worktree";
+  /** True only when the path is known to be a git local/worktree relationship. */
+  gitBacked: boolean;
   /** Repository/local checkout path. In Worktree mode this is not the command CWD. */
   repositoryPath: string;
   /** Current workspace path for opening apps and running thread-scoped commands. */
@@ -5443,6 +5446,7 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   if (worktreeDirectory) {
     return {
       mode: "worktree",
+      gitBacked: true,
       repositoryPath: worktreeDirectory.path,
       sourcePath: worktreeDirectory.worktreePath ?? worktreeDirectory.path,
     };
@@ -5454,6 +5458,7 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   if (localDirectory) {
     return {
       mode: "local",
+      gitBacked: true,
       repositoryPath: localDirectory.path,
       sourcePath: localDirectory.path,
     };
@@ -5462,12 +5467,32 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   if (thread.projectKey) {
     return {
       mode: "local",
+      gitBacked: false,
       repositoryPath: thread.projectKey,
       sourcePath: thread.projectKey,
     };
   }
 
   return undefined;
+}
+
+function isThreadWorkspaceHandoffEligible(params: {
+  sourceBranch?: string;
+  threadWorkspace?: ThreadWorkspace;
+}): boolean {
+  if (!params.threadWorkspace) {
+    return false;
+  }
+
+  if (!params.threadWorkspace.gitBacked) {
+    return false;
+  }
+
+  if (params.threadWorkspace.mode === "worktree") {
+    return true;
+  }
+
+  return Boolean(params.sourceBranch?.trim());
 }
 
 function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string {

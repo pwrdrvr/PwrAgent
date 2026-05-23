@@ -3451,6 +3451,99 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not offer existing thread workspace handoff for non-git Workspaces", () => {
+    const projectPath = "/Users/test/.pwragent/profiles/dev/projects/2026-05-23-885b8f";
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const runCodexEnvironmentAction = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      codexEnvironmentRuntime: {
+        environmentId: "workspace-tools",
+        environmentName: "Workspace tools",
+        executionTarget: "local" as const,
+      },
+    }));
+
+    render(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication, runCodexEnvironmentAction }}
+        disabled={false}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Create an Agent",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          projectKey: projectPath,
+          linkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "workspace-tools",
+            environmentName: "Workspace tools",
+            executionTarget: "local",
+            actions: [
+              {
+                id: "list-files",
+                name: "List files",
+                command: "ls",
+              },
+            ],
+          },
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const workspaceMode = screen.queryByLabelText("Workspace mode");
+    if (workspaceMode) {
+      fireEvent.click(workspaceMode);
+    }
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    expect(openApplication).toHaveBeenCalledWith({
+      applicationId: "vscode",
+      kind: "editor",
+      targetPath: projectPath,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(runCodexEnvironmentAction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      actionId: "list-files",
+      cwd: projectPath,
+    });
+  });
+
   it("lets the desktop handoff dialog move the current branch instead", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 

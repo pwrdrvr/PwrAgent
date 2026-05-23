@@ -2233,6 +2233,71 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("does not fabricate a git workspace relationship for directory-less Workspace threads", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey: "workspace:/Users/test/.pwragent/projects",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
+            directoryPath: "/Users/test/.pwragent/projects",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "Create an Agent",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKind).toBe("workspace");
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(
+        "workspace:/Users/test/.pwragent/projects",
+      );
+    });
+
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-1",
+      linkedDirectories: [],
+    });
+  });
+
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationCallCount = 0;
