@@ -8064,6 +8064,20 @@ textarea,
   min-width: 0;
 }
 
+.context-list__content .context-list__label,
+.context-list__content .context-list__meta {
+  display: flex;
+  width: 100%;
+}
+
+.context-list__content .context-list__label {
+  margin: 0;
+}
+
+.context-list__content .context-list__meta {
+  margin: 3px 0 0;
+}
+
 .context-list__label {
   display: inline-flex;
   align-items: center;
@@ -8142,33 +8156,40 @@ textarea,
 
 .automation-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .automation-row__main {
+  width: 100%;
   min-width: 0;
 }
 
 .automation-row__title-line {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .automation-row__title-line h4 {
+  min-width: 0;
   margin: 0;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .automation-row__actions {
   display: flex;
-  flex: 0 0 auto;
+  width: 100%;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
 }
 
