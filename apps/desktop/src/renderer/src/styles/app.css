@@ -3303,9 +3303,13 @@ textarea,
 }
 
 .automations-table__history {
+  max-height: clamp(280px, 56vh, 640px);
   padding: 12px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 /* ----------------------------------------------------------------
@@ -8357,7 +8361,7 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
