@@ -139,6 +139,7 @@ class MockTransport implements JsonRpcTransport {
           cursor?: string;
           sortKey?: string;
           sourceKinds?: string[];
+          useStateDbOnly?: boolean;
         };
       };
       const searchTerm =
@@ -228,6 +229,30 @@ class MockTransport implements JsonRpcTransport {
                     ]
             }
           })
+        );
+        return;
+      }
+
+      if (searchTerm === "jsonl-mtime-repair") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-jsonl-mtime",
+                      name: "Automation - Review Approach",
+                      updatedAt: params.params?.useStateDbOnly
+                        ? 1_779_507_033
+                        : 1_779_552_074,
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                    },
+                  ],
+            },
+          }),
         );
         return;
       }
@@ -1003,6 +1028,7 @@ describe("CodexAppServerClient", () => {
             limit: 50,
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
+            useStateDbOnly: true,
           }
         }),
       ])
@@ -1333,13 +1359,14 @@ describe("CodexAppServerClient", () => {
     expect(threadListRequests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          params: {
+          params: expect.objectContaining({
             searchTerm: "web-app",
             archived: false,
             limit: 50,
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
-          }
+            useStateDbOnly: true,
+          })
         }),
       ])
     );
@@ -1550,6 +1577,45 @@ describe("CodexAppServerClient", () => {
             searchTerm: "updated-at-sort",
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
+            useStateDbOnly: true,
+          }),
+        }),
+      ]),
+    );
+
+    await client.close();
+  });
+
+  it("uses state-db thread metadata instead of JSONL mtime repair for navigation timestamps", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "jsonl-mtime-repair" });
+
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-jsonl-mtime",
+        title: "Automation - Review Approach",
+        updatedAt: 1_779_507_033_000,
+      }),
+    ]);
+
+    const transport = MockTransport.instances.at(-1);
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .filter((payload) => payload.method === "thread/list");
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            searchTerm: "jsonl-mtime-repair",
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
+            useStateDbOnly: true,
           }),
         }),
       ]),

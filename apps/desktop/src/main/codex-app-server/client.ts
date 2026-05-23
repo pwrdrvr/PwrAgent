@@ -3085,6 +3085,7 @@ function buildThreadDiscoveryPayloads(
     limit: 50,
     sortKey: "updated_at",
     sourceKinds: ["cli", "vscode"],
+    useStateDbOnly: true,
   };
 
   return [
