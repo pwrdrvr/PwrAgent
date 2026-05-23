@@ -44,6 +44,12 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
 function normalizeTimestamp(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -307,6 +313,14 @@ function buildLiveToolLabel(
   status: AppServerThreadActivityDetail["status"],
   toolName: string
 ): string {
+  if (itemType === "collabagenttoolcall") {
+    return formatCollabAgentToolLabel({
+      receiverThreadIds: readStringArray(item.receiverThreadIds),
+      status,
+      tool: toolName,
+    });
+  }
+
   if (itemType === "commandexecution") {
     const command = readString(item, "command");
     return (
@@ -324,6 +338,95 @@ function buildLiveToolLabel(
   return formatLiveToolName(toolName, status);
 }
 
+function formatCollabAgentToolLabel(params: {
+  tool: string;
+  receiverThreadIds: string[];
+  status: AppServerThreadActivityDetail["status"];
+}): string {
+  const targetCount = params.receiverThreadIds.length;
+  const targetLabel =
+    targetCount === 1
+      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      : targetCount > 1
+        ? `${targetCount} agents`
+        : "agent";
+  const failedPrefix = params.status === "failed" ? "Failed to " : "";
+
+  if (params.tool === "spawnAgent") {
+    return `${failedPrefix}${params.status === "failed" ? "spawn" : "Spawned"} ${targetLabel}`;
+  }
+  if (params.tool === "wait") {
+    return `${failedPrefix}${params.status === "failed" ? "wait on" : "Waited on"} ${targetLabel}`;
+  }
+  if (params.tool === "sendInput") {
+    return `${failedPrefix}${params.status === "failed" ? "send input to" : "Sent input to"} ${targetLabel}`;
+  }
+  if (params.tool === "resumeAgent") {
+    return `${failedPrefix}${params.status === "failed" ? "resume" : "Resumed"} ${targetLabel}`;
+  }
+  if (params.tool === "closeAgent") {
+    return `${failedPrefix}${params.status === "failed" ? "close" : "Closed"} ${targetLabel}`;
+  }
+  return `${failedPrefix}Used ${params.tool}`;
+}
+
+function buildCollabAgentCommandDetail(
+  item: Record<string, unknown>,
+  toolName: string,
+  receiverThreadIds: string[]
+): AppServerThreadCommandDetail {
+  const prompt = readString(item, "prompt");
+  const model = readString(item, "model");
+  const reasoningEffort =
+    readString(item, "reasoningEffort") ?? readString(item, "reasoning_effort");
+  const stateSummary = summarizeCollabAgentStates(readRecord(item.agentsStates));
+  const output = [
+    receiverThreadIds.length > 0 ? `Agents: ${receiverThreadIds.join(", ")}` : undefined,
+    model ? `Model: ${model}` : undefined,
+    reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
+    prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
+    stateSummary ? `Agent states:\n${stateSummary}` : undefined,
+  ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
+
+  return {
+    displayCommand:
+      receiverThreadIds.length > 0
+        ? `${toolName} ${receiverThreadIds.map(shortAgentId).join(", ")}`
+        : toolName,
+    rawCommand: toolName,
+    ...(output ? { output } : {}),
+  };
+}
+
+function summarizeCollabAgentStates(
+  states: Record<string, unknown> | undefined
+): string | undefined {
+  if (!states) {
+    return undefined;
+  }
+  const lines = Object.entries(states).flatMap(([agentId, value]) => {
+    const record = readRecord(value);
+    if (!record) {
+      return [];
+    }
+    const status = readString(record, "status") ?? "unknown";
+    const message = readString(record, "message");
+    return [
+      `${shortAgentId(agentId)}: ${status}${message ? ` - ${truncateActivityText(message, 240)}` : ""}`
+    ];
+  });
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function shortAgentId(agentId: string): string {
+  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+}
+
+function truncateActivityText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
 export function buildLiveToolDetails(
   item: Record<string, unknown>
 ): AppServerThreadActivityDetail[] {
@@ -332,6 +435,7 @@ export function buildLiveToolDetails(
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&
     itemType !== "mcptoolcall" &&
+    itemType !== "collabagenttoolcall" &&
     itemType !== "websearch"
   ) {
     return [];
@@ -354,6 +458,8 @@ export function buildLiveToolDetails(
   const command = itemType === "commandexecution" ? readString(item, "command") : undefined;
   const commandDetail = itemType === "commandexecution"
     ? buildLiveCommandDetail(item, command, elapsedMs)
+    : itemType === "collabagenttoolcall"
+      ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
     : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
