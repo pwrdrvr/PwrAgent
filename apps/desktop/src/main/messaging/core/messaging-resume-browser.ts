@@ -17,7 +17,7 @@ import type {
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
 } from "@pwragent/messaging-interface";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
@@ -160,7 +160,8 @@ export function selectThreadFromValue(
     return undefined;
   }
   if (
-    (value.backend !== "codex" && value.backend !== "grok") ||
+    typeof value.backend !== "string" ||
+    !isAppServerBackendKind(value.backend) ||
     typeof value.threadId !== "string"
   ) {
     return undefined;

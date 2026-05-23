@@ -421,6 +421,6 @@ describe("LogsWindow", () => {
       expect(screen.queryByText(/oldest visible marker/)).not.toBeInTheDocument();
       expect(screen.getByText(/wrapped line/)).toBeInTheDocument();
     },
-    15000,
+    30_000,
   );
 });

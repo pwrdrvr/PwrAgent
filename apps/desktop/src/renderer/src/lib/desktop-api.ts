@@ -32,6 +32,8 @@ import type {
   LatestCodexConfigWarningResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
   ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -91,6 +93,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -291,6 +295,9 @@ export type DesktopApi = {
   cancelThreadExecutionModeQueue?: (
     request: CancelThreadExecutionModeQueueRequest,
   ) => Promise<CancelThreadExecutionModeQueueResponse>;
+  setAcpSessionRuntimeOption?: (
+    request: SetAcpSessionRuntimeOptionRequest,
+  ) => Promise<SetAcpSessionRuntimeOptionResponse>;
   setThreadModelSettings?: (
     request: SetThreadModelSettingsRequest
   ) => Promise<SetThreadModelSettingsResponse>;
@@ -325,6 +332,9 @@ export type DesktopApi = {
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
+  listAcpAgents?: (
+    request?: ListAcpAgentSettingsRequest
+  ) => Promise<ListAcpAgentSettingsResponse>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;

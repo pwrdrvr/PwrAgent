@@ -185,13 +185,7 @@ export class JsonRpcConnection {
       this.pending.delete(key);
 
       if (envelope.error) {
-        pending.reject(
-          new Error(
-            `json-rpc error (${envelope.error.code ?? "unknown"}): ${
-              envelope.error.message ?? "unknown error"
-            }`
-          )
-        );
+        pending.reject(new Error(formatJsonRpcError(envelope.error)));
         return;
       }
 
@@ -266,4 +260,29 @@ export class JsonRpcConnection {
       this.pending.delete(id);
     }
   }
+}
+
+function formatJsonRpcError(error: NonNullable<JsonRpcEnvelope["error"]>): string {
+  const base = `json-rpc error (${error.code ?? "unknown"}): ${
+    error.message ?? "unknown error"
+  }`;
+  if (error.data === undefined) {
+    return base;
+  }
+  return `${base}: ${formatJsonRpcErrorData(error.data)}`;
+}
+
+function formatJsonRpcErrorData(data: unknown): string {
+  const serialized =
+    typeof data === "string"
+      ? data
+      : JSON.stringify(data, (_key, value) =>
+          typeof value === "bigint" ? value.toString() : value,
+        );
+  if (!serialized) {
+    return String(data);
+  }
+  return serialized.length > 1_000
+    ? `${serialized.slice(0, 997)}...`
+    : serialized;
 }

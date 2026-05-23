@@ -5,7 +5,7 @@ const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";
 const STREAM_LOG_INTERVAL_MS = 500;
 const PREVIEW_LIMIT = 160;
 
-type ProtocolLogBackend = "codex" | "grok";
+type ProtocolLogBackend = string;
 
 type ProtocolLogger = Pick<ReturnType<typeof getMainLogger>, "info">;
 
@@ -132,6 +132,8 @@ export function createProtocolLogObserver(
       const envelope = event.envelope;
       const params = asRecord(envelope.params);
       const item = asRecord(params?.item);
+      const update = asRecord(params?.update);
+      const error = asRecord(envelope.error);
       const id = envelope.id == null ? undefined : String(envelope.id);
       const kind = classifyEnvelope(envelope);
       const method =
@@ -187,14 +189,18 @@ export function createProtocolLogObserver(
           backend: options.backend,
           callerReason: diagnostics?.callerReason,
           direction: compactDirection(event.direction),
+          errorCode: pickNumberOrString(error, "code"),
+          errorMessage: pickString(error, "message"),
           id,
           itemId: pickString(params, "itemId") ?? pickString(item, "id"),
           kind,
           method,
           ownerId: diagnostics?.ownerId,
           paramKeys: paramKeys.length > 0 ? paramKeys : undefined,
+          sessionId: pickString(params, "sessionId"),
           turnId: pickString(params, "turnId"),
           threadId: pickString(params, "threadId"),
+          updateKind: pickString(update, "sessionUpdate", "kind", "type"),
         }),
       );
       if (kind === "response" && id) {
@@ -269,6 +275,23 @@ function pickRawString(
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickNumberOrString(
+  record: Record<string, unknown> | undefined,
+  ...keys: string[]
+): number | string | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" || (typeof value === "string" && value.trim())) {
       return value;
     }
   }

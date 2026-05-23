@@ -21,6 +21,8 @@ import type {
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
   LatestCodexConfigWarningResponse,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -41,6 +43,8 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   ReorderDirectoryPinsRequest,
@@ -177,6 +181,7 @@ import {
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+  AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -186,6 +191,7 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+  ACP_AGENTS_LIST_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
   APP_LOG_ENTRY_EVENT_CHANNEL,
@@ -421,6 +427,10 @@ const desktopApi = Object.freeze({
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
     await ipcRenderer.invoke(BACKEND_LIST_CHANNEL, request),
+  listAcpAgents: async (
+    request?: ListAcpAgentSettingsRequest,
+  ): Promise<ListAcpAgentSettingsResponse> =>
+    await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
@@ -555,6 +565,13 @@ const desktopApi = Object.freeze({
   ): Promise<CancelThreadExecutionModeQueueResponse> =>
     await ipcRenderer.invoke(
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+      request,
+    ),
+  setAcpSessionRuntimeOption: async (
+    request: SetAcpSessionRuntimeOptionRequest,
+  ): Promise<SetAcpSessionRuntimeOptionResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
       request,
     ),
   setThreadModelSettings: async (

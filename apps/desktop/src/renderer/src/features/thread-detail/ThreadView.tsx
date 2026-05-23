@@ -36,7 +36,10 @@ import { isBranchDrifted, readCodexEnvironmentActionRuns } from "@pwragent/share
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  formatAccessModeLabel,
+  formatExecutionModeLabel,
+} from "../../lib/execution-mode";
 import { useMediaQuery } from "../../lib/useMediaQuery";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
@@ -751,6 +754,10 @@ function activityContainsDiff(
   });
 }
 
+function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): boolean {
+  return Boolean(entry?.details.some((detail) => detail.fileDiff));
+}
+
 export type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -832,6 +839,11 @@ export type ThreadViewProps = {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetAcpRuntimeOption?: (params: {
+    source: "configOption" | "mode";
+    optionId: string;
+    value: string;
+  }) => Promise<void>;
   onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
@@ -1388,6 +1400,15 @@ export function ThreadView(props: ThreadViewProps) {
     return latest;
   }, [props.transcriptEntries]);
 
+  const pendingTranscriptActivityEntry =
+    pendingActivityEntry && !activityHasFileDiff(pendingActivityEntry)
+      ? pendingActivityEntry
+      : undefined;
+  const pendingRailActivityEntry =
+    pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
+      ? pendingActivityEntry
+      : undefined;
+
   useEffect(() => {
     if (!pendingActivityEntry) {
       return;
@@ -1849,10 +1870,15 @@ export function ThreadView(props: ThreadViewProps) {
             <div className="thread-header__eyebrow-row">
               <p className="eyebrow">New thread</p>
               <span className="chip chip--backend">
-                {formatBackendLabel(selectedLaunchpad.backend)}
+                {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
               </span>
               <span className="chip chip--mode">
-                {formatExecutionModeLabel(selectedLaunchpad.executionMode)}
+                {formatAccessModeLabel(
+                  selectedLaunchpad,
+                  props.backends.find(
+                    (backend) => backend.kind === selectedLaunchpad.backend,
+                  ),
+                )}
               </span>
             </div>
             <h2 className="thread-header__title">{launchpadTitle}</h2>
@@ -2002,6 +2028,7 @@ export function ThreadView(props: ThreadViewProps) {
         desktopApi={props.desktopApi}
         projectLabel={props.selectedDirectory?.label}
         thread={selectedThread!}
+        backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
         onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       />
@@ -2074,13 +2101,12 @@ export function ThreadView(props: ThreadViewProps) {
               loading={props.loading}
               loadingMore={props.loadingMore}
               pagination={props.transcriptPagination}
-              // pendingActivityEntry and pendingPlanEntry render in
-              // the LiveWorkRail above the composer (issue #495); pass
-              // undefined here so the transcript doesn't double-render
-              // the same live state. The persisted/optimistic copies
-              // that settle after `turn/completed` still flow through
-              // `entries`, so the transcript history is unaffected.
-              pendingActivityEntry={undefined}
+              // File-diff activity renders in the LiveWorkRail above
+              // the composer (issue #495). Generic tool activity has no
+              // rail body, so keep it in the transcript while the turn
+              // is live instead of collapsing the UI to a bare
+              // "Thinking" indicator.
+              pendingActivityEntry={pendingTranscriptActivityEntry}
               pendingAssistantMessage={props.pendingAssistantMessage}
               pendingPlanEntry={undefined}
               pendingMcpInteraction={props.pendingMcpInteraction}
@@ -2118,7 +2144,7 @@ export function ThreadView(props: ThreadViewProps) {
               desktopApi={props.desktopApi}
               dock="above"
               editedFilesEntry={
-                pendingActivityEntry ??
+                pendingRailActivityEntry ??
                 (props.activeTurnId ? undefined : lastCompletedActivityEntry)
               }
               pinned={!props.activeTurnId}
@@ -2162,6 +2188,7 @@ export function ThreadView(props: ThreadViewProps) {
               setTranscriptReglueRequestKey((current) => current + 1);
             }}
             onSetExecutionMode={props.onSetExecutionMode}
+            onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
@@ -2187,7 +2214,7 @@ export function ThreadView(props: ThreadViewProps) {
             desktopApi={props.desktopApi}
             dock="sidebar"
             editedFilesEntry={
-              pendingActivityEntry ??
+              pendingRailActivityEntry ??
               (props.activeTurnId ? undefined : lastCompletedActivityEntry)
             }
             pinned={!props.activeTurnId}

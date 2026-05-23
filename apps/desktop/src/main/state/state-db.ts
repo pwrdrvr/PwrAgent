@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 8;
+export const CURRENT_STATE_DB_USER_VERSION = 10;
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -281,6 +281,45 @@ CREATE INDEX IF NOT EXISTS idx_messaging_topic_cleanup_proposals_supergroup
   ON messaging_topic_cleanup_proposals(channel_kind, supergroup_id, updated_at DESC);
 `;
 
+const ACP_AGENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_registry_cache (
+  cache_key   TEXT PRIMARY KEY,
+  fetched_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acp_registry_cache_fetched
+  ON acp_registry_cache(fetched_at DESC);
+
+CREATE TABLE IF NOT EXISTS acp_installed_agents (
+  backend_id           TEXT PRIMARY KEY,
+  registry_id          TEXT NOT NULL,
+  version              TEXT,
+  install_status       TEXT NOT NULL,
+  auth_status          TEXT NOT NULL,
+  verification_status  TEXT NOT NULL,
+  installed_at         INTEGER NOT NULL,
+  updated_at           INTEGER NOT NULL,
+  payload              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acp_installed_agents_registry
+  ON acp_installed_agents(registry_id);
+CREATE INDEX IF NOT EXISTS idx_acp_installed_agents_updated
+  ON acp_installed_agents(updated_at DESC);
+`;
+
+const ACP_SESSION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_sessions (
+  backend_id  TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (backend_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_backend_updated
+  ON acp_sessions(backend_id, updated_at DESC);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -374,6 +413,18 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 8) {
       db.transaction(() => {
         db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+        db.pragma("user_version = 8");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 9) {
+      db.transaction(() => {
+        db.exec(ACP_AGENT_SCHEMA);
+        db.pragma("user_version = 9");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 10) {
+      db.transaction(() => {
+        db.exec(ACP_SESSION_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -518,6 +569,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+    db.exec(ACP_AGENT_SCHEMA);
+    db.exec(ACP_SESSION_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

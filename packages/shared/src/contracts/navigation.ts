@@ -1,5 +1,7 @@
 import type {
+  AcpBackendId,
   AppServerBackendScope,
+  AppServerBuiltinBackendKind,
   AppServerBackendKind,
   AppServerThreadImagePart,
   AppServerThreadSummary,
@@ -16,6 +18,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
+import type { BackendAcpSessionRuntimeState } from "./backend";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -156,6 +159,7 @@ export type NavigationLaunchpadDefaults = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  acpRuntime?: BackendAcpSessionRuntimeState;
 };
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
@@ -253,11 +257,71 @@ export type RefreshDirectoryGitStatusesResponse = {
   scheduledCount: number;
 };
 
+const ACP_BACKEND_ID_PREFIX = "acp:";
+const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+export function isAppServerBuiltinBackendKind(
+  value: string,
+): value is AppServerBuiltinBackendKind {
+  return value === "codex" || value === "grok";
+}
+
+export function buildAcpBackendId(registryId: string): AcpBackendId {
+  const normalizedRegistryId = registryId.trim();
+  if (!ACP_REGISTRY_ID_PATTERN.test(normalizedRegistryId)) {
+    throw new Error(`Invalid ACP registry id: ${registryId}`);
+  }
+  return `${ACP_BACKEND_ID_PREFIX}${normalizedRegistryId}`;
+}
+
+export function isAcpBackendId(value: string): value is AcpBackendId {
+  if (!value.startsWith(ACP_BACKEND_ID_PREFIX)) {
+    return false;
+  }
+  return ACP_REGISTRY_ID_PATTERN.test(value.slice(ACP_BACKEND_ID_PREFIX.length));
+}
+
+export function isAppServerBackendKind(
+  value: string,
+): value is AppServerBackendKind {
+  return isAppServerBuiltinBackendKind(value) || isAcpBackendId(value);
+}
+
+export type ThreadIdentityKeyParts = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
 export function buildThreadIdentityKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
 ): string {
-  return `${backend}:${threadId}`;
+  return `${encodeURIComponent(backend)}:${threadId}`;
+}
+
+export function parseThreadIdentityKey(
+  threadKey: string,
+): ThreadIdentityKeyParts | undefined {
+  const separatorIndex = threadKey.indexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+
+  let backend: string;
+  try {
+    backend = decodeURIComponent(threadKey.slice(0, separatorIndex));
+  } catch {
+    return undefined;
+  }
+
+  if (!isAppServerBackendKind(backend)) {
+    return undefined;
+  }
+
+  return {
+    backend,
+    threadId: threadKey.slice(separatorIndex + 1),
+  };
 }
 
 export type NavigationSnapshot = {
@@ -518,6 +582,12 @@ export type ThreadPermissionTransition = {
   id: string;
   fromExecutionMode: ThreadExecutionMode;
   toExecutionMode: ThreadExecutionMode;
+  /**
+   * Optional provider-native labels for non-Codex access modes. Codex
+   * transitions continue to derive labels from the execution-mode enum.
+   */
+  fromLabel?: string;
+  toLabel?: string;
   status: ThreadPermissionTransitionStatus;
   /** Epoch ms. */
   occurredAt: number;

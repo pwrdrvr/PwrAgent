@@ -1,10 +1,11 @@
 import {
   isBranchDrifted,
+  type BackendSummary,
   type MessagingChannelKind,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { formatAccessModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -12,6 +13,7 @@ type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
   projectLabel?: string;
   thread: NavigationThreadSummary;
+  backends?: BackendSummary[];
   /** Forwarded to MessagingStatusBar — fires when a platform chip is clicked. */
   onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
   onRevealSelectedThreadInList?: () => void;
@@ -73,7 +75,10 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             {formatBackendLabel(props.thread.source)}
           </span>
           <span className="chip chip--mode">
-            {formatExecutionModeLabel(props.thread.executionMode)}
+            {formatAccessModeLabel(
+              props.thread,
+              props.backends?.find((backend) => backend.kind === props.thread.source),
+            )}
           </span>
         </div>
         {missingPath ? (

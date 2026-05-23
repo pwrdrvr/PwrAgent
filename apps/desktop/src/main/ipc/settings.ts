@@ -1,6 +1,9 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import type {
+  AcpAgentSettingsEntry,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -14,6 +17,8 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsWriteResponse,
   DesktopSettingsSnapshot,
+  ListAcpAgentSettingsRequest,
+  ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   PickGhCommandResponse,
@@ -33,6 +38,7 @@ import {
 } from "@pwragent/shared";
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
+  ACP_AGENTS_LIST_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -65,6 +71,22 @@ import {
   resolveDefaultCodexHome,
 } from "../settings/codex-profiles";
 import { getMainLogger } from "../log";
+import { AcpAgentStore } from "../acp/acp-agent-store";
+import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
+import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
+import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
+import { describeDistributionSource } from "../acp/acp-install-provenance";
+import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
+import { AcpRegistryService } from "../acp/acp-registry-service";
+import type {
+  AcpInstalledAgentRecord,
+  AcpRegistryAgent,
+  AcpRegistryAgentWithPolicy,
+  AcpRegistryDistribution,
+  AcpRegistrySnapshot,
+} from "../acp/acp-registry-types";
+import { getAppStateDb } from "../state/app-state";
+import { resolveActiveProfileDir } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const activeCodexLoginProcesses = new Map<
@@ -86,6 +108,250 @@ async function refreshModelBackendsIfNeeded(params: {
   ) {
     await disposeDesktopBackendRegistry();
   }
+}
+
+async function listAcpAgentSettings(
+  request: ListAcpAgentSettingsRequest = {},
+): Promise<ListAcpAgentSettingsResponse> {
+  const store = new AcpAgentStore(getAppStateDb());
+  const registryService = new AcpRegistryService();
+  let snapshot: AcpRegistrySnapshot | undefined;
+  let error: string | undefined;
+
+  if (request.refresh !== false) {
+    try {
+      snapshot = await registryService.fetchRegistry();
+      store.saveRegistrySnapshot(snapshot);
+    } catch (fetchError) {
+      error = fetchError instanceof Error ? fetchError.message : String(fetchError);
+    }
+  }
+
+  snapshot ??= store.readRegistrySnapshot();
+  const installed = await listInstalledAndLocalAcpAgents(store, {
+    refreshLocal: request.refresh === true,
+  });
+  const entries = snapshot
+    ? registryService
+        .applyAllowlist(snapshot)
+        .filter((agent) => agent.allowlist.allowed)
+        .flatMap((agent) => {
+          const entry = acpAgentSettingsEntry({
+            agent,
+            installed: installed.find((record) => record.backendId === agent.backendId),
+            registryService,
+          });
+          return entry ? [entry] : [];
+        })
+    : [];
+  const listedBackendIds = new Set(entries.map((entry) => entry.backendId));
+  for (const record of installed) {
+    if (!listedBackendIds.has(record.backendId)) {
+      entries.push(installedAcpAgentSettingsEntry(record));
+    }
+  }
+
+  return {
+    fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+    entries,
+    ...(error ? { error } : {}),
+  };
+}
+
+async function listInstalledAndLocalAcpAgents(
+  store: AcpAgentStore,
+  options?: { refreshLocal?: boolean },
+): Promise<AcpInstalledAgentRecord[]> {
+  const installed = store.listInstalledAgents();
+  let discovered: AcpInstalledAgentRecord[] = [];
+  if (options?.refreshLocal) {
+    try {
+      discovered = await discoverLocalAcpAgents();
+      const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
+      for (const record of discovered) {
+        const current = store.getInstalledAgent(record.backendId);
+        const nextRecord = {
+          ...record,
+          runtimeCapabilities: current?.runtimeCapabilities,
+          lastDiscoveredAt: current?.lastDiscoveredAt,
+          lastDiscoveryError: current?.lastDiscoveryError,
+          installedAt: current?.installedAt ?? record.installedAt,
+          updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
+        } satisfies AcpInstalledAgentRecord;
+        store.upsertInstalledAgent(
+          await refreshAcpRuntimeCapabilities(nextRecord, discoveryCwd),
+        );
+      }
+    } catch (error) {
+      settingsIpcLog.debug("local_acp_discovery_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const refreshedInstalled = options?.refreshLocal
+    ? store.listInstalledAgents()
+    : installed;
+  const allowedInstalled = refreshedInstalled.filter(
+    (record) => !isBannedAcpRegistryId(record.registryId),
+  );
+  const installedBackendIds = new Set(
+    allowedInstalled.map((record) => record.backendId),
+  );
+  return [
+    ...allowedInstalled,
+    ...discovered.filter(
+      (record) =>
+        !installedBackendIds.has(record.backendId) &&
+        !isBannedAcpRegistryId(record.registryId),
+    ),
+  ];
+}
+
+async function refreshAcpRuntimeCapabilities(
+  record: AcpInstalledAgentRecord,
+  cwd: string,
+): Promise<AcpInstalledAgentRecord> {
+  const now = Date.now();
+  try {
+    const result = await discoverAcpRuntimeCapabilities(record, { cwd });
+    return {
+      ...record,
+      ...(result.runtimeCapabilities
+        ? {
+            runtimeCapabilities: result.runtimeCapabilities,
+            lastDiscoveredAt: result.runtimeCapabilities.discoveredAt ?? now,
+            lastDiscoveryError: undefined,
+          }
+        : {
+            lastDiscoveredAt: now,
+          }),
+      updatedAt: Math.max(record.updatedAt, now),
+    };
+  } catch (error) {
+    return {
+      ...record,
+      lastDiscoveryError: error instanceof Error ? error.message : String(error),
+      updatedAt: Math.max(record.updatedAt, now),
+    };
+  }
+}
+
+async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
+  const directory = path.join(
+    resolveActiveProfileDir(),
+    "state",
+    "acp-discovery-workspace",
+  );
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
+function acpAgentSettingsEntry(params: {
+  agent: AcpRegistryAgentWithPolicy;
+  installed?: AcpInstalledAgentRecord;
+  registryService: AcpRegistryService;
+}): AcpAgentSettingsEntry | undefined {
+  if (params.installed) {
+    return installedAcpAgentSettingsEntry(params.installed, params.agent);
+  }
+
+  const distribution = selectAcpDistribution(params.agent);
+  if (!distribution) {
+    const displayDistribution = params.agent.distributions[0];
+    if (!displayDistribution) {
+      return undefined;
+    }
+    return {
+      backendId: params.agent.backendId,
+      registryId: params.agent.id,
+      name: params.agent.name,
+      description: params.agent.description,
+      version: params.agent.version,
+      license: params.agent.license,
+      authors: params.agent.authors,
+      repositoryUrl: params.agent.repositoryUrl,
+      websiteUrl: params.agent.websiteUrl,
+      distributionKind: displayDistribution.kind,
+      distributionSource: describeDistributionSource(displayDistribution),
+    installable: false,
+      installed: false,
+      installStatus: "unavailable",
+      authStatus: params.agent.auth.required ? "required" : "not-required",
+      verificationStatus: params.agent.verificationStatus,
+      allowlistRuleId: params.agent.allowlist.allowed
+        ? params.agent.allowlist.ruleId
+        : undefined,
+    unavailableReason: "Install is not supported. Install the agent separately and run Discover new.",
+    };
+  }
+  const distributionPolicy = params.registryService.evaluateDistribution(
+    params.agent,
+    distribution,
+  );
+  return {
+    backendId: params.agent.backendId,
+    registryId: params.agent.id,
+    name: params.agent.name,
+    description: params.agent.description,
+    version: params.agent.version,
+    license: params.agent.license,
+    authors: params.agent.authors,
+    repositoryUrl: params.agent.repositoryUrl,
+    websiteUrl: params.agent.websiteUrl,
+    distributionKind: distribution.kind,
+    distributionSource: describeDistributionSource(distribution),
+    installable: false,
+    installed: false,
+    installStatus: "unavailable",
+    authStatus: params.agent.auth.required ? "required" : "not-required",
+    verificationStatus: distributionPolicy.verificationStatus,
+    allowlistRuleId: distributionPolicy.allowlist.allowed
+      ? distributionPolicy.allowlist.ruleId
+      : undefined,
+    unavailableReason:
+      distributionPolicy.unavailableReason ??
+      params.agent.unavailableReason ??
+      "Install is not supported. Install the agent separately and run Discover new.",
+  };
+}
+
+function installedAcpAgentSettingsEntry(
+  record: AcpInstalledAgentRecord,
+  registryAgent?: AcpRegistryAgent,
+): AcpAgentSettingsEntry {
+  const agent = registryAgent ?? record.registryAgent;
+  return {
+    backendId: record.backendId,
+    registryId: record.registryId,
+    name: record.name,
+    description: agent?.description,
+    version: record.version,
+    license: agent?.license,
+    authors: agent?.authors ?? [],
+    repositoryUrl: agent?.repositoryUrl,
+    websiteUrl: agent?.websiteUrl,
+    distributionKind: record.distributionKind,
+    distributionSource: record.distributionSource,
+    installable: false,
+    installed: record.installStatus === "installed",
+    installStatus: record.installStatus,
+    authStatus: record.authStatus,
+    verificationStatus: record.verificationStatus,
+    allowlistRuleId: record.allowlistRuleId,
+    installedAt: record.installedAt,
+    updatedAt: record.updatedAt,
+    lastError: record.lastError,
+    lastDiscoveredAt: record.lastDiscoveredAt,
+    lastDiscoveryError: record.lastDiscoveryError,
+    runtime: record.runtimeCapabilities,
+  };
+}
+
+function selectAcpDistribution(
+  agent: Pick<AcpRegistryAgent, "distributions">,
+  preferredKind?: AcpRegistryDistribution["kind"],
+): AcpRegistryDistribution | undefined {
+  return selectAcpDistributionForCurrentPlatform(agent.distributions, preferredKind);
 }
 
 async function resolveCodexCommandForProfileWorkflow(
@@ -573,6 +839,15 @@ export function registerSettingsIpcHandlers(
     ) => void | Promise<void>;
   },
 ): void {
+  ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
+  ipcMain.handle(
+    ACP_AGENTS_LIST_CHANNEL,
+    async (
+      _event,
+      request?: ListAcpAgentSettingsRequest,
+    ): Promise<ListAcpAgentSettingsResponse> => await listAcpAgentSettings(request),
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -826,6 +1101,7 @@ export function disposeSettingsIpcHandlers(): void {
     child.kill();
   }
   activeCodexLoginProcesses.clear();
+  ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);

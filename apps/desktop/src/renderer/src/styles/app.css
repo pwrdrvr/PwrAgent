@@ -6,6 +6,8 @@
   --bg-sidebar: #050505;
   --bg-panel: #0a0a0a;
   --bg-panel-elevated: #101010;
+  --panel: var(--bg-panel);
+  --panel-elevated: var(--bg-panel-elevated);
   --bg-panel-hover: #14110d;
   --bg-row-active: #120800;
   --bg-input: #080808;
@@ -10174,6 +10176,91 @@ textarea,
 
 .status-dot--blink {
   animation: status-blink 1.6s ease-in-out infinite;
+}
+
+.settings-acp-agents {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.settings-acp-agent {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--panel);
+}
+
+.settings-acp-agent__main {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.settings-acp-agent h3 {
+  color: var(--text-primary);
+  font-size: 14px;
+  margin: 0 0 4px;
+}
+
+.settings-acp-agent p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.settings-acp-agent__status {
+  background: var(--panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.settings-acp-agent__meta {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.settings-acp-agent__meta div {
+  min-width: 0;
+}
+
+.settings-acp-agent__meta dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.settings-acp-agent__meta dd {
+  color: var(--text-primary);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-acp-agent__links {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-acp-agent__confirm {
+  background: var(--panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {

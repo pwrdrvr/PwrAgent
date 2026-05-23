@@ -1,4 +1,6 @@
-export type AppServerBackendKind = "codex" | "grok";
+export type AppServerBuiltinBackendKind = "codex" | "grok";
+export type AcpBackendId = `acp:${string}`;
+export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
 export type ThreadExecutionMode = "default" | "full-access";
 
@@ -213,6 +215,13 @@ export const CODEX_ENVIRONMENT_ACTION_RUNS_MAX = 10;
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
+export type AppServerAcpSessionRuntimeState = {
+  configValues?: Record<string, string>;
+  currentModeId?: string;
+  currentModelId?: string;
+  updatedAt?: number;
+};
+
 export type AppServerThreadSummary = {
   id: ThreadIdentifier;
   title: string;
@@ -231,6 +240,11 @@ export type AppServerThreadSummary = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  acpRuntime?: AppServerAcpSessionRuntimeState;
+  workspaceHandoff?: {
+    available: boolean;
+    unavailableReason?: string;
+  };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
 };
@@ -955,6 +969,13 @@ export type AppServerNotification =
         fastMode?: boolean;
         reasoningEffort?: string;
         serviceTier?: string;
+      };
+    }
+  | {
+      method: "thread/acpRuntime/updated";
+      params: {
+        threadId: string;
+        acpRuntime?: AppServerAcpSessionRuntimeState;
       };
     }
   | {

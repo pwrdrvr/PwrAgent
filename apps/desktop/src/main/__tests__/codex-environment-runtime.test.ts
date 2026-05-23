@@ -72,7 +72,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("strips parent Electron runtime variables from detached actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));

@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AcpBackendId,
   AgentEvent,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -14,9 +15,12 @@ import type {
   AppServerReviewTarget,
   AppServerTurnInputItem,
   BackendAccountSummary,
+  BackendAcpRuntimeOptionSource,
+  BackendAcpSessionRuntimeState,
   BackendRateLimitSummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -28,6 +32,14 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import type { AcpSessionMetadata } from "../acp/acp-session-store";
+
+const localAcpDiscoveryMock = vi.hoisted(() => ({
+  discoverLocalAcpAgents: vi.fn(async () => [] as AcpInstalledAgentRecord[]),
+}));
+
+vi.mock("../acp/acp-local-discovery", () => localAcpDiscoveryMock);
 
 const execFileAsync = promisify(execFileCallback);
 
@@ -946,6 +958,52 @@ function createMessagingArchiveCleanerMock(
   };
 }
 
+function createAcpAgentStoreMock(records: AcpInstalledAgentRecord[]) {
+  return {
+    getInstalledAgent: (backendId: AcpBackendId) =>
+      records.find((record) => record.backendId === backendId),
+    listInstalledAgents: () => records,
+    upsertInstalledAgent: (record: AcpInstalledAgentRecord) => {
+      const index = records.findIndex(
+        (candidate) => candidate.backendId === record.backendId,
+      );
+      if (index >= 0) {
+        records[index] = record;
+      } else {
+        records.push(record);
+      }
+    },
+  };
+}
+
+function createAcpSessionStoreMock(records: AcpSessionMetadata[]) {
+  return {
+    listSessions: (backendId: string, params?: { archived?: boolean }) =>
+      records.filter(
+        (record) =>
+          record.backendId === backendId &&
+          Boolean(record.archivedAt) === (params?.archived === true),
+      ),
+    getSession: (backendId: string, sessionId: string) =>
+      records.find(
+        (record) =>
+          record.backendId === backendId && record.sessionId === sessionId,
+      ),
+    upsertSession: (metadata: AcpSessionMetadata) => {
+      const index = records.findIndex(
+        (record) =>
+          record.backendId === metadata.backendId &&
+          record.sessionId === metadata.sessionId,
+      );
+      if (index === -1) {
+        records.push(metadata);
+      } else {
+        records[index] = metadata;
+      }
+    },
+  };
+}
+
 describe("DesktopBackendRegistry", () => {
   it("reports backend availability and capabilities", async () => {
     const codexClient = new MockBackendClient({
@@ -1181,6 +1239,1579 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(registry.getLatestCodexConfigWarning()).toEqual({});
+    await registry.close();
+  });
+
+  it("reports installed ACP agents as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          version: "0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "gemini-local",
+          installedAt: 1000,
+          updatedAt: 2000,
+          registryAgent: {
+            id: "gemini",
+            backendId: "acp:gemini",
+            name: "Gemini CLI",
+            version: "0.42.0",
+            authors: ["Google"],
+            license: "Apache-2.0",
+            repositoryUrl: "https://github.com/google-gemini/gemini-cli",
+            distributions: [],
+            distributionKinds: [],
+            auth: { required: false, methods: [] },
+            raw: {},
+          },
+        },
+      ]),
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "acp:gemini",
+          source: "acp",
+          label: "Gemini CLI",
+          available: true,
+          acp: expect.objectContaining({
+            registryId: "gemini",
+            version: "0.42.0",
+            installStatus: "installed",
+            authStatus: "not-required",
+            verificationStatus: "not-applicable",
+            allowlistRuleId: "gemini-local",
+            license: "Apache-2.0",
+          }),
+          capabilities: expect.objectContaining({
+            createThread: true,
+            renameThread: true,
+            readThread: true,
+            startTurn: true,
+          }),
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("does not report banned ACP adapters as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:codex-acp",
+          registryId: "codex-acp",
+          name: "Codex CLI",
+          distributionKind: "npx",
+          distributionSource: "@zed-industries/codex-acp@0.14.0",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "codex-rule",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends.some((backend) => backend.kind === "acp:codex-acp"))
+      .toBe(false);
+
+    await registry.close();
+  });
+
+  it("reports locally discovered ACP agents as backend summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      discoverLocalAcpAgents: async () => [
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          version: "0.42.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          launchDescriptor: {
+            backendId: "acp:gemini",
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ],
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "acp:gemini",
+          source: "acp",
+          label: "Gemini CLI",
+          available: true,
+          acp: expect.objectContaining({
+            registryId: "gemini",
+            distributionKinds: ["local"],
+            installStatus: "installed",
+            allowlistRuleId: "local-gemini-cli",
+          }),
+        }),
+      ]),
+    );
+
+    await registry.close();
+  });
+
+  it("lists persisted ACP sessions as thread summaries", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "gemini-local",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: "acp:gemini",
+          sessionId: "session-1",
+          title: "ACP Thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 3000,
+          executionMode: "full-access",
+          status: "idle",
+        },
+      ]),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "acp:gemini" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        source: "acp:gemini",
+        title: "ACP Thread",
+        executionMode: "full-access",
+        linkedDirectories: [
+          {
+            id: "/repo/project",
+            label: "project",
+            path: "/repo/project",
+            kind: "local",
+          },
+        ],
+      }),
+    ]);
+    await expect(registry.listThreads()).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        source: "acp:gemini",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("marks Gemini ACP thread workspace handoff unavailable after conversation history", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: "acp:gemini",
+          sessionId: "session-1",
+          title: "ACP Thread",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 3000,
+          executionMode: "default",
+          status: "idle",
+          transcriptUpdates: [
+            {
+              receivedAt: 2000,
+              update: {
+                kind: "pwragent_user_prompt",
+                prompt: "What is this project?",
+              },
+            },
+          ],
+        },
+      ]),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "acp:gemini" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        workspaceHandoff: {
+          available: false,
+          unavailableReason: expect.stringContaining("cannot hand off"),
+        },
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("invalidates cached ACP thread summaries when a live topic update renames the thread", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const sessionStore = createAcpSessionStoreMock(sessions);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+        },
+      ]),
+      acpSessionStore: sessionStore,
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        title: "ACP session",
+      }),
+    ]);
+
+    sessionStore.upsertSession({
+      ...sessions[0]!,
+      title: "Exploring PwrSnap Project",
+      updatedAt: 2000,
+    });
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "session-1",
+          threadName: "Exploring PwrSnap Project",
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        title: "Exploring PwrSnap Project",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("invalidates cached ACP thread summaries when runtime mode changes", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          currentModeId: "default",
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption: vi.fn(
+        async (): Promise<BackendAcpSessionRuntimeState> => ({
+          currentModeId: "yolo",
+          updatedAt: 2000,
+        }),
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            modes: {
+              currentModeId: "default",
+              availableModes: [
+                { id: "default", label: "Default" },
+                { id: "yolo", label: "YOLO" },
+              ],
+            },
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        acpRuntime: expect.objectContaining({ currentModeId: "default" }),
+      }),
+    ]);
+
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "session-1",
+      source: "mode",
+      optionId: "mode",
+      value: "yolo",
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        acpRuntime: expect.objectContaining({ currentModeId: "yolo" }),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("keeps ACP config-option mode state when the agent returns stale config", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          configValues: { "approval-mode": "default" },
+          currentModeId: "default",
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption: vi.fn(
+        async (): Promise<BackendAcpSessionRuntimeState> => ({
+          configValues: { "approval-mode": "default" },
+          updatedAt: 2000,
+        }),
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 1000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            source: "session-load",
+            discoveredAt: 1000,
+            checkedAt: 1000,
+            configOptions: [
+              {
+                id: "approval-mode",
+                label: "Approval mode",
+                type: "select",
+                category: "mode",
+                currentValue: "default",
+                values: [
+                  { value: "default", label: "Default" },
+                  { value: "yolo", label: "YOLO" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "session-1",
+      source: "configOption",
+      optionId: "approval-mode",
+      value: "yolo",
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        acpRuntime: expect.objectContaining({
+          configValues: { "approval-mode": "yolo" },
+          currentModeId: "yolo",
+        }),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("archives and restores persisted ACP sessions locally", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "Gemini ACP Thread",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 3000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+    });
+
+    await expect(
+      registry.archiveThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      cleanup: [],
+    });
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([]);
+    await expect(
+      registry.listThreads({ backend: acpBackendId, archived: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        archivedAt: expect.any(Number),
+      }),
+    ]);
+
+    await expect(
+      registry.restoreThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      worktrees: [],
+    });
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "session-1",
+        archivedAt: undefined,
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("starts ACP sessions, prompts them, reads replay, and cancels turns", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const startedPrompts: Array<{
+      sessionId: string;
+      prompt: string;
+      promptContent?: unknown;
+      parts?: unknown;
+      turnId?: string;
+    }> = [];
+    const cancelledSessions: string[] = [];
+    const emittedEvents: AgentEvent[] = [];
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+        title?: string;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: params.title ?? "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        prompt: string;
+        promptContent?: unknown;
+        parts?: unknown;
+        turnId?: string;
+      }) => {
+        startedPrompts.push(params);
+        return {
+          sessionId: params.sessionId,
+          turnId: params.turnId ?? "pending:session-1:1001",
+        };
+      }),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        cancelledSessions.push(sessionId);
+      }),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [
+          {
+            type: "message",
+            id: "assistant:1",
+            role: "assistant",
+            text: "Done",
+            createdAt: 1002,
+          },
+        ],
+        messages: [
+          {
+            id: "assistant:1",
+            role: "assistant",
+            text: "Done",
+            createdAt: 1002,
+          },
+        ],
+        lastAssistantMessage: "Done",
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+    registry.onEvent((event) => {
+      emittedEvents.push(event);
+    });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "full-access",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      executionMode: "full-access",
+    });
+    const startedTurn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "hello ACP" }],
+    });
+    expect(startedTurn).toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      turnId: expect.stringMatching(/^pending:session-1:\d+$/),
+    });
+    await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "session-1",
+          turnId: startedTurn.turnId,
+          turn: {
+            id: startedTurn.turnId,
+            status: "completed",
+            completedAt: 1002,
+            output: [{ type: "text", text: "Done" }],
+          },
+        },
+      },
+    });
+    const imageUrl = "data:image/png;base64,aGVsbG8=";
+    const imageTurn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", url: imageUrl },
+      ],
+    });
+    expect(imageTurn).toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      turnId: expect.stringMatching(/^pending:session-1:\d+$/),
+    });
+    await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "session-1",
+          turnId: imageTurn.turnId,
+          turn: {
+            id: imageTurn.turnId,
+            status: "completed",
+            completedAt: 1003,
+            output: [{ type: "text", text: "Done" }],
+          },
+        },
+      },
+    });
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      replay: {
+        lastAssistantMessage: "Done",
+      },
+    });
+    await expect(
+      registry.interruptTurn({
+        backend: acpBackendId,
+        threadId: "session-1",
+        turnId: startedTurn.turnId,
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      turnId: startedTurn.turnId,
+    });
+
+    expect(acpClient.initialize).toHaveBeenCalledTimes(1);
+    const startSessionParams = acpClient.startSession.mock.calls[0]?.[0];
+    expect(startSessionParams).toMatchObject({
+      cwd: "/repo/project",
+      executionMode: "full-access",
+    });
+    expect(startSessionParams).not.toHaveProperty("title");
+    expect(startedPrompts).toEqual([
+      {
+        sessionId: "session-1",
+        prompt: "hello ACP",
+        promptContent: [{ type: "text", text: "hello ACP" }],
+        parts: [{ type: "text", text: "hello ACP" }],
+        turnId: startedTurn.turnId,
+      },
+      {
+        sessionId: "session-1",
+        prompt: "What's in this image?",
+        promptContent: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+        ],
+        parts: [
+          { type: "text", text: "What's in this image?" },
+          { type: "image", url: imageUrl },
+        ],
+        turnId: imageTurn.turnId,
+      },
+    ]);
+    expect(cancelledSessions).toEqual(["session-1"]);
+    expect(emittedEvents.map((event) => event.notification.method)).toEqual([
+      "turn/started",
+      "turn/completed",
+      "turn/started",
+      "turn/completed",
+      "turn/cancelled",
+    ]);
+
+    await registry.close();
+    expect(acpClient.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads persisted ACP sessions locally and refreshes the agent in the background", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const localReplay: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "assistant:cached",
+          role: "assistant",
+          text: "Cached ACP transcript",
+          createdAt: 1002,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:cached",
+          role: "assistant",
+          text: "Cached ACP transcript",
+          createdAt: 1002,
+        },
+      ],
+      lastAssistantMessage: "Cached ACP transcript",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      readReplay: vi.fn(() => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      })),
+      loadSession: vi.fn(async () => localReplay),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "Stored ACP Thread",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 3000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      replay: {
+        lastAssistantMessage: "Cached ACP transcript",
+      },
+    });
+    expect(acpClient.initialize).toHaveBeenCalledTimes(1);
+    expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+    expect(acpClient.refreshSession).toHaveBeenCalledWith(session);
+
+    await registry.close();
+  });
+
+  it("preserves ACP launchpad model selections when starting sessions", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        sessionId: string;
+        source: BackendAcpRuntimeOptionSource;
+        optionId: string;
+        value: string;
+      }): Promise<BackendAcpSessionRuntimeState> =>
+        params.source === "model"
+          ? { currentModelId: params.value, updatedAt: 1001 }
+          : { configValues: { [params.optionId]: params.value }, updatedAt: 1001 },
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: ThreadExecutionMode;
+        title?: string;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: params.title ?? "ACP session",
+          titleSource: params.title ? "explicit" : "fallback",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            models: {
+              currentModelId: "gemini-3-flash-preview",
+              availableModels: [
+                {
+                  id: "gemini-3-flash-preview",
+                  label: "Gemini 3 Flash Preview",
+                },
+                {
+                  id: "gemini-3-pro-preview",
+                  label: "Gemini 3 Pro Preview",
+                },
+              ],
+            },
+          },
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "default",
+        model: "gemini-3-pro-preview",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+    });
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/repo/project",
+        executionMode: "default",
+        acpRuntime: expect.objectContaining({
+          currentModelId: "gemini-3-pro-preview",
+        }),
+      }),
+    );
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-3-pro-preview",
+    });
+    expect(sessions[0]?.acpRuntime).toMatchObject({
+      currentModelId: "gemini-3-pro-preview",
+    });
+
+    await registry.close();
+  });
+
+  it("does not send privileged Gemini ACP modes for default access sessions", async () => {
+    const sessions: AcpSessionMetadata[] = [];
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const setRuntimeOption = vi.fn(
+      async (params: {
+        sessionId: string;
+        source: BackendAcpRuntimeOptionSource;
+        optionId: string;
+        value: string;
+      }): Promise<BackendAcpSessionRuntimeState> =>
+        params.source === "configOption"
+          ? { configValues: { [params.optionId]: params.value }, updatedAt: 1001 }
+          : { currentModeId: params.value, updatedAt: 1001 },
+    );
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(async (params: {
+        cwd?: string;
+        executionMode: "default" | "full-access";
+        title?: string;
+        acpRuntime?: BackendAcpSessionRuntimeState;
+      }) => {
+        const metadata: AcpSessionMetadata = {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: params.title ?? "ACP session",
+          cwd: params.cwd,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: params.executionMode,
+          acpRuntime: params.acpRuntime,
+          status: "idle",
+        };
+        sessions.push(metadata);
+        return metadata;
+      }),
+      startPrompt: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      setRuntimeOption,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startThread({
+      backend: acpBackendId,
+      cwd: "/repo/project",
+      executionMode: "default",
+      acpRuntime: {
+        configValues: { "approval-mode": "yolo" },
+        currentModeId: "yolo",
+      },
+    });
+
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acpRuntime: {
+          configValues: { "approval-mode": "default" },
+          currentModeId: "default",
+        },
+      }),
+    );
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "configOption",
+      optionId: "approval-mode",
+      value: "default",
+    });
+    expect(setRuntimeOption).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      source: "mode",
+      optionId: "mode",
+      value: "default",
+    });
+    expect(setRuntimeOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ value: "yolo" }),
+    );
+    expect(sessions[0]?.acpRuntime).toEqual({
+      configValues: { "approval-mode": "default" },
+      currentModeId: "default",
+    });
+
+    await registry.close();
+  });
+
+  it("rejects a second ACP turn while the first start is still resolving", async () => {
+    const ensureSession = createDeferred<void>();
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      startPrompt: vi.fn((params: {
+        sessionId: string;
+        prompt: string;
+        turnId?: string;
+      }) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "pending:session-1:1001",
+      })),
+      ensureSession: vi.fn(async () => await ensureSession.promise),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "active",
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    const firstTurn = registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "first" }],
+    });
+    await waitForCondition(() => acpClient.ensureSession.mock.calls.length === 1);
+
+    await expect(
+      registry.startTurn({
+        backend: acpBackendId,
+        threadId: "session-1",
+        input: [{ type: "text", text: "second" }],
+      }),
+    ).rejects.toThrow("A turn is already active for this thread.");
+
+    ensureSession.resolve();
+    await expect(firstTurn).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+    });
+    expect(acpClient.startPrompt).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("keeps stored ACP sessions readable when the agent cannot reload them", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "Stored Gemini Thread",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 3000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => {
+        throw new Error("No previous sessions found for this project.");
+      }),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "session-1",
+      replay: {
+        entries: [],
+        threadStatus: "idle",
+      },
+    });
+    expect(acpClient.loadSession).toHaveBeenCalledWith(session);
+    expect(acpClient.refreshSession).toHaveBeenCalledWith(session);
+
+    await registry.close();
+  });
+
+  it("replays persisted ACP transcript updates when agent reload fails", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const session: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "session-1",
+      title: "Stored Gemini Thread",
+      cwd: "/repo/project",
+      createdAt: 1000,
+      updatedAt: 3000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 2000,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "What is this project?",
+            turnId: "pending:session-1",
+          },
+        },
+        {
+          receivedAt: 2100,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "It is PwrSnap." },
+          },
+        },
+      ],
+    };
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession: vi.fn(),
+      startPrompt: vi.fn(),
+      cancelSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
+        entries: [
+          {
+            type: "message",
+            id: "user:session-1:2000",
+            role: "user",
+            text: "What is this project?",
+            createdAt: 2000,
+          },
+          {
+            type: "message",
+            id: "assistant:session-1:2100",
+            role: "assistant",
+            text: "It is PwrSnap.",
+            createdAt: 2100,
+          },
+        ],
+        messages: [
+          {
+            id: "user:session-1:2000",
+            role: "user",
+            text: "What is this project?",
+            createdAt: 2000,
+          },
+          {
+            id: "assistant:session-1:2100",
+            role: "assistant",
+            text: "It is PwrSnap.",
+            createdAt: 2100,
+          },
+        ],
+        lastUserMessage: "What is this project?",
+        lastAssistantMessage: "It is PwrSnap.",
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+      refreshSession: vi.fn(async () => {
+        throw new Error("No previous sessions found for this project.");
+      }),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([session]),
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.readThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      replay: {
+        lastUserMessage: "What is this project?",
+        lastAssistantMessage: "It is PwrSnap.",
+        threadStatus: "idle",
+        messages: [
+          expect.objectContaining({ role: "user", text: "What is this project?" }),
+          expect.objectContaining({ role: "assistant", text: "It is PwrSnap." }),
+        ],
+      },
+    });
 
     await registry.close();
   });
@@ -6314,6 +7945,455 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rebinds ACP protocol sessions when the thread workspace overlay changes cwd", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.replaceWorkspaceLinkedDirectory({
+      backend: acpBackendId as never,
+      threadId: "session-1",
+      directory: {
+        id: "pwragent-handoff:acp:gemini:session-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree",
+      },
+      gitBranch: "feature/handoff",
+    });
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const ensureSession = vi.fn(async () => undefined);
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+      }),
+    );
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "agent-session-2",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("updates stored ACP session cwd on workspace handoff before the next turn", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ]);
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const ensureSession = vi.fn(async () => undefined);
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const handoff = vi.fn(async () => ({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:acp:gemini:session-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await registry.handoffThreadWorkspace({
+      backend: acpBackendId,
+      threadId: "session-1",
+      direction: "local-to-worktree",
+      leaveLocalBranch: "main",
+    });
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "session-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+      }),
+    );
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      agentSessionId: "agent-session-2",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        prompt: "What is the CWD?",
+      }),
+    );
+
+    await registry.close();
+  });
+
+  it("rejects Gemini ACP workspace handoff after the first message", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const handoff = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock([
+        {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: "ACP session",
+          cwd: "/repo/app",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+          transcriptUpdates: [
+            {
+              receivedAt: 1000,
+              update: {
+                kind: "pwragent_user_prompt",
+                prompt: "What is this project?",
+                turnId: "pending:session-1:1000",
+              },
+            },
+          ],
+        },
+      ]),
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await expect(
+      registry.handoffThreadWorkspace({
+        backend: acpBackendId,
+        threadId: "session-1",
+        direction: "local-to-worktree",
+        leaveLocalBranch: "main",
+      }),
+    ).rejects.toThrow("cannot hand off a workspace after the first message");
+    expect(handoff).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("rejects rebinding legacy Gemini ACP sessions after conversation history exists", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessionStore = createAcpSessionStoreMock([
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        cwd: "/repo/app/.worktrees/app-feature-handoff",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+        transcriptUpdates: [
+          {
+            receivedAt: 1000,
+            update: {
+              kind: "pwragent_user_prompt",
+              prompt: "What is this project?",
+              turnId: "pending:session-1:1000",
+            },
+          },
+        ],
+      },
+    ]);
+    const ensureSession = vi.fn(async () => {
+      throw new Error(
+        'json-rpc error (-32603): Internal error: {"details":"No previous sessions found for this project."}',
+      );
+    });
+    const startSession = vi.fn(async (params: {
+      sessionId?: string;
+      cwd?: string;
+      executionMode: ThreadExecutionMode;
+      title?: string;
+      createdAt?: number;
+      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
+    }) => {
+      const metadata: AcpSessionMetadata = {
+        backendId: acpBackendId,
+        sessionId: params.sessionId ?? "agent-session-2",
+        agentSessionId: "agent-session-2",
+        title: params.title ?? "ACP session",
+        cwd: params.cwd,
+        createdAt: params.createdAt ?? 1000,
+        updatedAt: 2000,
+        executionMode: params.executionMode,
+        status: "idle",
+        transcriptUpdates: params.transcriptUpdates,
+      };
+      sessionStore.upsertSession(metadata);
+      return metadata;
+    });
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? "pending:session-1:1001",
+    }));
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+      startSession,
+      ensureSession,
+      startPrompt,
+      cancelSession: vi.fn(),
+      readReplay: vi.fn(),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          backendId: acpBackendId,
+          registryId: "gemini",
+          name: "Gemini CLI",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1000,
+          updatedAt: 2000,
+          launchDescriptor: {
+            backendId: acpBackendId,
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]),
+      acpSessionStore: sessionStore,
+      createAcpClient: () => acpClient,
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: acpBackendId,
+        threadId: "session-1",
+        input: [{ type: "text", text: "What is the CWD now?" }],
+      }),
+    ).rejects.toThrow("cannot hand off a workspace after the first message");
+
+    expect(ensureSession).toHaveBeenCalled();
+    expect(startSession).not.toHaveBeenCalled();
+    expect(sessionStore.getSession(acpBackendId, "session-1")).toMatchObject({
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
+    expect(startPrompt).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("rejects workspace handoff while the thread has an active turn", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
@@ -6991,6 +9071,48 @@ command = "pnpm dev"
     expect(grokClient.lastRenameThreadParams).toEqual({
       threadId: "thread-2",
       name: "Renamed Grok thread",
+    });
+
+    await registry.close();
+  });
+
+  it("renames ACP threads in the local session store", async () => {
+    const acpBackendId = "acp:gemini" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "session-1",
+        title: "ACP session",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+    });
+
+    await expect(
+      registry.renameThread({
+        backend: acpBackendId,
+        threadId: "session-1",
+        name: "  Cleaned up formatting  ",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "session-1",
+      renamedAt: expect.any(Number),
+    });
+
+    expect(sessions[0]).toMatchObject({
+      title: "Cleaned up formatting",
+      titleSource: "explicit",
     });
 
     await registry.close();

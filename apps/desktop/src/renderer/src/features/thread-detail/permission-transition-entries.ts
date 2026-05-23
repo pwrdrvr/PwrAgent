@@ -29,8 +29,9 @@ function formatExecutionModeLabel(mode: ThreadExecutionMode): string {
 }
 
 function summarizeTransition(transition: ThreadPermissionTransition): string {
-  const from = formatExecutionModeLabel(transition.fromExecutionMode);
-  const to = formatExecutionModeLabel(transition.toExecutionMode);
+  const from =
+    transition.fromLabel ?? formatExecutionModeLabel(transition.fromExecutionMode);
+  const to = transition.toLabel ?? formatExecutionModeLabel(transition.toExecutionMode);
   const icon = STATUS_ICON[transition.status];
   switch (transition.status) {
     case "queued":

@@ -36,7 +36,11 @@ import { readCodexEnvironmentActionRuns } from "@pwragent/shared";
 import { EditorIcon, FileCodeIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  acpRuntimeModeRequiresFullAccess,
+  formatExecutionModeLabel,
+  getAcpRuntimeModeControl,
+} from "../../lib/execution-mode";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -116,6 +120,7 @@ type ComposerProps = {
         | "reasoningEffort"
         | "serviceTier"
         | "fastMode"
+        | "acpRuntime"
         | "workMode"
         | "branchName"
         | "codexEnvironmentId"
@@ -147,6 +152,11 @@ type ComposerProps = {
   thread?: NavigationThreadSummary;
   updatingExecutionMode?: ThreadExecutionMode;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetAcpRuntimeOption?: (params: {
+    source: "configOption" | "mode";
+    optionId: string;
+    value: string;
+  }) => Promise<void>;
   onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
@@ -3140,6 +3150,7 @@ export function Composer(props: ComposerProps) {
         | "serviceTier"
         | "fastMode"
         | "workMode"
+        | "acpRuntime"
         | "branchName"
         | "codexEnvironmentId"
         | "codexEnvironmentExecutionTarget"
@@ -3316,6 +3327,7 @@ export function Composer(props: ComposerProps) {
       : false;
   const selectedServiceTier =
     currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
+  const acpRuntimeModeControl = getAcpRuntimeModeControl(backend, currentSettings);
   const providerOptions =
     props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
@@ -3403,6 +3415,7 @@ export function Composer(props: ComposerProps) {
     props.thread &&
       threadWorkspace &&
       props.onHandoffThreadWorkspace &&
+      props.thread.workspaceHandoff?.available !== false &&
       !sending &&
       !activeTurnId &&
       !props.pendingRequestActive &&
@@ -4475,7 +4488,7 @@ export function Composer(props: ComposerProps) {
               disabled={launchpadSubmitting}
               value={props.launchpad.backend}
               options={providerOptions.map((candidate) => ({
-                label: formatBackendLabel(candidate.kind),
+                label: formatBackendLabel(candidate.kind, props.backends),
                 value: candidate.kind,
               }))}
               onChange={(value) => {
@@ -4511,7 +4524,7 @@ export function Composer(props: ComposerProps) {
             />
           ) : props.thread ? (
             <span className="composer__fixed-value" aria-label="Provider">
-              {formatBackendLabel(props.thread.source)}
+              {formatBackendLabel(props.thread.source, props.backends)}
             </span>
           ) : null}
 
@@ -4533,6 +4546,49 @@ export function Composer(props: ComposerProps) {
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;
                 requestExecutionModeSelection(executionMode);
+              }}
+            />
+          ) : null}
+
+          {acpRuntimeModeControl ? (
+            <ComposerDropdown
+              ariaLabel="ACP mode"
+              compact
+              disabled={
+                launchpadSubmitting ||
+                (!props.launchpad && !props.onSetAcpRuntimeOption)
+              }
+              value={acpRuntimeModeControl.value}
+              options={acpRuntimeModeControl.options}
+              onChange={(value) => {
+                if (props.launchpad) {
+                  const executionMode = acpRuntimeModeRequiresFullAccess(value)
+                    ? "full-access"
+                    : "default";
+                  handleLaunchpadPatch({
+                    executionMode,
+                    acpRuntime: {
+                      ...props.launchpad.acpRuntime,
+                      configValues:
+                        acpRuntimeModeControl.source === "configOption"
+                          ? {
+                              ...(props.launchpad.acpRuntime?.configValues ?? {}),
+                              [acpRuntimeModeControl.optionId]: value,
+                            }
+                          : props.launchpad.acpRuntime?.configValues,
+                      currentModeId:
+                        acpRuntimeModeControl.source === "mode"
+                          ? value
+                          : undefined,
+                    },
+                  });
+                  return;
+                }
+                void props.onSetAcpRuntimeOption?.({
+                  source: acpRuntimeModeControl.source,
+                  optionId: acpRuntimeModeControl.optionId,
+                  value,
+                });
               }}
             />
           ) : null}

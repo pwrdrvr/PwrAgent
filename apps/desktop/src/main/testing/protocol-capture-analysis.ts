@@ -126,7 +126,8 @@ function parseCaptureRecord(line: string): ProtocolCaptureEventRecord | null {
 
     const record = parsed as ProtocolCaptureEventRecord;
     if (
-      (record.backend !== "codex" && record.backend !== "grok") ||
+      typeof record.backend !== "string" ||
+      !record.backend.trim() ||
       !record.captureId?.trim() ||
       (record.direction !== "inbound" && record.direction !== "outbound") ||
       (record.kind !== "request" &&

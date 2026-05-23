@@ -19,6 +19,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentRequest,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
@@ -52,6 +54,7 @@ import {
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+  AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -373,6 +376,17 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
+    async (
+      _event,
+      request: SetAcpSessionRuntimeOptionRequest,
+    ): Promise<SetAcpSessionRuntimeOptionResponse> => {
+      return await registry.setAcpSessionRuntimeOption(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.handle(
     AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
@@ -497,6 +511,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL);
+  ipcMain.removeHandler(AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);

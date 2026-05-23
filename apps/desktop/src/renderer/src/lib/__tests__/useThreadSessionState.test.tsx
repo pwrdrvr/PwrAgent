@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
+  AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -129,7 +130,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -236,7 +237,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -369,7 +370,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -403,7 +404,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -542,7 +543,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -625,7 +626,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -766,7 +767,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -927,7 +928,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -1098,7 +1099,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -1119,7 +1120,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -1822,7 +1823,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -1960,7 +1961,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -2073,7 +2074,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => {
         readCount += 1;
@@ -2199,7 +2200,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -2282,7 +2283,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",
@@ -2380,7 +2381,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -2401,7 +2402,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -2494,7 +2495,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -2515,7 +2516,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -3761,7 +3762,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -3795,7 +3796,7 @@ describe("useThreadSessionState", () => {
           backend,
           threadId,
         }: {
-          backend?: "codex" | "grok";
+          backend?: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend: backend ?? "codex",
@@ -3904,7 +3905,7 @@ describe("useThreadSessionState", () => {
         backend,
         threadId,
       }: {
-        backend?: "codex" | "grok";
+        backend?: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend: backend ?? "codex",

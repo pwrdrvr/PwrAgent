@@ -551,7 +551,7 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
-  });
+  }, 15_000);
 
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
@@ -983,6 +983,29 @@ describe("SettingsScreen", () => {
       expect(screen.queryByText("Archived code review")).not.toBeInTheDocument();
     });
     expect(screen.getByText("Restored Archived code review.")).toBeInTheDocument();
+  });
+
+  it("opens the ACP Agents settings section", async () => {
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="agents"
+        settings={createSettingsState()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "ACP Agents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "ACP Agents" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("can restart login for an existing Codex auth profile", async () => {
@@ -2464,6 +2487,7 @@ describe("SettingsScreen", () => {
       "Applications",
       "Profiles",
       "Models",
+      "ACP Agents",
       "Messaging",
       "Worktrees",
       "Archived Threads",

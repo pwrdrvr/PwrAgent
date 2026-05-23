@@ -9,6 +9,7 @@ import {
   comparePinnedThreads,
   isPinnedThread,
   moveThreadKey,
+  parseThreadIdentityKey,
 } from "@pwragent/shared";
 import {
   didDragLeaveCurrentTarget,
@@ -76,7 +77,8 @@ export function RecentsList(props: RecentsListProps) {
   ): void => {
     const ids = nextThreadKeys
       .filter((threadKey) => threadByKey.get(threadKey)?.source === backend)
-      .map((threadKey) => threadKey.split(":").slice(1).join(":"));
+      .map((threadKey) => parseThreadIdentityKey(threadKey)?.threadId)
+      .filter((threadId): threadId is string => Boolean(threadId));
     void props.onReorderThreadPins?.(backend, ids);
   };
 

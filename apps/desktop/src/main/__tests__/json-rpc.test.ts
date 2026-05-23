@@ -159,4 +159,39 @@ describe("JsonRpcConnection", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
+  it("includes JSON-RPC error data in rejected request messages", async () => {
+    const transport = new MockTransport();
+    const connection = new JsonRpcConnection(transport, 1_000);
+
+    await connection.connect();
+    const requestPromise = connection.request("session/new", {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const outboundEnvelope = JSON.parse(transport.sentMessages[0] ?? "{}") as {
+      id?: string;
+    };
+
+    transport.emitRaw(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: outboundEnvelope.id,
+        error: {
+          code: -32603,
+          message: "Internal error",
+          data: [
+            {
+              path: ["mcpServers"],
+              message: "Invalid input: expected array, received undefined",
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toThrow(
+      'json-rpc error (-32603): Internal error: [{"path":["mcpServers"],"message":"Invalid input: expected array, received undefined"}]',
+    );
+
+    await connection.close();
+  });
 });

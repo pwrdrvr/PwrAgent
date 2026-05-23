@@ -145,6 +145,83 @@ describe("protocol log observer", () => {
     });
   });
 
+  it("logs ACP session update summaries with session and update kind", () => {
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "acp:gemini",
+      logger: { info },
+    });
+
+    observer.onMessage(
+      createEvent({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "hidden from protocol summaries",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(info).toHaveBeenCalledWith("message", {
+      backend: "acp:gemini",
+      direction: "in",
+      kind: "notification",
+      method: "session/update",
+      paramKeys: ["sessionId", "update"],
+      sessionId: "session-1",
+      updateKind: "agent_message_chunk",
+    });
+  });
+
+  it("logs response error codes and messages", () => {
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "acp:gemini",
+      logger: { info },
+    });
+
+    observer.onMessage(
+      createEvent(
+        {
+          id: "rpc-1",
+          jsonrpc: "2.0",
+          method: "session/prompt",
+          params: {
+            sessionId: "session-1",
+          },
+        },
+        "outbound",
+      ),
+    );
+    observer.onMessage(
+      createEvent({
+        id: "rpc-1",
+        jsonrpc: "2.0",
+        error: {
+          code: -32603,
+          message: "Internal error",
+        },
+      }),
+    );
+
+    expect(info).toHaveBeenNthCalledWith(2, "message", {
+      backend: "acp:gemini",
+      direction: "in",
+      errorCode: -32603,
+      errorMessage: "Internal error",
+      id: "rpc-1",
+      kind: "response",
+      method: "session/prompt",
+    });
+  });
+
   it("coalesces streaming deltas and flushes the final chunk", () => {
     let now = 1_000;
     const info = vi.fn();

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  AppServerBackendKind,
   AppServerListSkillsResponse,
   AppServerPendingRequestNotification,
   BackendSummary,
@@ -1186,6 +1187,40 @@ describe("MessagingController", () => {
       targetSurface: expect.objectContaining({
         id: expect.stringContaining("surface:resume:"),
       }),
+    });
+  });
+
+  it("binds to ACP threads from structured resume callback values", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      id: "session-1",
+      source: "acp:codex-acp",
+      title: "ACP Thread",
+    };
+    const harness = await createHarness({ navigation });
+    const resumeEvent = buildCommandEvent("/resume");
+    await harness.controller.handleInboundEvent(resumeEvent);
+
+    const callbackEvent = buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "acp:codex-acp",
+          threadId: "session-1",
+        },
+      });
+    await harness.controller.handleInboundEvent(callbackEvent);
+
+    const binding = await harness.store.findActiveBindingForChannel(
+      callbackEvent.channel,
+    );
+    expect(binding).toMatchObject({
+      backend: "acp:codex-acp",
+      threadId: "session-1",
+    });
+    expect(harness.readThreadLastAssistantReply).toHaveBeenCalledWith({
+      backend: "acp:codex-acp",
+      threadId: "session-1",
     });
   });
 
@@ -2444,6 +2479,99 @@ describe("MessagingController", () => {
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
     ).resolves.toMatchObject({
       backend: "grok",
+      threadId: "new-thread-1",
+    });
+  });
+
+  it("includes enabled ACP backends in the messaging new-thread provider picker", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            kind: "codex",
+            label: "Codex",
+          }),
+          buildBackendSummary({
+            kind: "acp:gemini",
+            label: "Gemini CLI",
+            source: "acp",
+            executionModes: [],
+            launchpadOptions: {
+              models: [{ id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" }],
+              reasoningEfforts: [],
+              supportsFastMode: false,
+            },
+          }),
+        ],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:backend" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select provider",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-backend",
+          label: "Gemini CLI",
+          value: { backend: "acp:gemini" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:new:set-backend",
+        value: { backend: "acp:gemini" },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Provider: Gemini CLI"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:backend",
+          label: "Provider: Gemini CLI",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Use Gemini"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: expect.stringMatching(/^messaging:browse:/),
+      launchpad: expect.objectContaining({
+        backend: "acp:gemini",
+        directoryKey: "directory:pwragent",
+      }),
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:gemini",
+        threadId: "new-thread-1",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toMatchObject({
+      backend: "acp:gemini",
       threadId: "new-thread-1",
     });
   });
@@ -4940,6 +5068,80 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("delivers buffered assistant stream text when ACP terminal output is empty", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: intent.kind === "stream_update" ? "discarded" : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThreadToBackend(harness, "acp:gemini");
+    delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:gemini",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant:turn-1",
+          delta: "Gemini streamed the answer.",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "acp:gemini",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+      expect.objectContaining({
+        stream: expect.objectContaining({
+          isFinal: false,
+        }),
+        text: "Gemini streamed the answer.",
+      }),
+      expect.objectContaining({
+        stream: expect.objectContaining({
+          isFinal: true,
+        }),
+        text: "Gemini streamed the answer.",
+      }),
+    ]);
+    expect(delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Gemini streamed the answer.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("keeps typing active after assistant item text until terminal completion", async () => {
     let now = 1000;
     const harness = await createHarness({
@@ -5173,6 +5375,49 @@ describe("MessagingController", () => {
         parts: [
           expect.objectContaining({
             text: "Tool update: npm view dive",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("delivers completed ACP tool updates as generated system messages", async () => {
+    const harness = await createHarness();
+    await bindThreadToBackend(harness, "acp:gemini");
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "acp:gemini",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "acp-read-1",
+            type: "commandExecution",
+            command: "apps/desktop/src/main/app-server/backend-registry.ts",
+            commandActions: [
+              {
+                type: "read",
+                path: "apps/desktop/src/main/app-server/backend-registry.ts",
+                name: "apps/.../backend-registry.ts",
+              },
+            ],
+            status: "completed",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "system",
+        parts: [
+          expect.objectContaining({
+            text: "Tool update: Read backend-registry.ts",
           }),
         ],
       }),
@@ -8498,11 +8743,18 @@ async function createHarness(options?: {
 async function bindThread(
   harness: Awaited<ReturnType<typeof createHarness>>,
 ): Promise<void> {
+  await bindThreadToBackend(harness, "codex");
+}
+
+async function bindThreadToBackend(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  backend: AppServerBackendKind,
+): Promise<void> {
   await harness.controller.handleInboundEvent(
     buildCallbackEvent({
       actionId: "bind:codex:thread-1",
       value: {
-        backend: "codex",
+        backend,
         threadId: "thread-1",
       },
     }),

@@ -78,4 +78,24 @@ describe("SqliteOverlayStore — thread pins", () => {
     ).resolves.toMatchObject({ pinnedRank: "1024" });
     reopenedDb.close();
   });
+
+  it("persists dynamic ACP backend pin state with an escaped thread key", async () => {
+    await store.setThreadPin({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      pinnedRank: "1024",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "acp:gemini", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      backend: "acp:gemini",
+      pinnedRank: "1024",
+    });
+
+    const rows = stateDb.raw.prepare("SELECT thread_id FROM threads").all() as Array<{
+      thread_id: string;
+    }>;
+    expect(rows.map((row) => row.thread_id)).toEqual(["acp%3Agemini:thread-1"]);
+  });
 });

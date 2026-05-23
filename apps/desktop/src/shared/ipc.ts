@@ -10,6 +10,7 @@ export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
+export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
@@ -20,6 +21,8 @@ export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
   "agent:queue-thread-execution-mode";
 export const AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL =
   "agent:cancel-thread-execution-mode-queue";
+export const AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL =
+  "agent:set-acp-session-runtime-option";
 export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL = "agent:set-thread-model-settings";
 export const AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL = "agent:check-thread-branch-drift";
 export const AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL =
