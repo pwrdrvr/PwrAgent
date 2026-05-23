@@ -55,6 +55,7 @@ type AcpSessionStoreLike = Pick<
 
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
+  agentDisplayName?: string;
   initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
@@ -101,6 +102,7 @@ export class AcpAgentClient {
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
+  private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
@@ -108,6 +110,7 @@ export class AcpAgentClient {
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
+    this.approvalRequesterName = approvalRequesterNameForOptions(options);
   }
 
   async initialize(): Promise<void> {
@@ -579,8 +582,8 @@ export class AcpAgentClient {
         threadId: sessionId,
         ...(activeTurn?.turnId ? { turnId: activeTurn.turnId } : {}),
         requestId,
-        prompt: permissionPrompt(title, toolCall),
-        reason: permissionPrompt(title, toolCall),
+        prompt: permissionPrompt(this.approvalRequesterName, title, toolCall),
+        reason: permissionPrompt(this.approvalRequesterName, title, toolCall),
         command: title,
         displayCommand: title,
         acpMethod: "session/request_permission",
@@ -987,13 +990,36 @@ function readPermissionOptions(value: unknown): AcpPermissionOption[] {
   });
 }
 
-function permissionPrompt(title: string, toolCall: Record<string, unknown>): string {
+function approvalRequesterNameForOptions(options: Pick<
+  AcpAgentClientOptions,
+  "agentDisplayName" | "backendId"
+>): string {
+  const configured = options.agentDisplayName?.trim();
+  if (configured) {
+    return configured;
+  }
+  const backendName = options.backendId
+    .replace(/^acp:/, "")
+    .split(/[-_:]+/)
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ")
+    .trim();
+  return backendName || "ACP agent";
+}
+
+function permissionPrompt(
+  requesterName: string,
+  title: string,
+  toolCall: Record<string, unknown>,
+): string {
   const contentText = readToolCallText(toolCall.content);
   if (contentText) {
     return contentText;
   }
   const kind = typeof toolCall.kind === "string" ? toolCall.kind : undefined;
-  return kind ? `Gemini wants to run ${kind}: ${title}` : `Gemini wants to run ${title}`;
+  return kind
+    ? `${requesterName} wants to run ${kind}: ${title}`
+    : `${requesterName} wants to run ${title}`;
 }
 
 function readToolCallText(value: unknown): string | undefined {
