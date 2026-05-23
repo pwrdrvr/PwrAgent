@@ -529,14 +529,14 @@ class DesktopAppServerService {
     const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const bindingsDurationMs = Date.now() - bindingsStartedAt;
-    const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
+    const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
     const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
-      queuedExecutionModesByThreadId,
+      queuedExecutionModesByThreadKey,
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });

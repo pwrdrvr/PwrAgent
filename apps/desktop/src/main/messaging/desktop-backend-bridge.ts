@@ -62,13 +62,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       filter: request.filter,
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
-    const queuedExecutionModesByThreadId =
+    const queuedExecutionModesByThreadKey =
       this.registry.getQueuedExecutionModesSnapshot();
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
-      queuedExecutionModesByThreadId,
+      queuedExecutionModesByThreadKey,
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });

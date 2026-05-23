@@ -100,6 +100,7 @@ import {
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
+  buildThreadIdentityKey,
   isAcpBackendId,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -113,6 +114,7 @@ import {
   inputToAcpPrompt,
   isAcpSessionMissingForProjectError,
   mergeAcpRuntimeState,
+  readKimiYoloExecutionModeFromText,
   withAcpModelRuntimeSelection,
   type AcpBackendAdapterOptions,
   type AcpClientFactory,
@@ -900,6 +902,17 @@ function buildPendingRequestKey(params: {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
 }
 
+function executionModeQueueKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return buildThreadIdentityKey(backend, threadId);
+}
+
+function formatExecutionModeForError(mode: ThreadExecutionMode): string {
+  return mode === "full-access" ? "Full Access" : "Default Access";
+}
+
 function buildActiveTurnModeKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
 }
@@ -1629,6 +1642,7 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
+  private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -2378,23 +2392,40 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
+    const initialExecutionMode = this.usesKimiSlashExecutionModes(params.backend)
+      ? "default"
+      : params.executionMode;
     const session = await client.startSession({
       cwd: params.cwd,
-      executionMode: params.executionMode,
+      executionMode: initialExecutionMode,
       acpRuntime: params.acpRuntime,
     });
-    await this.applyKimiAcpExecutionModeControlPrompt({
-      backend: params.backend,
-      client,
-      sessionId: session.sessionId,
-      fromExecutionMode: "default",
-      toExecutionMode: params.executionMode,
-    });
+    if (
+      this.usesKimiSlashExecutionModes(params.backend) &&
+      params.executionMode !== "default"
+    ) {
+      await this.applyKimiAcpThreadExecutionMode({
+        backend: params.backend,
+        threadId: session.sessionId,
+        executionMode: params.executionMode,
+      });
+    }
     await this.applyAcpRuntimeSelection(client, session.sessionId, params.acpRuntime);
     return { threadId: session.sessionId };
   }
 
   private async startAcpTurn(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    return await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(params.backend, params.threadId),
+      async () => await this.startAcpTurnLocked(params),
+    );
+  }
+
+  private async startAcpTurnLocked(params: {
     backend: AcpBackendId;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -4026,7 +4057,8 @@ export class DesktopBackendRegistry {
     });
     const currentApplied = overlay?.executionMode ?? "default";
     const hasActiveTurn = this.threadHasActiveTurn(params.threadId, "codex");
-    const hasQueue = this.queuedExecutionModes.has(params.threadId);
+    const queueKey = executionModeQueueKey("codex", params.threadId);
+    const hasQueue = this.queuedExecutionModes.has(queueKey);
 
     // Toggling back to the currently-applied mode while a queue is
     // pending is a cancel — the user changed their mind. No codex call,
@@ -4072,7 +4104,8 @@ export class DesktopBackendRegistry {
       params.threadId,
     );
     const hasActiveTurn = this.threadHasActiveTurn(params.threadId, params.backend);
-    const hasQueue = this.queuedExecutionModes.has(params.threadId);
+    const queueKey = executionModeQueueKey(params.backend, params.threadId);
+    const hasQueue = this.queuedExecutionModes.has(queueKey);
 
     if (hasQueue && params.executionMode === currentApplied) {
       await this.cancelThreadExecutionModeQueue({
@@ -4099,7 +4132,7 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Snapshot of in-memory queued execution modes keyed by `threadId`.
+   * Snapshot of in-memory queued execution modes keyed by thread identity.
    * Consumed by the navigation snapshot path so the renderer sees
    * queued state on the very first snapshot after restart, without
    * waiting for a follow-up bus event. The queue map itself is not
@@ -4114,8 +4147,8 @@ export class DesktopBackendRegistry {
       string,
       { mode: ThreadExecutionMode; queuedAt: number }
     > = {};
-    for (const [threadId, entry] of this.queuedExecutionModes) {
-      snapshot[threadId] = {
+    for (const [queueKey, entry] of this.queuedExecutionModes) {
+      snapshot[queueKey] = {
         mode: entry.mode,
         queuedAt: entry.queuedAt,
       };
@@ -4179,7 +4212,9 @@ export class DesktopBackendRegistry {
     const queuedAt = Date.now();
     const queueId = randomUUID();
 
-    this.queuedExecutionModes.set(params.threadId, {
+    const queueKey = executionModeQueueKey(params.backend, params.threadId);
+
+    this.queuedExecutionModes.set(queueKey, {
       backend: params.backend,
       mode: params.executionMode,
       queuedAt,
@@ -4237,7 +4272,9 @@ export class DesktopBackendRegistry {
 
     const queue =
       this.backendUsesQueuedExecutionModes(params.backend)
-        ? this.queuedExecutionModes.get(params.threadId)
+        ? this.queuedExecutionModes.get(
+            executionModeQueueKey(params.backend, params.threadId),
+          )
         : undefined;
     if (!queue) {
       // Idempotent: cancel of nothing is a no-op that returns the
@@ -4249,7 +4286,9 @@ export class DesktopBackendRegistry {
       };
     }
 
-    this.queuedExecutionModes.delete(params.threadId);
+    this.queuedExecutionModes.delete(
+      executionModeQueueKey(params.backend, params.threadId),
+    );
 
     await this.appendPermissionTransition({
       backend: params.backend,
@@ -4497,10 +4536,25 @@ export class DesktopBackendRegistry {
     if (!params.client.sendControlPrompt) {
       throw new Error("Kimi ACP execution mode updates require control prompts");
     }
-    await params.client.sendControlPrompt({
-      sessionId: params.sessionId,
-      prompt: "/yolo",
-    });
+    const sendControlPrompt = params.client.sendControlPrompt;
+    const result = await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(params.backend, params.sessionId),
+      async () =>
+        await sendControlPrompt({
+          sessionId: params.sessionId,
+          prompt: "/yolo",
+        }),
+    );
+    const observedMode = readKimiYoloExecutionModeFromText(result.text);
+    if (observedMode !== params.toExecutionMode) {
+      const target = formatExecutionModeForError(params.toExecutionMode);
+      const observed = observedMode
+        ? formatExecutionModeForError(observedMode)
+        : "unknown state";
+      throw new Error(
+        `Kimi ACP /yolo did not confirm ${target}; observed ${observed}`,
+      );
+    }
   }
 
   /**
@@ -4594,15 +4648,15 @@ export class DesktopBackendRegistry {
     threadId: string,
     backend: AppServerBackendKind = "codex",
   ): Promise<void> {
-    const activeFlush = this.queuedExecutionModeFlushes.get(threadId);
+    const queueKey = executionModeQueueKey(backend, threadId);
+    const activeFlush = this.queuedExecutionModeFlushes.get(queueKey);
     if (activeFlush) {
       await activeFlush;
       return;
     }
 
-    const queue = this.queuedExecutionModes.get(threadId);
+    const queue = this.queuedExecutionModes.get(queueKey);
     if (!queue) return;
-    if (queue.backend !== backend) return;
     // Atomic claim: in JS's single-threaded event loop, `Map.delete`
     // returning true gives this caller exclusive ownership of the
     // apply. Concurrent flushes (one from the emit-listener turn-end
@@ -4610,23 +4664,24 @@ export class DesktopBackendRegistry {
     // queue but only one's delete returns true — the other no-ops.
     // Without this, both callers race on applyThreadExecutionMode and
     // each appends a duplicate "applied" transition entry.
-    if (!this.queuedExecutionModes.delete(threadId)) {
+    if (!this.queuedExecutionModes.delete(queueKey)) {
       return;
     }
 
-    const flush = this.applyClaimedQueuedExecutionMode(threadId, queue);
-    this.queuedExecutionModeFlushes.set(threadId, flush);
+    const flush = this.applyClaimedQueuedExecutionMode(threadId, queueKey, queue);
+    this.queuedExecutionModeFlushes.set(queueKey, flush);
     try {
       await flush;
     } finally {
-      if (this.queuedExecutionModeFlushes.get(threadId) === flush) {
-        this.queuedExecutionModeFlushes.delete(threadId);
+      if (this.queuedExecutionModeFlushes.get(queueKey) === flush) {
+        this.queuedExecutionModeFlushes.delete(queueKey);
       }
     }
   }
 
   private async applyClaimedQueuedExecutionMode(
     threadId: string,
+    queueKey: string,
     queue: {
       backend: AppServerBackendKind;
       mode: ThreadExecutionMode;
@@ -4646,7 +4701,7 @@ export class DesktopBackendRegistry {
       );
     } catch (error) {
       const attempts = queue.flushAttempts + 1;
-      const stillRetained = this.queuedExecutionModes.get(threadId);
+      const stillRetained = this.queuedExecutionModes.get(queueKey);
       if (stillRetained && stillRetained.queueId !== queue.queueId) {
         // The queue was replaced while we were mid-apply (the user
         // queued a different target). Discard our retry — the new
@@ -4670,7 +4725,7 @@ export class DesktopBackendRegistry {
           queue.backend === "codex"
             ? overlay?.executionMode ?? "default"
             : await this.readAppliedExecutionMode(queue.backend, threadId);
-        this.queuedExecutionModes.delete(threadId);
+        this.queuedExecutionModes.delete(queueKey);
         await this.appendPermissionTransition({
           backend: queue.backend,
           threadId,
@@ -4696,7 +4751,7 @@ export class DesktopBackendRegistry {
         });
         return;
       }
-      this.queuedExecutionModes.set(threadId, {
+      this.queuedExecutionModes.set(queueKey, {
         ...queue,
         flushAttempts: attempts,
       });

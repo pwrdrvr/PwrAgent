@@ -166,7 +166,9 @@ describe("AcpAgentClient", () => {
       },
     });
     promptResponse.resolve({ stopReason: "end_turn" });
-    await controlPrompt;
+    await expect(controlPrompt).resolves.toEqual({
+      text: "You only live once! All actions will be auto-approved.",
+    });
 
     expect(transport.requests.at(-1)).toEqual({
       method: "session/prompt",
