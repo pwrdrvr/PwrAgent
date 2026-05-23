@@ -2565,19 +2565,34 @@ function formatCollabAgentToolLabel(params: {
   const failedPrefix = params.status === "failed" ? "Failed to " : "";
 
   if (params.tool === "spawnAgent") {
-    return `${failedPrefix}${params.status === "failed" ? "spawn" : "Spawned"} ${targetLabel}`;
+    if (params.status === "failed") {
+      return `${failedPrefix}spawn ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Spawning" : "Spawned"} ${targetLabel}`;
   }
   if (params.tool === "wait") {
-    return `${failedPrefix}${params.status === "failed" ? "wait on" : "Waited on"} ${targetLabel}`;
+    if (params.status === "failed") {
+      return `${failedPrefix}wait on ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Waiting on" : "Waited on"} ${targetLabel}`;
   }
   if (params.tool === "sendInput") {
-    return `${failedPrefix}${params.status === "failed" ? "send input to" : "Sent input to"} ${targetLabel}`;
+    if (params.status === "failed") {
+      return `${failedPrefix}send input to ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Sending input to" : "Sent input to"} ${targetLabel}`;
   }
   if (params.tool === "resumeAgent") {
-    return `${failedPrefix}${params.status === "failed" ? "resume" : "Resumed"} ${targetLabel}`;
+    if (params.status === "failed") {
+      return `${failedPrefix}resume ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Resuming" : "Resumed"} ${targetLabel}`;
   }
   if (params.tool === "closeAgent") {
-    return `${failedPrefix}${params.status === "failed" ? "close" : "Closed"} ${targetLabel}`;
+    if (params.status === "failed") {
+      return `${failedPrefix}close ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Closing" : "Closed"} ${targetLabel}`;
   }
   return `${failedPrefix}Used ${params.tool}`;
 }
@@ -2591,7 +2606,7 @@ function buildCollabAgentCommandDetail(params: {
   const prompt = pickString(params.item, ["prompt"]);
   const model = pickString(params.item, ["model"]);
   const reasoningEffort = pickString(params.item, ["reasoningEffort", "reasoning_effort"]);
-  const stateSummary = summarizeCollabAgentStates(asRecord(params.item.agentsStates));
+  const stateSummary = formatCollabAgentStates(asRecord(params.item.agentsStates));
   const output = [
     params.receiverThreadIds.length > 0
       ? `Agents: ${params.receiverThreadIds.join(", ")}`
@@ -2613,7 +2628,7 @@ function buildCollabAgentCommandDetail(params: {
   };
 }
 
-function summarizeCollabAgentStates(
+function formatCollabAgentStates(
   states: Record<string, unknown> | null
 ): string | undefined {
   if (!states) {
@@ -2626,11 +2641,23 @@ function summarizeCollabAgentStates(
     }
     const status = pickString(record, ["status"]) ?? "unknown";
     const message = pickString(record, ["message"]);
-    return [
-      `${shortAgentId(agentId)}: ${status}${message ? ` - ${truncateActivityText(message, 240)}` : ""}`
-    ];
+    const header = `${shortAgentId(agentId)}: ${status} (${agentId})`;
+    if (!message) {
+      return [header];
+    }
+    return [`${header}\nOutput:\n${indentCollabAgentMessage(message)}`];
   });
   return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function indentCollabAgentMessage(message: string): string {
+  return message
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
 }
 
 function shortAgentId(agentId: string): string {

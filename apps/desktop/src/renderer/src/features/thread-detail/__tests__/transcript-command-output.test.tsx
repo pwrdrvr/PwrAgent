@@ -30,7 +30,32 @@ describe("TranscriptCommandOutput", () => {
 
     expect(screen.getByText("$ npm view dive")).toBeInTheDocument();
     expect(screen.getByText("dive@0.5.0 | Proprietary | deps: none")).toBeInTheDocument();
+    expect(screen.getByText("Shell")).toBeInTheDocument();
     expect(screen.getByText("Success · ran for 373ms")).toBeInTheDocument();
+  });
+
+  it("labels collaboration agent output separately from shell output", () => {
+    render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "agent-1",
+          kind: "command",
+          label: "Waited on agent 019e5630",
+          status: "completed",
+          command: {
+            displayCommand: "wait 019e5630",
+            rawCommand: "wait",
+            output: "019e5630: completed\nOutput:\n  Review transcript",
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("$ wait 019e5630")).toBeInTheDocument();
+    expect(screen.getAllByText((_, element) =>
+      element?.textContent?.includes("Review transcript") ?? false
+    ).length).toBeGreaterThan(0);
   });
 
   it("truncates long output and expands on demand", () => {

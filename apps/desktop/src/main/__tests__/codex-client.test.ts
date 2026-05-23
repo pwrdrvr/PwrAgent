@@ -3112,7 +3112,11 @@ describe("CodexAppServerClient", () => {
                 agentsStates: {
                   "019e5630-b147-7980-9f33-3cd7997c235a": {
                     status: "completed",
-                    message: "{\"reviewer\":\"correctness\"}",
+                    message: [
+                      "{\"reviewer\":\"correctness\",",
+                      "\"summary\":\"This is the returned review transcript that should not be collapsed before rendering.\",",
+                      "\"finding\":\"full transcript tail\"}",
+                    ].join("\n"),
                   },
                 },
               },
@@ -3192,6 +3196,14 @@ describe("CodexAppServerClient", () => {
         },
       },
     ]);
+    const activity = replay.entries[1];
+    expect(activity.type).toBe("activity");
+    if (activity.type === "activity") {
+      expect(activity.details[2]?.command?.output).toContain("full transcript tail");
+      expect(activity.details[2]?.command?.output).toContain(
+        "019e5630-b147-7980-9f33-3cd7997c235a"
+      );
+    }
 
     await client.close();
   });

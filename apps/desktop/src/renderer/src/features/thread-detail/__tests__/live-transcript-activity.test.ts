@@ -14,7 +14,7 @@ describe("buildLiveToolDetails", () => {
       agentsStates: {
         "019e5630-b147-7980-9f33-3cd7997c235a": {
           status: "running",
-          message: "Inspecting the diff.",
+          message: "Inspecting the diff.\nStill running reviewer output.",
         },
       },
     });
@@ -23,7 +23,7 @@ describe("buildLiveToolDetails", () => {
       {
         id: "collab-spawn-1",
         kind: "command",
-        label: "Spawned agent 019e5630",
+        label: "Spawning agent 019e5630",
         status: "in_progress",
         command: expect.objectContaining({
           displayCommand: "spawnAgent 019e5630",
@@ -31,5 +31,6 @@ describe("buildLiveToolDetails", () => {
         }),
       },
     ]);
+    expect(details[0]?.command?.output).toContain("Still running reviewer output.");
   });
 });
