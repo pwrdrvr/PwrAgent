@@ -7,9 +7,12 @@ import {
   computeNextAutomationRunAt,
   collectDueAutomationWindows,
 } from "./automation-schedule.js";
+import { getMainLogger } from "../log.js";
 import type { AutomationGateRunner } from "./automation-gate-runner.js";
 import type { AutomationRunner } from "./automation-runner.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+
+const automationSchedulerLog = getMainLogger("pwragent:automation-scheduler");
 
 export type AutomationSchedulerOptions = {
   store: AutomationStore;
@@ -282,8 +285,28 @@ export class AutomationScheduler {
           now: params.now,
         });
       }
+      automationSchedulerLog.info("automation run submitted", {
+        automationId: params.automation.id,
+        automationName: params.automation.name,
+        backend: params.automation.backend,
+        queueEntryId: result.entry.id,
+        runId: params.runId,
+        status: result.status,
+        threadId: params.automation.threadId,
+        turnId: result.status === "started" ? result.turnId : undefined,
+        windowCount: params.windows.length,
+      });
       return result;
     } catch (error) {
+      automationSchedulerLog.warn("automation run submission failed", {
+        automationId: params.automation.id,
+        automationName: params.automation.name,
+        backend: params.automation.backend,
+        error: error instanceof Error ? error.message : String(error),
+        runId: params.runId,
+        threadId: params.automation.threadId,
+        windowCount: params.windows.length,
+      });
       this.options.store.markRunTerminal({
         runId: params.runId,
         status: "failed",

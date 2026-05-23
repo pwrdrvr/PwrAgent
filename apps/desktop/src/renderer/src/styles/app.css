@@ -8055,8 +8055,13 @@ textarea,
 
 .context-list__item {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.context-list__content {
+  min-width: 0;
 }
 
 .context-list__label {
@@ -8064,6 +8069,7 @@ textarea,
   align-items: center;
   gap: 8px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .context-list__actions {
@@ -8074,6 +8080,7 @@ textarea,
 }
 
 .context-list__action {
+  flex: 0 0 auto;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-panel-elevated);

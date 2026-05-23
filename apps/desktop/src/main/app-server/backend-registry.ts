@@ -2084,14 +2084,40 @@ export class DesktopBackendRegistry {
   }> {
     this.assertNotBootstrap("startAutomationHeadlessTurn");
     const client = this.getClient(params.backend);
+    const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
+    backendRegistryLog.info("starting automation headless thread", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      backend: params.backend,
+      ephemeral: params.backend === "codex",
+      inputItemCount: params.input.length,
+      promptLength: submittedPrompt?.length ?? 0,
+    });
     const headlessThread = await client.startThread({
       ephemeral: params.backend === "codex" ? true : undefined,
+    });
+    backendRegistryLog.info("automation headless thread created", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      backend: params.backend,
+      headlessThreadId: headlessThread.threadId,
     });
     const turn = await client.startTurn({
       threadId: headlessThread.threadId,
       input: params.input,
     });
     const queueEntryId = `headless:${params.automationRunId}`;
+    backendRegistryLog.info("automation headless turn started", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      backend: params.backend,
+      headlessThreadId: turn.threadId,
+      queueEntryId,
+      turnId: turn.turnId,
+    });
     this.headlessAutomationTurns.set(
       buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
       {
@@ -5943,6 +5969,12 @@ export class DesktopBackendRegistry {
       ),
     );
     if (!run) {
+      backendRegistryLog.debug("terminal turn did not match a headless automation", {
+        backend,
+        method: notification.method,
+        threadId: notification.params.threadId,
+        turnId,
+      });
       return;
     }
     this.headlessAutomationTurns.delete(
@@ -5952,6 +5984,17 @@ export class DesktopBackendRegistry {
         turnId,
       ),
     );
+    backendRegistryLog.info("automation headless turn reached terminal status", {
+      agentThreadId: run.agentThreadId,
+      automationName: run.automationName,
+      automationRunId: run.automationRunId,
+      backend,
+      finalTextLength: finalTextFromTerminalNotification(notification)?.length ?? 0,
+      method: notification.method,
+      queueEntryId: run.queueEntryId,
+      threadId: notification.params.threadId,
+      turnId,
+    });
 
     await this.emit({
       backend,

@@ -4,8 +4,11 @@ import type {
   ThreadTurnQueueEntry,
   ThreadTurnQueueSubmissionResult,
 } from "../app-server/thread-turn-queue.js";
+import { getMainLogger } from "../log.js";
 import { buildAutomationTurnInput } from "./automation-prompt.js";
 import type { AutomationRecord } from "./automation-store.js";
+
+const automationRunnerLog = getMainLogger("pwragent:automation-runner");
 
 export type AutomationTurnQueue = {
   canStartImmediately(params: {
@@ -60,12 +63,33 @@ export class HeadlessAutomationRunner implements AutomationRunner {
     run: AutomationRunSummary;
   }): Promise<AutomationRunSubmissionResult> {
     const input = buildAutomationTurnInput(params);
+    automationRunnerLog.info("submitting headless automation run", {
+      automationId: params.automation.id,
+      automationName: params.automation.name,
+      backend: params.automation.backend,
+      inputItemCount: input.length,
+      promptLength: params.automation.taskPrompt.length,
+      runId: params.run.id,
+      threadId: params.automation.threadId,
+      trigger: params.run.trigger,
+      windowCount: params.run.scheduledWindows.length,
+    });
     const result = await this.launcher.startAutomationHeadlessTurn({
       backend: params.automation.backend,
       agentThreadId: params.automation.threadId,
       automationName: params.automation.name,
       automationRunId: params.run.id,
       input,
+    });
+    automationRunnerLog.info("headless automation run accepted", {
+      automationId: params.automation.id,
+      automationName: params.automation.name,
+      backend: params.automation.backend,
+      headlessThreadId: result.headlessThreadId,
+      queueEntryId: result.queueEntryId,
+      runId: params.run.id,
+      threadId: params.automation.threadId,
+      turnId: result.turnId,
     });
     return {
       status: "started",

@@ -152,8 +152,10 @@ function formatThreadAgentTitle(thread: NavigationThreadSummary): string {
   }
   const guidance = agent.instructionsTooLong
     ? `, instructions over ${agent.instructionLineCount} lines`
-    : `, ${agent.instructionLineCount} instruction line${
-        agent.instructionLineCount === 1 ? "" : "s"
-      }`;
+    : agent.instructionLineCount <= 0
+      ? ", no Agent instructions"
+      : `, ${agent.instructionLineCount} instruction line${
+          agent.instructionLineCount === 1 ? "" : "s"
+        }`;
   return `${agent.name}${guidance}`;
 }

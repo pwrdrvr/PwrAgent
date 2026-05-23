@@ -623,11 +623,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             <h3>Agent</h3>
             {props.thread.agent ? (
               <div className="context-list__item">
-                <div>
+                <div className="context-list__content">
                   <p className="context-list__label">{props.thread.agent.name}</p>
                   <p className="context-list__meta">
-                    {props.thread.agent.instructionLineCount} instruction line
-                    {props.thread.agent.instructionLineCount === 1 ? "" : "s"}
+                    {formatAgentInstructionSummary(
+                      props.thread.agent.instructionLineCount
+                    )}
                   </p>
                 </div>
                 <button
@@ -974,6 +975,13 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
+}
+
+function formatAgentInstructionSummary(lineCount: number): string {
+  if (lineCount <= 0) {
+    return "No Agent instructions";
+  }
+  return `${lineCount} instruction line${lineCount === 1 ? "" : "s"}`;
 }
 
 function findSnapshotForWorktree(

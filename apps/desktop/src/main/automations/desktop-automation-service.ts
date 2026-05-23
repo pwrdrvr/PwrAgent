@@ -5,6 +5,7 @@ import type {
   AutomationIdRequest,
   AutomationMutationResponse,
   AutomationRunSummary,
+  AutomationRunStatus,
   AutomationRunOutputDecision,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
@@ -23,12 +24,15 @@ import type {
 import { validateAutomationScheduleDefinition } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
+import { getMainLogger } from "../log.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
 import { ShellAutomationGateRunner } from "./automation-gate-runner.js";
 import { HeadlessAutomationRunner } from "./automation-runner.js";
 import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
+
+const automationServiceLog = getMainLogger("pwragent:automations");
 
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
@@ -359,7 +363,15 @@ export class DesktopAutomationService {
       backend: event.backend,
       backendTurnId: turnId,
     });
-    if (!activeRun) return;
+    if (!activeRun) {
+      automationServiceLog.warn("terminal backend turn did not match a running automation", {
+        backend: event.backend,
+        method: event.notification.method,
+        threadId: event.notification.params.threadId,
+        turnId,
+      });
+      return;
+    }
 
     const finalText = finalTextFromTerminalTurnNotification(event.notification);
     const errorMessage = errorMessageFromTerminalTurnNotification(event.notification);
@@ -392,9 +404,29 @@ export class DesktopAutomationService {
     errorMessage?: string;
   }): Promise<void> {
     const run = this.options.store.getRun(params.runId);
-    if (!run) return;
+    if (!run) {
+      automationServiceLog.warn("automation run update skipped because run was missing", {
+        backend: params.backend,
+        runId: params.runId,
+        status: params.status,
+        threadId: params.threadId,
+      });
+      return;
+    }
     const automation = this.options.store.getAutomation(run.automationId, {
       includeDeleted: true,
+    });
+    automationServiceLog.info("publishing automation run update", {
+      automationId: run.automationId,
+      automationName: automation?.name,
+      backend: params.backend,
+      backendThreadId: run.backendThreadId,
+      backendTurnId: run.backendTurnId,
+      eventStatus: params.status,
+      finalTextLength: params.finalText?.length ?? 0,
+      runId: run.id,
+      runStatus: run.status,
+      threadId: automation?.threadId ?? params.threadId,
     });
     if (shouldRecordRunArtifact(params.status)) {
       const existingArtifact = this.options.store.getRunArtifact(run.id);
@@ -407,6 +439,7 @@ export class DesktopAutomationService {
         transcriptEvents: mergeTranscriptEvents(
           existingArtifact?.transcriptEvents ?? [],
           buildRunArtifactTranscript({
+            automation,
             run,
             finalText: params.finalText,
             errorMessage: params.errorMessage ?? run.errorMessage,
@@ -481,6 +514,15 @@ export class DesktopAutomationService {
       now: Date.now(),
     });
     if (!transcriptEvent) return;
+    automationServiceLog.info("captured automation run transcript event", {
+      backend: event.backend,
+      eventKind: transcriptEvent.kind,
+      method: event.notification.method,
+      runId: run.id,
+      textLength: transcriptEvent.text?.length ?? 0,
+      threadId: notificationThreadId(event.notification),
+      turnId,
+    });
     this.options.store.appendRunTranscriptEvent({
       runId: run.id,
       event: transcriptEvent,
@@ -570,7 +612,12 @@ function automationRunActivityAt(run: AutomationRunSummary): number | undefined 
 function shouldRecordRunArtifact(
   status: "queued" | "started" | "failed" | "cancelled" | "terminal",
 ): boolean {
-  return status === "terminal" || status === "failed" || status === "cancelled";
+  return (
+    status === "started" ||
+    status === "terminal" ||
+    status === "failed" ||
+    status === "cancelled"
+  );
 }
 
 type TerminalTurnNotification = Extract<
@@ -609,6 +656,7 @@ function errorMessageFromTerminalTurnNotification(
 }
 
 function buildRunArtifactTranscript(params: {
+  automation?: AutomationRecord;
   run: AutomationRunSummary;
   finalText?: string;
   errorMessage?: string;
@@ -619,7 +667,15 @@ function buildRunArtifactTranscript(params: {
       id: `${params.run.id}:invocation`,
       at: params.run.startedAt ?? params.run.queuedAt ?? at,
       kind: "invocation",
+      text: params.automation?.taskPrompt
+        ? `Submitted automation prompt:\n${params.automation.taskPrompt}`
+        : undefined,
       metadata: {
+        automationName: params.automation?.name,
+        backendThreadId: params.run.backendThreadId,
+        backendTurnId: params.run.backendTurnId,
+        backlogPolicy: params.automation?.backlogPolicy,
+        scheduleSummary: params.automation?.scheduleSummary,
         trigger: params.run.trigger,
         scheduledFor: params.run.scheduledFor,
         scheduledWindows: params.run.scheduledWindows,
@@ -642,16 +698,22 @@ function buildRunArtifactTranscript(params: {
       text: params.errorMessage,
     });
   }
-  events.push({
-    id: `${params.run.id}:terminal`,
-    at,
-    kind: "lifecycle",
-    metadata: {
-      status: params.run.status,
-      backendTurnId: params.run.backendTurnId,
-    },
-  });
+  if (isTerminalAutomationRunStatus(params.run.status)) {
+    events.push({
+      id: `${params.run.id}:terminal`,
+      at,
+      kind: "lifecycle",
+      metadata: {
+        status: params.run.status,
+        backendTurnId: params.run.backendTurnId,
+      },
+    });
+  }
   return events;
+}
+
+function isTerminalAutomationRunStatus(status: AutomationRunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function automationTranscriptEventFromBackendEvent(params: {
@@ -748,6 +810,11 @@ function turnIdFromAutomationNotification(
     turnId?: string | null;
   };
   return params.turnId ?? params.turn?.id ?? undefined;
+}
+
+function notificationThreadId(notification: AppServerNotification): string | undefined {
+  const threadId = (notification.params as { threadId?: unknown }).threadId;
+  return typeof threadId === "string" ? threadId : undefined;
 }
 
 type AutomationNotificationItem = {

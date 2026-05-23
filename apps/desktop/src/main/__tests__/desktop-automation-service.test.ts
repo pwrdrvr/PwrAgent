@@ -171,9 +171,68 @@ describe("DesktopAutomationService", () => {
         agentThreadId: "thread-1",
         automationName: "Check email",
         automationRunId: expect.any(String),
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("Check mail"),
+            type: "text",
+          }),
+        ]),
       }),
     );
     expect(registry.submitTurn).not.toHaveBeenCalled();
+  });
+
+  it("records the submitted automation prompt when a run starts", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather in Aberdeen, NJ 07747",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+    const runNow = await service.runNow({ automationId: created.automation.id });
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: runNow.queueEntryId ?? "headless:run-1",
+              origin: "automation",
+              status: "started",
+              automationRunId: runNow.run.id,
+              automationName: "Check weather",
+              backendThreadId: "headless-thread-1",
+              turnId: "turn-1",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(store.getRunArtifact(runNow.run.id)).toMatchObject({
+      transcriptEvents: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation",
+          text: expect.stringContaining("Check weather in Aberdeen, NJ 07747"),
+          metadata: expect.objectContaining({
+            automationName: "Check weather",
+            backendThreadId: "headless-thread-1",
+            backendTurnId: "turn-1",
+            scheduleSummary: "every 5 minutes",
+          }),
+        }),
+      ]),
+    });
   });
 
   it("lists an active run as the latest automation status", async () => {
