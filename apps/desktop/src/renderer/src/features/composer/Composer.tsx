@@ -3414,6 +3414,7 @@ export function Composer(props: ComposerProps) {
   const canHandoffThreadWorkspace = Boolean(
     props.thread &&
       threadWorkspace &&
+      isThreadWorkspaceHandoffEligible({ sourceBranch, threadWorkspace }) &&
       props.onHandoffThreadWorkspace &&
       props.thread.workspaceHandoff?.available !== false &&
       !sending &&
@@ -5459,15 +5460,22 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
     };
   }
 
-  if (thread.projectKey) {
-    return {
-      mode: "local",
-      repositoryPath: thread.projectKey,
-      sourcePath: thread.projectKey,
-    };
+  return undefined;
+}
+
+function isThreadWorkspaceHandoffEligible(params: {
+  sourceBranch?: string;
+  threadWorkspace?: ThreadWorkspace;
+}): boolean {
+  if (!params.threadWorkspace) {
+    return false;
   }
 
-  return undefined;
+  if (params.threadWorkspace.mode === "worktree") {
+    return true;
+  }
+
+  return Boolean(params.sourceBranch?.trim());
 }
 
 function buildHandoffBranchSuggestion(sourceBranch: string | undefined): string {

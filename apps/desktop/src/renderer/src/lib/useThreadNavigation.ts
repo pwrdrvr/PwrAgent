@@ -1278,16 +1278,17 @@ function buildOptimisticThreadFromLaunchpad(params: {
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
-    linkedDirectories: params.launchpad.directoryPath || params.launchpad.directoryKind === "workspace"
-      ? [
-          {
-            id: `launchpad:${params.launchpad.directoryKey}`,
-            label: params.launchpad.directoryLabel,
-            path: params.launchpad.directoryPath ?? "",
-            kind: params.workMode === "worktree" ? "worktree" : "local",
-          },
-        ]
-      : [],
+    linkedDirectories:
+      params.launchpad.directoryPath && params.launchpad.directoryKind !== "workspace"
+        ? [
+            {
+              id: `launchpad:${params.launchpad.directoryKey}`,
+              label: params.launchpad.directoryLabel,
+              path: params.launchpad.directoryPath,
+              kind: params.workMode === "worktree" ? "worktree" : "local",
+            },
+          ]
+        : [],
     gitBranch:
       params.workMode === "worktree"
         ? "HEAD"
