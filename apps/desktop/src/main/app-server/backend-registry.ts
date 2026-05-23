@@ -4533,14 +4533,14 @@ export class DesktopBackendRegistry {
     if (params.fromExecutionMode === params.toExecutionMode) {
       return;
     }
-    if (!params.client.sendControlPrompt) {
+    const client = params.client;
+    if (!client.sendControlPrompt) {
       throw new Error("Kimi ACP execution mode updates require control prompts");
     }
-    const sendControlPrompt = params.client.sendControlPrompt;
     const result = await this.acpSessionPromptLocks.run(
       executionModeQueueKey(params.backend, params.sessionId),
       async () =>
-        await sendControlPrompt({
+        await client.sendControlPrompt!({
           sessionId: params.sessionId,
           prompt: "/yolo",
         }),

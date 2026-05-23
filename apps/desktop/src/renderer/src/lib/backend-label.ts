@@ -14,5 +14,15 @@ export function formatBackendLabel(
   if (backend === "grok") {
     return "Grok";
   }
-  return backend.startsWith("acp:") ? backend.slice("acp:".length) : backend;
+  if (backend.startsWith("acp:")) {
+    const registryId = backend.slice("acp:".length);
+    if (registryId === "gemini") {
+      return "Gemini";
+    }
+    if (registryId === "kimi") {
+      return "Kimi";
+    }
+    return registryId;
+  }
+  return backend;
 }

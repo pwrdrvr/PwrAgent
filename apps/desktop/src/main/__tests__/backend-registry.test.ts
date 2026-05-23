@@ -1053,6 +1053,8 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
+  codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
+  gitDirectoryService?: unknown;
 }) {
   const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
   const sessions = options?.sessions ?? [];
@@ -1066,6 +1068,7 @@ function createKimiAcpRegistry(options?: {
     options?.startPrompt ??
     vi.fn(() => ({ sessionId, turnId: "turn-1" }));
   const acpClient = {
+    controlPromptReceiverMarker: true,
     initialize: vi.fn(async () => undefined),
     dispose: vi.fn(),
     startSession: vi.fn(async (params: {
@@ -1116,6 +1119,8 @@ function createKimiAcpRegistry(options?: {
     acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
     acpSessionStore: createAcpSessionStoreMock(sessions),
     createAcpClient: () => acpClient,
+    codexEnvironmentCommandRunner: options?.codexEnvironmentCommandRunner,
+    gitDirectoryService: options?.gitDirectoryService as never,
   });
   return {
     acpBackendId,
@@ -2432,6 +2437,123 @@ describe("DesktopBackendRegistry", () => {
     expect(sessions[0]?.executionMode).toBe("default");
 
     await registry.close();
+  });
+
+  it("keeps the ACP client receiver when sending Kimi /yolo prompts", async () => {
+    const sendControlPrompt = vi.fn(function (
+      this: { controlPromptReceiverMarker?: boolean } | undefined,
+    ) {
+      if (this?.controlPromptReceiverMarker !== true) {
+        throw new Error("lost ACP client receiver");
+      }
+      return Promise.resolve({
+        text: "You only live once! All actions will be auto-approved.",
+      });
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      sendControlPrompt,
+    });
+
+    await expect(
+      registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "full-access",
+      }),
+    ).resolves.toMatchObject({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "full-access",
+    });
+
+    expect(sendControlPrompt).toHaveBeenCalledWith({
+      sessionId: "kimi-session-1",
+      prompt: "/yolo",
+    });
+
+    await registry.close();
+  });
+
+  it("materializes Kimi worktree launchpads without running Codex environment setup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-kimi-launchpad-"));
+    const worktreePath = path.join(root, ".worktrees", "thread-1", "app");
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "Repo Environment"
+
+[setup]
+script = "echo setup"
+`,
+      "utf8",
+    );
+    const commandRunner = vi.fn(async () => ({ output: "setup", exitCode: 0 }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const { acpBackendId, registry, sendControlPrompt, sessions } =
+      createKimiAcpRegistry({
+        codexEnvironmentCommandRunner: commandRunner,
+        gitDirectoryService: {
+          prepareLaunchpadWorkspace: vi.fn(async () => ({
+            cwd: worktreePath,
+            repositoryPath: root,
+            workMode: "worktree" as const,
+          })),
+          recordCodexWorktreeOwnerThread,
+        },
+      });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        launchpad: {
+          directoryKey: `directory:${root}`,
+          directoryKind: "directory",
+          directoryLabel: "app",
+          directoryPath: root,
+          backend: acpBackendId,
+          executionMode: "full-access",
+          prompt: "",
+          workMode: "worktree",
+          model: "kimi-for-coding",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentSetupEnabled: true,
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response).toMatchObject({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        executionMode: "full-access",
+        workMode: "worktree",
+        linkedDirectory: {
+          id: root,
+          kind: "worktree",
+          label: "app",
+          path: root,
+          worktreePath,
+        },
+      });
+      expect(response.codexEnvironmentRuntime).toBeUndefined();
+      expect(response.codexEnvironmentStartupFailure).toBeUndefined();
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect(recordCodexWorktreeOwnerThread).not.toHaveBeenCalled();
+      expect(sendControlPrompt).toHaveBeenCalledWith({
+        sessionId: "kimi-session-1",
+        prompt: "/yolo",
+      });
+      expect(sessions[0]).toMatchObject({
+        cwd: worktreePath,
+        executionMode: "full-access",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps new Kimi sessions at default when startup /yolo fails", async () => {
