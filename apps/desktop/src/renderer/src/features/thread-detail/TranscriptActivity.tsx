@@ -118,6 +118,16 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                       </span>
                     </span>
                   ) : null}
+                  {detail.status ? (
+                    <span
+                      className={[
+                        "transcript-activity__detail-status",
+                        `transcript-activity__detail-status--${detail.status}`
+                      ].join(" ")}
+                    >
+                      {formatActivityDetailStatus(detail.status)}
+                    </span>
+                  ) : null}
                 </div>
                 {hasNestedDetails && isDetailExpanded ? (
                   <div id={nestedId} className="transcript-activity__detail-body">
@@ -132,4 +142,16 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
       ) : null}
     </aside>
   );
+}
+
+function formatActivityDetailStatus(
+  status: NonNullable<AppServerThreadActivityEntry["status"]>
+): string {
+  if (status === "in_progress") {
+    return "Running";
+  }
+  if (status === "completed") {
+    return "Done";
+  }
+  return status[0]?.toUpperCase() ? `${status[0].toUpperCase()}${status.slice(1)}` : status;
 }

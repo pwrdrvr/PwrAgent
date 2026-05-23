@@ -44,6 +44,12 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
 function normalizeTimestamp(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -307,6 +313,14 @@ function buildLiveToolLabel(
   status: AppServerThreadActivityDetail["status"],
   toolName: string
 ): string {
+  if (itemType === "collabagenttoolcall") {
+    return formatCollabAgentToolLabel({
+      receiverThreadIds: readStringArray(item.receiverThreadIds),
+      status,
+      tool: toolName,
+    });
+  }
+
   if (itemType === "commandexecution") {
     const command = readString(item, "command");
     return (
@@ -324,6 +338,122 @@ function buildLiveToolLabel(
   return formatLiveToolName(toolName, status);
 }
 
+function formatCollabAgentToolLabel(params: {
+  tool: string;
+  receiverThreadIds: string[];
+  status: AppServerThreadActivityDetail["status"];
+}): string {
+  const targetCount = params.receiverThreadIds.length;
+  const targetLabel =
+    targetCount === 1
+      ? `agent ${shortAgentId(params.receiverThreadIds[0] ?? "")}`
+      : targetCount > 1
+        ? `${targetCount} agents`
+        : "agent";
+  const failedPrefix = params.status === "failed" ? "Failed to " : "";
+
+  if (params.tool === "spawnAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}spawn ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Spawning" : "Spawned"} ${targetLabel}`;
+  }
+  if (params.tool === "wait") {
+    if (params.status === "failed") {
+      return `${failedPrefix}wait on ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Waiting on" : "Waited on"} ${targetLabel}`;
+  }
+  if (params.tool === "sendInput") {
+    if (params.status === "failed") {
+      return `${failedPrefix}send input to ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Sending input to" : "Sent input to"} ${targetLabel}`;
+  }
+  if (params.tool === "resumeAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}resume ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Resuming" : "Resumed"} ${targetLabel}`;
+  }
+  if (params.tool === "closeAgent") {
+    if (params.status === "failed") {
+      return `${failedPrefix}close ${targetLabel}`;
+    }
+    return `${params.status === "in_progress" ? "Closing" : "Closed"} ${targetLabel}`;
+  }
+  return `${failedPrefix}Used ${params.tool}`;
+}
+
+function buildCollabAgentCommandDetail(
+  item: Record<string, unknown>,
+  toolName: string,
+  receiverThreadIds: string[]
+): AppServerThreadCommandDetail {
+  const prompt = readString(item, "prompt");
+  const model = readString(item, "model");
+  const reasoningEffort =
+    readString(item, "reasoningEffort") ?? readString(item, "reasoning_effort");
+  const stateSummary = formatCollabAgentStates(readRecord(item.agentsStates));
+  const output = [
+    receiverThreadIds.length > 0 ? `Agents: ${receiverThreadIds.join(", ")}` : undefined,
+    model ? `Model: ${model}` : undefined,
+    reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
+    prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
+    stateSummary ? `Agent states:\n${stateSummary}` : undefined,
+  ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
+
+  return {
+    displayCommand:
+      receiverThreadIds.length > 0
+        ? `${toolName} ${receiverThreadIds.map(shortAgentId).join(", ")}`
+        : toolName,
+    rawCommand: toolName,
+    ...(output ? { output } : {}),
+  };
+}
+
+function formatCollabAgentStates(
+  states: Record<string, unknown> | undefined
+): string | undefined {
+  if (!states) {
+    return undefined;
+  }
+  const lines = Object.entries(states).flatMap(([agentId, value]) => {
+    const record = readRecord(value);
+    if (!record) {
+      return [];
+    }
+    const status = readString(record, "status") ?? "unknown";
+    const message = readString(record, "message");
+    const header = `${shortAgentId(agentId)}: ${status} (${agentId})`;
+    if (!message) {
+      return [header];
+    }
+    return [`${header}\nOutput:\n${indentCollabAgentMessage(message)}`];
+  });
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+function indentCollabAgentMessage(message: string): string {
+  return message
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim()
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function shortAgentId(agentId: string): string {
+  return agentId.length > 8 ? agentId.slice(0, 8) : agentId;
+}
+
+function truncateActivityText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
 export function buildLiveToolDetails(
   item: Record<string, unknown>
 ): AppServerThreadActivityDetail[] {
@@ -332,6 +462,7 @@ export function buildLiveToolDetails(
     itemType !== "dynamictoolcall" &&
     itemType !== "commandexecution" &&
     itemType !== "mcptoolcall" &&
+    itemType !== "collabagenttoolcall" &&
     itemType !== "websearch"
   ) {
     return [];
@@ -354,6 +485,8 @@ export function buildLiveToolDetails(
   const command = itemType === "commandexecution" ? readString(item, "command") : undefined;
   const commandDetail = itemType === "commandexecution"
     ? buildLiveCommandDetail(item, command, elapsedMs)
+    : itemType === "collabagenttoolcall"
+      ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
     : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {

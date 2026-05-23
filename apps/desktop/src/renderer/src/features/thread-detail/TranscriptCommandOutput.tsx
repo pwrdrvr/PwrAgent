@@ -19,11 +19,12 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
 
   const preview = buildOutputPreview(output, isExpanded);
   const statusText = formatCommandStatus(props.detail);
+  const sourceLabel = isAgentCommand(command.rawCommand) ? "Agent" : "Shell";
 
   return (
     <div className="transcript-command">
       <div className="transcript-command__meta">
-        <span className="transcript-command__source">Shell</span>
+        <span className="transcript-command__source">{sourceLabel}</span>
         {statusText ? (
           <span className="transcript-command__status">{statusText}</span>
         ) : null}
@@ -75,6 +76,14 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
       ) : null}
     </div>
   );
+}
+
+function isAgentCommand(rawCommand: string | undefined): boolean {
+  return rawCommand === "spawnAgent" ||
+    rawCommand === "wait" ||
+    rawCommand === "sendInput" ||
+    rawCommand === "resumeAgent" ||
+    rawCommand === "closeAgent";
 }
 
 function sanitizeCommandOutput(value: string | undefined): string {

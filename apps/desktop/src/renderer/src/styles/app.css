@@ -7341,6 +7341,29 @@ textarea,
   font-size: 12px;
 }
 
+.transcript-activity__detail-status {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.transcript-activity__detail-status--completed {
+  color: var(--success-text);
+}
+
+.transcript-activity__detail-status--failed {
+  color: var(--danger-text);
+}
+
+.transcript-activity__detail-status--in_progress {
+  color: var(--info-text);
+}
+
 .transcript-activity__detail-body {
   display: flex;
   flex-direction: column;

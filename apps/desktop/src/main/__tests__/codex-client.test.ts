@@ -3124,6 +3124,156 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("hydrates collaboration agent tool calls as transcript activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-collab-agents", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_763_500_260,
+            completedAt: 1_763_500_290,
+            items: [
+              {
+                type: "agentMessage",
+                id: "message-1",
+                content: [{ type: "text", text: "Review team:" }],
+              },
+              {
+                type: "collabAgentToolCall",
+                id: "collab-spawn-1",
+                tool: "spawnAgent",
+                status: "completed",
+                senderThreadId: "parent-thread",
+                receiverThreadIds: ["019e5630-b147-7980-9f33-3cd7997c235a"],
+                prompt: "You are the correctness reviewer.",
+                model: "gpt-5.4-mini",
+                reasoningEffort: "medium",
+                agentsStates: {
+                  "019e5630-b147-7980-9f33-3cd7997c235a": {
+                    status: "running",
+                    message: "Inspecting the diff.",
+                  },
+                },
+              },
+              {
+                type: "collabAgentToolCall",
+                id: "collab-spawn-2",
+                tool: "spawnAgent",
+                status: "failed",
+                senderThreadId: "parent-thread",
+                receiverThreadIds: [],
+                prompt: "You are the API contract reviewer.",
+                agentsStates: {},
+              },
+              {
+                type: "collabAgentToolCall",
+                id: "collab-wait-1",
+                tool: "wait",
+                status: "completed",
+                senderThreadId: "parent-thread",
+                receiverThreadIds: ["019e5630-b147-7980-9f33-3cd7997c235a"],
+                prompt: null,
+                agentsStates: {
+                  "019e5630-b147-7980-9f33-3cd7997c235a": {
+                    status: "completed",
+                    message: [
+                      "{\"reviewer\":\"correctness\",",
+                      "\"summary\":\"This is the returned review transcript that should not be collapsed before rendering.\",",
+                      "\"finding\":\"full transcript tail\"}",
+                    ].join("\n"),
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-collab-agents",
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "message-1",
+        role: "assistant",
+        text: "Review team:",
+        createdAt: 1_763_500_260_000,
+        parts: [{ type: "text", text: "Review team:" }],
+        turn: {
+          id: "turn-review",
+          status: "completed",
+          startedAt: 1_763_500_260_000,
+          completedAt: 1_763_500_290_000,
+        },
+      },
+      {
+        type: "activity",
+        id: "activity-collab-spawn-1",
+        summary: "Spawned 1 agent, Waited on 1 agent, 1 collaboration tool failed",
+        createdAt: 1_763_500_260_000,
+        status: "failed",
+        details: [
+          expect.objectContaining({
+            id: "collab-spawn-1",
+            kind: "command",
+            label: "Spawned agent 019e5630",
+            status: "completed",
+            command: expect.objectContaining({
+              displayCommand: "spawnAgent 019e5630",
+              output: expect.stringContaining("Prompt: You are the correctness reviewer."),
+            }),
+          }),
+          expect.objectContaining({
+            id: "collab-spawn-2",
+            kind: "command",
+            label: "Failed to spawn agent",
+            status: "failed",
+            command: expect.objectContaining({
+              displayCommand: "spawnAgent",
+              output: expect.stringContaining("Prompt: You are the API contract reviewer."),
+            }),
+          }),
+          expect.objectContaining({
+            id: "collab-wait-1",
+            kind: "command",
+            label: "Waited on agent 019e5630",
+            status: "completed",
+            command: expect.objectContaining({
+              displayCommand: "wait 019e5630",
+              output: expect.stringContaining("019e5630: completed"),
+            }),
+          }),
+        ],
+        turn: {
+          id: "turn-review",
+          status: "completed",
+          startedAt: 1_763_500_260_000,
+          completedAt: 1_763_500_290_000,
+        },
+      },
+    ]);
+    const activity = replay.entries[1];
+    expect(activity.type).toBe("activity");
+    if (activity.type === "activity") {
+      expect(activity.details[2]?.command?.output).toContain("full transcript tail");
+      expect(activity.details[2]?.command?.output).toContain(
+        "019e5630-b147-7980-9f33-3cd7997c235a"
+      );
+    }
+
+    await client.close();
+  });
+
   it("normalizes request_user_input requests from rpc envelope ids", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
