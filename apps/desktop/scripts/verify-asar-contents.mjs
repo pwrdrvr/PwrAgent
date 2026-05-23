@@ -12,7 +12,26 @@ const args = process.argv.slice(2);
 const appPath = args[0]
   ?? resolve("release-stage/dist/mac-universal/PwrAgent.app");
 
-const asarPath = resolve(appPath, "Contents/Resources/app.asar");
+function resolveAsarPath(path) {
+  const directAsarPath = resolve(path);
+  if (directAsarPath.endsWith(".asar") && existsSync(directAsarPath)) {
+    return directAsarPath;
+  }
+
+  const macAsarPath = resolve(path, "Contents/Resources/app.asar");
+  if (existsSync(macAsarPath)) {
+    return macAsarPath;
+  }
+
+  const linuxAsarPath = resolve(path, "resources/app.asar");
+  if (existsSync(linuxAsarPath)) {
+    return linuxAsarPath;
+  }
+
+  return macAsarPath;
+}
+
+const asarPath = resolveAsarPath(appPath);
 if (!existsSync(asarPath)) {
   console.error(`verify-asar-contents: app.asar not found at ${asarPath}`);
   process.exit(1);

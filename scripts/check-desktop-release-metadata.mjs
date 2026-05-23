@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
+const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml");
+const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
+const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
+const linuxDocsPath = resolve(repoRoot, "docs-site/linux.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
 
 function usage() {
@@ -67,6 +71,66 @@ try {
 const headingPattern = new RegExp(`^##\\s+v?${escapeRegex(expectedVersion)}(?:\\s|$)`, "m");
 if (!headingPattern.test(changelog)) {
   fail(`CHANGELOG.md must contain a second-level heading for ${tag}`);
+}
+
+const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
+const releaseScript = readFileSync(releaseScriptPath, "utf8");
+const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
+const linuxDocs = readFileSync(linuxDocsPath, "utf8");
+
+const desktopScripts = desktopPackage.scripts || {};
+if (desktopScripts["package:linux"] !== "node ./scripts/release.mjs --linux --no-publish") {
+  fail("apps/desktop/package.json must expose package:linux for local Linux package builds");
+}
+if (desktopScripts["release:linux"] !== "node ./scripts/release.mjs --linux") {
+  fail("apps/desktop/package.json must expose release:linux for local Linux package publishing");
+}
+
+for (const expected of [
+  "linux:",
+  "executableName: pwragent",
+  "target: deb",
+  "arch: [x64, arm64]",
+  "artifactName: \"${productName}-${version}-linux-${arch}.${ext}\"",
+  "private: false",
+]) {
+  if (!electronBuilderConfig.includes(expected)) {
+    fail(`apps/desktop/electron-builder.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const expected of [
+  "-linux-amd64.deb",
+  "PwrAgent-linux-x64.deb",
+  "PwrAgent-linux-arm64.deb",
+]) {
+  if (!releaseScript.includes(expected)) {
+    fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const expected of [
+  "ubuntu-24.04-arm",
+  "Package Linux DEB",
+  "Publish Linux DEB artifacts",
+  "PWRAGENT_LINUX_ARCH",
+  "SHA256SUMS",
+]) {
+  if (!releaseWorkflow.includes(expected)) {
+    fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const expected of [
+  "PwrAgent-linux-x64.deb",
+  "PwrAgent-linux-arm64.deb",
+  "sudo apt install",
+  "sudo apt remove pwragent",
+  "Codex CLI",
+]) {
+  if (!linuxDocs.includes(expected)) {
+    fail(`docs-site/linux.md must contain ${JSON.stringify(expected)}`);
+  }
 }
 
 if (process.exitCode) {

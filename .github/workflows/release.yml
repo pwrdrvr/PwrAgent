@@ -1,4 +1,4 @@
-name: Release Desktop (macOS universal)
+name: Release Desktop (macOS universal + Linux DEB)
 
 on:
   push:
@@ -155,4 +155,100 @@ jobs:
             apps/desktop/release-stage/dist/*.blockmap
             apps/desktop/release-stage/dist/latest-mac.yml
             apps/desktop/release-stage/dist/builder-debug.yml
+          retention-days: 30
+
+  linux-package:
+    name: Package Linux DEB (${{ matrix.deb_arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deb_arch: amd64
+            builder_arch: x64
+            runner: ubuntu-24.04
+          - deb_arch: arm64
+            builder_arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@7c109865ae9af59c6fcd2f2a0e8cc851f6ded26a # v1
+        with:
+          node-version: 24.x
+
+      - name: Check release metadata
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: pnpm release:check
+
+      - name: Package Linux DEB
+        env:
+          PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
+        run: node apps/desktop/scripts/release.mjs --linux --no-publish
+
+      - name: Upload Linux package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-deb-${{ matrix.deb_arch }}
+          path: apps/desktop/release-stage/dist/*.deb
+          retention-days: 7
+
+  linux-publish:
+    name: Publish Linux DEB artifacts
+    runs-on: ubuntu-24.04
+    needs:
+      - linux-package
+      - sign
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: none
+    steps:
+      - name: Download Linux package artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: linux-deb-*
+          path: linux-dist
+          merge-multiple: true
+
+      - name: Generate Linux checksums
+        run: |
+          set -euo pipefail
+          cd linux-dist
+          mapfile -t debs < <(find . -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort)
+          test "${#debs[@]}" -eq 4
+          sha256sum "${debs[@]}" > SHA256SUMS
+
+      - name: Publish Linux release assets
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd linux-dist
+          gh release upload "$RELEASE_TAG" \
+            *.deb \
+            SHA256SUMS \
+            --repo pwrdrvr/PwrAgent \
+            --clobber
+
+      - name: Upload Linux artifacts (debug retention)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: linux-release-artifacts
+          path: |
+            linux-dist/*.deb
+            linux-dist/SHA256SUMS
           retention-days: 30
