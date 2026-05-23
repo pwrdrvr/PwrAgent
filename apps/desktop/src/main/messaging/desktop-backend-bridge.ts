@@ -19,6 +19,8 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  SetAcpSessionRuntimeOptionRequest,
+  SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -181,6 +183,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
     return await this.registry.setThreadExecutionMode(request);
+  }
+
+  async setAcpSessionRuntimeOption(
+    request: SetAcpSessionRuntimeOptionRequest,
+  ): Promise<SetAcpSessionRuntimeOptionResponse> {
+    return await this.registry.setAcpSessionRuntimeOption(request);
   }
 
   async cancelThreadExecutionModeQueue(

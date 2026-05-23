@@ -1,6 +1,6 @@
 import type {
   AppServerBackendKind,
-  BackendAcpSessionRuntimeState,
+  BackendSummary,
   HandoffThreadWorkspaceRequest,
   MessagingToolUpdateMode,
   ThreadExecutionMode,
@@ -24,6 +24,10 @@ import {
   truncateActionsByPriority,
 } from "@pwragent/messaging-interface";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
+import {
+  buildMessagingAcpRuntimeModeSummary,
+  type MessagingAcpRuntimeModeChoice,
+} from "./messaging-acp-runtime.js";
 
 /**
  * Minimum action count for a usable status card. Below this, drop all
@@ -48,6 +52,7 @@ export const HANDOFF_BRANCH_PAGE_SIZE = BRANCH_PICKER_PAGE_SIZE;
 
 export function buildBindingStatusIntent(params: {
   allowFullAccessEscalation?: boolean;
+  backendSummary?: BackendSummary;
   binding: MessagingBindingRecord;
   capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
@@ -97,8 +102,17 @@ export function buildBindingStatusIntent(params: {
     params.streamingResponsesDefault,
   );
   const acpRuntimeLabel = isAcpBackendId(params.binding.backend)
-    ? formatAcpRuntimeLineLabel(params.threadState.acpRuntime)
+    ? buildMessagingAcpRuntimeModeSummary({
+        backend: params.backendSummary,
+        runtime: params.threadState.acpRuntime,
+      }).currentLabel
     : undefined;
+  const acpRuntimeChoices = isAcpBackendId(params.binding.backend)
+    ? buildMessagingAcpRuntimeModeSummary({
+        backend: params.backendSummary,
+        runtime: params.threadState.acpRuntime,
+      }).choices
+    : [];
 
   return {
     id: params.id,
@@ -125,7 +139,7 @@ export function buildBindingStatusIntent(params: {
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
       "Plan mode: unavailable",
       acpRuntimeLabel
-        ? `Runtime mode: ${acpRuntimeLabel} (desktop-only)`
+        ? `Runtime mode: ${acpRuntimeLabel}`
         : `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       `Streaming: ${streamingLabel}`,
@@ -146,6 +160,7 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
+      runtimeChoices: acpRuntimeChoices,
       supportsPermissionsAction: !acpRuntimeLabel,
       queuedExecutionMode,
       reasoning,
@@ -170,43 +185,13 @@ function mentionRequiredLine(
     ?? capabilityProfile.conversationInput.sharedConversationMentionInstruction;
 }
 
-function formatAcpRuntimeLineLabel(
-  runtime: BackendAcpSessionRuntimeState | undefined,
-): string {
-  const mode =
-    runtime?.currentModeId ??
-    (runtime?.configValues
-      ? Object.entries(runtime.configValues).find(([key]) =>
-          isAcpRuntimeModeConfigKey(key),
-        )?.[1]
-      : undefined);
-  return mode ? formatAcpRuntimeModeLabel(mode) : "Agent default";
-}
-
-function isAcpRuntimeModeConfigKey(key: string): boolean {
-  return key.trim().toLowerCase().endsWith("mode");
-}
-
-function formatAcpRuntimeModeLabel(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return value;
-  }
-  if (trimmed.toLowerCase() === "yolo") {
-    return "Yolo";
-  }
-  return trimmed
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
 function buildStatusActions(params: {
   allowFullAccessEscalation?: boolean;
   capabilityProfile?: MessagingCapabilityProfile;
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
+  runtimeChoices?: MessagingAcpRuntimeModeChoice[];
   supportsPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
@@ -235,6 +220,21 @@ function buildStatusActions(params: {
           priority: 7,
         }
       : undefined;
+  const runtimeAction:
+    | MessagingSurfaceAction
+    | undefined =
+    params.runtimeChoices && params.runtimeChoices.length > 0
+      ? {
+          id: "status:runtime-mode",
+          label: `Runtime: ${
+            params.runtimeChoices.find((choice) => choice.selected)?.label ??
+            "Agent default"
+          }`,
+          style: "secondary",
+          fallbackText: "runtime",
+          priority: 7,
+        }
+      : undefined;
   const allActions: MessagingSurfaceAction[] = [
     {
       id: "status:model",
@@ -258,6 +258,7 @@ function buildStatusActions(params: {
       priority: 6,
     },
     ...(permissionsAction ? [permissionsAction] : []),
+    ...(runtimeAction ? [runtimeAction] : []),
     ...(params.handoff
       ? [
           {
@@ -929,6 +930,52 @@ export function buildStatusReasoningPickerIntent(params: {
           priority: 10 + index,
           value: {
             reasoningEffort: effort,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusAcpRuntimeModePickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  choices: MessagingAcpRuntimeModeChoice[];
+  createdAt: number;
+  id: string;
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a runtime mode number, Refresh, or Detach.",
+    prompt: "Select Runtime Mode",
+    choices: applyActionCapabilityLimits(
+      [
+        ...params.choices.map((choice, index) => ({
+          id: "status:set-runtime-mode",
+          label: `${choice.label}${choice.selected ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            optionId: choice.optionId,
+            source: choice.source,
+            value: choice.value,
           },
         })),
         {
