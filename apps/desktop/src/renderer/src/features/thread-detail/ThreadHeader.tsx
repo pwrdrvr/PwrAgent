@@ -81,6 +81,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               props.backends?.find((backend) => backend.kind === props.thread.source),
             )}
           </span>
+          {props.thread.agent ? (
+            <span className="chip chip--mode" title={formatThreadAgentTitle(props.thread)}>
+              Agent: {props.thread.agent.name}
+            </span>
+          ) : null}
           {props.thread.automationSummary?.totalCount ? (
             <span
               className="thread-row__chip thread-row__chip--automation"
@@ -138,4 +143,17 @@ function formatThreadAutomationTitle(thread: NavigationThreadSummary): string {
     ? `, ${summary.coalescedWindowCount} coalesced`
     : "";
   return `${summary.enabledCount} enabled, ${summary.pausedCount} paused${coalesced}`;
+}
+
+function formatThreadAgentTitle(thread: NavigationThreadSummary): string {
+  const agent = thread.agent;
+  if (!agent) {
+    return "";
+  }
+  const guidance = agent.instructionsTooLong
+    ? `, instructions over ${agent.instructionLineCount} lines`
+    : `, ${agent.instructionLineCount} instruction line${
+        agent.instructionLineCount === 1 ? "" : "s"
+      }`;
+  return `${agent.name}${guidance}`;
 }

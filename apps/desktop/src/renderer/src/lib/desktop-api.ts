@@ -105,6 +105,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SteerTurnRequest,
@@ -430,6 +432,9 @@ export type DesktopApi = {
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;
+  setThreadAgent?: (
+    request: SetThreadAgentRequest
+  ) => Promise<SetThreadAgentResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;

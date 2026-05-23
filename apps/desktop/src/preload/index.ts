@@ -31,6 +31,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SteerTurnRequest,
@@ -265,6 +267,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -683,6 +686,10 @@ const desktopApi = Object.freeze({
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PIN_CHANNEL, request),
+  setThreadAgent: async (
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>

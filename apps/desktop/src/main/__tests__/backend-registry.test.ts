@@ -31,6 +31,7 @@ import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
+import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
@@ -187,6 +188,25 @@ function createOverlayStoreMock(params?: {
         ...overlays.get(key),
         ...settings,
         extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadAgent: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      agent: ThreadOverlayState["agent"] | null;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key) ?? {
+        backend: settings.backend,
+        threadId: settings.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        agent: settings.agent ?? undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -471,7 +491,7 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
-  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
+  } as unknown as OverlayStoreLike;
 }
 
 class MockBackendClient {

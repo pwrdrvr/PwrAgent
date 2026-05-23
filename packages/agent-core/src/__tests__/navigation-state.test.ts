@@ -116,3 +116,76 @@ describe("navigation automation summaries", () => {
     );
   });
 });
+
+describe("navigation Agent metadata", () => {
+  it("materializes Agent metadata from thread overlays", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          agent: {
+            name: "Inbox Triage",
+            instructions: "Keep updates concise.",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1_000,
+          },
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+
+    expect(thread?.agent).toEqual({
+      name: "Inbox Triage",
+      instructions: "Keep updates concise.",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+      updatedAt: 1_000,
+    });
+  });
+
+  it("includes Agent metadata in the navigation snapshot hash", () => {
+    const [threadWithoutAgent] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {},
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+    const [threadWithAgent] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          agent: {
+            name: "Inbox Triage",
+            instructionLineCount: 0,
+            instructionsTooLong: false,
+            updatedAt: 1_000,
+          },
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+
+    expect(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithoutAgent!],
+      }),
+    ).not.toBe(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithAgent!],
+      }),
+    );
+  });
+});

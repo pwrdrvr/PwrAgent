@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
@@ -158,7 +159,22 @@ function createOverlayStoreMock() {
       executionMode,
       extraLinkedDirectories: [],
     }),
-  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
+    setThreadAgent: async ({
+      backend,
+      threadId,
+      agent,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      agent: import("@pwragent/shared").ThreadOverlayState["agent"] | null;
+    }) => ({
+      backend,
+      threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+      agent: agent ?? undefined,
+    }),
+  } as unknown as OverlayStoreLike;
 }
 
 beforeEach(() => {

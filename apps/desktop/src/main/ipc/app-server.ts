@@ -47,6 +47,8 @@ import type {
   ReorderThreadPinsResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadReactionRequest,
@@ -88,6 +90,7 @@ import {
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1064,6 +1067,42 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> {
+    const backend = request.backend ?? "codex";
+
+    const overlay = await this.getOverlayStore().setThreadAgent({
+      backend,
+      threadId: request.threadId,
+      agent: request.agent,
+    });
+
+    logDebug("setThreadAgent", {
+      backend,
+      threadId: request.threadId,
+      agentName: overlay.agent?.name ?? null,
+      instructionLineCount: overlay.agent?.instructionLineCount ?? 0,
+      instructionsTooLong: overlay.agent?.instructionsTooLong ?? false,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: {
+          threadId: request.threadId,
+        },
+      },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      agent: overlay.agent,
+    };
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -1500,6 +1539,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadPin(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_AGENT_CHANNEL,
+    async (
+      _event,
+      request: SetThreadAgentRequest,
+    ): Promise<SetThreadAgentResponse> => {
+      return await appServerService.setThreadAgent(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -1626,6 +1675,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);

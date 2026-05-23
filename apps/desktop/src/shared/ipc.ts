@@ -48,6 +48,8 @@ export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
+export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
+  "navigation:set-thread-agent";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 /**

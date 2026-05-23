@@ -46,4 +46,25 @@ describe("ThreadHeader", () => {
 
     expect(onRevealSelectedThreadInList).toHaveBeenCalledOnce();
   });
+
+  it("shows the Agent marker when the selected thread has persona metadata", () => {
+    render(
+      <ThreadHeader
+        thread={{
+          ...thread,
+          agent: {
+            name: "Inbox Triage",
+            instructions: "Keep updates concise.",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1_000,
+          },
+        }}
+      />,
+    );
+
+    const chip = screen.getByText("Agent: Inbox Triage");
+    expect(chip).toHaveClass("chip--mode");
+    expect(chip).toHaveAttribute("title", "Inbox Triage, 1 instruction line");
+  });
 });

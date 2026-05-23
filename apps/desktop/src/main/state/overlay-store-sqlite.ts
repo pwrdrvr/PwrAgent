@@ -18,6 +18,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   buildThreadIdentityKey,
@@ -97,6 +98,7 @@ export class SqliteOverlayStore {
           reasoningEffort: current?.reasoningEffort ?? thread.reasoningEffort,
           serviceTier: current?.serviceTier ?? thread.serviceTier,
           fastMode: current?.fastMode ?? thread.fastMode,
+          agent: current?.agent,
           gitBranch: current?.gitBranch,
           observedGitBranch: current?.observedGitBranch,
           codexEnvironmentRuntime:
@@ -326,6 +328,27 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       pinnedRank: pinnedRank || undefined,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setThreadAgent(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    agent: { name: string; instructions?: string } | null;
+    now?: number;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -965,6 +988,26 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
   );
 }
 
+function normalizeThreadAgent(
+  input: { name: string; instructions?: string },
+  now = Date.now(),
+): NonNullable<ThreadOverlayState["agent"]> {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("Agent thread name is required.");
+  }
+  const instructions = input.instructions?.trim();
+  const instructionLineCount = instructions ? instructions.split(/\r?\n/).length : 0;
+  return {
+    name,
+    instructions: instructions || undefined,
+    instructionLineCount,
+    instructionsTooLong:
+      instructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+    updatedAt: now,
+  };
+}
+
 export type OverlayStoreLike = Pick<
   SqliteOverlayStore,
   | "reconcileNavigationSnapshot"
@@ -976,6 +1019,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayStates"
   | "setThreadReaction"
   | "setThreadPin"
+  | "setThreadAgent"
   | "reorderThreadPins"
   | "setDirectoryPin"
   | "reorderDirectoryPins"

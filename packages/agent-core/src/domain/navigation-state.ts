@@ -153,6 +153,7 @@ export function materializeNavigationThreads(params: {
 
     return {
       ...thread,
+      agent: overlay?.agent,
       gitBranch,
       observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
@@ -254,6 +255,15 @@ export function buildNavigationSnapshotHash(params: {
       id: thread.id,
       title: thread.title,
       titleSource: thread.titleSource,
+      agent: thread.agent
+        ? {
+            name: thread.agent.name,
+            instructions: thread.agent.instructions ?? null,
+            instructionLineCount: thread.agent.instructionLineCount,
+            instructionsTooLong: thread.agent.instructionsTooLong,
+            updatedAt: thread.agent.updatedAt,
+          }
+        : null,
       summary: thread.summary ?? null,
       projectKey: thread.projectKey ?? null,
       updatedAt: thread.updatedAt ?? null,

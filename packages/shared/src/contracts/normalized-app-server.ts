@@ -986,6 +986,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/agent/updated";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
       method: "navigation/threadDirectories/updated";
       params: {
         reason: "selected-thread" | "full-reconcile";
