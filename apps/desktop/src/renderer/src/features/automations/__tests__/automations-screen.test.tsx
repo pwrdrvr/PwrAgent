@@ -140,7 +140,14 @@ describe("AutomationsScreen", () => {
         finalText: "Bring an umbrella.",
         runId: "run-1",
         status: "completed",
-        transcriptEvents: [],
+        transcriptEvents: [
+          {
+            at: 1_000,
+            id: "run-1:assistant:progress",
+            kind: "assistant_final",
+            text: "Checking radar.",
+          },
+        ],
         updatedAt: 1_000,
       },
       rollout: {
@@ -190,6 +197,8 @@ describe("AutomationsScreen", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
 
     expect(await screen.findByText("Bring an umbrella.")).toBeInTheDocument();
+    expect(screen.getByText("Captured automation events")).toBeInTheDocument();
+    expect(screen.getByText("Checking radar.")).toBeInTheDocument();
     expect(screen.getByText("Scheduled windows covered")).toBeInTheDocument();
     expect(screen.getByText("Ephemeral rollout")).toBeInTheDocument();
     expect(screen.getByText("It will rain at 4 PM.")).toBeInTheDocument();

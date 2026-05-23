@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type {
   AppServerThreadEntry,
   AutomationDetail,
+  AutomationRunTranscriptEvent,
   AutomationRunRollout,
   AutomationRunStatus,
   AutomationRunWindow,
@@ -333,6 +334,7 @@ export function AutomationRunHistoryItem(props: {
           rollout={artifact.rollout}
           scheduledWindows={props.run.scheduledWindows}
           status={props.run.status}
+          transcriptEvents={artifact.artifact?.transcriptEvents ?? []}
         />
       ) : null}
     </li>
@@ -349,6 +351,7 @@ function AutomationRunArtifactDetails(props: {
   rollout?: AutomationRunRollout;
   scheduledWindows: AutomationRunWindow[];
   status: AutomationRunStatus;
+  transcriptEvents: AutomationRunTranscriptEvent[];
 }) {
   if (props.loading) {
     return <p className="automation-run-history__time">Loading details...</p>;
@@ -361,7 +364,14 @@ function AutomationRunArtifactDetails(props: {
     Boolean(props.rollout?.errorMessage) ||
     Boolean(props.backendThreadId);
   const hasScheduledWindows = props.scheduledWindows.length > 0;
-  if (!props.finalText && !props.outputDecision && !hasRollout && !hasScheduledWindows) {
+  const hasTranscriptEvents = props.transcriptEvents.length > 0;
+  if (
+    !props.finalText &&
+    !props.outputDecision &&
+    !hasRollout &&
+    !hasScheduledWindows &&
+    !hasTranscriptEvents
+  ) {
     return (
       <p className="automation-run-history__time">
         {props.status === "queued" || props.status === "pending"
@@ -378,6 +388,9 @@ function AutomationRunArtifactDetails(props: {
         </p>
       ) : null}
       {props.finalText ? <pre>{props.finalText}</pre> : null}
+      {hasTranscriptEvents ? (
+        <AutomationRunTranscriptEvents events={props.transcriptEvents} />
+      ) : null}
       {hasScheduledWindows ? (
         <div className="automation-run-history__section">
           <p className="automation-run-history__section-title">
@@ -399,6 +412,28 @@ function AutomationRunArtifactDetails(props: {
           rollout={props.rollout}
         />
       ) : null}
+    </div>
+  );
+}
+
+function AutomationRunTranscriptEvents(props: {
+  events: AutomationRunTranscriptEvent[];
+}) {
+  return (
+    <div className="automation-run-history__section">
+      <p className="automation-run-history__section-title">Captured automation events</p>
+      <ol className="automation-run-history__rollout">
+        {props.events.map((event) => (
+          <li className="automation-run-history__rollout-entry" key={event.id}>
+            <p className="automation-run-history__rollout-heading">
+              {formatAutomationTranscriptEventKind(event.kind)}
+              {" - "}
+              {formatAutomationTimestamp(event.at)}
+            </p>
+            {event.text ? <pre>{event.text}</pre> : null}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -504,6 +539,19 @@ function AutomationRunRolloutEntry(props: { entry: AppServerThreadEntry }) {
       <pre>{entry.displayText ?? entry.review}</pre>
     </li>
   );
+}
+
+function formatAutomationTranscriptEventKind(
+  kind: AutomationRunTranscriptEvent["kind"],
+): string {
+  switch (kind) {
+    case "assistant_final":
+      return "assistant";
+    case "invocation":
+      return "started";
+    default:
+      return kind;
+  }
 }
 
 function formatThreadAutomationSummary(thread: NavigationThreadSummary): string {

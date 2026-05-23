@@ -248,6 +248,25 @@ describe("DesktopAutomationService", () => {
         listener({
           backend: "codex",
           notification: {
+            method: "item/completed",
+            params: {
+              threadId: "headless-thread-1",
+              turnId: "turn-1",
+              item: {
+                id: "assistant-progress-1",
+                text: "Checking the inbox now.",
+                type: "agentMessage",
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
             method: "thread/turnQueue/updated",
             params: {
               threadId: "thread-1",
@@ -281,14 +300,18 @@ describe("DesktopAutomationService", () => {
       automationId: created.automation.id,
       status: "completed",
       finalText: "Inbox summary is ready.",
-      transcriptEvents: [
+      transcriptEvents: expect.arrayContaining([
         expect.objectContaining({ kind: "invocation" }),
+        expect.objectContaining({
+          kind: "assistant_final",
+          text: "Checking the inbox now.",
+        }),
         expect.objectContaining({
           kind: "assistant_final",
           text: "Inbox summary is ready.",
         }),
         expect.objectContaining({ kind: "lifecycle" }),
-      ],
+      ]),
     });
     expect(
       service.listCards({
@@ -316,14 +339,9 @@ describe("DesktopAutomationService", () => {
       rollout: {
         threadId: "headless-thread-1",
         turnId: "turn-1",
-        replay: {
-          entries: [
-            expect.objectContaining({ text: "Automation prompt" }),
-            expect.objectContaining({ text: "Rollout result" }),
-          ],
-        },
       },
     });
+    expect(registry.readThread).not.toHaveBeenCalled();
   });
 
   it("keeps quiet structured scheduled results out of timeline cards", async () => {

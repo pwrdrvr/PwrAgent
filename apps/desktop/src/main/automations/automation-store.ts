@@ -504,6 +504,29 @@ export class AutomationStore {
     return artifact;
   }
 
+  appendRunTranscriptEvent(params: {
+    runId: string;
+    event: AutomationRunTranscriptEvent;
+    now?: number;
+  }): AutomationRunArtifact | undefined {
+    const run = this.getRun(params.runId);
+    if (!run) return undefined;
+    const existing = this.getRunArtifact(params.runId);
+    const transcriptEvents = mergeTranscriptEvents(
+      existing?.transcriptEvents ?? [],
+      [params.event],
+    );
+    return this.upsertRunArtifact({
+      runId: params.runId,
+      status: run.status,
+      finalText: existing?.finalText,
+      errorMessage: existing?.errorMessage,
+      outputDecision: existing?.outputDecision,
+      transcriptEvents,
+      now: params.now,
+    });
+  }
+
   getRunArtifact(runId: string): AutomationRunArtifact | undefined {
     const row = this.getRunArtifactRow(runId);
     return row ? this.artifactFromRow(row) : undefined;
@@ -995,6 +1018,20 @@ function parseJson<T>(value: string): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+function mergeTranscriptEvents(
+  existing: AutomationRunTranscriptEvent[],
+  incoming: AutomationRunTranscriptEvent[],
+): AutomationRunTranscriptEvent[] {
+  const byId = new Map<string, AutomationRunTranscriptEvent>();
+  for (const event of existing) {
+    byId.set(event.id, event);
+  }
+  for (const event of incoming) {
+    byId.set(event.id, event);
+  }
+  return [...byId.values()].sort((left, right) => left.at - right.at);
 }
 
 function minDefined(left: number | undefined, right: number | undefined): number | undefined {

@@ -161,6 +161,7 @@ export class DesktopAutomationService {
     const automation = run
       ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
       : undefined;
+    const artifact = this.options.store.getRunArtifact(request.runId);
     const rollout =
       run?.backendThreadId && automation
         ? await this.readAutomationRunRollout({
@@ -169,7 +170,7 @@ export class DesktopAutomationService {
           })
         : undefined;
     return {
-      artifact: this.options.store.getRunArtifact(request.runId),
+      artifact,
       rollout,
     };
   }
@@ -311,6 +312,7 @@ export class DesktopAutomationService {
 
   private async handleRegistryEvent(event: AgentEvent): Promise<void> {
     if (event.notification.method !== "thread/turnQueue/updated") {
+      this.captureAutomationRunTranscriptEvent(event);
       if (isTerminalTurnNotification(event.notification)) {
         await this.handleBackendTerminalTurnEvent(event);
       }
@@ -395,17 +397,21 @@ export class DesktopAutomationService {
       includeDeleted: true,
     });
     if (shouldRecordRunArtifact(params.status)) {
+      const existingArtifact = this.options.store.getRunArtifact(run.id);
       this.options.store.upsertRunArtifact({
         runId: run.id,
         status: run.status,
         finalText: params.finalText,
         errorMessage: params.errorMessage ?? run.errorMessage,
         outputDecision: parseAutomationOutputDecision(params.finalText),
-        transcriptEvents: buildRunArtifactTranscript({
-          run,
-          finalText: params.finalText,
-          errorMessage: params.errorMessage ?? run.errorMessage,
-        }),
+        transcriptEvents: mergeTranscriptEvents(
+          existingArtifact?.transcriptEvents ?? [],
+          buildRunArtifactTranscript({
+            run,
+            finalText: params.finalText,
+            errorMessage: params.errorMessage ?? run.errorMessage,
+          }),
+        ),
       });
     }
     await this.options.registry.publishLocalEvent({
@@ -431,6 +437,13 @@ export class DesktopAutomationService {
   }): Promise<GetAutomationRunArtifactResponse["rollout"]> {
     const threadId = params.run.backendThreadId;
     if (!threadId) return undefined;
+    if (params.automation.backend === "codex") {
+      return {
+        backend: params.automation.backend,
+        threadId,
+        turnId: params.run.backendTurnId,
+      };
+    }
     try {
       const response = await this.options.registry.readThread({
         backend: params.automation.backend,
@@ -451,6 +464,28 @@ export class DesktopAutomationService {
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private captureAutomationRunTranscriptEvent(event: AgentEvent): void {
+    const turnId = turnIdFromAutomationNotification(event.notification);
+    if (!turnId) return;
+    const run = this.options.store.findRunningRunByBackendTurnId({
+      backend: event.backend,
+      backendTurnId: turnId,
+    });
+    if (!run) return;
+    const transcriptEvent = automationTranscriptEventFromBackendEvent({
+      event,
+      run,
+      turnId,
+      now: Date.now(),
+    });
+    if (!transcriptEvent) return;
+    this.options.store.appendRunTranscriptEvent({
+      runId: run.id,
+      event: transcriptEvent,
+      now: transcriptEvent.at,
+    });
   }
 
   private reconcileStartupRuns(): void {
@@ -617,6 +652,168 @@ function buildRunArtifactTranscript(params: {
     },
   });
   return events;
+}
+
+function automationTranscriptEventFromBackendEvent(params: {
+  event: AgentEvent;
+  run: AutomationRunSummary;
+  turnId: string;
+  now: number;
+}): AutomationRunTranscriptEvent | undefined {
+  const notification = params.event.notification;
+  if (notification.method === "item/agentMessage/delta") {
+    const deltaParams = notification.params as {
+      delta?: unknown;
+      itemId?: unknown;
+      phase?: unknown;
+    };
+    const delta = typeof deltaParams.delta === "string" ? deltaParams.delta.trim() : "";
+    if (!delta) return undefined;
+    return {
+      id: `${params.run.id}:delta:${String(deltaParams.itemId ?? "message")}`,
+      at: params.now,
+      kind: "lifecycle",
+      text: delta,
+      metadata: {
+        phase: deltaParams.phase,
+        source: "item/agentMessage/delta",
+        turnId: params.turnId,
+      },
+    };
+  }
+
+  if (notification.method === "item/completed") {
+    const completedParams = notification.params as { item?: unknown };
+    const item = asAutomationItem(completedParams.item);
+    if (!item) return undefined;
+    if (item.type === "agentMessage" && item.text?.trim()) {
+      return {
+        id: `${params.run.id}:assistant:${item.id}`,
+        at: params.now,
+        kind: "assistant_final",
+        text: item.text.trim(),
+        metadata: {
+          source: "item/completed",
+          turnId: params.turnId,
+        },
+      };
+    }
+
+    const toolSummary = automationToolSummary(item);
+    if (toolSummary) {
+      return {
+        id: `${params.run.id}:tool:${item.id}`,
+        at: params.now,
+        kind: "lifecycle",
+        text: toolSummary,
+        metadata: {
+          item,
+          source: "item/completed",
+          turnId: params.turnId,
+        },
+      };
+    }
+  }
+
+  if (notification.method === "turn/plan/updated") {
+    const planParams = notification.params as {
+      plan?: {
+        steps?: Array<{ status?: string; step?: string }>;
+      };
+    };
+    const markdown = (planParams.plan?.steps ?? [])
+      .map((step) => `${step.status}: ${step.step}`)
+      .join("\n");
+    if (!markdown.trim()) return undefined;
+    return {
+      id: `${params.run.id}:plan:${params.turnId}`,
+      at: params.now,
+      kind: "lifecycle",
+      text: markdown,
+      metadata: {
+        source: "turn/plan/updated",
+        turnId: params.turnId,
+      },
+    };
+  }
+
+  return undefined;
+}
+
+function turnIdFromAutomationNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  const params = notification.params as {
+    turn?: { id?: string | null };
+    turnId?: string | null;
+  };
+  return params.turnId ?? params.turn?.id ?? undefined;
+}
+
+type AutomationNotificationItem = {
+  id: string;
+  type: string;
+  text?: string;
+  command?: string;
+  success?: boolean;
+  toolName?: string;
+};
+
+function asAutomationItem(value: unknown): AutomationNotificationItem | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.type !== "string") {
+    return undefined;
+  }
+  return {
+    id: record.id,
+    type: record.type,
+    command: typeof record.command === "string" ? record.command : undefined,
+    success: typeof record.success === "boolean" ? record.success : undefined,
+    text: typeof record.text === "string" ? record.text : undefined,
+    toolName: typeof record.toolName === "string" ? record.toolName : undefined,
+  };
+}
+
+function automationToolSummary(
+  item: AutomationNotificationItem,
+): string | undefined {
+  const type = item.type.toLowerCase();
+  if (type === "agentmessage") return undefined;
+  if (item.command?.trim()) {
+    return `${item.success === false ? "Failed" : "Ran"}: ${item.command.trim()}`;
+  }
+  if (item.toolName?.trim()) {
+    return `${item.success === false ? "Failed" : "Used"} tool: ${item.toolName.trim()}`;
+  }
+  if (item.text?.trim()) {
+    return item.text.trim();
+  }
+  if (
+    type.includes("command") ||
+    type.includes("tool") ||
+    type.includes("search") ||
+    type.includes("file")
+  ) {
+    return `${item.success === false ? "Failed" : "Completed"} ${item.type}`;
+  }
+  return undefined;
+}
+
+function mergeTranscriptEvents(
+  existing: AutomationRunTranscriptEvent[],
+  incoming: AutomationRunTranscriptEvent[],
+): AutomationRunTranscriptEvent[] {
+  const byId = new Map<string, AutomationRunTranscriptEvent>();
+  for (const event of existing) {
+    byId.set(event.id, event);
+  }
+  for (const event of incoming) {
+    byId.set(event.id, event);
+  }
+  return [...byId.values()].sort((left, right) => left.at - right.at);
 }
 
 function buildAutomationTimelineCard(params: {
