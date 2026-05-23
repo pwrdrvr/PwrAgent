@@ -132,6 +132,54 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
+  it("sends control prompts without recording transcript updates", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const sessionUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ sessionId }) => {
+        sessionUpdates.push(sessionId);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      title: "Kimi ACP",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "/yolo",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: "You only live once! All actions will be auto-approved.",
+      },
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+    await controlPrompt;
+
+    expect(transport.requests.at(-1)).toEqual({
+      method: "session/prompt",
+      params: {
+        sessionId: "session-1",
+        prompt: [{ type: "text", text: "/yolo" }],
+      },
+    });
+    expect(client.readReplay("session-1").messages).toEqual([]);
+    expect(store.getSession("acp:kimi", "session-1")?.transcriptUpdates).toBeUndefined();
+    expect(sessionUpdates).toEqual([]);
+  });
+
   it("sends pasted images as ACP image content and persists structured transcript parts", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";
