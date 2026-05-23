@@ -21,8 +21,13 @@ export async function discoverLocalAcpAgents(options?: {
   probe?: LocalAcpAgentProbe;
   now?: () => number;
 }): Promise<AcpInstalledAgentRecord[]> {
-  const gemini = await discoverLocalGemini(options);
-  return gemini ? [gemini] : [];
+  const discovered = await Promise.all([
+    discoverLocalGemini(options),
+    discoverLocalKimi(options),
+  ]);
+  return discovered.filter((agent): agent is AcpInstalledAgentRecord =>
+    Boolean(agent)
+  );
 }
 
 async function discoverLocalGemini(options?: {
@@ -82,6 +87,63 @@ async function discoverLocalGemini(options?: {
   };
 }
 
+async function discoverLocalKimi(options?: {
+  probe?: LocalAcpAgentProbe;
+  now?: () => number;
+}): Promise<AcpInstalledAgentRecord | undefined> {
+  const probe = options?.probe ?? defaultProbe;
+  const [versionResult, acpHelpResult] = await Promise.all([
+    probeCommand(probe, "kimi", ["--version"]),
+    probeCommand(probe, "kimi", ["acp", "--help"]),
+  ]);
+  if (!versionResult || !acpHelpResult) {
+    return undefined;
+  }
+
+  const acpHelpText = resultText(acpHelpResult);
+  if (!/\bACP server\b/i.test(acpHelpText)) {
+    return undefined;
+  }
+
+  const now = options?.now?.() ?? Date.now();
+  const backendId = "acp:kimi" as AcpBackendId;
+  const version = parseCliVersion(resultText(versionResult));
+  return {
+    backendId,
+    registryId: "kimi",
+    name: "Kimi Code CLI",
+    version,
+    distributionKind: "local",
+    distributionSource: "kimi acp",
+    installStatus: "installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    allowlistRuleId: "local-kimi-cli",
+    installedAt: now,
+    updatedAt: now,
+    capabilities: acpAgentCapabilitiesForRegistryId("kimi"),
+    launchDescriptor: normalizeAcpLaunchDescriptor({
+      backendId,
+      registryId: "kimi",
+      distributionKind: "local",
+      command: "kimi",
+      args: ["acp"],
+      env: {},
+    }),
+    registryAgent: {
+      id: "kimi",
+      backendId,
+      name: "Kimi Code CLI",
+      version,
+      authors: ["Moonshot AI"],
+      distributions: [],
+      distributionKinds: ["local"],
+      auth: { required: false, methods: ["agent-managed"] },
+      raw: { source: "local-cli" },
+    },
+  };
+}
+
 async function defaultProbe(
   command: string,
   args: string[],
@@ -112,6 +174,10 @@ function resultText(result: LocalAcpProbeResult): string {
 }
 
 function parseGeminiVersion(output: string): string | undefined {
+  return parseCliVersion(output);
+}
+
+function parseCliVersion(output: string): string | undefined {
   const trimmed = output.trim();
   if (!trimmed) {
     return undefined;
