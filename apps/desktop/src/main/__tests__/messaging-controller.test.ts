@@ -2786,7 +2786,9 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
-      body: expect.stringContaining("Runtime mode: Yolo"),
+      body: expect.stringMatching(
+        /Permissions: Full[\s\S]*Runtime mode: Yolo|Runtime mode: Yolo[\s\S]*Permissions: Full/,
+      ),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Use yolo"));
@@ -2795,10 +2797,87 @@ describe("MessagingController", () => {
       directoryKey: expect.stringMatching(/^messaging:browse:/),
       launchpad: expect.objectContaining({
         backend: "acp:gemini",
+        executionMode: "full-access",
         acpRuntime: expect.objectContaining({
           currentModeId: "yolo",
         }),
       }),
+    });
+  });
+
+  it("uses inherited ACP runtime state when opening the new-thread picker", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      ...navigation.launchpadDefaults,
+      backend: "acp:gemini",
+      acpRuntime: {
+        currentModeId: "default",
+        updatedAt: 1000,
+      },
+    };
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      launchpad: {
+        directoryKey: "directory:pwragent",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo/pwragent",
+        backend: "acp:gemini",
+        executionMode: "full-access",
+        acpRuntime: {
+          currentModeId: "yolo",
+          updatedAt: 1000,
+        },
+        prompt: "",
+        workMode: "local",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildAcpRuntimeBackendSummary()],
+      }),
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Runtime mode: Yolo"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:runtime-mode" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Select runtime mode",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:set-runtime-mode",
+          label: "Yolo (current)",
+          value: {
+            optionId: "mode",
+            source: "mode",
+            value: "yolo",
+          },
+        }),
+      ]),
     });
   });
 

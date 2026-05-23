@@ -3180,6 +3180,7 @@ export class MessagingController {
         nextSession,
         event,
         nextSession.backend ?? navigation.launchpadDefaults.backend,
+        navigation,
       );
       return;
     }
@@ -4054,13 +4055,38 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
     backend: AppServerBackendKind,
+    navigation: NavigationSnapshot,
   ): Promise<void> {
     const summary = await this.getBackendSummary(backend);
+    if (!summary) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-runtime-unavailable"),
+          createdAt: this.now(),
+          title: "Runtime modes unavailable",
+          body: "This ACP backend did not report runtime mode choices.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const options = newThreadOptionsForSession(
+      session,
+      navigation,
+      directory,
+      this.streamingResponsesDefault,
+      summary,
+    );
     const runtimeMode = buildMessagingAcpRuntimeModeSummary({
       backend: summary,
-      runtime: session.preferences?.acpRuntime,
+      runtime: options.acpRuntime,
     });
-    if (!summary || runtimeMode.choices.length === 0) {
+    if (runtimeMode.choices.length === 0) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("new-thread-runtime-unavailable"),
@@ -4137,9 +4163,21 @@ export class MessagingController {
 
     const backend = session.backend ?? navigation.launchpadDefaults.backend;
     const summary = await this.getBackendSummary(backend);
-    const currentRuntime =
-      session.preferences?.acpRuntime ??
-      navigation.launchpadDefaults.acpRuntime;
+    if (!summary) {
+      await this.deliverInvalidBrowseSelection(event);
+      return;
+    }
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    const options = newThreadOptionsForSession(
+      session,
+      navigation,
+      directory,
+      this.streamingResponsesDefault,
+      summary,
+    );
+    const currentRuntime = options.acpRuntime;
     const currentRuntimeMode = buildMessagingAcpRuntimeModeSummary({
       backend: summary,
       runtime: currentRuntime,
@@ -4202,8 +4240,12 @@ export class MessagingController {
         : currentRuntime?.currentModeId,
       updatedAt: this.now(),
     };
+    const executionMode = messagingAcpRuntimeValueLooksPrivileged(selection.value)
+      ? "full-access"
+      : "default";
     await this.updateNewThreadStickySettings(session, {
       acpRuntime,
+      executionMode,
     });
     await this.presentNewThreadPromptGate(
       {
@@ -4211,6 +4253,8 @@ export class MessagingController {
         preferences: {
           ...session.preferences,
           acpRuntime,
+          executionMode,
+          permissionsMode: executionMode,
           updatedAt: this.now(),
         },
       },
@@ -9832,9 +9876,6 @@ function normalizeNewThreadSessionForBackend(
   const preferences = { ...session.preferences };
   if (isAcpBackendId(backend.kind)) {
     delete preferences.permissionsMode;
-    if (preferences.executionMode === "full-access") {
-      delete preferences.executionMode;
-    }
   } else {
     delete preferences.acpRuntime;
   }
