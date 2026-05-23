@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  AutomationDetail,
+  AutomationRunSummary,
+  GetAutomationRunArtifactResponse,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { AutomationsScreen } from "../AutomationsScreen";
 
@@ -38,6 +43,18 @@ const automation: AutomationDetail = {
   taskPrompt: "Check email.",
   threadId: "thread-1",
   updatedAt: 1,
+};
+
+const automationRun: AutomationRunSummary = {
+  automationId: "automation-1",
+  backendThreadId: "headless-thread-1",
+  backendTurnId: "turn-1",
+  completedAt: 1_000,
+  id: "run-1",
+  scheduledFor: 1_000,
+  scheduledWindows: [{ scheduledFor: 1_000 }, { scheduledFor: 2_000 }],
+  status: "completed",
+  trigger: "scheduled",
 };
 
 afterEach(() => {
@@ -113,5 +130,68 @@ describe("AutomationsScreen", () => {
         threadId: "thread-1",
       }),
     );
+  });
+
+  it("shows rollout replay details for an automation run", async () => {
+    const artifactResponse: GetAutomationRunArtifactResponse = {
+      artifact: {
+        automationId: "automation-1",
+        createdAt: 1_000,
+        finalText: "Bring an umbrella.",
+        runId: "run-1",
+        status: "completed",
+        transcriptEvents: [],
+        updatedAt: 1_000,
+      },
+      rollout: {
+        backend: "codex",
+        replay: {
+          entries: [
+            {
+              id: "rollout-user",
+              role: "user",
+              text: "Automation prompt",
+              type: "message",
+            },
+            {
+              id: "rollout-assistant",
+              phase: "final",
+              role: "assistant",
+              text: "It will rain at 4 PM.",
+              type: "message",
+            },
+          ],
+          messages: [],
+          pagination: {
+            hasPreviousPage: false,
+            supportsPagination: false,
+          },
+        },
+        threadId: "headless-thread-1",
+        turnId: "turn-1",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      getAutomationRunArtifact: vi.fn(async () => artifactResponse),
+      listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+      listAutomations: vi.fn(async () => ({ automations: [automation] })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    render(
+      <AutomationsScreen
+        desktopApi={desktopApi}
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "History" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Bring an umbrella.")).toBeInTheDocument();
+    expect(screen.getByText("Scheduled windows covered")).toBeInTheDocument();
+    expect(screen.getByText("Ephemeral rollout")).toBeInTheDocument();
+    expect(screen.getByText("It will rain at 4 PM.")).toBeInTheDocument();
   });
 });

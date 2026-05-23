@@ -105,7 +105,12 @@ export class DesktopAutomationService {
             return true;
           });
     return {
-      automations: automations.map(toAutomationDetail),
+      automations: automations.map((automation) =>
+        toAutomationDetail(
+          automation,
+          this.options.store.getLatestRunForAutomation(automation.id),
+        ),
+      ),
     };
   }
 
@@ -149,11 +154,23 @@ export class DesktopAutomationService {
     return { cards };
   }
 
-  getRunArtifact(
+  async getRunArtifact(
     request: GetAutomationRunArtifactRequest,
-  ): GetAutomationRunArtifactResponse {
+  ): Promise<GetAutomationRunArtifactResponse> {
+    const run = this.options.store.getRun(request.runId);
+    const automation = run
+      ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
+      : undefined;
+    const rollout =
+      run?.backendThreadId && automation
+        ? await this.readAutomationRunRollout({
+            automation,
+            run,
+          })
+        : undefined;
     return {
       artifact: this.options.store.getRunArtifact(request.runId),
+      rollout,
     };
   }
 
@@ -310,11 +327,13 @@ export class DesktopAutomationService {
       errorMessage?: string;
       finalText?: string;
       terminalStatus?: string;
+      backendThreadId?: string;
     };
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: params.automationRunId,
       status: params.status,
       terminalStatus: params.terminalStatus,
+      backendThreadId: params.backendThreadId,
       turnId: params.turnId,
       errorMessage: params.errorMessage,
     });
@@ -406,6 +425,34 @@ export class DesktopAutomationService {
     }
   }
 
+  private async readAutomationRunRollout(params: {
+    automation: AutomationRecord;
+    run: AutomationRunSummary;
+  }): Promise<GetAutomationRunArtifactResponse["rollout"]> {
+    const threadId = params.run.backendThreadId;
+    if (!threadId) return undefined;
+    try {
+      const response = await this.options.registry.readThread({
+        backend: params.automation.backend,
+        threadId,
+        limit: 200,
+      });
+      return {
+        backend: params.automation.backend,
+        threadId,
+        turnId: params.run.backendTurnId,
+        replay: response.replay,
+      };
+    } catch (error) {
+      return {
+        backend: params.automation.backend,
+        threadId,
+        turnId: params.run.backendTurnId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   private reconcileStartupRuns(): void {
     const now = Date.now();
     const nextRunAtByAutomationId = Object.fromEntries(
@@ -452,7 +499,15 @@ export class DesktopAutomationService {
   }
 }
 
-function toAutomationDetail(record: AutomationRecord): AutomationDetail {
+function toAutomationDetail(
+  record: AutomationRecord,
+  latestRun?: AutomationRunSummary,
+): AutomationDetail {
+  const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
+  const useLatestRun =
+    latestRun !== undefined &&
+    latestRunAt !== undefined &&
+    (record.lastRunAt === undefined || latestRunAt >= record.lastRunAt);
   return {
     id: record.id,
     backend: record.backend,
@@ -465,12 +520,16 @@ function toAutomationDetail(record: AutomationRecord): AutomationDetail {
     scheduleSummary: record.scheduleSummary,
     backlogPolicy: record.backlogPolicy,
     nextRunAt: record.nextRunAt,
-    lastRunAt: record.lastRunAt,
-    lastRunStatus: record.lastRunStatus,
+    lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
+    lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
     updatedAt: record.updatedAt,
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,
   };
+}
+
+function automationRunActivityAt(run: AutomationRunSummary): number | undefined {
+  return run.completedAt ?? run.startedAt ?? run.queuedAt ?? run.scheduledFor;
 }
 
 function shouldRecordRunArtifact(

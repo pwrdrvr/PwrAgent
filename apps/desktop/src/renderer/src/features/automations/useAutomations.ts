@@ -4,6 +4,7 @@ import type {
   AutomationDetail,
   AutomationIdRequest,
   AutomationRunArtifact,
+  AutomationRunRollout,
   AutomationRunSummary,
   CreateAutomationRequest,
   ListAutomationsRequest,
@@ -241,8 +242,10 @@ export function useAutomationRunArtifact(
   artifact?: AutomationRunArtifact;
   error?: string;
   loading: boolean;
+  rollout?: AutomationRunRollout;
 } {
   const [artifact, setArtifact] = useState<AutomationRunArtifact>();
+  const [rollout, setRollout] = useState<AutomationRunRollout>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -250,6 +253,7 @@ export function useAutomationRunArtifact(
     let cancelled = false;
     if (!runId || !desktopApi?.getAutomationRunArtifact) {
       setArtifact(undefined);
+      setRollout(undefined);
       setLoading(false);
       return;
     }
@@ -260,6 +264,7 @@ export function useAutomationRunArtifact(
       .then((response) => {
         if (!cancelled) {
           setArtifact(response.artifact);
+          setRollout(response.rollout);
         }
       })
       .catch((candidate) => {
@@ -277,7 +282,7 @@ export function useAutomationRunArtifact(
     };
   }, [desktopApi, runId]);
 
-  return { artifact, error, loading };
+  return { artifact, error, loading, rollout };
 }
 
 export function sameAutomationThread(

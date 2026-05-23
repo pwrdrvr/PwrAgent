@@ -150,6 +150,7 @@ type AutomationPayload = {
 
 type AutomationRunPayload = {
   scheduledWindows: AutomationRunWindow[];
+  backendThreadId?: string;
   errorMessage?: string;
 };
 
@@ -413,12 +414,14 @@ export class AutomationStore {
 
   markRunStarted(params: {
     runId: string;
+    backendThreadId?: string;
     backendTurnId: string;
     startedAt?: number;
     now?: number;
   }): AutomationRunSummary | undefined {
     return this.updateRun(params.runId, {
       status: "running",
+      backendThreadId: params.backendThreadId,
       backendTurnId: params.backendTurnId,
       startedAt: params.startedAt ?? params.now ?? Date.now(),
       now: params.now,
@@ -450,6 +453,15 @@ export class AutomationStore {
 
   getRun(runId: string): AutomationRunSummary | undefined {
     const row = this.getRunRow(runId);
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  getLatestRunForAutomation(automationId: string): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+      )
+      .get(automationId) as AutomationRunRow | undefined;
     return row ? this.runFromRow(row) : undefined;
   }
 
@@ -548,6 +560,11 @@ export class AutomationStore {
             updatedAt: now,
           },
         );
+        this.updateAutomationLastRun(run.automationId, {
+          lastRunAt: now,
+          lastRunStatus: "cancelled",
+          now,
+        });
       }
 
       for (const [automationId, nextRunAt] of Object.entries(
@@ -614,6 +631,7 @@ export class AutomationStore {
       queuedAt?: number;
       startedAt?: number;
       completedAt?: number;
+      backendThreadId?: string;
       backendTurnId?: string;
       queueEntryId?: string;
       errorMessage?: string;
@@ -631,6 +649,7 @@ export class AutomationStore {
       queuedAt: input.queuedAt ?? current.queuedAt,
       startedAt: input.startedAt ?? current.startedAt,
       completedAt: input.completedAt ?? current.completedAt,
+      backendThreadId: input.backendThreadId ?? current.backendThreadId,
       backendTurnId: input.backendTurnId ?? current.backendTurnId,
       errorMessage: input.errorMessage ?? current.errorMessage,
     };
@@ -757,6 +776,7 @@ export class AutomationStore {
   ): void {
     const payload: AutomationRunPayload = {
       scheduledWindows: run.scheduledWindows,
+      backendThreadId: run.backendThreadId,
       errorMessage: run.errorMessage,
     };
     this.stateDb.raw
@@ -887,6 +907,7 @@ export class AutomationStore {
       queueEntryId: row.queue_entry_id ?? undefined,
       startedAt: row.started_at ?? undefined,
       completedAt: row.completed_at ?? undefined,
+      backendThreadId: payload.backendThreadId,
       backendTurnId: row.backend_turn_id ?? undefined,
       errorMessage: payload.errorMessage,
     };

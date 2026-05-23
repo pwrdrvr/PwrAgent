@@ -261,10 +261,7 @@ function AutomationTableRow(props: {
           <span className={`automation-status automation-status--${props.automation.status}`}>
             {formatAutomationStatus(props.automation.status)}
           </span>
-          <p>
-            Last {props.automation.lastRunStatus ?? "none"}{" "}
-            {formatAutomationRelative(props.automation.lastRunAt)}
-          </p>
+          <p>{formatAutomationLatestRun(props.automation)}</p>
         </div>
         <div className="automations-table__actions" role="cell">
           <button
@@ -314,6 +311,23 @@ function formatAutomationAgentLabel(props: {
   thread?: NavigationThreadSummary;
 }): string {
   return props.thread?.agent?.name ?? props.thread?.title ?? props.automation.threadId;
+}
+
+function formatAutomationLatestRun(automation: AutomationDetail): string {
+  if (!automation.lastRunStatus) {
+    return "No runs yet";
+  }
+  const relative = formatAutomationRelative(automation.lastRunAt);
+  if (automation.lastRunStatus === "running") {
+    return `Running since ${relative}`;
+  }
+  if (automation.lastRunStatus === "queued") {
+    return `Queued ${relative}`;
+  }
+  if (automation.lastRunStatus === "pending") {
+    return `Pending ${relative}`;
+  }
+  return `Last ${automation.lastRunStatus} ${relative}`;
 }
 
 function AutomationTableHistory(props: {

@@ -89,6 +89,7 @@ export class AutomationScheduler {
     automationRunId?: string;
     status: "queued" | "started" | "failed" | "cancelled" | "terminal";
     terminalStatus?: string;
+    backendThreadId?: string;
     turnId?: string;
     errorMessage?: string;
     now?: number;
@@ -100,6 +101,7 @@ export class AutomationScheduler {
     if (params.status === "started" && params.turnId) {
       this.options.store.markRunStarted({
         runId: params.automationRunId,
+        backendThreadId: params.backendThreadId,
         backendTurnId: params.turnId,
         startedAt: now,
         now,
@@ -274,6 +276,7 @@ export class AutomationScheduler {
       } else {
         this.options.store.markRunStarted({
           runId: params.runId,
+          backendThreadId: result.backendThreadId,
           backendTurnId: result.turnId,
           startedAt: params.now,
           now: params.now,

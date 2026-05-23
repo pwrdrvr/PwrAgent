@@ -34,6 +34,32 @@ beforeEach(() => {
       turnId: "turn-1",
     })),
     updateQueuedTurnInput: vi.fn(),
+    readThread: vi.fn(async ({ threadId }: { threadId: string }) => ({
+      backend: "codex",
+      fetchedAt: 1_000,
+      threadId,
+      replay: {
+        entries: [
+          {
+            id: "rollout-user",
+            role: "user",
+            text: "Automation prompt",
+            type: "message",
+          },
+          {
+            id: "rollout-assistant",
+            role: "assistant",
+            text: "Rollout result",
+            type: "message",
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    })),
     startAutomationHeadlessTurn: vi.fn(async (params) => ({
       backend: params.backend,
       headlessThreadId: "headless-thread-1",
@@ -150,6 +176,33 @@ describe("DesktopAutomationService", () => {
     expect(registry.submitTurn).not.toHaveBeenCalled();
   });
 
+  it("lists an active run as the latest automation status", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+
+    const runNow = await service.runNow({ automationId: created.automation.id });
+
+    expect(runNow.run.status).toBe("running");
+    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
+      .toEqual([
+        expect.objectContaining({
+          id: created.automation.id,
+          lastRunAt: runNow.run.startedAt,
+          lastRunStatus: "running",
+        }),
+      ]);
+  });
+
   it("schedules from now when update enables a paused automation", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({
@@ -251,13 +304,23 @@ describe("DesktopAutomationService", () => {
         summary: "Check email: Inbox summary is ready.",
       }),
     ]);
-    expect(service.getRunArtifact({ runId: runNow.run.id })).toMatchObject({
+    await expect(service.getRunArtifact({ runId: runNow.run.id })).resolves.toMatchObject({
       artifact: {
         runId: runNow.run.id,
         finalText: "Inbox summary is ready.",
         outputDecision: {
           kind: "parse_failed",
           summary: "Inbox summary is ready.",
+        },
+      },
+      rollout: {
+        threadId: "headless-thread-1",
+        turnId: "turn-1",
+        replay: {
+          entries: [
+            expect.objectContaining({ text: "Automation prompt" }),
+            expect.objectContaining({ text: "Rollout result" }),
+          ],
         },
       },
     });
@@ -315,7 +378,7 @@ describe("DesktopAutomationService", () => {
       ),
     );
 
-    expect(service.getRunArtifact({ runId: "run-quiet" })).toMatchObject({
+    await expect(service.getRunArtifact({ runId: "run-quiet" })).resolves.toMatchObject({
       artifact: {
         outputDecision: {
           kind: "quiet",
@@ -400,6 +463,7 @@ describe("DesktopAutomationService", () => {
       backendTurnId: "turn-weather",
     });
     expect(store.getRun("run-weather-queued")).toMatchObject({
+      backendThreadId: "headless-thread-1",
       status: "running",
       backendTurnId: "turn-1",
     });

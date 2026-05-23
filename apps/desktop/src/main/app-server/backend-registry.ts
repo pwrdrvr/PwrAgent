@@ -2112,6 +2112,7 @@ export class DesktopBackendRegistry {
           automationRunId: params.automationRunId,
           automationName: params.automationName,
           status: "started",
+          backendThreadId: turn.threadId,
           turnId: turn.turnId,
         },
       },

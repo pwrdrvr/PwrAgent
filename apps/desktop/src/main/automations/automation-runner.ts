@@ -24,12 +24,16 @@ export type AutomationRunner = {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
-  }): Promise<ThreadTurnQueueSubmissionResult>;
+  }): Promise<AutomationRunSubmissionResult>;
   updateQueuedRunInput?(params: {
     automation: AutomationRecord;
     queueEntryId: string;
     run: AutomationRunSummary;
   }): void;
+};
+
+export type AutomationRunSubmissionResult = ThreadTurnQueueSubmissionResult & {
+  backendThreadId?: string;
 };
 
 export type HeadlessAutomationLauncher = {
@@ -40,6 +44,7 @@ export type HeadlessAutomationLauncher = {
     automationRunId: string;
     input: ThreadTurnQueueEntry["input"];
   }): Promise<{
+    headlessThreadId?: string;
     queueEntryId: string;
     threadId: string;
     turnId: string;
@@ -53,7 +58,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
-  }): Promise<ThreadTurnQueueSubmissionResult> {
+  }): Promise<AutomationRunSubmissionResult> {
     const input = buildAutomationTurnInput(params);
     const result = await this.launcher.startAutomationHeadlessTurn({
       backend: params.automation.backend,
@@ -64,6 +69,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
     });
     return {
       status: "started",
+      backendThreadId: result.headlessThreadId,
       entry: {
         id: result.queueEntryId,
         backend: params.automation.backend,
@@ -86,7 +92,7 @@ export class ThreadQueueAutomationRunner implements AutomationRunner {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
     run: AutomationRunSummary;
-  }): Promise<ThreadTurnQueueSubmissionResult> {
+  }): Promise<AutomationRunSubmissionResult> {
     return await this.queue.submit({
       backend: params.automation.backend,
       threadId: params.automation.threadId,

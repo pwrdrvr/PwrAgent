@@ -8352,6 +8352,58 @@ textarea,
   color: var(--danger-text);
 }
 
+.automation-run-history__artifact {
+  grid-column: 1 / -1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.automation-run-history__artifact pre {
+  max-height: 240px;
+  margin: 4px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font: 11px/1.45 var(--font-mono);
+}
+
+.automation-run-history__section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.automation-run-history__section-title,
+.automation-run-history__rollout-heading {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.automation-run-history__windows,
+.automation-run-history__rollout,
+.automation-run-history__rollout-details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.automation-run-history__rollout-entry {
+  min-width: 0;
+}
+
 .context-list__label,
 .context-list__meta {
   display: inline-flex;

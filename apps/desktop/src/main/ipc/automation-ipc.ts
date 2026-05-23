@@ -118,11 +118,11 @@ export function registerAutomationIpcHandlers(): void {
   ipcMain.removeHandler(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL);
   ipcMain.handle(
     AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL,
-    (
+    async (
       _event,
       request: GetAutomationRunArtifactRequest,
-    ): GetAutomationRunArtifactResponse =>
-      getDesktopAutomationService().getRunArtifact(request),
+    ): Promise<GetAutomationRunArtifactResponse> =>
+      await getDesktopAutomationService().getRunArtifact(request),
   );
 }
 

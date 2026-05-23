@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import type {
+  AppServerThreadEntry,
   AutomationDetail,
+  AutomationRunRollout,
+  AutomationRunStatus,
+  AutomationRunWindow,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -320,10 +324,15 @@ export function AutomationRunHistoryItem(props: {
       </button>
       {props.expanded ? (
         <AutomationRunArtifactDetails
+          backendThreadId={props.run.backendThreadId}
+          backendTurnId={props.run.backendTurnId}
           error={artifact.error}
           finalText={artifact.artifact?.finalText}
           loading={artifact.loading}
           outputDecision={artifact.artifact?.outputDecision?.kind}
+          rollout={artifact.rollout}
+          scheduledWindows={props.run.scheduledWindows}
+          status={props.run.status}
         />
       ) : null}
     </li>
@@ -331,10 +340,15 @@ export function AutomationRunHistoryItem(props: {
 }
 
 function AutomationRunArtifactDetails(props: {
+  backendThreadId?: string;
+  backendTurnId?: string;
   error?: string;
   finalText?: string;
   loading: boolean;
   outputDecision?: string;
+  rollout?: AutomationRunRollout;
+  scheduledWindows: AutomationRunWindow[];
+  status: AutomationRunStatus;
 }) {
   if (props.loading) {
     return <p className="automation-run-history__time">Loading details...</p>;
@@ -342,8 +356,19 @@ function AutomationRunArtifactDetails(props: {
   if (props.error) {
     return <p className="automation-run-history__error">{props.error}</p>;
   }
-  if (!props.finalText && !props.outputDecision) {
-    return <p className="automation-run-history__time">No artifact details stored.</p>;
+  const hasRollout =
+    Boolean(props.rollout?.replay?.entries.length) ||
+    Boolean(props.rollout?.errorMessage) ||
+    Boolean(props.backendThreadId);
+  const hasScheduledWindows = props.scheduledWindows.length > 0;
+  if (!props.finalText && !props.outputDecision && !hasRollout && !hasScheduledWindows) {
+    return (
+      <p className="automation-run-history__time">
+        {props.status === "queued" || props.status === "pending"
+          ? "Run is waiting in the automation queue. No rollout thread has started yet."
+          : "No artifact details stored."}
+      </p>
+    );
   }
   return (
     <div className="automation-run-history__artifact">
@@ -353,7 +378,131 @@ function AutomationRunArtifactDetails(props: {
         </p>
       ) : null}
       {props.finalText ? <pre>{props.finalText}</pre> : null}
+      {hasScheduledWindows ? (
+        <div className="automation-run-history__section">
+          <p className="automation-run-history__section-title">
+            Scheduled windows covered
+          </p>
+          <ul className="automation-run-history__windows">
+            {props.scheduledWindows.map((window) => (
+              <li key={window.scheduledFor}>
+                {formatAutomationTimestamp(window.scheduledFor)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {hasRollout ? (
+        <AutomationRunRolloutDetails
+          backendThreadId={props.backendThreadId}
+          backendTurnId={props.backendTurnId}
+          rollout={props.rollout}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function AutomationRunRolloutDetails(props: {
+  backendThreadId?: string;
+  backendTurnId?: string;
+  rollout?: AutomationRunRollout;
+}) {
+  const threadId = props.rollout?.threadId ?? props.backendThreadId;
+  const turnId = props.rollout?.turnId ?? props.backendTurnId;
+  const entries = props.rollout?.replay?.entries ?? [];
+  return (
+    <div className="automation-run-history__section">
+      <p className="automation-run-history__section-title">Ephemeral rollout</p>
+      {threadId ? (
+        <p className="automation-run-history__time">
+          Thread {threadId}
+          {turnId ? ` - turn ${turnId}` : ""}
+        </p>
+      ) : null}
+      {props.rollout?.errorMessage ? (
+        <p className="automation-run-history__error">{props.rollout.errorMessage}</p>
+      ) : null}
+      {entries.length > 0 ? (
+        <ol className="automation-run-history__rollout">
+          {entries.map((entry) => (
+            <AutomationRunRolloutEntry entry={entry} key={entry.id} />
+          ))}
+        </ol>
+      ) : props.rollout?.errorMessage ? null : (
+        <p className="automation-run-history__time">
+          No rollout entries were returned for this run.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AutomationRunRolloutEntry(props: { entry: AppServerThreadEntry }) {
+  const entry = props.entry;
+  if (entry.type === "message") {
+    return (
+      <li className="automation-run-history__rollout-entry">
+        <p className="automation-run-history__rollout-heading">
+          {entry.role}
+          {entry.phase ? ` - ${entry.phase}` : ""}
+        </p>
+        {entry.text ? <pre>{entry.text}</pre> : null}
+      </li>
+    );
+  }
+
+  if (entry.type === "activity") {
+    return (
+      <li className="automation-run-history__rollout-entry">
+        <p className="automation-run-history__rollout-heading">
+          {entry.summary}
+          {entry.status ? ` - ${entry.status}` : ""}
+        </p>
+        {entry.details.length > 0 ? (
+          <ul className="automation-run-history__rollout-details">
+            {entry.details.map((detail) => (
+              <li key={detail.id}>
+                <span>{detail.label}</span>
+                {detail.command?.displayCommand ? (
+                  <pre>{detail.command.displayCommand}</pre>
+                ) : null}
+                {detail.command?.output ? <pre>{detail.command.output}</pre> : null}
+                {detail.fileDiff?.diff ? <pre>{detail.fileDiff.diff}</pre> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </li>
+    );
+  }
+
+  if (entry.type === "plan") {
+    return (
+      <li className="automation-run-history__rollout-entry">
+        <p className="automation-run-history__rollout-heading">plan</p>
+        {entry.explanation ? <pre>{entry.explanation}</pre> : null}
+        {entry.markdown ? <pre>{entry.markdown}</pre> : null}
+        {entry.steps.length > 0 ? (
+          <ol className="automation-run-history__rollout-details">
+            {entry.steps.map((step) => (
+              <li key={`${step.status}:${step.step}`}>
+                {step.status}: {step.step}
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </li>
+    );
+  }
+
+  return (
+    <li className="automation-run-history__rollout-entry">
+      <p className="automation-run-history__rollout-heading">
+        review{entry.status ? ` - ${entry.status}` : ""}
+      </p>
+      <pre>{entry.displayText ?? entry.review}</pre>
+    </li>
   );
 }
 

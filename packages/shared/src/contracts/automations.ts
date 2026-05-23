@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadReplay,
   ThreadIdentifier,
 } from "./normalized-app-server";
 
@@ -166,6 +167,7 @@ export type AutomationRunSummary = {
   queueEntryId?: string;
   startedAt?: number;
   completedAt?: number;
+  backendThreadId?: string;
   backendTurnId?: string;
   errorMessage?: string;
 };
@@ -202,6 +204,12 @@ export type AutomationRunArtifact = {
   transcriptEvents: AutomationRunTranscriptEvent[];
   createdAt: number;
   updatedAt: number;
+};
+
+export type AutomationRunRollout = AutomationAgentAssignment & {
+  turnId?: string;
+  replay?: AppServerThreadReplay;
+  errorMessage?: string;
 };
 
 export type AutomationTimelineCard = AutomationAgentAssignment & {
@@ -277,6 +285,7 @@ export type GetAutomationRunArtifactRequest = {
 
 export type GetAutomationRunArtifactResponse = {
   artifact?: AutomationRunArtifact;
+  rollout?: AutomationRunRollout;
 };
 
 export type RunAutomationNowResponse = {
