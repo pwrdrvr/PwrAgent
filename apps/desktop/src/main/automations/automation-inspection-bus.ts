@@ -287,10 +287,13 @@ export class AutomationInspectionBus {
           details: details.value,
         }
       : undefined;
-    return {
+    const boundedArtifact = {
       ...params.artifact,
       finalText: finalText.value,
       outputDecision,
+    };
+    return {
+      ...boundedArtifact,
       transcriptEvents,
       transcriptEventsTruncated:
         params.artifact.transcriptEvents.length > transcriptEvents.length || undefined,
@@ -298,7 +301,7 @@ export class AutomationInspectionBus {
       detailsTextTruncated: details.truncated || undefined,
       card: buildAutomationTimelineCard({
         automation: params.automation,
-        artifact: params.artifact,
+        artifact: boundedArtifact,
         run: params.run,
       }),
     };

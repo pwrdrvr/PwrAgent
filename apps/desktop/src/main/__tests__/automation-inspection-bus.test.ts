@@ -146,6 +146,7 @@ describe("AutomationInspectionBus", () => {
           transcriptEvents: [{ id: "event-1" }],
           transcriptEventsTruncated: true,
           card: {
+            details: "yyyyy",
             summary: "Check weather: Long output",
           },
         },
