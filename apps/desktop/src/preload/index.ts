@@ -1,6 +1,8 @@
 import { clipboard, contextBridge, ipcRenderer } from "electron";
 import type {
   AgentEvent,
+  AutomationIdRequest,
+  AutomationMutationResponse,
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
@@ -13,6 +15,12 @@ import type {
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  ListAutomationCardsRequest,
+  ListAutomationCardsResponse,
+  ListAutomationRunsRequest,
+  ListAutomationRunsResponse,
+  ListAutomationsRequest,
+  ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -25,6 +33,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SteerTurnRequest,
@@ -33,6 +43,8 @@ import type {
   AppServerListSkillsResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
+  GetAutomationRunArtifactRequest,
+  GetAutomationRunArtifactResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
@@ -40,6 +52,7 @@ import type {
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CodexEnvironmentSetupProgressEvent,
+  CreateAutomationRequest,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -99,6 +112,7 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  RunAutomationNowResponse,
   StartReviewRequest,
   StartReviewResponse,
   StartThreadRequest,
@@ -111,6 +125,7 @@ import type {
   TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
+  UpdateAutomationRequest,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -192,6 +207,16 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  AUTOMATIONS_CREATE_CHANNEL,
+  AUTOMATIONS_DELETE_CHANNEL,
+  AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL,
+  AUTOMATIONS_LIST_CARDS_CHANNEL,
+  AUTOMATIONS_LIST_CHANNEL,
+  AUTOMATIONS_LIST_RUNS_CHANNEL,
+  AUTOMATIONS_PAUSE_CHANNEL,
+  AUTOMATIONS_RESUME_CHANNEL,
+  AUTOMATIONS_RUN_NOW_CHANNEL,
+  AUTOMATIONS_UPDATE_CHANNEL,
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
   APP_CHANGELOG_WINDOW_OPEN_CHANNEL,
   APP_LOG_ENTRY_EVENT_CHANNEL,
@@ -248,6 +273,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -372,6 +398,46 @@ const desktopApi = Object.freeze({
   },
   installAppUpdate: async (): Promise<AppUpdateInstallResult> =>
     await ipcRenderer.invoke(APP_UPDATE_INSTALL_CHANNEL),
+  listAutomations: async (
+    request?: ListAutomationsRequest,
+  ): Promise<ListAutomationsResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_LIST_CHANNEL, request),
+  createAutomation: async (
+    request: CreateAutomationRequest,
+  ): Promise<AutomationMutationResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_CREATE_CHANNEL, request),
+  updateAutomation: async (
+    request: UpdateAutomationRequest,
+  ): Promise<AutomationMutationResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_UPDATE_CHANNEL, request),
+  deleteAutomation: async (
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_DELETE_CHANNEL, request),
+  pauseAutomation: async (
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_PAUSE_CHANNEL, request),
+  resumeAutomation: async (
+    request: AutomationIdRequest,
+  ): Promise<AutomationMutationResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_RESUME_CHANNEL, request),
+  runAutomationNow: async (
+    request: AutomationIdRequest,
+  ): Promise<RunAutomationNowResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_RUN_NOW_CHANNEL, request),
+  listAutomationRuns: async (
+    request: ListAutomationRunsRequest,
+  ): Promise<ListAutomationRunsResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_LIST_RUNS_CHANNEL, request),
+  listAutomationCards: async (
+    request: ListAutomationCardsRequest,
+  ): Promise<ListAutomationCardsResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_LIST_CARDS_CHANNEL, request),
+  getAutomationRunArtifact: async (
+    request: GetAutomationRunArtifactRequest,
+  ): Promise<GetAutomationRunArtifactResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL, request),
   listPwrAgentProfiles: async (): Promise<ListDesktopPwrAgentProfilesResponse> =>
     await ipcRenderer.invoke(PROFILES_LIST_CHANNEL),
   openPwrAgentProfile: async (
@@ -634,6 +700,10 @@ const desktopApi = Object.freeze({
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PIN_CHANNEL, request),
+  setThreadAgent: async (
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>

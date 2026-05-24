@@ -63,6 +63,8 @@ export type StartTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
+  queueStatus?: "started" | "queued";
+  queueEntryId?: string;
 };
 
 export type StartReviewRequest = {

@@ -750,6 +750,122 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  it("renders completed assistant message items without waiting for a transcript reread", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: AppServerBackendKind;
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-message-1`,
+              role: "user" as const,
+              text: "Automation run metadata...",
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-message-1`,
+              role: "user" as const,
+              text: "Automation run metadata...",
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "assistant-message-1",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "The automation result is ready.",
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual([
+      "user:Automation run metadata...",
+      "assistant:The automation result is ready.",
+    ]);
+    expect(
+      result.current.entries.find(
+        (entry) => entry.type === "message" && entry.role === "assistant"
+      )
+    ).toMatchObject({
+      id: "assistant-message-1",
+      phase: "final",
+      turn: { id: "turn-1", status: "in_progress" },
+    });
+    expect(readThread).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps live read activity in receipt order between assistant messages", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

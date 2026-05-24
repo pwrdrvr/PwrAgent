@@ -81,6 +81,7 @@ import {
   type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
   type ThreadPermissionTransitionStatus,
+  type ThreadAgentMetadata,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -91,6 +92,7 @@ import {
   type TrustCodexProjectRequest,
   type TrustCodexProjectResponse,
   type ThreadExecutionMode,
+  type ThreadIdentifier,
   type ThreadOverlayState,
   type WorktreeSnapshotSummary,
   type UpdateDirectoryLaunchpadRequest,
@@ -162,6 +164,13 @@ import {
   type CodexEnvironmentDetachedOutput,
   type CodexEnvironmentSelection,
 } from "./codex-environment-runtime";
+import {
+  ThreadTurnQueue,
+  type ThreadTurnQueueEntry,
+  type ThreadTurnQueueLifecycleEvent,
+  type ThreadTurnQueueOrigin,
+  type ThreadTurnQueueSubmissionResult,
+} from "./thread-turn-queue";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 
 type InitializeResult = {
@@ -272,6 +281,7 @@ type BackendClient = {
   }): Promise<AppServerReadThreadResponse["replay"]>;
   startThread(params: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -665,6 +675,12 @@ type PendingServerRequest = {
   reject: (error: Error) => void;
 };
 
+type AutomationTurnContextProvider = (params: {
+  backend: AppServerBackendKind;
+  origin?: ThreadTurnQueueOrigin;
+  threadId: ThreadIdentifier;
+}) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>;
+
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
 
 type ThreadTitleGenerationLogStatus =
@@ -912,11 +928,94 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function buildHeadlessAutomationTurnKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId: string,
+): string {
+  return `${backend}:${threadId}:${turnId}`;
+}
+
 function buildTurnStartReservationKey(
   backend: AppServerBackendKind,
   threadId: string,
 ): string {
   return `${backend}\u0000${threadId}`;
+}
+
+function prependAutomationRuntimeContext(params: {
+  approvalPolicy: string;
+  executionMode: ThreadExecutionMode;
+  input: AppServerTurnInputItem[];
+  label: string;
+  sandbox: string;
+}): AppServerTurnInputItem[] {
+  const accessNote =
+    params.sandbox === "danger-full-access"
+      ? "Shell commands may run with Full Access. Permission prompts are unavailable; do not ask the user for approval."
+      : "Shell commands run in the Default Access workspace-write sandbox. Shell network access is unavailable, and permission prompts are unavailable; do not ask the user for approval or wait for one. Use built-in hosted tools such as web search when available, or return a concise failure explaining that the automation needs Full Access.";
+
+  return [
+    {
+      type: "text",
+      text: [
+        "Automation runtime context:",
+        `Access mode: ${params.label} (${params.executionMode}).`,
+        `Approval policy: ${params.approvalPolicy}.`,
+        `Sandbox: ${params.sandbox}.`,
+        accessNote,
+      ].join("\n"),
+    },
+    ...params.input,
+  ];
+}
+
+function buildHeadlessAutomationRequestCancelResponse(
+  request: AppServerPendingRequestNotification,
+): Record<string, unknown> {
+  if (request.method === "mcpServer/elicitation/request") {
+    return {
+      action: "cancel",
+      content: null,
+      _meta: null,
+    };
+  }
+
+  if (request.method === "item/tool/requestUserInput") {
+    return {
+      answers: {},
+    };
+  }
+
+  return { decision: "cancel" };
+}
+
+function formatAutomationContextForTurnInput(
+  context: AppServerTurnInputItem[],
+): AppServerTurnInputItem[] {
+  const textParts = context
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+      item.type === "text",
+    )
+    .map((item) => item.text.trim())
+    .filter(Boolean);
+  const nonTextParts = context.filter((item) => item.type !== "text");
+  if (textParts.length === 0) {
+    return context;
+  }
+
+  return [
+    {
+      type: "text",
+      text: [
+        "## Automation Context",
+        ...textParts,
+        "## User Message",
+        "",
+      ].join("\n\n"),
+    },
+    ...nonTextParts,
+  ];
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -953,14 +1052,46 @@ function turnIdFromStartedNotification(
 function turnIdFromTerminalNotification(
   notification: {
     params: {
-      turnId?: string;
+      turnId?: string | null;
       turn?: {
-        id?: string;
+        id?: string | null;
       };
     };
   },
 ): string | undefined {
-  return notification.params.turnId ?? notification.params.turn?.id;
+  return notification.params.turnId ?? notification.params.turn?.id ?? undefined;
+}
+
+function finalTextFromTerminalNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  if (notification.method !== "turn/completed") {
+    return undefined;
+  }
+  const completed = notification as Extract<
+    AppServerNotification,
+    { method: "turn/completed" }
+  >;
+  const text = completed.params.turn.output
+    .filter((item) => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function errorMessageFromTerminalNotification(
+  notification: AppServerNotification,
+): string | undefined {
+  if (notification.method !== "turn/failed") {
+    return undefined;
+  }
+  const failed = notification as Extract<
+    AppServerNotification,
+    { method: "turn/failed" }
+  >;
+  return failed.params.turn.error.message;
 }
 
 function logBackendLifecycleNotification(
@@ -1610,6 +1741,18 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  private readonly threadTurnQueue: ThreadTurnQueue;
+  private automationTurnContextProvider?: AutomationTurnContextProvider;
+  private readonly headlessAutomationTurns = new Map<
+    string,
+    {
+      agentThreadId: string;
+      automationName?: string;
+      automationRunId: string;
+      executionMode: ThreadExecutionMode;
+      queueEntryId: string;
+    }
+  >();
   /**
    * In-memory queue of pending permission-mode changes, keyed by
    * threadId. Populated when a user toggles execution mode while a turn
@@ -1837,6 +1980,12 @@ export class DesktopBackendRegistry {
       codex: this.codexClient,
       grok: this.grokClient,
     });
+    this.threadTurnQueue = new ThreadTurnQueue({
+      startTurn: async (entry) => await this.startTurnNow(entry),
+      isThreadActive: ({ backend, threadId }) =>
+        backend === "codex" ? this.threadHasActiveTurn(threadId) : false,
+      onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
+    });
 
     this.isCodexBootstrapDeferredFn =
       options?.isCodexBootstrapDeferred ??
@@ -2000,8 +2149,188 @@ export class DesktopBackendRegistry {
     this.messagingArchiveCleaner = cleaner;
   }
 
+  setAutomationTurnContextProvider(
+    provider: AutomationTurnContextProvider | null | undefined,
+  ): void {
+    this.automationTurnContextProvider = provider ?? undefined;
+  }
+
   async publishLocalEvent(event: AgentEvent): Promise<void> {
     await this.emit(event);
+  }
+
+  async startAutomationHeadlessTurn(params: {
+    backend: AppServerBackendKind;
+    agentThreadId: string;
+    automationName?: string;
+    automationRunId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<{
+    backend: AppServerBackendKind;
+    headlessThreadId: string;
+    queueEntryId: string;
+    threadId: string;
+    turnId: string;
+  }> {
+    this.assertNotBootstrap("startAutomationHeadlessTurn");
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.agentThreadId,
+    });
+    const executionMode = overlay?.executionMode ?? "default";
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const approvalPolicy = "never";
+    const sandbox = modeSettings.sandbox;
+    const modelSettings = await this.resolveModelSettings(params.backend, {
+      model: overlay?.model,
+      serviceTier: overlay?.serviceTier,
+      reasoningEffort: overlay?.reasoningEffort,
+      fastMode: params.backend === "codex" ? overlay?.fastMode : undefined,
+    });
+    const cwd =
+      params.backend === "codex"
+        ? await this.resolveCodexThreadTurnCwd(params.agentThreadId, overlay)
+        : undefined;
+    const input = prependAutomationRuntimeContext({
+      approvalPolicy,
+      executionMode,
+      input: params.input,
+      label: modeSettings.label,
+      sandbox,
+    });
+    const client = this.getClient(params.backend, executionMode);
+    const submittedPrompt = extractFirstMeaningfulTextInput(params.input);
+    backendRegistryLog.info("starting automation headless thread", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      approvalPolicy,
+      backend: params.backend,
+      cwd,
+      executionMode,
+      ephemeral: params.backend === "codex",
+      inputItemCount: input.length,
+      promptLength: submittedPrompt?.length ?? 0,
+      sandbox,
+    });
+    const headlessThread = await client.startThread({
+      ...(cwd ? { cwd } : {}),
+      ...modelSettings,
+      approvalPolicy,
+      ephemeral: params.backend === "codex" ? true : undefined,
+      sandbox,
+    });
+    backendRegistryLog.info("automation headless thread created", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      backend: params.backend,
+      executionMode,
+      headlessThreadId: headlessThread.threadId,
+    });
+    const turn = await client.startTurn({
+      threadId: headlessThread.threadId,
+      input,
+      ...(cwd ? { cwd } : {}),
+      ...modelSettings,
+      approvalPolicy,
+      sandbox,
+    });
+    const queueEntryId = `headless:${params.automationRunId}`;
+    backendRegistryLog.info("automation headless turn started", {
+      agentThreadId: params.agentThreadId,
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      approvalPolicy,
+      backend: params.backend,
+      executionMode,
+      headlessThreadId: turn.threadId,
+      queueEntryId,
+      sandbox,
+      turnId: turn.turnId,
+    });
+    this.headlessAutomationTurns.set(
+      buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
+      {
+        agentThreadId: params.agentThreadId,
+        automationName: params.automationName,
+        automationRunId: params.automationRunId,
+        executionMode,
+        queueEntryId,
+      },
+    );
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: params.agentThreadId,
+          queueEntryId,
+          origin: "automation",
+          automationRunId: params.automationRunId,
+          automationName: params.automationName,
+          status: "started",
+          backendThreadId: turn.threadId,
+          turnId: turn.turnId,
+        },
+      },
+    });
+    return {
+      backend: params.backend,
+      headlessThreadId: turn.threadId,
+      queueEntryId,
+      threadId: params.agentThreadId,
+      turnId: turn.turnId,
+    };
+  }
+
+  private async emitTurnQueueLifecycle(
+    event: ThreadTurnQueueLifecycleEvent,
+  ): Promise<void> {
+    const baseParams = {
+      threadId: event.entry.threadId,
+      queueEntryId: event.entry.id,
+      origin: event.entry.origin,
+      automationRunId: event.entry.automationRunId,
+      automationName: event.entry.automationName,
+    };
+
+    await this.emit({
+      backend: event.entry.backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params:
+          event.type === "queued"
+            ? {
+                ...baseParams,
+                status: "queued",
+                position: event.position,
+              }
+            : event.type === "started"
+              ? {
+                  ...baseParams,
+                  status: "started",
+                  turnId: event.turnId,
+                }
+              : event.type === "failed"
+                ? {
+                    ...baseParams,
+                    status: "failed",
+                    errorMessage: event.error.message,
+                  }
+                : event.type === "cancelled"
+                  ? {
+                      ...baseParams,
+                      status: "cancelled",
+                    }
+                  : {
+                      ...baseParams,
+                      status: "terminal",
+                      turnId: event.turnId,
+                      terminalStatus: event.status,
+                    },
+      },
+    });
   }
 
   getLatestCodexConfigWarning(): LatestCodexConfigWarningResponse {
@@ -2154,6 +2483,14 @@ export class DesktopBackendRegistry {
       });
     this.threadListCache.set(cacheKey, { promise });
     return await promise;
+  }
+
+  async getThreadAgentMetadata(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAgentMetadata | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return overlay?.agent;
   }
 
   private async readThreadList(params: {
@@ -3543,10 +3880,67 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async submitTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    automationRunId?: string;
+  }): Promise<ThreadTurnQueueSubmissionResult> {
+    const { origin = "manual", ...entry } = params;
+    return await this.threadTurnQueue.submit({
+      ...entry,
+      origin,
+    });
+  }
+
+  cancelQueuedTurn(entryId: string, reason?: string): void {
+    this.threadTurnQueue.cancelEntry(entryId, reason);
+  }
+
+  updateQueuedTurnInput(
+    entryId: string,
+    input: AppServerTurnInputItem[],
+  ): void {
+    this.threadTurnQueue.updateQueuedEntryInput(entryId, input);
+  }
+
+  canStartThreadTurnImmediately(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): boolean {
+    return this.threadTurnQueue.canStartImmediately(params);
+  }
+
   async startTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    return await this.startTurnNow(params);
+  }
+
+  private async startTurnNow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;
@@ -3601,6 +3995,7 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
+    let input = params.input;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -3620,6 +4015,12 @@ export class DesktopBackendRegistry {
         params.backend === "codex"
           ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
           : undefined;
+      input = await this.buildTurnInputWithAutomationContext({
+        backend: params.backend,
+        input: params.input,
+        origin: params.origin,
+        threadId: params.threadId,
+      });
       await this.emit({
         backend: params.backend,
         notification: {
@@ -3654,7 +4055,7 @@ export class DesktopBackendRegistry {
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
               const started = await client.startTurn({
                 threadId: params.threadId,
-                input: params.input,
+                input,
                 ...(cwd ? { cwd } : {}),
                 collaborationMode: params.collaborationMode,
                 ...turnParams,
@@ -3666,7 +4067,7 @@ export class DesktopBackendRegistry {
             }, params.executionMode)
           : await this.grokClient.startTurn({
               threadId: params.threadId,
-              input: params.input,
+              input,
               model: turnParams.model,
               serviceTier: turnParams.serviceTier,
               reasoningEffort: turnParams.reasoningEffort,
@@ -5562,6 +5963,36 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async buildTurnInputWithAutomationContext(params: {
+    backend: AppServerBackendKind;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    threadId: ThreadIdentifier;
+  }): Promise<AppServerTurnInputItem[]> {
+    if (!this.automationTurnContextProvider || params.origin === "automation") {
+      return params.input;
+    }
+    try {
+      const context = await this.automationTurnContextProvider({
+        backend: params.backend,
+        origin: params.origin,
+        threadId: params.threadId,
+      });
+      if (context.length === 0) {
+        return params.input;
+      }
+      return [...formatAutomationContextForTurnInput(context), ...params.input];
+    } catch (error) {
+      backendRegistryLog.warn("automation turn context provider failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        origin: params.origin,
+        threadId: params.threadId,
+      });
+      return params.input;
+    }
+  }
+
   private async resolveLaunchpadBackend(
     preferred: AppServerBackendKind,
   ): Promise<BackendSummary> {
@@ -5672,6 +6103,7 @@ export class DesktopBackendRegistry {
             threadId: notification.params.threadId,
           });
         }
+        await this.emitHeadlessAutomationLifecycle(backend, notification);
         await this.emit({ backend, notification });
       }),
     );
@@ -5681,6 +6113,118 @@ export class DesktopBackendRegistry {
         client.onRequest(async (request) => await this.handleServerRequest(backend, request)),
       );
     }
+  }
+
+  private async emitHeadlessAutomationLifecycle(
+    backend: AppServerBackendKind,
+    notification: AppServerNotification,
+  ): Promise<void> {
+    if (
+      notification.method !== "turn/completed" &&
+      notification.method !== "turn/failed" &&
+      notification.method !== "turn/cancelled"
+    ) {
+      return;
+    }
+
+    const turnId = turnIdFromTerminalNotification(notification);
+    if (!turnId) {
+      return;
+    }
+    const run = this.headlessAutomationTurns.get(
+      buildHeadlessAutomationTurnKey(
+        backend,
+        notification.params.threadId,
+        turnId,
+      ),
+    );
+    if (!run) {
+      backendRegistryLog.debug("terminal turn did not match a headless automation", {
+        backend,
+        method: notification.method,
+        threadId: notification.params.threadId,
+        turnId,
+      });
+      return;
+    }
+    this.headlessAutomationTurns.delete(
+      buildHeadlessAutomationTurnKey(
+        backend,
+        notification.params.threadId,
+        turnId,
+      ),
+    );
+    backendRegistryLog.info("automation headless turn reached terminal status", {
+      agentThreadId: run.agentThreadId,
+      automationName: run.automationName,
+      automationRunId: run.automationRunId,
+      backend,
+      finalTextLength: finalTextFromTerminalNotification(notification)?.length ?? 0,
+      method: notification.method,
+      queueEntryId: run.queueEntryId,
+      threadId: notification.params.threadId,
+      turnId,
+    });
+
+    await this.emit({
+      backend,
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: run.agentThreadId,
+          queueEntryId: run.queueEntryId,
+          origin: "automation",
+          automationRunId: run.automationRunId,
+          automationName: run.automationName,
+          status: "terminal",
+          turnId,
+          errorMessage: errorMessageFromTerminalNotification(notification),
+          finalText: finalTextFromTerminalNotification(notification),
+          terminalStatus: notification.method,
+        },
+      },
+    });
+  }
+
+  private findHeadlessAutomationTurnForRequest(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+  ):
+    | {
+        agentThreadId: string;
+        automationName?: string;
+        automationRunId: string;
+        executionMode: ThreadExecutionMode;
+        queueEntryId: string;
+      }
+    | undefined {
+    const turnId = request.params.turnId?.trim();
+    if (turnId) {
+      return this.headlessAutomationTurns.get(
+        buildHeadlessAutomationTurnKey(backend, request.params.threadId, turnId),
+      );
+    }
+
+    const keyPrefix = `${backend}:${request.params.threadId}:`;
+    let match:
+      | {
+          agentThreadId: string;
+          automationName?: string;
+          automationRunId: string;
+          executionMode: ThreadExecutionMode;
+          queueEntryId: string;
+        }
+      | undefined;
+    for (const [key, run] of this.headlessAutomationTurns.entries()) {
+      if (!key.startsWith(keyPrefix)) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = run;
+    }
+    return match;
   }
 
   private getClient(
@@ -7348,6 +7892,26 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<unknown> {
+    const headlessAutomation = this.findHeadlessAutomationTurnForRequest(
+      backend,
+      request,
+    );
+    if (headlessAutomation) {
+      backendRegistryLog.warn("auto-cancelling headless automation server request", {
+        agentThreadId: headlessAutomation.agentThreadId,
+        automationName: headlessAutomation.automationName,
+        automationRunId: headlessAutomation.automationRunId,
+        backend,
+        executionMode: headlessAutomation.executionMode,
+        method: request.method,
+        queueEntryId: headlessAutomation.queueEntryId,
+        requestId: request.params.requestId,
+        threadId: request.params.threadId,
+        turnId: request.params.turnId,
+      });
+      return buildHeadlessAutomationRequestCancelResponse(request);
+    }
+
     const key = buildPendingRequestKey({
       backend,
       threadId: request.params.threadId,
@@ -7445,6 +8009,12 @@ export class DesktopBackendRegistry {
           });
         }
       }
+      void this.threadTurnQueue.releaseThread({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId,
+        status: event.notification.method,
+      });
       if (event.backend === "codex") {
         // Turn-end is the resume boundary — flush any queued mode change
         // now. Fire-and-forget; failures are logged + retried inside
@@ -7502,6 +8072,11 @@ export class DesktopBackendRegistry {
           event.notification.params.threadId,
         );
       }
+      void this.threadTurnQueue.releaseThread({
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+        status: readStatusType(event.notification.params.status),
+      });
     }
 
     if (event.notification.method === "serverRequest/resolved") {

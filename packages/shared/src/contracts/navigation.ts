@@ -19,6 +19,7 @@ import type {
 } from "./messaging";
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
+import type { AutomationThreadSummary } from "./automations";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -29,8 +30,23 @@ export type ThreadInboxState = {
   lastSeenUpdatedAt?: number;
 };
 
+export const AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE = 200;
+
+export type ThreadAgentMetadata = {
+  name: string;
+  instructions?: string;
+  instructionLineCount: number;
+  instructionsTooLong: boolean;
+  updatedAt: number;
+};
+
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /**
+   * Optional Agent/persona marker. When present, this thread is intended
+   * to act as a personal Agent surface that automations can attach to.
+   */
+  agent?: ThreadAgentMetadata;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
@@ -73,6 +89,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * the user unbind from the desktop side via the chip menu.
    */
   messagingBindings?: MessagingThreadBindingSummary[];
+  /**
+   * Compact automation state for the thread. Detailed records and run
+   * history are fetched through automation IPC; this summary only keeps
+   * navigation refreshes and thread chrome honest.
+   */
+  automationSummary?: AutomationThreadSummary;
 };
 
 /**
@@ -380,6 +402,25 @@ export type SetThreadPinResponse = {
   pinnedRank?: string;
 };
 
+export type SetThreadAgentRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * Null removes the Agent marker. Non-null marks this thread as an
+   * Agent/persona thread with compact instructions.
+   */
+  agent: {
+    name: string;
+    instructions?: string;
+  } | null;
+};
+
+export type SetThreadAgentResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  agent?: ThreadAgentMetadata;
+};
+
 export type ReorderThreadPinsRequest = {
   backend?: AppServerBackendKind;
   /** Complete pinned order for this backend, first item at the top. */
@@ -498,6 +539,7 @@ export type DirectoryOverlayState = {
 export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  agent?: ThreadAgentMetadata;
   executionMode?: ThreadExecutionMode;
   model?: string;
   reasoningEffort?: string;

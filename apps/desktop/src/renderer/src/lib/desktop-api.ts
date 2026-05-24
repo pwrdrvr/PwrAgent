@@ -8,6 +8,8 @@ import type {
 } from "../../../shared/image-normalization";
 import type {
   AgentEvent,
+  AutomationIdRequest,
+  AutomationMutationResponse,
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
@@ -16,12 +18,15 @@ import type {
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CreateAutomationRequest,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  GetAutomationRunArtifactRequest,
+  GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
@@ -30,6 +35,12 @@ import type {
   InterruptTurnRequest,
   InterruptTurnResponse,
   LatestCodexConfigWarningResponse,
+  ListAutomationCardsRequest,
+  ListAutomationCardsResponse,
+  ListAutomationRunsRequest,
+  ListAutomationRunsResponse,
+  ListAutomationsRequest,
+  ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
   ListAcpAgentSettingsRequest,
@@ -89,6 +100,7 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  RunAutomationNowResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   QueueThreadExecutionModeRequest,
@@ -97,6 +109,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
   SteerTurnRequest,
@@ -113,6 +127,7 @@ import type {
   TrustCodexProjectResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
+  UpdateAutomationRequest,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -201,6 +216,36 @@ export type DesktopApi = {
   readAppUpdateReleaseVersions?: () => Promise<AppUpdateReleaseVersions>;
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
   installAppUpdate?: () => Promise<AppUpdateInstallResult>;
+  listAutomations?: (
+    request?: ListAutomationsRequest,
+  ) => Promise<ListAutomationsResponse>;
+  createAutomation?: (
+    request: CreateAutomationRequest,
+  ) => Promise<AutomationMutationResponse>;
+  updateAutomation?: (
+    request: UpdateAutomationRequest,
+  ) => Promise<AutomationMutationResponse>;
+  deleteAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  pauseAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  resumeAutomation?: (
+    request: AutomationIdRequest,
+  ) => Promise<AutomationMutationResponse>;
+  runAutomationNow?: (
+    request: AutomationIdRequest,
+  ) => Promise<RunAutomationNowResponse>;
+  listAutomationRuns?: (
+    request: ListAutomationRunsRequest,
+  ) => Promise<ListAutomationRunsResponse>;
+  listAutomationCards?: (
+    request: ListAutomationCardsRequest,
+  ) => Promise<ListAutomationCardsResponse>;
+  getAutomationRunArtifact?: (
+    request: GetAutomationRunArtifactRequest,
+  ) => Promise<GetAutomationRunArtifactResponse>;
   listPwrAgentProfiles?: () => Promise<ListDesktopPwrAgentProfilesResponse>;
   openPwrAgentProfile?: (
     request: OpenDesktopPwrAgentProfileRequest,
@@ -397,6 +442,9 @@ export type DesktopApi = {
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;
+  setThreadAgent?: (
+    request: SetThreadAgentRequest
+  ) => Promise<SetThreadAgentResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;

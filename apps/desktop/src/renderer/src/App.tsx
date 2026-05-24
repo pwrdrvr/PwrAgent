@@ -33,6 +33,7 @@ import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
+import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
@@ -115,7 +116,9 @@ function DesktopAppShell(props: {
   // attributes on the resize handle stay in sync.
   const sidebarMinWidth = 280;
   const sidebarMaxWidth = 560;
-  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
+  const [mainView, setMainView] = useState<"thread" | "settings" | "automations">(
+    "thread",
+  );
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
@@ -479,9 +482,13 @@ function DesktopAppShell(props: {
         selectedItemKey={navigation.selectedItemKey}
         thinkingThreadKeys={session.thinkingThreadKeys}
         threads={navigation.threads}
+        automationsActive={mainView === "automations"}
         settingsActive={mainView === "settings"}
         onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}
+        onOpenAutomations={() => {
+          setMainView("automations");
+        }}
         onOpenLaunchpad={async (directory, preferredBackend) => {
           setMainView("thread");
           await navigation.openDirectoryLaunchpad(directory, preferredBackend);
@@ -543,6 +550,22 @@ function DesktopAppShell(props: {
             settings={settings}
             onClose={() => setMainView("thread")}
             onOpenMessagingActivity={openMessagingActivityWindow}
+          />
+        </div>
+      ) : null}
+
+      {mainView === "automations" ? (
+        <div className="app-shell__settings-layer">
+          <AutomationsScreen
+            desktopApi={desktopApi}
+            threads={navigation.threads}
+            onClose={() => setMainView("thread")}
+            onOpenMessagingActivity={openMessagingActivityWindow}
+            onRefreshNavigation={navigation.refresh}
+            onSelectThread={(thread) => {
+              setMainView("thread");
+              navigation.selectThread(thread);
+            }}
           />
         </div>
       ) : null}

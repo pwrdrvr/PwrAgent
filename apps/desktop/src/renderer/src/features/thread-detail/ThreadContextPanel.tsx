@@ -28,6 +28,7 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
+import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 
 const HOVER_RAIL_POINTER_POLL_MS = 500;
 const HOVER_RAIL_OFF_TARGET_CLOSE_MS = 1_200;
@@ -36,8 +37,9 @@ const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
-  desktopApi?: Pick<DesktopApi, "getWindowPointerSnapshot">;
+  desktopApi?: DesktopApi;
   onPinnedChange?: (pinned: boolean) => void;
+  onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   pinned: boolean;
@@ -57,6 +59,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
   const [resizing, setResizing] = useState(false);
+  const [agentSaving, setAgentSaving] = useState(false);
+  const [agentError, setAgentError] = useState<string>();
   const [tooltip, setTooltip] = useState<{
     left?: number;
     text: string;
@@ -208,6 +212,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }, []);
 
   useEffect(() => {
+    setAgentError(undefined);
+    setAgentSaving(false);
+  }, [props.thread.id, props.thread.source]);
+
+  useEffect(() => {
     if (pinned || !revealed) {
       return;
     }
@@ -345,6 +354,26 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
+  };
+
+  const setThreadAgent = async (agent: { name: string } | null): Promise<void> => {
+    if (!props.desktopApi?.setThreadAgent) {
+      return;
+    }
+    setAgentSaving(true);
+    setAgentError(undefined);
+    try {
+      await props.desktopApi.setThreadAgent({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        agent,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setAgentError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentSaving(false);
+    }
   };
 
   return (
@@ -589,6 +618,53 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </p>
             ) : null}
           </section>
+
+          <section className="context-panel__section">
+            <h3>Agent</h3>
+            {props.thread.agent ? (
+              <div className="context-list__item">
+                <div className="context-list__content">
+                  <p className="context-list__label">{props.thread.agent.name}</p>
+                  <p className="context-list__meta">
+                    {formatAgentInstructionSummary(
+                      props.thread.agent.instructionLineCount
+                    )}
+                  </p>
+                </div>
+                <button
+                  className="context-list__action"
+                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                  type="button"
+                  onClick={() => void setThreadAgent(null)}
+                >
+                  Clear
+                </button>
+              </div>
+            ) : (
+              <div className="context-list__item">
+                <p className="context-empty">Ordinary work thread</p>
+                <button
+                  className="context-list__action"
+                  disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                  type="button"
+                  onClick={() => void setThreadAgent({ name: props.thread.title })}
+                >
+                  Mark as Agent
+                </button>
+              </div>
+            )}
+            {agentError ? (
+              <p className="context-empty context-empty--error" role="alert">
+                {agentError}
+              </p>
+            ) : null}
+          </section>
+
+          <ThreadAutomationsPanel
+            desktopApi={props.desktopApi}
+            thread={props.thread}
+            onRefreshNavigation={props.onRefreshNavigation}
+          />
 
           {props.thread.worktreeSnapshots?.some(
             (snapshot) => snapshot.state === "archived"
@@ -899,6 +975,13 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
+}
+
+function formatAgentInstructionSummary(lineCount: number): string {
+  if (lineCount <= 0) {
+    return "No Agent instructions";
+  }
+  return `${lineCount} instruction line${lineCount === 1 ? "" : "s"}`;
 }
 
 function findSnapshotForWorktree(

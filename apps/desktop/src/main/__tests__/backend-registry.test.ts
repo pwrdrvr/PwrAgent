@@ -31,6 +31,7 @@ import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
+import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
@@ -187,6 +188,25 @@ function createOverlayStoreMock(params?: {
         ...overlays.get(key),
         ...settings,
         extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadAgent: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      agent: ThreadOverlayState["agent"] | null;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const current = overlays.get(key) ?? {
+        backend: settings.backend,
+        threadId: settings.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        agent: settings.agent ?? undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -471,7 +491,7 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
-  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
+  } as unknown as OverlayStoreLike;
 }
 
 class MockBackendClient {
@@ -488,6 +508,7 @@ class MockBackendClient {
   };
   lastStartThreadParams?: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -500,6 +521,7 @@ class MockBackendClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     executionMode?: "default" | "full-access";
+    cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
     model?: string;
@@ -733,6 +755,7 @@ class MockBackendClient {
 
   async startThread(params?: {
     cwd?: string;
+    ephemeral?: boolean;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -6053,7 +6076,6 @@ command = "pnpm dev"
       turnId: "turn-1",
     });
 
-    expect(codexClient.lastRenameThreadParams).toBeUndefined();
     await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
@@ -6498,6 +6520,290 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("releases queued turns for Grok terminal events", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const first = await registry.submitTurn({
+      backend: "grok",
+      threadId: "thread-1",
+      origin: "manual",
+      input: [{ type: "text", text: "first" }],
+    });
+    const second = await registry.submitTurn({
+      backend: "grok",
+      threadId: "thread-1",
+      origin: "manual",
+      input: [{ type: "text", text: "second" }],
+    });
+
+    expect(first.status).toBe("started");
+    expect(second.status).toBe("queued");
+    expect(grokClient.lastStartTurnParams?.input).toEqual([
+      { type: "text", text: "first" },
+    ]);
+
+    await grokClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [{ type: "text", text: "Automation finished." }],
+        },
+      },
+    });
+
+    await waitForCondition(() =>
+      grokClient.lastStartTurnParams?.input.some(
+        (item) => item.type === "text" && item.text === "second",
+      ) ?? false,
+    );
+    expect(grokClient.lastStartTurnParams?.input).toEqual([
+      { type: "text", text: "second" },
+    ]);
+
+    await registry.close();
+  });
+
+  it("mirrors headless automation turn lifecycle onto the Agent thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const started = await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check email",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Run the scheduled task." }],
+    });
+
+    expect(started).toEqual({
+      backend: "codex",
+      headlessThreadId: "thread-1",
+      queueEntryId: "headless:run-1",
+      threadId: "agent-thread-1",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      ephemeral: true,
+      sandbox: "workspace-write",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Default Access (default)."),
+      },
+      { type: "text", text: "Run the scheduled task." },
+    ]);
+    expect(events).toEqual([
+      {
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "agent-thread-1",
+            queueEntryId: "headless:run-1",
+            origin: "automation",
+            automationRunId: "run-1",
+            automationName: "Check email",
+            status: "started",
+            backendThreadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      },
+    ]);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [{ type: "text", text: "Automation finished." }],
+        },
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          method: "thread/turnQueue/updated",
+          params: expect.objectContaining({ status: "started" }),
+        }),
+      }),
+      {
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "agent-thread-1",
+            queueEntryId: "headless:run-1",
+            origin: "automation",
+            automationRunId: "run-1",
+            automationName: "Check email",
+            status: "terminal",
+            turnId: "turn-1",
+            finalText: "Automation finished.",
+            terminalStatus: "turn/completed",
+          },
+        },
+      },
+      {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Automation finished." }],
+            },
+          },
+        },
+      },
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("runs headless automations with the Agent thread's full access settings", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread-1": {
+            backend: "codex",
+            threadId: "agent-thread-1",
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/tmp/full-access-project",
+                label: "Full Access Project",
+                path: "/tmp/full-access-project",
+                kind: "local",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check weather",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Check whether it will rain." }],
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/full-access-project",
+      ephemeral: true,
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/tmp/full-access-project",
+      sandbox: "danger-full-access",
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Access mode: Full Access (full-access)."),
+      },
+      { type: "text", text: "Check whether it will rain." },
+    ]);
+
+    await registry.close();
+  });
+
+  it("auto-cancels approval requests from headless automations", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex",
+      agentThreadId: "agent-thread-1",
+      automationName: "Check weather",
+      automationRunId: "run-1",
+      input: [{ type: "text", text: "Check whether it will rain." }],
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "call-1",
+        requestId: "approval-1",
+        command: "curl https://example.com",
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({ decision: "cancel" });
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "thread/turnQueue/updated",
+    ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("emits local turn lifecycle events for registry-started Codex turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/read"] },
@@ -6637,6 +6943,46 @@ command = "pnpm dev"
     ]);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("prepends automation context to non-automation thread turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/read"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    registry.setAutomationTurnContextProvider(() => [
+      {
+        type: "text",
+        text: "Recent automation updates for this Agent thread:\n- Weather: rain.",
+      },
+    ]);
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "What happened?" }],
+    });
+
+    expect(codexClient.lastStartTurnParams?.input).toEqual([
+      {
+        type: "text",
+        text: [
+          "## Automation Context",
+          "Recent automation updates for this Agent thread:\n- Weather: rain.",
+          "## User Message",
+          "",
+        ].join("\n\n"),
+      },
+      { type: "text", text: "What happened?" },
+    ]);
+
     await registry.close();
   });
 
@@ -9714,6 +10060,7 @@ command = "pnpm dev"
           status: { type: "idle" },
         },
       });
+      await Promise.resolve();
       const startTurnPromise = registry.startTurn({
         backend: "codex",
         threadId: "thread-1",

@@ -15,10 +15,12 @@ import type {
   AppServerThreadPlanEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
+  AutomationTimelineCard,
   DesktopApplicationsSnapshot,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
 } from "@pwragent/shared";
+import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -45,7 +47,10 @@ type TranscriptListProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
-  desktopApi?: Pick<DesktopApi, "copyText" | "openApplication">;
+  desktopApi?: Pick<
+    DesktopApi,
+    "copyText" | "openApplication" | "listAutomationCards" | "onAgentEvent"
+  >;
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];
   error?: string;
@@ -98,6 +103,11 @@ type SyncScrollStateOptions = {
 
 const BOTTOM_THRESHOLD_PX = 24;
 
+type AutomationThreadTarget = {
+  backend: "codex" | "grok";
+  threadId: string;
+};
+
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "message" &&
@@ -108,6 +118,16 @@ function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
 
 function entryCreatedAt(entry: AppServerThreadEntry): number | undefined {
   return typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+}
+
+function parseThreadIdentity(value: string | undefined): AutomationThreadTarget | undefined {
+  const separatorIndex = value?.indexOf(":") ?? -1;
+  if (!value || separatorIndex <= 0) return undefined;
+  const backend = value.slice(0, separatorIndex);
+  if (backend !== "codex" && backend !== "grok") return undefined;
+  const threadId = value.slice(separatorIndex + 1);
+  if (!threadId) return undefined;
+  return { backend, threadId };
 }
 
 function pendingEntriesInEventOrder(
@@ -326,6 +346,53 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingUserInput ||
       props.pendingStatusText
   );
+  const automationThreadTarget = useMemo(
+    () => parseThreadIdentity(props.threadId),
+    [props.threadId],
+  );
+  const [automationCards, setAutomationCards] = useState<AutomationTimelineCard[]>([]);
+  const refreshAutomationCards = useCallback(async () => {
+    if (!automationThreadTarget || !props.desktopApi?.listAutomationCards) {
+      setAutomationCards([]);
+      return;
+    }
+    const response = await props.desktopApi.listAutomationCards({
+      backend: automationThreadTarget.backend,
+      threadId: automationThreadTarget.threadId,
+      limit: 50,
+    });
+    setAutomationCards(response.cards);
+  }, [automationThreadTarget, props.desktopApi]);
+
+  useEffect(() => {
+    void refreshAutomationCards();
+  }, [refreshAutomationCards]);
+
+  useEffect(() => {
+    if (
+      !automationThreadTarget ||
+      !props.desktopApi?.onAgentEvent ||
+      !props.desktopApi?.listAutomationCards
+    ) {
+      return;
+    }
+    return props.desktopApi.onAgentEvent((event) => {
+      if (
+        event.backend !== automationThreadTarget.backend ||
+        !("threadId" in event.notification.params) ||
+        event.notification.params.threadId !== automationThreadTarget.threadId
+      ) {
+        return;
+      }
+      if (
+        event.notification.method === "automation/run/updated" ||
+        event.notification.method === "thread/automations/updated"
+      ) {
+        void refreshAutomationCards();
+      }
+    });
+  }, [automationThreadTarget, props.desktopApi, refreshAutomationCards]);
+
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
     for (const pendingEntry of pendingEntriesInEventOrder([
@@ -336,11 +403,15 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectMessagingBindingTransitions(
-      injectPermissionTransitions(entries, props.permissionTransitions),
-      props.messagingBindingTransitions,
+    return injectAutomationCards(
+      injectMessagingBindingTransitions(
+        injectPermissionTransitions(entries, props.permissionTransitions),
+        props.messagingBindingTransitions,
+      ),
+      automationCards,
     );
   }, [
+    automationCards,
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,

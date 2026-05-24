@@ -9,6 +9,7 @@ import {
   updateLastUsed,
 } from "../profile";
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
+import { AutomationStore } from "../automations/automation-store.js";
 import { migrateIfNeeded } from "./migration.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
@@ -19,6 +20,7 @@ let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
+let automationStore: AutomationStore | null = null;
 let activeMode: AppStateMode | null = null;
 // The boot decision is set once at startup and stays put for the
 // process lifetime. Stored here (vs. recomputed lazily) because the
@@ -62,6 +64,7 @@ export function initializeAppState(
   overlayStore: SqliteOverlayStore;
   runtimeInstanceStore: AppRuntimeInstanceStore;
   mode: AppStateMode;
+  automationStore: AutomationStore;
 } {
   if (stateDb) {
     if (activeMode !== mode) {
@@ -79,6 +82,7 @@ export function initializeAppState(
       overlayStore: overlayStore!,
       runtimeInstanceStore: runtimeInstanceStore!,
       mode,
+      automationStore: automationStore!,
     };
   }
 
@@ -109,6 +113,7 @@ export function initializeAppState(
   messagingStore = new SqliteMessagingStore(stateDb);
   overlayStore = new SqliteOverlayStore(stateDb);
   runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
+  automationStore = new AutomationStore(stateDb);
   activeMode = mode;
 
   return {
@@ -116,6 +121,7 @@ export function initializeAppState(
     messagingStore: messagingStore!,
     overlayStore: overlayStore!,
     runtimeInstanceStore: runtimeInstanceStore!,
+    automationStore: automationStore!,
     mode,
   };
 }
@@ -148,6 +154,11 @@ export function isAppStateInitialized(): boolean {
   return runtimeInstanceStore !== null;
 }
 
+export function getAppAutomationStore(): AutomationStore {
+  if (!automationStore) throw new Error("App state not initialized. Call initializeAppState() first.");
+  return automationStore;
+}
+
 export function disposeAppState(): void {
   if (profileRuntimeHeartbeat) {
     profileRuntimeHeartbeat.stop();
@@ -159,6 +170,7 @@ export function disposeAppState(): void {
     messagingStore = null;
     overlayStore = null;
     runtimeInstanceStore = null;
+    automationStore = null;
   }
   activeMode = null;
 }
@@ -170,6 +182,7 @@ export function resetAppStateForTests(): void {
   messagingStore = null;
   overlayStore = null;
   runtimeInstanceStore = null;
+  automationStore = null;
   activeMode = null;
   currentBootDecision = null;
 }

@@ -8,6 +8,7 @@ import {
   PWRAGENT_PROFILE_ENV,
 } from "../profile";
 import { migrateIfNeeded } from "../state/migration";
+import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
 
 const tempRoots: string[] = [];
 
@@ -55,6 +56,26 @@ function readProfileName(dbPath: string): string {
 }
 
 describe("state migration", () => {
+  it("initializes automation scheduling tables in the profile database", () => {
+    const root = createTempRoot();
+    const dbPath = path.join(root, "state.db");
+    const stateDb = StateDb.open(dbPath);
+    try {
+      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+        CURRENT_STATE_DB_USER_VERSION,
+      );
+      expect(
+        stateDb.raw
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('automations', 'automation_runs') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "automation_runs" }, { name: "automations" }]);
+    } finally {
+      stateDb.close();
+    }
+  });
+
   it("does not copy legacy default settings into a new named profile", () => {
     const root = createTempRoot();
     const pwragentHome = path.join(root, "pwragent");

@@ -227,6 +227,18 @@ test -f "$APP/Contents/Resources/THIRD_PARTY_LICENSES"
 test -f "$APP/Contents/Resources/CHANGELOG.md"
 ```
 
+For releases that include automation scheduling changes, smoke-test one migrated
+profile before publishing broadly:
+
+```bash
+PWRAGENT_PROFILE=release-smoke open "$APP"
+```
+
+Create an interval automation on an existing thread, use **Run now**, confirm it
+appears in the thread context and global Automations view, then quit and relaunch
+to verify closed-app ticks are not backfilled. Automation state lives in the
+profile SQLite database under `~/.pwragent/profiles/<name>/state/state.db`.
+
 ---
 
 ## Auto-update on Phase 1

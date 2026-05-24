@@ -40,12 +40,15 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
   NavigationSnapshot,
+  AutomationThreadSummary,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetThreadAgentRequest,
+  SetThreadAgentResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadReactionRequest,
@@ -87,6 +90,7 @@ import {
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -99,6 +103,7 @@ import {
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
+import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -193,6 +198,19 @@ async function hydrateRetainedThreadOverlayData(
       worktreeSnapshots: overlay.worktreeSnapshots,
     };
   });
+}
+
+function buildAutomationSummariesByThreadKey():
+  | Record<string, AutomationThreadSummary | undefined>
+  | undefined {
+  try {
+    return getDesktopAutomationService().buildThreadSummaries();
+  } catch (error) {
+    appServerLog.warn("automation store unavailable for navigation snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 function directoryStatusesEqual(
@@ -529,11 +547,13 @@ class DesktopAppServerService {
     const bindingsStartedAt = Date.now();
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const bindingsDurationMs = Date.now() - bindingsStartedAt;
+    const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
     const overlayStartedAt = Date.now();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
+      automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadId,
@@ -1047,6 +1067,42 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadAgent(
+    request: SetThreadAgentRequest,
+  ): Promise<SetThreadAgentResponse> {
+    const backend = request.backend ?? "codex";
+
+    const overlay = await this.getOverlayStore().setThreadAgent({
+      backend,
+      threadId: request.threadId,
+      agent: request.agent,
+    });
+
+    logDebug("setThreadAgent", {
+      backend,
+      threadId: request.threadId,
+      agentName: overlay.agent?.name ?? null,
+      instructionLineCount: overlay.agent?.instructionLineCount ?? 0,
+      instructionsTooLong: overlay.agent?.instructionsTooLong ?? false,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: {
+          threadId: request.threadId,
+        },
+      },
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      agent: overlay.agent,
+    };
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -1483,6 +1539,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadPin(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_AGENT_CHANNEL,
+    async (
+      _event,
+      request: SetThreadAgentRequest,
+    ): Promise<SetThreadAgentResponse> => {
+      return await appServerService.setThreadAgent(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -1609,6 +1675,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);

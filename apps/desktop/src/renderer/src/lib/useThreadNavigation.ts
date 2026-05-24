@@ -14,6 +14,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ThreadAgentMetadata,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -212,6 +213,29 @@ function messagingBindingsEqual(
   });
 }
 
+function automationSummariesEqual(
+  left: NavigationThreadSummary["automationSummary"],
+  right: NavigationThreadSummary["automationSummary"]
+): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function threadAgentsEqual(
+  left: NavigationThreadSummary["agent"],
+  right: NavigationThreadSummary["agent"],
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return (
+    left.name === right.name &&
+    left.instructions === right.instructions &&
+    left.instructionLineCount === right.instructionLineCount &&
+    left.instructionsTooLong === right.instructionsTooLong &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
 function prSummariesEqual(
   left: NavigationThreadSummary["prs"],
   right: NavigationThreadSummary["prs"]
@@ -342,6 +366,8 @@ function threadSummariesEqual(
     // previous thread reference whenever nothing else changed and chips on
     // the row stay stale until something else triggers a re-render.
     messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
+    automationSummariesEqual(left.automationSummary, right.automationSummary) &&
+    threadAgentsEqual(left.agent, right.agent) &&
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
     permissionTransitionLogsEqual(
@@ -489,6 +515,33 @@ function updateThreadPinInSnapshot(
     }
     changed = true;
     return { ...thread, pinnedRank: params.pinnedRank };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function updateThreadAgentInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    agent?: ThreadAgentMetadata;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (threadAgentsEqual(thread.agent, params.agent)) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, agent: params.agent };
   });
 
   return changed ? { ...snapshot, threads } : snapshot;
@@ -1467,6 +1520,10 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     pinned: boolean,
   ) => Promise<void>;
+  setThreadAgent: (
+    thread: NavigationThreadSummary,
+    agent: Parameters<NonNullable<DesktopApi["setThreadAgent"]>>[0]["agent"],
+  ) => Promise<void>;
   reorderThreadPins: (
     backend: AppServerBackendKind,
     threadIds: string[],
@@ -2077,6 +2134,16 @@ export function useThreadNavigation(
               }
             : current
         );
+        scheduleRefresh();
+        return;
+      }
+
+      if (
+        method === "thread/automations/updated" ||
+        method === "automation/run/updated" ||
+        method === "thread/turnQueue/updated" ||
+        method === "thread/agent/updated"
+      ) {
         scheduleRefresh();
         return;
       }
@@ -3055,6 +3122,7 @@ export function useThreadNavigation(
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
   const setThreadPinRequest = desktopApi?.setThreadPin;
+  const setThreadAgentRequest = desktopApi?.setThreadAgent;
   const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
   const setDirectoryPinRequest = desktopApi?.setDirectoryPin;
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
@@ -3187,6 +3255,36 @@ export function useThreadNavigation(
       }
     },
     [refresh, reorderThreadPinsRequest],
+  );
+
+  const setThreadAgent = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      agent: Parameters<NonNullable<DesktopApi["setThreadAgent"]>>[0]["agent"],
+    ): Promise<void> => {
+      if (!setThreadAgentRequest) {
+        return;
+      }
+
+      try {
+        const result = await setThreadAgentRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          agent,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateThreadAgentInSnapshot(current.response, {
+            backend: result.backend,
+            threadId: result.threadId,
+            agent: result.agent,
+          }),
+        }));
+      } catch {
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setThreadAgentRequest],
   );
 
   /**
@@ -3520,6 +3618,7 @@ export function useThreadNavigation(
     renameThread,
     setThreadReaction,
     setThreadPin,
+    setThreadAgent,
     reorderThreadPins,
     setDirectoryPin,
     reorderDirectoryPins,

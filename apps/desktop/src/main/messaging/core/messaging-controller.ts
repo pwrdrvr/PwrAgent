@@ -10,6 +10,7 @@ import type {
   AgentEvent,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  AutomationRunOutputDecision,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   BackendSummary,
@@ -173,6 +174,10 @@ import {
   type MessagingTurnAdmissionBundle,
   type MessagingTurnInputEvent,
 } from "./messaging-turn-admission.js";
+import {
+  renderAutomationDecisionForMessaging,
+  renderAutomationOutputForMessaging,
+} from "../../automations/automation-output-decision.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
@@ -229,6 +234,11 @@ type AssistantStreamBuffer = AssistantStreamDelta & {
   sequence: number;
   surface?: MessagingSurfaceRef;
   text: string;
+};
+
+type AutomationTurnMessagingContext = {
+  automationName?: string;
+  automationRunId?: string;
 };
 
 type ExecutionModeResolution = {
@@ -502,6 +512,12 @@ export class MessagingController {
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
+  private readonly automationTurnsByTurnKey = new Map<
+    string,
+    AutomationTurnMessagingContext
+  >();
+  private readonly deliveredAutomationStartKeys = new Set<string>();
+  private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -691,11 +707,62 @@ export class MessagingController {
         threadId,
       }),
     );
+    const automationRunUpdate = automationRunUpdateForBackendEvent(event);
+    if (automationRunUpdate) {
+      await this.handleAutomationRunUpdated({
+        bindings,
+        event,
+        runId: automationRunUpdate.runId,
+        finalText: automationRunUpdate.finalText,
+        outputDecision: automationRunUpdate.outputDecision,
+        status: automationRunUpdate.status,
+      });
+      return;
+    }
+    const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
+    if (turnQueueUpdate) {
+      if (
+        turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.status === "started" &&
+        turnQueueUpdate.turnId
+      ) {
+        await this.handleAutomationTurnStarted({
+          automationName: turnQueueUpdate.automationName,
+          automationRunId: turnQueueUpdate.automationRunId,
+          backend: event.backend,
+          bindings,
+          threadId,
+          turnId: turnQueueUpdate.turnId,
+        });
+      }
+      if (
+        turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.status === "terminal" &&
+        turnQueueUpdate.turnId
+      ) {
+        await this.handleAutomationTurnTerminal({
+          automationRunId: turnQueueUpdate.automationRunId,
+          backend: event.backend,
+          bindings,
+          event,
+          finalText: turnQueueUpdate.finalText,
+          threadId,
+          turnId: turnQueueUpdate.turnId,
+        });
+      }
+      return;
+    }
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
-      if (lifecycle) {
+      const eventTurnId = turnIdForBackendEvent(event);
+      const automationTurnEvent = this.isAutomationTurnEvent(
+        event,
+        binding,
+        eventTurnId ?? lifecycle?.turnId ?? activeTurn?.turnId,
+      );
+      if (lifecycle && !automationTurnEvent) {
         const previousTurn = activeTurn;
         activeTurn = lifecycle;
         turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
@@ -745,20 +812,27 @@ export class MessagingController {
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
       if (assistantDelta) {
-        await this.deliverAssistantStreamUpdate(assistantDelta, binding);
+        if (!automationTurnEvent) {
+          await this.deliverAssistantStreamUpdate(assistantDelta, binding);
+        }
       }
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        const deliveredFinalStream = await this.flushAssistantStreamForEvent(
-          event,
-          binding,
-          assistantText,
-        );
-        if (deliveredFinalStream) {
-          this.markAssistantMessageDelivered(event, binding, assistantText);
-        } else {
-          await this.deliverAssistantMessage(assistantText, event, binding);
+        if (
+          !automationTurnEvent ||
+          !isNonFinalAssistantTextForBackendEvent(event)
+        ) {
+          const deliveredFinalStream = await this.flushAssistantStreamForEvent(
+            event,
+            binding,
+            assistantText,
+          );
+          if (deliveredFinalStream) {
+            this.markAssistantMessageDelivered(event, binding, assistantText);
+          } else {
+            await this.deliverAssistantMessage(assistantText, event, binding);
+          }
         }
       } else if (isTerminalTurnLifecycle(activeTurn)) {
         await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
@@ -802,7 +876,6 @@ export class MessagingController {
         if (latestActiveTurn?.status !== "working") {
           continue;
         }
-        const eventTurnId = turnIdForBackendEvent(event);
         if (eventTurnId && latestActiveTurn.turnId !== eventTurnId) {
           continue;
         }
@@ -811,6 +884,9 @@ export class MessagingController {
           refreshMs: typingActivityRefreshMsForBackendEvent(event),
         });
       }
+    }
+    if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
+      this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
     }
   }
 
@@ -1521,6 +1597,15 @@ export class MessagingController {
         input: params.input,
         ...turnSettings,
       });
+      if (started.queueStatus === "queued") {
+        this.logger.info?.("messaging turn queued in shared thread FIFO", {
+          bindingId: params.binding.id,
+          threadId: params.binding.threadId,
+          queueEntryId: started.queueEntryId ?? started.turnId,
+          requestedExecutionMode: turnSettings.executionMode ?? "unset",
+        });
+        return "queued";
+      }
       turnStarted = true;
       this.logger.info?.("messaging turn started", {
         bindingId: params.binding.id,
@@ -8332,6 +8417,195 @@ export class MessagingController {
     return threadKeyForBinding(binding);
   }
 
+  private async handleAutomationTurnStarted(params: {
+    automationName?: string;
+    automationRunId?: string;
+    backend: AppServerBackendKind;
+    bindings: MessagingBindingRecord[];
+    threadId: ThreadIdentifier;
+    turnId: string;
+  }): Promise<void> {
+    this.rememberAutomationTurn({
+      automationName: params.automationName,
+      automationRunId: params.automationRunId,
+      backend: params.backend,
+      threadId: params.threadId,
+      turnId: params.turnId,
+    });
+
+    for (const binding of params.bindings) {
+      await this.deliverAutomationStartedMessage(binding, {
+        automationName: params.automationName,
+        automationRunId: params.automationRunId,
+        turnId: params.turnId,
+      });
+    }
+  }
+
+  private async handleAutomationTurnTerminal(params: {
+    automationRunId?: string;
+    backend: AppServerBackendKind;
+    bindings: MessagingBindingRecord[];
+    event: AgentEvent;
+    finalText?: string;
+    threadId: ThreadIdentifier;
+    turnId: string;
+  }): Promise<void> {
+    for (const binding of params.bindings) {
+      await this.deliverAutomationFinalMessageOnce({
+        binding,
+        event: params.event,
+        finalText: params.finalText,
+        keyParts: [
+          binding.id,
+          params.automationRunId ?? params.threadId,
+          params.automationRunId ? "automation-run" : params.turnId,
+        ],
+      });
+    }
+    this.forgetAutomationTurn(params.backend, params.threadId, params.turnId);
+  }
+
+  private async handleAutomationRunUpdated(params: {
+    bindings: MessagingBindingRecord[];
+    event: AgentEvent;
+    finalText?: string;
+    outputDecision?: AutomationRunOutputDecision;
+    runId: string;
+    status: string;
+  }): Promise<void> {
+    if (
+      params.status !== "completed" &&
+      params.status !== "failed" &&
+      params.status !== "cancelled" &&
+      params.status !== "skipped"
+    ) {
+      return;
+    }
+    for (const binding of params.bindings) {
+      await this.deliverAutomationFinalMessageOnce({
+        binding,
+        event: params.event,
+        finalText: params.finalText,
+        keyParts: [binding.id, params.runId, "automation-run"],
+        outputDecision: params.outputDecision,
+      });
+    }
+  }
+
+  private async deliverAutomationFinalMessageOnce(params: {
+    binding: MessagingBindingRecord;
+    event: AgentEvent;
+    finalText?: string;
+    keyParts: string[];
+    outputDecision?: AutomationRunOutputDecision;
+  }): Promise<void> {
+    if (params.outputDecision?.kind === "quiet") {
+      return;
+    }
+    const messageText =
+      params.outputDecision?.kind === "post_card"
+        ? renderAutomationDecisionForMessaging(params.outputDecision)
+        : renderAutomationOutputForMessaging(params.finalText);
+    if (!messageText) {
+      return;
+    }
+    const key = [...params.keyParts, messageText].join("\0");
+    if (this.deliveredAutomationFinalKeys.has(key)) {
+      return;
+    }
+    this.deliveredAutomationFinalKeys.add(key);
+    await this.deliverAssistantMessage(messageText, params.event, params.binding);
+  }
+
+  private rememberAutomationTurn(params: {
+    automationName?: string;
+    automationRunId?: string;
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    turnId: string;
+  }): void {
+    this.automationTurnsByTurnKey.set(
+      automationTurnKey(params),
+      {
+        automationName: params.automationName,
+        automationRunId: params.automationRunId,
+      },
+    );
+  }
+
+  private forgetAutomationTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string,
+  ): void {
+    this.automationTurnsByTurnKey.delete(
+      automationTurnKey({ backend, threadId, turnId }),
+    );
+  }
+
+  private isAutomationTurnEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    fallbackTurnId?: string,
+  ): boolean {
+    const turnId = turnIdForBackendEvent(event) ?? fallbackTurnId;
+    if (!turnId) {
+      return false;
+    }
+    return this.automationTurnsByTurnKey.has(
+      automationTurnKey({
+        backend: event.backend,
+        threadId: binding.threadId,
+        turnId,
+      }),
+    );
+  }
+
+  private async deliverAutomationStartedMessage(
+    binding: MessagingBindingRecord,
+    params: {
+      automationName?: string;
+      automationRunId?: string;
+      turnId: string;
+    },
+  ): Promise<void> {
+    const key = [
+      binding.id,
+      params.automationRunId ?? "",
+      params.turnId,
+      "automation-started",
+    ].join("\0");
+    if (this.deliveredAutomationStartKeys.has(key)) {
+      return;
+    }
+    this.deliveredAutomationStartKeys.add(key);
+
+    const name = params.automationName?.trim();
+    const text = [
+      name ? `Automation started: ${name}` : "Automation started.",
+      "I'll post the final response when it's done.",
+    ].join("\n");
+
+    await this.deliver(
+      {
+        id: this.newIntentId("automation-started"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "system",
+        parts: [
+          {
+            type: "text",
+            text,
+            markdown: "plain",
+          },
+        ],
+      },
+      binding,
+    );
+  }
+
   private async signalTurnActivity(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
@@ -8900,6 +9174,9 @@ export class MessagingController {
 
     const activity = summarizeToolActivityFromBackendEvent(event);
     if (!activity) {
+      return;
+    }
+    if (this.isAutomationTurnEvent(event, binding, activeTurnId)) {
       return;
     }
 
@@ -10189,6 +10466,100 @@ function turnIdForBackendEvent(event: AgentEvent): string | undefined {
     return params.turnId;
   }
   return typeof params.turn?.id === "string" ? params.turn.id : undefined;
+}
+
+function automationTurnKey(params: {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId: string;
+}): string {
+  return `${params.backend}:${params.threadId}:${params.turnId}`;
+}
+
+function turnQueueUpdateForBackendEvent(event: AgentEvent): {
+  automationName?: string;
+  automationRunId?: string;
+  finalText?: string;
+  origin?: string;
+  status?: string;
+  turnId?: string;
+} | undefined {
+  if (event.notification.method !== "thread/turnQueue/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    automationName?: unknown;
+    automationRunId?: unknown;
+    finalText?: unknown;
+    origin?: unknown;
+    status?: unknown;
+    turnId?: unknown;
+  };
+  return {
+    automationName:
+      typeof params.automationName === "string" ? params.automationName : undefined,
+    automationRunId:
+      typeof params.automationRunId === "string" ? params.automationRunId : undefined,
+    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
+    origin: typeof params.origin === "string" ? params.origin : undefined,
+    status: typeof params.status === "string" ? params.status : undefined,
+    turnId: typeof params.turnId === "string" ? params.turnId : undefined,
+  };
+}
+
+function automationRunUpdateForBackendEvent(event: AgentEvent): {
+  finalText?: string;
+  outputDecision?: AutomationRunOutputDecision;
+  runId: string;
+  status: string;
+} | undefined {
+  if (event.notification.method !== "automation/run/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    finalText?: unknown;
+    outputDecision?: unknown;
+    runId?: unknown;
+    status?: unknown;
+  };
+  if (typeof params.runId !== "string" || typeof params.status !== "string") {
+    return undefined;
+  }
+  return {
+    finalText: typeof params.finalText === "string" ? params.finalText : undefined,
+    outputDecision: isAutomationRunOutputDecision(params.outputDecision)
+      ? params.outputDecision
+      : undefined,
+    runId: params.runId,
+    status: params.status,
+  };
+}
+
+function isAutomationRunOutputDecision(
+  value: unknown,
+): value is AutomationRunOutputDecision {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const kind = (value as { kind?: unknown }).kind;
+  return kind === "post_card" || kind === "quiet" || kind === "parse_failed";
+}
+
+function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const params = event.notification.params as {
+    item?: {
+      phase?: unknown;
+      type?: unknown;
+    };
+  };
+  if (params.item?.type !== "agentMessage") {
+    return false;
+  }
+  const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
+  return Boolean(phase && phase !== "final" && phase !== "final_answer");
 }
 
 function isTerminalTurnLifecycle(

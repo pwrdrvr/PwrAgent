@@ -1,3 +1,5 @@
+import type { AutomationRunOutputDecision } from "./automations";
+
 export type AppServerBuiltinBackendKind = "codex" | "grok";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
@@ -986,10 +988,57 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/agent/updated";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
       method: "navigation/threadDirectories/updated";
       params: {
         reason: "selected-thread" | "full-reconcile";
         threadIds: string[];
+      };
+    }
+  | {
+      method: "thread/automations/updated";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "automation/run/updated";
+      params: {
+        threadId: string;
+        automationId: string;
+        automationName?: string;
+        finalText?: string;
+        outputDecision?: AutomationRunOutputDecision;
+        runId: string;
+        status:
+          | "pending"
+          | "queued"
+          | "running"
+          | "completed"
+          | "failed"
+          | "cancelled"
+          | "skipped";
+      };
+    }
+  | {
+      method: "thread/turnQueue/updated";
+      params: {
+        threadId: string;
+        queueEntryId: string;
+        origin: "manual" | "automation" | "messaging";
+        status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+        position?: number;
+        turnId?: string;
+        automationRunId?: string;
+        automationName?: string;
+        errorMessage?: string;
+        finalText?: string;
+        terminalStatus?: string;
       };
     }
   | {
