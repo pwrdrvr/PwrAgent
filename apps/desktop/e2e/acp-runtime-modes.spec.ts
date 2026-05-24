@@ -644,21 +644,21 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     await expect(
       app.window.getByRole("heading", { level: 2, name: "ACP Yolo Thread" }),
     ).toBeVisible();
-    const modeChip = app.window.locator(".thread-header .chip--mode");
-    await expect(modeChip).toHaveText("Default");
+    const accessChip = app.window.locator(".thread-header .chip--mode");
+    await expect(accessChip).toHaveText("Default Access");
 
-    const acpMode = app.window.getByLabel("ACP mode");
-    await expect(acpMode).toBeEnabled();
-    await expect(acpMode).toHaveAttribute("data-value", "default");
+    const agentMode = app.window.getByLabel("Agent mode");
+    await expect(agentMode).toBeEnabled();
+    await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await acpMode.click();
+    await agentMode.click();
     await app.window.getByRole("option", { name: "YOLO" }).click();
 
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await app.window.waitForTimeout(300);
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
   } finally {
     await app.close();
@@ -677,19 +677,19 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
   try {
     await app.window.getByRole("button", { name: /ACP Config Mode Thread/i }).click();
 
-    const modeChip = app.window.locator(".thread-header .chip--mode");
-    const acpMode = app.window.getByLabel("ACP mode");
-    await expect(modeChip).toHaveText("Default");
-    await expect(acpMode).toHaveAttribute("data-value", "default");
+    const accessChip = app.window.locator(".thread-header .chip--mode");
+    const agentMode = app.window.getByLabel("Agent mode");
+    await expect(accessChip).toHaveText("Default Access");
+    await expect(agentMode).toHaveAttribute("data-value", "default");
 
-    await acpMode.click();
+    await agentMode.click();
     await app.window.getByRole("option", { name: "YOLO" }).click();
 
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await app.window.waitForTimeout(300);
-    await expect(acpMode).toHaveAttribute("data-value", "yolo");
-    await expect(modeChip).toHaveText("Yolo");
+    await expect(agentMode).toHaveAttribute("data-value", "yolo");
+    await expect(accessChip).toHaveText("Default Access");
     await expect(app.window.getByText("[MODE_UPDATE]")).toHaveCount(0);
   } finally {
     await app.close();
