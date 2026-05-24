@@ -1,7 +1,7 @@
 ---
 title: feat: Expose automation history through agent tools
 type: feat
-status: active
+status: completed
 date: 2026-05-24
 origin: docs/brainstorms/2026-05-22-agent-thread-attached-automations-requirements.md
 ---
