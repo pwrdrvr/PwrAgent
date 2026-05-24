@@ -63,6 +63,7 @@ type AcpSessionStoreLike = Pick<
 
 type AcpRolloutStoreLike = {
   appendUpdate(params: AcpRolloutStoreAppendParams): void;
+  flushAll?(): void;
   readUpdates(params: {
     backendId: AcpBackendId;
     sessionId: string;
@@ -165,6 +166,7 @@ export class AcpAgentClient {
   }
 
   async dispose(): Promise<void> {
+    this.options.rolloutStore?.flushAll?.();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.unsubscribeRequest?.();

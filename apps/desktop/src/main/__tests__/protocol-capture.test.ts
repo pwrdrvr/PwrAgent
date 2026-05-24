@@ -14,6 +14,7 @@ describe("ProtocolCaptureStore", () => {
   const cleanupPaths: string[] = [];
 
   afterEach(async () => {
+    delete process.env.PWRAGENT_APP_SERVER_PROTOCOL_LOG;
     delete process.env.PWRAGENT_PROTOCOL_CAPTURE;
     delete process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT;
 
@@ -177,6 +178,43 @@ describe("ProtocolCaptureStore", () => {
     expect(Object.values(index)).toHaveLength(1);
     expect(Object.values(index)[0]?.backend).toBe("codex");
     expect(Object.values(index)[0]?.backendInstance).toBe("default");
+  });
+
+  it("creates raw captures when compact protocol logging is enabled", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    process.env.PWRAGENT_APP_SERVER_PROTOCOL_LOG = "1";
+    process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT = rootDir;
+
+    const capture = createProtocolCaptureFromEnv({
+      backend: "acp:kimi",
+      backendInstance: "default",
+    });
+
+    expect(capture).toBeDefined();
+    await capture?.observer.onMessage({
+      direction: "inbound",
+      raw: '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-1","update":{"session_update":"agent_message_chunk"}}}',
+      envelope: {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            session_update: "agent_message_chunk",
+          },
+        },
+      },
+    });
+    await capture?.store.close();
+
+    const index = JSON.parse(
+      await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
+    ) as Record<string, { backend: string; threadIds: string[] }>;
+    expect(Object.values(index)[0]).toMatchObject({
+      backend: "acp:kimi",
+      threadIds: ["session-1"],
+    });
   });
 
   it("captures ACP traffic and indexes session ids", async () => {

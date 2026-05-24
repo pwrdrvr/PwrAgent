@@ -20,7 +20,18 @@ export type AcpRolloutStoreAppendParams = {
   update: Record<string, unknown>;
 };
 
+type ChunkBuffer = {
+  backendId: AcpBackendId;
+  receivedAt: number;
+  sessionId: string;
+  update: Record<string, unknown>;
+  text: string;
+};
+
+const CHUNK_FLUSH_TEXT_LENGTH = 2_048;
+
 export class AcpRolloutStore {
+  private readonly chunkBuffers = new Map<string, ChunkBuffer>();
   private readonly lastFingerprints = new Map<string, string>();
 
   constructor(private readonly rootDir: string) {}
@@ -29,6 +40,13 @@ export class AcpRolloutStore {
     if (!shouldPersistUpdate(params.update)) {
       return;
     }
+    const chunkKey = streamingChunkKey(params);
+    if (chunkKey) {
+      this.appendChunk(chunkKey, params);
+      return;
+    }
+    this.flushSession(params.backendId, params.sessionId);
+
     const duplicateKey = updateDuplicateKey(params);
     const fingerprint = updateFingerprint(params.update);
     if (duplicateKey && fingerprint) {
@@ -39,23 +57,14 @@ export class AcpRolloutStore {
       this.lastFingerprints.set(duplicateKey, fingerprint);
     }
 
-    const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
-    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
-    fs.appendFileSync(
-      rolloutPath,
-      `${JSON.stringify({
-        type: "update",
-        receivedAt: params.receivedAt,
-        update: params.update,
-      } satisfies AcpRolloutRecord)}\n`,
-      "utf8",
-    );
+    this.writeRecord(params);
   }
 
   readUpdates(params: {
     backendId: AcpBackendId;
     sessionId: string;
   }): AcpRolloutRecord[] {
+    this.flushSession(params.backendId, params.sessionId);
     const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
     if (!fs.existsSync(rolloutPath)) {
       return [];
@@ -87,6 +96,78 @@ export class AcpRolloutStore {
     return normalizer.replay();
   }
 
+  flushAll(): void {
+    for (const key of [...this.chunkBuffers.keys()]) {
+      this.flushChunk(key);
+    }
+  }
+
+  private appendChunk(
+    chunkKey: string,
+    params: AcpRolloutStoreAppendParams,
+  ): void {
+    const text = readUpdateText(params.update);
+    if (!text) {
+      return;
+    }
+    const existing = this.chunkBuffers.get(chunkKey);
+    if (existing) {
+      existing.text += text;
+      if (existing.text.length >= CHUNK_FLUSH_TEXT_LENGTH) {
+        this.flushChunk(chunkKey);
+      }
+      return;
+    }
+
+    this.chunkBuffers.set(chunkKey, {
+      backendId: params.backendId,
+      receivedAt: params.receivedAt,
+      sessionId: params.sessionId,
+      update: params.update,
+      text,
+    });
+    if (text.length >= CHUNK_FLUSH_TEXT_LENGTH) {
+      this.flushChunk(chunkKey);
+    }
+  }
+
+  private flushSession(backendId: AcpBackendId, sessionId: string): void {
+    const prefix = `${backendId}:${sessionId}:`;
+    for (const key of [...this.chunkBuffers.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.flushChunk(key);
+      }
+    }
+  }
+
+  private flushChunk(chunkKey: string): void {
+    const buffer = this.chunkBuffers.get(chunkKey);
+    if (!buffer) {
+      return;
+    }
+    this.chunkBuffers.delete(chunkKey);
+    this.writeRecord({
+      backendId: buffer.backendId,
+      sessionId: buffer.sessionId,
+      receivedAt: buffer.receivedAt,
+      update: updateWithText(buffer.update, buffer.text),
+    });
+  }
+
+  private writeRecord(params: AcpRolloutStoreAppendParams): void {
+    const rolloutPath = this.rolloutPath(params.backendId, params.sessionId);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.appendFileSync(
+      rolloutPath,
+      `${JSON.stringify({
+        type: "update",
+        receivedAt: params.receivedAt,
+        update: params.update,
+      } satisfies AcpRolloutRecord)}\n`,
+      "utf8",
+    );
+  }
+
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
     return path.join(
       this.rootDir,
@@ -110,6 +191,21 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
     return false;
   }
   return kind !== "unknown";
+}
+
+function streamingChunkKey(
+  params: AcpRolloutStoreAppendParams,
+): string | undefined {
+  const kind = readKind(params.update);
+  if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk") {
+    return undefined;
+  }
+  const id =
+    readString(params.update, "messageId") ??
+    readString(params.update, "message_id") ??
+    readString(params.update, "id") ??
+    "default";
+  return `${params.backendId}:${params.sessionId}:${kind}:${id}`;
 }
 
 function updateDuplicateKey(
@@ -145,6 +241,30 @@ function updateFingerprint(update: Record<string, unknown>): string | undefined 
     status: readString(update, "status"),
     title: readString(update, "title"),
   });
+}
+
+function readUpdateText(update: Record<string, unknown>): string | undefined {
+  return readAcpContentText(update.content) ?? readString(update, "text");
+}
+
+function updateWithText(
+  update: Record<string, unknown>,
+  text: string,
+): Record<string, unknown> {
+  const content = update.content;
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    return {
+      ...update,
+      content: {
+        ...content,
+        text,
+      },
+    };
+  }
+  return {
+    ...update,
+    text,
+  };
 }
 
 function readKind(update: Record<string, unknown>): string {

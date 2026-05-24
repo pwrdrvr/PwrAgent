@@ -68,4 +68,51 @@ describe("AcpRolloutStore", () => {
 
     expect(store.readUpdates({ backendId, sessionId: "session-1" })).toHaveLength(1);
   });
+
+  it("coalesces adjacent streaming text chunks before writing rollout records", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:kimi" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "hello",
+        turnId: "turn-1",
+      },
+    });
+    for (const text of ["Kim", "i says", " hi"]) {
+      store.appendUpdate({
+        backendId,
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: {
+          session_update: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+    }
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        kind: "turn_finished",
+        turnId: "turn-1",
+      },
+    });
+
+    const records = store.readUpdates({ backendId, sessionId: "session-1" });
+
+    expect(records.map((record) => record.update)).toEqual([
+      expect.objectContaining({ kind: "pwragent_user_prompt" }),
+      expect.objectContaining({
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "Kimi says hi" },
+      }),
+      expect.objectContaining({ kind: "turn_finished" }),
+    ]);
+  });
 });
