@@ -138,9 +138,18 @@ export function createProtocolLogObserver(
       const kind = classifyEnvelope(envelope);
       const method =
         envelope.method ?? (id ? requestMethodsById.get(id) : undefined) ?? "response";
+      const updateKind = pickString(
+        update,
+        "sessionUpdate",
+        "session_update",
+        "kind",
+        "type",
+      );
       const diagnostics =
         event.diagnostics ?? (id ? requestDiagnosticsById.get(id) : undefined);
-      const delta = pickRawString(params, "delta");
+      const delta =
+        pickRawString(params, "delta") ??
+        pickAcpStreamingSessionUpdateText(method, updateKind, update);
       const deltaKey = delta
         ? buildDeltaKey({
             backend: options.backend,
@@ -200,13 +209,7 @@ export function createProtocolLogObserver(
           sessionId: pickString(params, "sessionId"),
           turnId: pickString(params, "turnId"),
           threadId: pickString(params, "threadId"),
-          updateKind: pickString(
-            update,
-            "sessionUpdate",
-            "session_update",
-            "kind",
-            "type",
-          ),
+          updateKind,
         }),
       );
       if (kind === "response" && id) {
@@ -287,6 +290,22 @@ function pickRawString(
   return undefined;
 }
 
+function pickAcpStreamingSessionUpdateText(
+  method: string,
+  updateKind: string | undefined,
+  update: Record<string, unknown> | undefined,
+): string | undefined {
+  if (
+    method !== "session/update" ||
+    (updateKind !== "agent_message_chunk" &&
+      updateKind !== "agent_thought_chunk")
+  ) {
+    return undefined;
+  }
+  const content = asRecord(update?.content);
+  return pickRawString(content, "text") ?? pickRawString(update, "text");
+}
+
 function pickNumberOrString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
@@ -321,13 +340,19 @@ function buildDeltaKey(params: {
   params?: Record<string, unknown>;
 }): string {
   const item = asRecord(params.params?.item);
+  const update = asRecord(params.params?.update);
   return [
     `backend:${params.backend}`,
     `direction:${params.direction}`,
     `method:${params.method}`,
+    `session:${pickString(params.params, "sessionId") ?? "unknown"}`,
     `thread:${pickString(params.params, "threadId") ?? "unknown"}`,
     `turn:${pickString(params.params, "turnId") ?? "unknown"}`,
     `item:${pickString(params.params, "itemId") ?? pickString(item, "id") ?? "unknown"}`,
-    `stream:${pickString(params.params, "stream") ?? "text"}`,
+    `stream:${
+      pickString(params.params, "stream") ??
+      pickString(update, "sessionUpdate", "session_update", "kind", "type") ??
+      "text"
+    }`,
   ].join(" ");
 }
