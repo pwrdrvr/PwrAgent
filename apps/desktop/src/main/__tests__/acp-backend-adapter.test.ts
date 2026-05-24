@@ -156,6 +156,102 @@ describe("AcpBackendAdapter", () => {
 
     await adapter.close();
   });
+
+  it("coalesces unchanged ACP live tool notifications", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Build",
+      turnId: "turn-1",
+    });
+
+    for (let index = 0; index < 5; index += 1) {
+      transport.emitSessionUpdate(session.sessionId, {
+        session_update: "tool_call_update",
+        tool_call_id: "turn-1:tool-1",
+        title: "pnpm build",
+        status: "in_progress",
+      });
+    }
+
+    const itemStartedEvents = events.filter(
+      (event) => event.notification.method === "item/started",
+    );
+    expect(itemStartedEvents).toHaveLength(1);
+    expect(itemStartedEvents[0]?.notification.params).toEqual(
+      expect.objectContaining({
+        item: expect.objectContaining({
+          id: "turn-1:tool-1",
+          status: "in_progress",
+        }),
+      }),
+    );
+
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "tool_call_update",
+      tool_call_id: "turn-1:tool-1",
+      title: "pnpm build",
+      status: "completed",
+      content: { type: "text", text: "Build succeeded" },
+    });
+
+    expect(
+      events.filter((event) => event.notification.method === "item/completed"),
+    ).toHaveLength(1);
+
+    await adapter.close();
+  });
 });
 
 function buildInstalledAgent(): AcpInstalledAgentRecord {

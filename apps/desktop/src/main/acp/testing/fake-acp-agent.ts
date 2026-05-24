@@ -1,7 +1,11 @@
 import type { AcpJsonRpcTransport } from "../acp-client.js";
 
 export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
-  readonly requests: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  readonly requests: Array<{
+    method: string;
+    params?: Record<string, unknown>;
+    timeoutMs?: number;
+  }> = [];
   readonly notifications: Array<{ method: string; params?: Record<string, unknown> }> = [];
   closeCount = 0;
   private listeners = new Set<(method: string, params: Record<string, unknown>) => void>();
@@ -18,8 +22,16 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     private readonly responses: Partial<Record<string, unknown>> = {},
   ) {}
 
-  async request(method: string, params?: Record<string, unknown>): Promise<unknown> {
-    this.requests.push({ method, params });
+  async request(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
+    this.requests.push({
+      method,
+      params,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
     if (method in this.responses) {
       return this.responses[method];
     }

@@ -330,6 +330,7 @@ function shouldSeparateTranscriptChunks(existing: string, next: string): boolean
 function readKind(update: Record<string, unknown>): string {
   return (
     readString(update, "sessionUpdate") ??
+    readString(update, "session_update") ??
     readString(update, "kind") ??
     readString(update, "type") ??
     "unknown"
@@ -339,7 +340,8 @@ function readKind(update: Record<string, unknown>): string {
 export function readAcpTopicTitle(
   update: Record<string, unknown>,
 ): string | undefined {
-  const sessionUpdate = readString(update, "sessionUpdate");
+  const sessionUpdate =
+    readString(update, "sessionUpdate") ?? readString(update, "session_update");
   const kind = readString(update, "kind");
   const isToolUpdate =
     sessionUpdate === "tool_call" ||
@@ -532,7 +534,10 @@ function toolActivity(
 ): AppServerThreadActivityEntry {
   const id =
     readString(update.update, "toolCallId") ??
+    readString(update.update, "tool_call_id") ??
     readString(update.update, "id") ??
+    readString(update.update, "itemId") ??
+    readString(update.update, "item_id") ??
     `${kind}:${update.sessionId}`;
   const label =
     readString(update.update, "title") ??

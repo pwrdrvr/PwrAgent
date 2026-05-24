@@ -143,7 +143,8 @@ function isConversationTranscriptUpdate(
   item: AcpPersistedTranscriptUpdate,
 ): boolean {
   const update = item.update;
-  const kind = update.kind ?? update.type ?? update.sessionUpdate;
+  const kind =
+    update.kind ?? update.type ?? update.sessionUpdate ?? update.session_update;
   return (
     kind === "pwragent_user_prompt" ||
     kind === "user_message_chunk" ||

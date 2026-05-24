@@ -40,6 +40,24 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("OK.");
   });
 
+  it("reads Kimi snake_case assistant chunks", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "Kimi text." },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Kimi text." }),
+    ]);
+    expect(replay.lastAssistantMessage).toBe("Kimi text.");
+  });
+
   it("renders ACP user message chunks as transcript messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -381,6 +399,41 @@ describe("AcpSessionReplayNormalizer", () => {
             path: "/repo/README.md",
           }),
         ],
+      }),
+    ]);
+  });
+
+  it("merges Kimi snake_case tool call updates into the original activity", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        session_update: "tool_call",
+        tool_call_id: "turn-1:tool-1",
+        title: "pnpm build",
+        status: "in_progress",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        session_update: "tool_call_update",
+        tool_call_id: "turn-1:tool-1",
+        title: "pnpm build",
+        status: "completed",
+        content: { type: "text", text: "Build succeeded" },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "turn-1:tool-1",
+        summary: "pnpm build",
+        status: "completed",
       }),
     ]);
   });

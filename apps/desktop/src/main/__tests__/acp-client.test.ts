@@ -109,6 +109,7 @@ describe("AcpAgentClient", () => {
       sessionId: "session-1",
       prompt: [{ type: "text", text: "hello" }],
     });
+    expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
     expect(prompt).toEqual({ sessionId: "session-1", turnId: "turn-1" });
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Test ACP",
@@ -121,6 +122,47 @@ describe("AcpAgentClient", () => {
       readRawAcpSessionPayload("acp:codex-acp", "session-1")?.transcriptUpdates,
     ).toBeUndefined();
     expect(sessionUpdates).toEqual(["session-1"]);
+  });
+
+  it("records Kimi snake_case assistant chunks as active turn text", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const sessionUpdates: string[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ update }) => {
+        sessionUpdates.push(String(update.session_update ?? update.kind));
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "turn-1",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "Kimi says hi." },
+    });
+    promptResponse.resolve({});
+    await vi.waitFor(() => {
+      expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+        "Kimi says hi.",
+      );
+    });
+
+    expect(sessionUpdates).toContain("agent_message_chunk");
+    expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
   });
 
   it("sends control prompts without recording transcript updates", async () => {
@@ -167,6 +209,7 @@ describe("AcpAgentClient", () => {
         sessionId: "session-1",
         prompt: [{ type: "text", text: "/yolo" }],
       },
+      timeoutMs: 60 * 60_000,
     });
     expect(client.readReplay("session-1").messages).toEqual([]);
     expect(store.getSession("acp:kimi", "session-1")).not.toHaveProperty(

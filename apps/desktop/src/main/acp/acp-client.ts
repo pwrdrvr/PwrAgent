@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  readAcpContentText,
   readAcpTopicTitle,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
@@ -26,7 +27,11 @@ import type {
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
-  request(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  request(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown>;
   notify?(method: string, params?: Record<string, unknown>): Promise<void>;
   close?(): Promise<void>;
   onNotification(
@@ -42,6 +47,7 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
+const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -237,10 +243,14 @@ export class AcpAgentClient {
     let result: unknown;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     try {
-      const promptRequest = this.options.transport.request("session/prompt", {
-        sessionId: protocolSessionId,
-        prompt: params.promptContent ?? textPrompt(params.prompt),
-      });
+      const promptRequest = this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: protocolSessionId,
+          prompt: params.promptContent ?? textPrompt(params.prompt),
+        },
+        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+      );
       result = await promptRequest;
     } catch (error) {
       this.finishTrackedTurn(params.sessionId);
@@ -307,10 +317,14 @@ export class AcpAgentClient {
     });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const promptRequest = this.options.transport.request("session/prompt", {
-      sessionId: protocolSessionId,
-      prompt: params.promptContent ?? textPrompt(params.prompt),
-    });
+    const promptRequest = this.options.transport.request(
+      "session/prompt",
+      {
+        sessionId: protocolSessionId,
+        prompt: params.promptContent ?? textPrompt(params.prompt),
+      },
+      ACP_PROMPT_REQUEST_TIMEOUT_MS,
+    );
     void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
@@ -358,10 +372,14 @@ export class AcpAgentClient {
     const suppression = { textChunks: [] };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
-      await this.options.transport.request("session/prompt", {
-        sessionId: protocolSessionId,
-        prompt: textPrompt(params.prompt),
-      });
+      await this.options.transport.request(
+        "session/prompt",
+        {
+          sessionId: protocolSessionId,
+          prompt: textPrompt(params.prompt),
+        },
+        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+      );
       return { text: suppression.textChunks.join("\n").trim() };
     } finally {
       this.suppressedControlPromptSessions.delete(protocolSessionId);
@@ -539,7 +557,11 @@ export class AcpAgentClient {
         ? toolCall.title.trim()
         : "ACP tool call";
     const toolCallId =
-      typeof toolCall.toolCallId === "string" ? toolCall.toolCallId : undefined;
+      typeof toolCall.toolCallId === "string"
+        ? toolCall.toolCallId
+        : typeof toolCall.tool_call_id === "string"
+          ? toolCall.tool_call_id
+          : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
 
@@ -820,7 +842,8 @@ function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
 }
 
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  const kind =
+    update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
 }
 
@@ -837,14 +860,13 @@ function readUpdateText(update: Record<string, unknown>): string | undefined {
   if (typeof update.text === "string") {
     return update.text;
   }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
-    return undefined;
+  if (typeof update.outputText === "string") {
+    return update.outputText;
   }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
-    : undefined;
+  if (typeof update.output_text === "string") {
+    return update.output_text;
+  }
+  return readAcpContentText(update.content);
 }
 
 function errorMessage(error: unknown): string {

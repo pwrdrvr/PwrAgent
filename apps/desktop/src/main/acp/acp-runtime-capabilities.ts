@@ -108,7 +108,8 @@ export function acpSessionRuntimeStateFromUpdate(
   update: Record<string, unknown>,
   now: number,
 ): BackendAcpSessionRuntimeState | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  const kind =
+    update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   if (kind === "agent_message_chunk") {
     const modeId = readModeUpdateMarker(update);
     return modeId ? { currentModeId: modeId, updatedAt: now } : undefined;
@@ -116,7 +117,9 @@ export function acpSessionRuntimeStateFromUpdate(
   if (kind === "current_mode_update") {
     const currentModeId =
       readString(update, "currentModeId") ??
+      readString(update, "current_mode_id") ??
       readString(update, "modeId") ??
+      readString(update, "mode_id") ??
       readString(update, "id");
     return currentModeId ? { currentModeId, updatedAt: now } : undefined;
   }

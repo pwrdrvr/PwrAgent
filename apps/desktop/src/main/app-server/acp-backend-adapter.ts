@@ -3,6 +3,7 @@ import {
   type AcpBackendId,
   type AgentEvent,
   type AppServerBackendKind,
+  type AppServerNotification,
   type AppServerPendingRequestNotification,
   type AppServerThreadMessagePart,
   type AppServerThreadReplay,
@@ -41,7 +42,10 @@ import {
   type AcpSessionMetadata,
   type AcpSessionStore as AcpSessionStoreContract,
 } from "../acp/acp-session-store";
-import { AcpSessionReplayNormalizer } from "../acp/acp-session-normalizer";
+import {
+  AcpSessionReplayNormalizer,
+  readAcpContentText,
+} from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
@@ -109,7 +113,8 @@ export type AcpBackendAdapterOptions = {
 export function readAcpUpdateKind(
   update: Record<string, unknown>,
 ): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
+  const kind =
+    update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
 }
 
@@ -122,14 +127,10 @@ export function readAcpUpdateText(
   if (typeof update.outputText === "string") {
     return update.outputText;
   }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
-    return undefined;
+  if (typeof update.output_text === "string") {
+    return update.output_text;
   }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
-    : undefined;
+  return readAcpContentText(update.content);
 }
 
 export function readKimiYoloExecutionModeFromText(
@@ -146,6 +147,64 @@ export function readKimiYoloExecutionModeFromText(
     return "default";
   }
   return undefined;
+}
+
+function liveToolNotificationKey(
+  backend: AcpBackendId,
+  notification: AppServerNotification,
+): string | undefined {
+  const params = asPlainRecord(notification.params);
+  const item = asPlainRecord(params?.item);
+  const threadId = readNonEmptyString(params, "threadId");
+  const turnId = readNonEmptyString(params, "turnId") ?? "no-turn";
+  const itemId = readNonEmptyString(item, "id");
+  return threadId && itemId
+    ? `${backend}:${threadId}:${turnId}:${itemId}`
+    : undefined;
+}
+
+function liveToolNotificationFingerprint(
+  notification: AppServerNotification,
+): string | undefined {
+  const params = asPlainRecord(notification.params);
+  const item = asPlainRecord(params?.item);
+  if (!item) {
+    return undefined;
+  }
+  const data = asPlainRecord(item.data);
+  const output = readNonEmptyString(data, "output") ?? "";
+  return JSON.stringify({
+    method: notification.method,
+    type: item.type,
+    toolName: item.toolName,
+    status: item.status,
+    command: item.command,
+    commandActions: item.commandActions,
+    outputHash: hashString(output),
+    outputLength: output.length,
+  });
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNonEmptyString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return hash.toString(16);
 }
 
 export function buildAcpCapabilities(): BackendCapabilities {
@@ -522,6 +581,7 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
+  private readonly liveNotificationFingerprints = new Map<string, string>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -730,12 +790,43 @@ export class AcpBackendAdapter {
   async close(): Promise<void> {
     const acpClients = [...this.acpClients.values()];
     this.acpClients.clear();
+    this.liveNotificationFingerprints.clear();
     await Promise.all(
       acpClients.map(async (clientPromise) => {
         const client = await clientPromise.catch(() => undefined);
         await client?.dispose();
       }),
     );
+  }
+
+  private shouldEmitLiveToolNotification(
+    backend: AcpBackendId,
+    notification: AppServerNotification,
+  ): boolean {
+    const key = liveToolNotificationKey(backend, notification);
+    const fingerprint = liveToolNotificationFingerprint(notification);
+    if (!key || !fingerprint) {
+      return true;
+    }
+    const previous = this.liveNotificationFingerprints.get(key);
+    if (previous === fingerprint) {
+      return false;
+    }
+    this.liveNotificationFingerprints.set(key, fingerprint);
+    return true;
+  }
+
+  private clearLiveToolNotificationFingerprints(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    turnId: string;
+  }): void {
+    const prefix = `${params.backend}:${params.threadId}:${params.turnId}:`;
+    for (const key of this.liveNotificationFingerprints.keys()) {
+      if (key.startsWith(prefix)) {
+        this.liveNotificationFingerprints.delete(key);
+      }
+    }
   }
 
   private async readLocalAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
@@ -836,17 +927,25 @@ export class AcpBackendAdapter {
             });
           }
         }
-        for (const notification of acpToolUpdateNotifications({
+        const toolNotifications = acpToolUpdateNotifications({
           threadId: sessionId,
           turnId,
           update,
-        })) {
+        }).filter((notification) =>
+          this.shouldEmitLiveToolNotification(agent.backendId, notification),
+        );
+        for (const notification of toolNotifications) {
           await this.emit({
             backend: agent.backendId,
             notification,
           });
         }
         if (updateKind === "turn_finished" && turnId) {
+          this.clearLiveToolNotificationFingerprints({
+            backend: agent.backendId,
+            threadId: sessionId,
+            turnId,
+          });
           const outputText = readAcpUpdateText(update);
           await this.emit({
             backend: agent.backendId,

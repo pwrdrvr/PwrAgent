@@ -200,7 +200,13 @@ export function createProtocolLogObserver(
           sessionId: pickString(params, "sessionId"),
           turnId: pickString(params, "turnId"),
           threadId: pickString(params, "threadId"),
-          updateKind: pickString(update, "sessionUpdate", "kind", "type"),
+          updateKind: pickString(
+            update,
+            "sessionUpdate",
+            "session_update",
+            "kind",
+            "type",
+          ),
         }),
       );
       if (kind === "response" && id) {
