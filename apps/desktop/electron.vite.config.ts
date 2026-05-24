@@ -87,7 +87,24 @@ export default defineConfig(({ command }) => {
       },
       build: {
         minify: "esbuild",
-        sourcemap: false
+        sourcemap: false,
+        rollupOptions: {
+          output: {
+            manualChunks(id) {
+              if (id.includes("node_modules")) {
+                if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+                  return "vendor-react";
+                }
+                if (/[\\/]node_modules[\\/](react-markdown|remark-|unified|mdast-|micromark|markdown-|vfile|hast-)[\\/]/.test(id)) {
+                  return "vendor-markdown";
+                }
+                if (/[\\/]node_modules[\\/](@tiptap|prosemirror-|@popperjs|tippy)[\\/]/.test(id)) {
+                  return "vendor-tiptap";
+                }
+              }
+            }
+          }
+        }
       }
     }
   };
