@@ -2629,6 +2629,15 @@ script = "echo setup"
       events.push(event);
     });
 
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "kimi-session-1",
+        executionMode: "default",
+      }),
+    ]);
+
     await registry.startTurn({
       backend: acpBackendId,
       threadId: "kimi-session-1",
@@ -2668,6 +2677,14 @@ script = "echo setup"
     });
 
     expect(sessions[0]?.executionMode).toBe("full-access");
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "kimi-session-1",
+        executionMode: "full-access",
+      }),
+    ]);
     const methods = events.map((event) => event.notification.method);
     expect(methods).toContain("thread/executionMode/queued");
     expect(methods).toContain("thread/executionMode/updated");
@@ -7160,6 +7177,21 @@ command = "pnpm dev"
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
     });
+
+    await registry.close();
+  });
+
+  it("rejects review start for ACP backends instead of routing through built-in clients", async () => {
+    const { acpBackendId, registry } = createKimiAcpRegistry();
+
+    await expect(
+      registry.startReview({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      }),
+    ).rejects.toThrow("Selected backend does not support review/start");
 
     await registry.close();
   });

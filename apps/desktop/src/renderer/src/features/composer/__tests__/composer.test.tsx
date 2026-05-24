@@ -2640,6 +2640,63 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("does not open the review picker for backends without review support", async () => {
+    const kimiBackend = backendSummary("acp:kimi" as BackendSummary["kind"]);
+    const startReview = vi.fn();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...kimiBackend,
+            capabilities: {
+              ...kimiBackend.capabilities,
+              startReview: false,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "kimi-session-1",
+          title: "Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(startReview).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:kimi",
+          threadId: "kimi-session-1",
+          input: [{ type: "text", text: "/review" }],
+        }),
+      );
+    });
+  });
+
   it("queues review target submissions while a turn is active", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

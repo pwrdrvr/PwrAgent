@@ -4282,6 +4282,9 @@ export class DesktopBackendRegistry {
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
+    if (isAcpBackendId(params.backend)) {
+      throw new Error("Selected backend does not support review/start");
+    }
     if (params.backend === "codex" && this.threadHasActiveTurn(params.threadId)) {
       throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
     }
@@ -4305,7 +4308,7 @@ export class DesktopBackendRegistry {
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, startWithClient)
-        : await startWithClient(this.grokClient);
+        : await startWithClient(this.getClient(params.backend));
 
     return {
       backend: params.backend,
@@ -6715,6 +6718,9 @@ export class DesktopBackendRegistry {
     return (
       method === "thread/archived" ||
       method === "thread/acpRuntime/updated" ||
+      method === "thread/executionMode/queueCleared" ||
+      method === "thread/executionMode/queued" ||
+      method === "thread/executionMode/updated" ||
       method === "thread/name/updated" ||
       method === "thread/started" ||
       method === "thread/unarchived" ||

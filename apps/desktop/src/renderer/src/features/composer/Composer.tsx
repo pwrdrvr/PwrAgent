@@ -1318,6 +1318,7 @@ export function Composer(props: ComposerProps) {
       ),
     [props.backends, props.launchpad?.backend, props.thread?.source]
   );
+  const supportsReview = backend ? backend.capabilities.startReview !== false : true;
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -1862,7 +1863,7 @@ export function Composer(props: ComposerProps) {
       .map((match) => match.skill);
   }, [props.skills, trigger]);
   const filteredSlashCommands = useMemo(() => {
-    if (!slashTrigger) {
+    if (!slashTrigger || !supportsReview) {
       return [];
     }
 
@@ -1872,7 +1873,7 @@ export function Composer(props: ComposerProps) {
         command.label.toLowerCase().startsWith(typed) ||
         command.description.toLowerCase().includes(typed.slice(1))
     );
-  }, [draft, slashTrigger]);
+  }, [draft, slashTrigger, supportsReview]);
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
@@ -1919,7 +1920,15 @@ export function Composer(props: ComposerProps) {
     [props.directory, props.thread]
   );
   const isBareReviewCommand = draft.trim() === "/review";
-  const isReviewComposerOpen = Boolean(reviewConfig && isBareReviewCommand);
+  const isReviewComposerOpen = Boolean(
+    supportsReview && reviewConfig && isBareReviewCommand
+  );
+
+  useEffect(() => {
+    if (!supportsReview && reviewConfig) {
+      setReviewConfig(undefined);
+    }
+  }, [reviewConfig, supportsReview]);
 
   useEffect(() => {
     return () => {
@@ -2293,6 +2302,11 @@ export function Composer(props: ComposerProps) {
   }): Promise<void> => {
     if (props.disabled) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      return;
+    }
+    if (!supportsReview) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      setSendError("Selected backend does not support reviews.");
       return;
     }
     if (!options?.queued && imageAttachments.length > 0) {
@@ -2760,7 +2774,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
-    const reviewCommand = parseReviewCommand(draft);
+    const reviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
     if (shouldQueueThreadSubmit()) {
       if (activeTurnIdRef.current && mode === "steer") {
         steerCurrentDraft();
