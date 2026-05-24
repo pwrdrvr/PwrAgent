@@ -3835,6 +3835,15 @@ export class DesktopBackendRegistry {
       executionMode,
       runtime: acpRuntimeWithModel,
     });
+    const dynamicTools =
+      backend === "codex" ? buildAutomationInspectionDynamicToolSpecs() : undefined;
+    if (dynamicTools?.length) {
+      backendRegistryLog.info("attaching automation inspection dynamic tools", {
+        backend,
+        toolCount: dynamicTools.length,
+        tools: dynamicTools.map((tool) => tool.name),
+      });
+    }
 
     const result = isAcpBackendId(backend)
       ? await this.startAcpSession({
@@ -3850,10 +3859,7 @@ export class DesktopBackendRegistry {
           approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
           sandbox: request.sandbox ?? modeSettings.sandbox,
           codexEnvironmentRuntime: request.codexEnvironmentRuntime,
-          dynamicTools:
-            backend === "codex"
-              ? buildAutomationInspectionDynamicToolSpecs()
-              : undefined,
+          dynamicTools,
         });
     const startedAt = Date.now();
     const gitBranch = cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined;

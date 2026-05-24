@@ -91,9 +91,19 @@ export class DesktopAutomationService {
         this.handleRegistryEvent(event),
       );
     }
-    this.options.registry.setAutomationInspectionHandler?.((request) =>
-      this.inspectionBus.inspect(request),
-    );
+    this.options.registry.setAutomationInspectionHandler?.((request) => {
+      const response = this.inspectionBus.inspect(request);
+      const payload = response.ok ? response.data : response.error;
+      automationServiceLog.info("automation inspection request handled", {
+        backend: request.context.backend,
+        errorCode: response.ok ? undefined : response.error.code,
+        ok: response.ok,
+        operation: request.operation,
+        resultBytes: JSON.stringify(payload).length,
+        threadId: request.context.threadId,
+      });
+      return response;
+    });
     this.scheduler.start();
   }
 

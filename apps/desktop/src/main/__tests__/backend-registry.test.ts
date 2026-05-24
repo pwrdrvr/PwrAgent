@@ -5023,7 +5023,7 @@ script = "pnpm install"
       threadId: "thread-1",
       executionMode: "default",
     });
-    expect(codexClient.lastStartThreadParams).toEqual({
+    expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
       model: "gpt-5.5",
       reasoningEffort: "medium",
@@ -5031,6 +5031,12 @@ script = "pnpm install"
       fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
+      dynamicTools: expect.arrayContaining([
+        expect.objectContaining({
+          namespace: "pwragent_automations",
+          name: "list_automations",
+        }),
+      ]),
     });
 
     await registry.close();
