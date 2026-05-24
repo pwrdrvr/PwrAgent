@@ -8,6 +8,7 @@ const DEFAULT_FIRST_PROMPT = "does this build?";
 const DEFAULT_SECOND_PROMPT =
   "can you reduce big bundle sizes? make sure each messaging library is in a chunk so it doesn't get pulled in unless used";
 const DEFAULT_TIMEOUT_MS = 60 * 60_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 const PREVIEW_LIMIT = 180;
 
 const args = parseArgs(process.argv.slice(2));
@@ -19,6 +20,9 @@ const cwd = args.cwd ?? process.cwd();
 const firstPrompt = args.first ?? DEFAULT_FIRST_PROMPT;
 const secondPrompt = args.second ?? DEFAULT_SECOND_PROMPT;
 const timeoutMs = Number(args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+const idleTimeoutMs = Number(
+  args.idleTimeoutMs ?? args["idle-timeout-ms"] ?? DEFAULT_IDLE_TIMEOUT_MS,
+);
 const enableYolo = Boolean(args.yolo);
 
 let nextId = 1;
@@ -29,6 +33,7 @@ let totalInbound = 0;
 let loggedSecondTurn = false;
 let previousText = "";
 let secondTurnStartedAt = 0;
+let lastLoggedEventSummary = "";
 const pending = new Map();
 const counts = new Map();
 
@@ -44,6 +49,7 @@ async function main() {
   console.log(`cwd: ${cwd}`);
   console.log(`command: kimi ${kimiArgs.join(" ")}`);
   console.log(`yolo: ${enableYolo ? "enabled via top-level --yolo" : "disabled"}`);
+  console.log(`idle timeout: ${idleTimeoutMs}ms`);
   console.log(`first prompt: ${firstPrompt}`);
   console.log(`second prompt: ${secondPrompt}`);
 
@@ -122,10 +128,20 @@ async function main() {
   loggedSecondTurn = true;
   previousText = "";
   secondTurnStartedAt = Date.now();
-  await request("session/prompt", {
-    sessionId,
-    prompt: textPrompt(secondPrompt),
-  }, timeoutMs);
+  try {
+    await withSecondTurnIdleTimeout(
+      request("session/prompt", {
+        sessionId,
+        prompt: textPrompt(secondPrompt),
+      }, timeoutMs),
+    );
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    printSummary();
+    cleanup();
+    process.exitCode = 2;
+    return;
+  }
 
   console.log("Second prompt completed.");
   printSummary();
@@ -184,6 +200,17 @@ function handleLine(line) {
   }
 
   if (envelope.id != null && envelope.method) {
+    if (loggedSecondTurn) {
+      console.log(
+        [
+          `n=${totalInbound + 1}`,
+          "direction=inbound-request",
+          `method=${envelope.method}`,
+          `id=${envelope.id}`,
+          `params=${JSON.stringify(truncate(JSON.stringify(envelope.params ?? {})))}`,
+        ].join(" "),
+      );
+    }
     child.stdin.write(`${JSON.stringify({
       jsonrpc: "2.0",
       id: envelope.id,
@@ -231,7 +258,36 @@ function handleLine(line) {
     text ? `text=${JSON.stringify(truncate(text))}` : undefined,
   ].filter(Boolean);
 
-  console.log(fields.join(" "));
+  lastLoggedEventSummary = fields.join(" ");
+  console.log(lastLoggedEventSummary);
+}
+
+function withSecondTurnIdleTimeout(promise) {
+  let timer;
+  const idlePromise = new Promise((_, reject) => {
+    timer = setInterval(() => {
+      if (!loggedSecondTurn || secondTurnStartedAt === 0) {
+        return;
+      }
+      const referenceTime = lastMessageAt || secondTurnStartedAt;
+      const idleMs = Date.now() - referenceTime;
+      if (idleMs < idleTimeoutMs) {
+        return;
+      }
+      clearInterval(timer);
+      reject(
+        new Error(
+          `Idle timeout after ${idleMs}ms without inbound ACP messages. Last event: ${
+            lastLoggedEventSummary || "none"
+          }`,
+        ),
+      );
+    }, Math.min(1_000, Math.max(100, idleTimeoutMs)));
+  });
+
+  return Promise.race([promise, idlePromise]).finally(() => {
+    clearInterval(timer);
+  });
 }
 
 function printSummary() {
@@ -340,6 +396,8 @@ Options:
   --first <prompt>      First prompt. Defaults to: ${DEFAULT_FIRST_PROMPT}
   --second <prompt>     Second prompt. Defaults to the bundle-size repro prompt.
   --timeout-ms <ms>     session/prompt timeout. Defaults to ${DEFAULT_TIMEOUT_MS}.
+  --idle-timeout-ms <ms> Exit if the second turn receives no ACP messages for
+                       this long. Defaults to ${DEFAULT_IDLE_TIMEOUT_MS}.
   --yolo               Launch ACP as kimi --yolo acp.
   --help               Show this help.
 
