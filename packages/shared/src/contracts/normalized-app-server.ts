@@ -846,6 +846,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "backend/acpRuntimeCapabilities/updated";
+      params: {
+        backend: AppServerBackendKind;
+      };
+    }
+  | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;

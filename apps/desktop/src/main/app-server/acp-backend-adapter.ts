@@ -1095,6 +1095,15 @@ export class AcpBackendAdapter {
           lastDiscoveryError: runtimeCapabilities.lastError,
           updatedAt: Math.max(current.updatedAt, now),
         });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "backend/acpRuntimeCapabilities/updated",
+            params: {
+              backend: agent.backendId,
+            },
+          },
+        });
         if (sessionId && runtimeState && this.acpSessionStore?.upsertSession) {
           const metadata = this.getSession(agent.backendId, sessionId);
           if (metadata) {

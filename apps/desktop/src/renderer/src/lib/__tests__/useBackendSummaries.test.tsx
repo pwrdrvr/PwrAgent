@@ -225,4 +225,114 @@ describe("useBackendSummaries", () => {
     });
     expect(listBackends).toHaveBeenCalledTimes(2);
   });
+
+  it("refreshes ACP model details when runtime capabilities update", async () => {
+    let eventHandler: ((event: AgentEvent) => void) | undefined;
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValueOnce({
+        fetchedAt: 1,
+        backends: [
+          {
+            kind: "acp:kimi",
+            source: "acp",
+            label: "Kimi Code CLI",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              archiveThread: true,
+              restoreThread: true,
+              archiveWorktree: false,
+              restoreWorktree: false,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              startReview: false,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        fetchedAt: 2,
+        backends: [
+          {
+            kind: "acp:kimi",
+            source: "acp",
+            label: "Kimi Code CLI",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              archiveThread: true,
+              restoreThread: true,
+              archiveWorktree: false,
+              restoreWorktree: false,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              startReview: false,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+            launchpadOptions: {
+              models: [
+                {
+                  id: "kimi-code/kimi-for-coding,thinking",
+                  label: "kimi-for-coding (thinking)",
+                  current: true,
+                },
+              ],
+            },
+          },
+        ],
+      });
+    const desktopApi: DesktopApi = {
+      listBackends,
+      onAgentEvent: (callback) => {
+        eventHandler = callback;
+        return () => undefined;
+      },
+    };
+
+    const { result } = renderHook(() => useBackendSummaries(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.launchpadOptions).toBeUndefined();
+    });
+
+    eventHandler?.({
+      backend: "acp:kimi",
+      notification: {
+        method: "backend/acpRuntimeCapabilities/updated",
+        params: {
+          backend: "acp:kimi",
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
+        id: "kimi-code/kimi-for-coding,thinking",
+        label: "kimi-for-coding (thinking)",
+      });
+    });
+    expect(listBackends).toHaveBeenCalledTimes(2);
+  });
 });

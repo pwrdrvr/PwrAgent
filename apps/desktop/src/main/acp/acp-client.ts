@@ -159,9 +159,12 @@ export class AcpAgentClient {
         version: "0.0.0",
       },
     });
-    this.captureRuntimeCapabilities({
+    const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "initialize",
       result,
+    });
+    this.notifyRuntimeCapabilities({
+      runtimeCapabilities,
     });
   }
 

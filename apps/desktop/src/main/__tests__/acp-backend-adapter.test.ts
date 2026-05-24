@@ -350,6 +350,74 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("emits a backend update when ACP runtime capabilities are discovered", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+        models: {
+          currentModelId: "kimi-code/kimi-for-coding,thinking",
+          availableModels: [
+            {
+              modelId: "kimi-code/kimi-for-coding,thinking",
+              name: "kimi-for-coding (thinking)",
+            },
+          ],
+        },
+      },
+    });
+    const events: AgentEvent[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    await adapter.getClient(backendId);
+
+    expect(events).toContainEqual({
+      backend: backendId,
+      notification: {
+        method: "backend/acpRuntimeCapabilities/updated",
+        params: {
+          backend: backendId,
+        },
+      },
+    });
+
+    await adapter.close();
+  });
+
   it("reads Kimi replay from local rollout history instead of session/load", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
