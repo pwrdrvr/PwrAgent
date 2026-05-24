@@ -39,13 +39,15 @@ main().catch((error) => {
 });
 
 async function main() {
+  const kimiArgs = enableYolo ? ["--yolo", "acp"] : ["acp"];
   console.log("Starting kimi acp");
   console.log(`cwd: ${cwd}`);
-  console.log(`yolo: ${enableYolo ? "enabled via /yolo prompt" : "disabled"}`);
+  console.log(`command: kimi ${kimiArgs.join(" ")}`);
+  console.log(`yolo: ${enableYolo ? "enabled via top-level --yolo" : "disabled"}`);
   console.log(`first prompt: ${firstPrompt}`);
   console.log(`second prompt: ${secondPrompt}`);
 
-  child = spawn("kimi", ["acp"], {
+  child = spawn("kimi", kimiArgs, {
     cwd,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -108,15 +110,6 @@ async function main() {
     throw new Error(`session/new did not return a session id: ${JSON.stringify(session)}`);
   }
   console.log(`sessionId: ${sessionId}`);
-
-  if (enableYolo) {
-    console.log("Enabling YOLO mode with /yolo and waiting for completion...");
-    await request("session/prompt", {
-      sessionId,
-      prompt: textPrompt("/yolo"),
-    }, timeoutMs);
-    console.log("YOLO mode request completed.");
-  }
 
   console.log("Running first prompt and waiting for completion...");
   await request("session/prompt", {
@@ -347,7 +340,7 @@ Options:
   --first <prompt>      First prompt. Defaults to: ${DEFAULT_FIRST_PROMPT}
   --second <prompt>     Second prompt. Defaults to the bundle-size repro prompt.
   --timeout-ms <ms>     session/prompt timeout. Defaults to ${DEFAULT_TIMEOUT_MS}.
-  --yolo               Send /yolo before the repro prompts.
+  --yolo               Launch ACP as kimi --yolo acp.
   --help               Show this help.
 
 Warning: the default prompts allow Kimi to inspect and edit files in --cwd.
