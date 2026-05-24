@@ -1636,15 +1636,7 @@ describe("DesktopBackendRegistry", () => {
           updatedAt: 3000,
           executionMode: "default",
           status: "idle",
-          transcriptUpdates: [
-            {
-              receivedAt: 2000,
-              update: {
-                kind: "pwragent_user_prompt",
-                prompt: "What is this project?",
-              },
-            },
-          ],
+          hasConversationHistory: true,
         },
       ]),
     });
@@ -3353,23 +3345,7 @@ script = "echo setup"
       updatedAt: 3000,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 2000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "What is this project?",
-            turnId: "pending:session-1",
-          },
-        },
-        {
-          receivedAt: 2100,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "It is PwrSnap." },
-          },
-        },
-      ],
+      hasConversationHistory: true,
     };
     const acpClient = {
       initialize: vi.fn(async () => undefined),
@@ -9074,7 +9050,6 @@ command = "pnpm dev"
       executionMode: ThreadExecutionMode;
       title?: string;
       createdAt?: number;
-      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
     }) => {
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
@@ -9086,7 +9061,6 @@ command = "pnpm dev"
         updatedAt: 2000,
         executionMode: params.executionMode,
         status: "idle",
-        transcriptUpdates: params.transcriptUpdates,
       };
       sessionStore.upsertSession(metadata);
       return metadata;
@@ -9183,7 +9157,6 @@ command = "pnpm dev"
       executionMode: ThreadExecutionMode;
       title?: string;
       createdAt?: number;
-      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
     }) => {
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
@@ -9195,7 +9168,6 @@ command = "pnpm dev"
         updatedAt: 2000,
         executionMode: params.executionMode,
         status: "idle",
-        transcriptUpdates: params.transcriptUpdates,
       };
       sessionStore.upsertSession(metadata);
       return metadata;
@@ -9340,16 +9312,7 @@ command = "pnpm dev"
           updatedAt: 1000,
           executionMode: "default",
           status: "idle",
-          transcriptUpdates: [
-            {
-              receivedAt: 1000,
-              update: {
-                kind: "pwragent_user_prompt",
-                prompt: "What is this project?",
-                turnId: "pending:session-1:1000",
-              },
-            },
-          ],
+          hasConversationHistory: true,
         },
       ]),
       gitWorkspaceHandoffService: {
@@ -9382,16 +9345,7 @@ command = "pnpm dev"
         updatedAt: 1000,
         executionMode: "default",
         status: "idle",
-        transcriptUpdates: [
-          {
-            receivedAt: 1000,
-            update: {
-              kind: "pwragent_user_prompt",
-              prompt: "What is this project?",
-              turnId: "pending:session-1:1000",
-            },
-          },
-        ],
+        hasConversationHistory: true,
       },
     ]);
     const ensureSession = vi.fn(async () => {
@@ -9405,7 +9359,6 @@ command = "pnpm dev"
       executionMode: ThreadExecutionMode;
       title?: string;
       createdAt?: number;
-      transcriptUpdates?: AcpSessionMetadata["transcriptUpdates"];
     }) => {
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
@@ -9417,7 +9370,6 @@ command = "pnpm dev"
         updatedAt: 2000,
         executionMode: params.executionMode,
         status: "idle",
-        transcriptUpdates: params.transcriptUpdates,
       };
       sessionStore.upsertSession(metadata);
       return metadata;

@@ -55,6 +55,12 @@ the active PwrAgent profile sqlite database under `~/.pwragent/profiles/<name>/`
 Installed agents continue to be listed from profile state when the registry is
 temporarily unavailable.
 
+ACP session metadata does not include full transcript history. Providers that
+support `session/load` remain the source of truth for restored ACP transcripts.
+If PwrAgent later needs to persist fallback history for an ACP provider that
+cannot restore its own sessions, use append-only JSONL rollout files rather
+than sqlite; see [thread-history-persistence.md](thread-history-persistence.md).
+
 ## Rollout Notes
 
 Ship with a narrow allowlist. Add new agents only after agent-specific smoke

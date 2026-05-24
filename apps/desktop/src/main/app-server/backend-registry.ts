@@ -3298,7 +3298,6 @@ export class DesktopBackendRegistry {
       executionMode: session.executionMode,
       title: session.title,
       createdAt: session.createdAt,
-      transcriptUpdates: session.transcriptUpdates,
     });
   }
 

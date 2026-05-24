@@ -20,11 +20,9 @@ import {
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
 import type {
-  AcpPersistedTranscriptUpdate,
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
-import { appendCoalescedTranscriptUpdate } from "./acp-session-store.js";
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
@@ -44,8 +42,6 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
-const DEFAULT_TRANSCRIPT_PERSISTENCE_FLUSH_DELAY_MS = 1000;
-
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -86,7 +82,6 @@ export type AcpAgentClientOptions = {
   onRequest?: (
     request: AppServerPendingRequestNotification
   ) => Promise<unknown> | unknown;
-  transcriptPersistenceFlushDelayMs?: number;
 };
 
 export class AcpAgentClient {
@@ -99,25 +94,14 @@ export class AcpAgentClient {
     }
   >();
   private readonly loadedSessionCwds = new Map<string, string | undefined>();
-  private readonly suppressLoadReplaySessions = new Set<string>();
   private readonly suppressedControlPromptSessions = new Map<
     string,
     { textChunks: string[] }
   >();
-  private readonly hydratedTranscriptSessions = new Set<string>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
-  private readonly transcriptPersistenceFlushDelayMs: number;
-  private readonly pendingTranscriptUpdates = new Map<
-    string,
-    AcpPersistedTranscriptUpdate[]
-  >();
-  private readonly transcriptPersistenceTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
   private unsubscribe?: () => void;
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
@@ -126,9 +110,6 @@ export class AcpAgentClient {
     this.now = options.now ?? Date.now;
     this.runtimeCapabilities = options.initialRuntimeCapabilities;
     this.approvalRequesterName = approvalRequesterNameForOptions(options);
-    this.transcriptPersistenceFlushDelayMs =
-      options.transcriptPersistenceFlushDelayMs ??
-      DEFAULT_TRANSCRIPT_PERSISTENCE_FLUSH_DELAY_MS;
   }
 
   async initialize(): Promise<void> {
@@ -169,12 +150,9 @@ export class AcpAgentClient {
     this.unsubscribe = undefined;
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = undefined;
-    this.flushAllPendingTranscriptUpdates();
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
     this.loadedSessionCwds.clear();
-    this.suppressLoadReplaySessions.clear();
-    this.hydratedTranscriptSessions.clear();
     await this.options.transport.close?.();
   }
 
@@ -185,7 +163,6 @@ export class AcpAgentClient {
     title?: string;
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
-    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
     const result = await this.options.transport.request("session/new", {
@@ -228,7 +205,6 @@ export class AcpAgentClient {
       executionMode: params.executionMode,
       acpRuntime: combinedRuntimeState,
       status: "idle",
-      transcriptUpdates: params.transcriptUpdates,
     };
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
@@ -247,7 +223,6 @@ export class AcpAgentClient {
     promptContent?: AcpPromptContentBlock[];
     parts?: AppServerThreadMessagePart[];
   }): Promise<{ sessionId: string; turnId: string }> {
-    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -258,15 +233,7 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
-    this.persistTranscriptUpdate(params.sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_user_prompt",
-        prompt: params.prompt,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
-        turnId,
-      },
-    });
+    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     let result: unknown;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     try {
@@ -274,10 +241,9 @@ export class AcpAgentClient {
         sessionId: protocolSessionId,
         prompt: params.promptContent ?? textPrompt(params.prompt),
       });
-      this.clearLoadReplaySuppression(protocolSessionId);
       result = await promptRequest;
     } catch (error) {
-      this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+      this.finishTrackedTurn(params.sessionId);
       this.recordPromptFailure(params.sessionId, turnId, error);
       throw error;
     }
@@ -295,16 +261,14 @@ export class AcpAgentClient {
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
     this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    return this.hydratePersistedTranscript(metadata);
+    if (this.supportsSessionLoad()) {
+      await this.ensureSession(metadata);
+    }
+    return this.replayForSessionMetadata(metadata);
   }
 
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
-    this.options.store.upsertSession(metadata);
-    this.rememberSessionIds(metadata);
-    if (!this.supportsSessionLoad()) {
-      return;
-    }
-    await this.loadSessionFromAgent(metadata);
+    await this.ensureSession(metadata);
   }
 
   async ensureSession(metadata: AcpSessionMetadata): Promise<void> {
@@ -331,7 +295,6 @@ export class AcpAgentClient {
     parts?: AppServerThreadMessagePart[];
     turnId?: string;
   }): { sessionId: string; turnId: string } {
-    this.hydratePersistedTranscriptForSession(params.sessionId);
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const receivedAt = this.now();
     this.startTrackedTurn(params.sessionId, turnId);
@@ -342,21 +305,12 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
-    this.persistTranscriptUpdate(params.sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_user_prompt",
-        prompt: params.prompt,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
-        turnId,
-      },
-    });
+    this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.options.transport.request("session/prompt", {
       sessionId: protocolSessionId,
       prompt: params.promptContent ?? textPrompt(params.prompt),
     });
-    this.clearLoadReplaySuppression(protocolSessionId);
     void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
@@ -371,7 +325,7 @@ export class AcpAgentClient {
         });
       })
       .catch((error) => {
-        this.finishTrackedTurn(params.sessionId, { persistFinished: false });
+        this.finishTrackedTurn(params.sessionId);
         this.recordPromptFailure(params.sessionId, turnId, error);
         return Promise.resolve(
           this.options.onPromptError?.({
@@ -497,7 +451,6 @@ export class AcpAgentClient {
   }
 
   readReplay(sessionId: string): AppServerThreadReplay {
-    this.hydratePersistedTranscriptForSession(sessionId);
     return this.normalizerFor(sessionId).replay();
   }
 
@@ -529,17 +482,8 @@ export class AcpAgentClient {
       return;
     }
     const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
-    if (this.suppressLoadReplaySessions.has(protocolSessionId)) {
-      if (title) {
-        void this.notifySessionUpdate({
-          sessionId,
-          replay: this.normalizerFor(sessionId).replay(),
-          title,
-          turnId: activeTurn?.turnId,
-          update,
-        });
-      }
-      return;
+    if (isConversationHistoryUpdate(update)) {
+      this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
       activeTurn.assistantText += readUpdateText(update) ?? "";
@@ -549,14 +493,6 @@ export class AcpAgentClient {
       update,
       receivedAt,
     } satisfies AcpSessionUpdate);
-    this.persistTranscriptUpdate(
-      sessionId,
-      {
-        receivedAt,
-        update,
-      },
-      { flush: "deferred" },
-    );
     void this.notifySessionUpdate({
       sessionId,
       replay,
@@ -634,113 +570,29 @@ export class AcpAgentClient {
     return normalizer;
   }
 
-  private applyPersistedTranscriptUpdates(
-    normalizer: AcpSessionReplayNormalizer,
+  private replayForSessionMetadata(
     metadata: AcpSessionMetadata,
   ): AppServerThreadReplay {
-    let replay = normalizer.replay();
-    for (const item of metadata.transcriptUpdates ?? []) {
-      const runtimeState = acpSessionRuntimeStateFromUpdate(
-        item.update,
-        item.receivedAt,
-      );
-      if (runtimeState) {
-        this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
-      }
-      this.updateSessionTitleFromAcpUpdate(
-        metadata.sessionId,
-        item.update,
-        item.receivedAt,
-      );
-      replay = normalizer.apply({
-        sessionId: metadata.sessionId,
-        update: item.update,
-        receivedAt: item.receivedAt,
-      });
-    }
+    const normalizer = this.normalizerFor(metadata.sessionId);
+    const replay = normalizer.replay();
     return {
       ...replay,
       threadStatus: acpSessionThreadStatus(metadata.status, replay.threadStatus),
     };
   }
 
-  private hydratePersistedTranscriptForSession(sessionId: string): AppServerThreadReplay {
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
-      return this.normalizerFor(sessionId).replay();
-    }
-    return this.hydratePersistedTranscript(metadata);
-  }
-
-  private hydratePersistedTranscript(
-    metadata: AcpSessionMetadata,
-  ): AppServerThreadReplay {
-    const normalizer = this.normalizerFor(metadata.sessionId);
-    if (!this.hydratedTranscriptSessions.has(metadata.sessionId)) {
-      this.applyPersistedTranscriptUpdates(normalizer, metadata);
-      this.hydratedTranscriptSessions.add(metadata.sessionId);
-    }
-    return {
-      ...normalizer.replay(),
-      threadStatus: acpSessionThreadStatus(metadata.status, normalizer.replay().threadStatus),
-    };
-  }
-
-  private persistTranscriptUpdate(
+  private markSessionHasConversationHistory(
     sessionId: string,
-    update: AcpPersistedTranscriptUpdate,
-    options?: { flush?: "deferred" | "immediate" },
+    receivedAt: number,
   ): void {
-    const pending = this.pendingTranscriptUpdates.get(sessionId) ?? [];
-    appendCoalescedTranscriptUpdate(pending, update);
-    this.pendingTranscriptUpdates.set(sessionId, pending);
-    if (
-      options?.flush !== "deferred" ||
-      this.transcriptPersistenceFlushDelayMs <= 0
-    ) {
-      this.flushPendingTranscriptUpdates(sessionId);
-      return;
-    }
-    if (this.transcriptPersistenceTimers.has(sessionId)) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      this.transcriptPersistenceTimers.delete(sessionId);
-      this.flushPendingTranscriptUpdates(sessionId);
-    }, this.transcriptPersistenceFlushDelayMs);
-    timer.unref?.();
-    this.transcriptPersistenceTimers.set(sessionId, timer);
-  }
-
-  private flushAllPendingTranscriptUpdates(): void {
-    for (const sessionId of [...this.pendingTranscriptUpdates.keys()]) {
-      this.flushPendingTranscriptUpdates(sessionId);
-    }
-  }
-
-  private flushPendingTranscriptUpdates(sessionId: string): void {
-    const timer = this.transcriptPersistenceTimers.get(sessionId);
-    if (timer) {
-      clearTimeout(timer);
-      this.transcriptPersistenceTimers.delete(sessionId);
-    }
-    const pending = this.pendingTranscriptUpdates.get(sessionId);
-    if (!pending?.length) {
-      return;
-    }
-    this.pendingTranscriptUpdates.delete(sessionId);
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata) {
+    if (!metadata || metadata.hasConversationHistory) {
       return;
     }
-    const updatedAt = pending.reduce(
-      (latest, item) => Math.max(latest, item.receivedAt),
-      metadata.updatedAt,
-    );
     this.options.store.upsertSession({
       ...metadata,
-      updatedAt,
-      transcriptUpdates: [...(metadata.transcriptUpdates ?? []), ...pending],
+      hasConversationHistory: true,
+      updatedAt: Math.max(metadata.updatedAt, receivedAt),
     });
   }
 
@@ -810,7 +662,6 @@ export class AcpAgentClient {
     }
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    this.suppressLoadReplaySessions.add(protocolSessionId);
     const result = await this.options.transport.request("session/load", {
       cwd,
       mcpServers: [],
@@ -826,6 +677,12 @@ export class AcpAgentClient {
     );
     if (runtimeState) {
       this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
+      void Promise.resolve(
+        this.options.onSessionRuntimeStateChange?.({
+          sessionId: metadata.sessionId,
+          runtimeState,
+        }),
+      ).catch(() => undefined);
     }
     this.notifyRuntimeCapabilities({
       sessionId: metadata.sessionId,
@@ -840,10 +697,6 @@ export class AcpAgentClient {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
-  private clearLoadReplaySuppression(sessionId: string): void {
-    this.suppressLoadReplaySessions.delete(sessionId);
-  }
-
   private startTrackedTurn(sessionId: string, turnId: string): void {
     if (this.activeTurns.has(sessionId)) {
       throw new Error("A turn is already active for this ACP session.");
@@ -855,10 +708,7 @@ export class AcpAgentClient {
     this.updateSessionStatus(sessionId, "active");
   }
 
-  private finishTrackedTurn(
-    sessionId: string,
-    options?: { persistFinished?: boolean },
-  ): {
+  private finishTrackedTurn(sessionId: string): {
     assistantText: string;
     replay: AppServerThreadReplay;
     turnId?: string;
@@ -869,16 +719,6 @@ export class AcpAgentClient {
       activeTurn?.turnId,
     );
     this.updateSessionStatus(sessionId, "idle");
-    if (activeTurn && options?.persistFinished !== false) {
-      this.persistTranscriptUpdate(sessionId, {
-        receivedAt: this.now(),
-        update: {
-          kind: "turn_finished",
-          outputText: activeTurn.assistantText,
-          turnId: activeTurn.turnId,
-        },
-      });
-    }
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -893,14 +733,6 @@ export class AcpAgentClient {
   ): AppServerThreadReplay {
     const message = errorMessage(error);
     const receivedAt = this.now();
-    this.persistTranscriptUpdate(sessionId, {
-      receivedAt,
-      update: {
-        kind: "pwragent_turn_failed",
-        turnId,
-        error: message,
-      },
-    });
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (metadata) {
       this.options.store.upsertSession({
@@ -990,6 +822,15 @@ function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
   const kind = update.sessionUpdate ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
+}
+
+function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
+  const kind = readUpdateKind(update);
+  return (
+    kind === "pwragent_user_prompt" ||
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk"
+  );
 }
 
 function readUpdateText(update: Record<string, unknown>): string | undefined {

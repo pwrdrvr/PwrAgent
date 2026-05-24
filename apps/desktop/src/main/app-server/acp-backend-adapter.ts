@@ -9,8 +9,8 @@ import {
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
-  type BackendAcpRuntimeCapabilities,
   type BackendAcpSessionRuntimeState,
+  type BackendAcpRuntimeCapabilities,
   type BackendCapabilities,
   type BackendLaunchpadOptions,
   type BackendModelOption,
@@ -35,10 +35,7 @@ import {
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
-import {
-  acpRuntimeSupportsSessionLoad,
-  acpSessionRuntimeStateFromUpdate,
-} from "../acp/acp-runtime-capabilities";
+import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import {
   AcpSessionStore,
   type AcpSessionMetadata,
@@ -360,10 +357,6 @@ export function acpSessionToThreadSummary(
   const workspaceHandoffAvailable =
     !acpSessionHasConversationHistory(session) ||
     capabilities?.liveWorkspaceHandoff === true;
-  const acpRuntime = mergeAcpRuntimeState(
-    session.acpRuntime,
-    deriveAcpRuntimeStateFromTranscript(session),
-  );
   return {
     id: session.sessionId,
     title: session.title,
@@ -385,7 +378,7 @@ export function acpSessionToThreadSummary(
       : [],
     source: session.backendId,
     executionMode: session.executionMode,
-    acpRuntime,
+    acpRuntime: session.acpRuntime,
     workspaceHandoff: workspaceHandoffAvailable
       ? { available: true }
       : {
@@ -399,11 +392,6 @@ export function acpSessionLoadFallbackReplay(
   session: AcpSessionMetadata,
   error: unknown,
 ): AppServerThreadReplay {
-  const persistedReplay = replayPersistedAcpTranscript(session);
-  if (persistedReplay.entries.length > 0 || persistedReplay.messages.length > 0) {
-    return persistedReplay;
-  }
-
   const message = error instanceof Error ? error.message : String(error);
   return {
     entries: [
@@ -431,37 +419,6 @@ export function acpSessionLoadFallbackReplay(
   };
 }
 
-export function replayPersistedAcpTranscript(
-  session: AcpSessionMetadata,
-): AppServerThreadReplay {
-  const normalizer = new AcpSessionReplayNormalizer();
-  let replay = normalizer.replay();
-  for (const item of session.transcriptUpdates ?? []) {
-    replay = normalizer.apply({
-      sessionId: session.sessionId,
-      update: item.update,
-      receivedAt: item.receivedAt,
-    });
-  }
-  return {
-    ...replay,
-    threadStatus: acpSessionThreadStatus(session.status),
-  };
-}
-
-export function deriveAcpRuntimeStateFromTranscript(
-  session: AcpSessionMetadata,
-): BackendAcpSessionRuntimeState | undefined {
-  let runtimeState: BackendAcpSessionRuntimeState | undefined;
-  for (const item of session.transcriptUpdates ?? []) {
-    runtimeState = mergeAcpRuntimeState(
-      runtimeState,
-      acpSessionRuntimeStateFromUpdate(item.update, item.receivedAt),
-    );
-  }
-  return runtimeState;
-}
-
 export function acpSessionThreadStatus(
   status: AcpSessionMetadata["status"],
 ): AppServerThreadStatus {
@@ -478,14 +435,7 @@ export function isAcpSessionMissingForProjectError(error: unknown): boolean {
 export function acpSessionHasConversationHistory(
   session: AcpSessionMetadata,
 ): boolean {
-  return (session.transcriptUpdates ?? []).some((item) => {
-    const kind = item.update.kind ?? item.update.type ?? item.update.sessionUpdate;
-    return (
-      kind === "pwragent_user_prompt" ||
-      kind === "user_message_chunk" ||
-      kind === "agent_message_chunk"
-    );
-  });
+  return session.hasConversationHistory === true;
 }
 
 export function inputToAcpPrompt(
@@ -650,22 +600,41 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
+    const session = this.getSession(backend, sessionId);
     const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
     if (cachedClient) {
-      return cachedClient.readReplay(sessionId);
+      const replay = cachedClient.readReplay(sessionId);
+      if (
+        session &&
+        acpSessionHasConversationHistory(session) &&
+        replay.entries.length === 0 &&
+        acpRuntimeSupportsSessionLoad(
+          this.getInstalledAgent(backend)?.runtimeCapabilities,
+        )
+      ) {
+        try {
+          return await cachedClient.loadSession(session);
+        } catch (error) {
+          acpBackendAdapterLog.warn("acp_session_load_failed", {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            sessionId,
+          });
+          return acpSessionLoadFallbackReplay(session, error);
+        }
+      }
+      return replay;
     }
 
-    const session = this.getSession(backend, sessionId);
     if (!session) {
       return new AcpSessionReplayNormalizer().replay();
     }
 
-    if (
-      !acpRuntimeSupportsSessionLoad(
-        this.getInstalledAgent(backend)?.runtimeCapabilities,
-      )
-    ) {
-      return replayPersistedAcpTranscript(session);
+    if (!acpRuntimeSupportsSessionLoad(this.getInstalledAgent(backend)?.runtimeCapabilities)) {
+      return {
+        ...new AcpSessionReplayNormalizer().replay(),
+        threadStatus: acpSessionThreadStatus(session.status),
+      };
     }
     const client = await this.getClient(backend);
     try {

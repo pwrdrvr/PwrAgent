@@ -22,13 +22,13 @@ export type AcpSessionMetadata = {
   executionMode: ThreadExecutionMode;
   acpRuntime?: BackendAcpSessionRuntimeState;
   status: "active" | "idle" | "failed" | "unknown";
+  hasConversationHistory?: boolean;
   requiresAgentSessionRebind?: boolean;
   archivedAt?: number;
   lastError?: string;
-  transcriptUpdates?: AcpPersistedTranscriptUpdate[];
 };
 
-export type AcpPersistedTranscriptUpdate = {
+type AcpPersistedTranscriptUpdate = {
   receivedAt: number;
   update: Record<string, unknown>;
 };
@@ -37,7 +37,7 @@ export class AcpSessionStore {
   constructor(private readonly stateDb: StateDb) {}
 
   upsertSession(metadata: AcpSessionMetadata): void {
-    const compactedMetadata = compactAcpSessionMetadata(metadata);
+    const persistableMetadata = stripAcpSessionHistory(metadata);
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO acp_sessions(
@@ -50,11 +50,11 @@ export class AcpSessionStore {
          VALUES (?, ?, ?, ?, ?)`,
       )
       .run(
-        compactedMetadata.backendId,
-        compactedMetadata.sessionId,
-        compactedMetadata.createdAt,
-        compactedMetadata.updatedAt,
-        JSON.stringify(compactedMetadata),
+        persistableMetadata.backendId,
+        persistableMetadata.sessionId,
+        persistableMetadata.createdAt,
+        persistableMetadata.updatedAt,
+        JSON.stringify(persistableMetadata),
       );
   }
 
@@ -75,7 +75,9 @@ export class AcpSessionStore {
       if (!isSessionMetadata(parsed)) {
         return [];
       }
-      return Boolean(parsed.archivedAt) === archived ? [parsed] : [];
+      return Boolean(parsed.archivedAt) === archived
+        ? [stripAcpSessionHistory(parsed)]
+        : [];
     });
   }
 
@@ -90,122 +92,8 @@ export class AcpSessionStore {
       )
       .get(backendId, sessionId) as { payload: string } | undefined;
     const parsed = row ? parseJson(row.payload) : undefined;
-    return isSessionMetadata(parsed) ? parsed : undefined;
+    return isSessionMetadata(parsed) ? stripAcpSessionHistory(parsed) : undefined;
   }
-}
-
-function compactAcpSessionMetadata(metadata: AcpSessionMetadata): AcpSessionMetadata {
-  if (!metadata.transcriptUpdates?.length) {
-    return metadata;
-  }
-  return {
-    ...metadata,
-    transcriptUpdates: compactAcpTranscriptUpdates(metadata.transcriptUpdates),
-  };
-}
-
-export function compactAcpTranscriptUpdates(
-  updates: AcpPersistedTranscriptUpdate[],
-): AcpPersistedTranscriptUpdate[] {
-  const compacted: AcpPersistedTranscriptUpdate[] = [];
-  for (const update of updates) {
-    appendCoalescedTranscriptUpdate(compacted, update);
-  }
-  return compacted;
-}
-
-export function appendCoalescedTranscriptUpdate(
-  updates: AcpPersistedTranscriptUpdate[],
-  next: AcpPersistedTranscriptUpdate,
-): void {
-  const previous = updates.at(-1);
-  const coalesced = previous ? coalesceTranscriptUpdate(previous, next) : undefined;
-  if (coalesced) {
-    updates[updates.length - 1] = coalesced;
-    return;
-  }
-  updates.push(next);
-}
-
-function coalesceTranscriptUpdate(
-  previous: AcpPersistedTranscriptUpdate,
-  next: AcpPersistedTranscriptUpdate,
-): AcpPersistedTranscriptUpdate | undefined {
-  const previousKind = readUpdateKind(previous.update);
-  const nextKind = readUpdateKind(next.update);
-  if (
-    previousKind !== nextKind ||
-    !isCoalescibleTranscriptChunkKind(previousKind)
-  ) {
-    return undefined;
-  }
-  if (messageIdentity(previous.update) !== messageIdentity(next.update)) {
-    return undefined;
-  }
-  const previousText = readUpdateText(previous.update);
-  const nextText = readUpdateText(next.update);
-  if (previousText === undefined || nextText === undefined) {
-    return undefined;
-  }
-  return {
-    receivedAt: next.receivedAt,
-    update: writeUpdateText(previous.update, `${previousText}${nextText}`),
-  };
-}
-
-function readUpdateKind(update: Record<string, unknown>): string | undefined {
-  const kind = update.sessionUpdate ?? update.kind ?? update.type;
-  return typeof kind === "string" ? kind : undefined;
-}
-
-function isCoalescibleTranscriptChunkKind(kind: string | undefined): boolean {
-  return (
-    kind === "agent_message_chunk" ||
-    kind === "agent_thought_chunk" ||
-    kind === "user_message_chunk"
-  );
-}
-
-function messageIdentity(update: Record<string, unknown>): string {
-  const messageId = update.messageId ?? update.id;
-  return typeof messageId === "string" ? messageId : "";
-}
-
-function readUpdateText(update: Record<string, unknown>): string | undefined {
-  if (typeof update.text === "string") {
-    return update.text;
-  }
-  const content = update.content;
-  if (!content || typeof content !== "object" || Array.isArray(content)) {
-    return undefined;
-  }
-  const contentRecord = content as Record<string, unknown>;
-  return contentRecord.type === "text" && typeof contentRecord.text === "string"
-    ? contentRecord.text
-    : undefined;
-}
-
-function writeUpdateText(
-  update: Record<string, unknown>,
-  text: string,
-): Record<string, unknown> {
-  if (typeof update.text === "string") {
-    return { ...update, text };
-  }
-  const content = update.content;
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const contentRecord = content as Record<string, unknown>;
-    if (contentRecord.type === "text" && typeof contentRecord.text === "string") {
-      return {
-        ...update,
-        content: {
-          ...contentRecord,
-          text,
-        },
-      };
-    }
-  }
-  return update;
 }
 
 function parseJson(value: string): unknown {
@@ -214,6 +102,53 @@ function parseJson(value: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadata {
+  const legacyTranscriptUpdates = readLegacyTranscriptUpdates(metadata);
+  const {
+    transcriptUpdates: _transcriptUpdates,
+    ...metadataWithoutHistory
+  } = metadata as AcpSessionMetadata & {
+    transcriptUpdates?: AcpPersistedTranscriptUpdate[];
+  };
+  const hasConversationHistory =
+    metadata.hasConversationHistory ??
+    (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
+  return {
+    ...metadataWithoutHistory,
+    ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
+  };
+}
+
+function readLegacyTranscriptUpdates(
+  metadata: AcpSessionMetadata,
+): AcpPersistedTranscriptUpdate[] {
+  const value = (metadata as { transcriptUpdates?: unknown }).transcriptUpdates;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    const record = item as Partial<AcpPersistedTranscriptUpdate>;
+    return typeof record.receivedAt === "number" &&
+      record.update &&
+      typeof record.update === "object" &&
+      !Array.isArray(record.update)
+      ? [{ receivedAt: record.receivedAt, update: record.update }]
+      : [];
+  });
+}
+
+function isConversationTranscriptUpdate(
+  item: AcpPersistedTranscriptUpdate,
+): boolean {
+  const update = item.update;
+  const kind = update.kind ?? update.type ?? update.sessionUpdate;
+  return (
+    kind === "pwragent_user_prompt" ||
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk"
+  );
 }
 
 function isSessionMetadata(value: unknown): value is AcpSessionMetadata {

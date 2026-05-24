@@ -37,6 +37,18 @@ function createDeferred<T>(): {
   return { promise, reject, resolve };
 }
 
+function readRawAcpSessionPayload(
+  backendId: string,
+  sessionId: string,
+): Record<string, unknown> | undefined {
+  const row = stateDb.raw
+    .prepare(
+      `SELECT payload FROM acp_sessions WHERE backend_id = ? AND session_id = ?`,
+    )
+    .get(backendId, sessionId) as { payload: string } | undefined;
+  return row ? (JSON.parse(row.payload) as Record<string, unknown>) : undefined;
+}
+
 describe("AcpAgentClient", () => {
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
     const transport = new FakeAcpAgentTransport();
@@ -46,7 +58,6 @@ describe("AcpAgentClient", () => {
       store,
       transport,
       now: () => 1000,
-      transcriptPersistenceFlushDelayMs: 0,
       onSessionUpdate: ({ sessionId }) => {
         sessionUpdates.push(sessionId);
       },
@@ -103,34 +114,12 @@ describe("AcpAgentClient", () => {
       title: "Test ACP",
       cwd: "/repo",
       executionMode: "default",
+      hasConversationHistory: true,
     });
     expect(client.readReplay("session-1").lastAssistantMessage).toBe("Done");
-    expect(store.getSession("acp:codex-acp", "session-1")?.transcriptUpdates)
-      .toEqual([
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "hello",
-            turnId: "pending:session-1:1000",
-          },
-        },
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "turn_finished",
-            outputText: "",
-            turnId: "pending:session-1:1000",
-          },
-        },
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "agent_message_chunk",
-            content: "Done",
-          },
-        },
-      ]);
+    expect(
+      readRawAcpSessionPayload("acp:codex-acp", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
@@ -180,11 +169,16 @@ describe("AcpAgentClient", () => {
       },
     });
     expect(client.readReplay("session-1").messages).toEqual([]);
-    expect(store.getSession("acp:kimi", "session-1")?.transcriptUpdates).toBeUndefined();
+    expect(store.getSession("acp:kimi", "session-1")).not.toHaveProperty(
+      "hasConversationHistory",
+    );
+    expect(
+      readRawAcpSessionPayload("acp:kimi", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
     expect(sessionUpdates).toEqual([]);
   });
 
-  it("sends pasted images as ACP image content and persists structured transcript parts", async () => {
+  it("sends pasted images as ACP image content and keeps structured parts in live replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";
     const client = new AcpAgentClient({
@@ -230,19 +224,12 @@ describe("AcpAgentClient", () => {
         ],
       }),
     ]);
-    expect(store.getSession("acp:gemini", "session-1")?.transcriptUpdates?.[0])
-      .toEqual({
-        receivedAt: 1000,
-        update: {
-          kind: "pwragent_user_prompt",
-          prompt: "What's in this image?",
-          parts: [
-            { type: "text", text: "What's in this image?" },
-            { type: "image", url: imageUrl },
-          ],
-          turnId: "turn-1",
-        },
-      });
+    expect(store.getSession("acp:gemini", "session-1")).toMatchObject({
+      hasConversationHistory: true,
+    });
+    expect(
+      readRawAcpSessionPayload("acp:gemini", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
   });
 
   it("surfaces ACP permission requests and returns the selected option", async () => {
@@ -621,112 +608,25 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
-  it("hydrates persisted Gemini mode markers as runtime state without transcript noise", async () => {
-    const transport = new FakeAcpAgentTransport();
-    const client = new AcpAgentClient({
-      backendId: "acp:gemini",
-      store,
-      transport,
-      now: () => 2000,
-    });
-    store.upsertSession({
-      backendId: "acp:gemini",
-      sessionId: "session-1",
-      title: "ACP session",
-      cwd: "/repo",
-      createdAt: 1000,
-      updatedAt: 1000,
-      executionMode: "default",
-      status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "agent_message_chunk",
-            content: "[MODE_UPDATE] yolo",
-          },
-        },
-      ],
-    });
-
-    await client.initialize();
-    const replay = client.readReplay("session-1");
-
-    expect(replay.entries).toEqual([]);
-    expect(store.getSession("acp:gemini", "session-1")).toMatchObject({
-      acpRuntime: {
-        currentModeId: "yolo",
-      },
-    });
-  });
-
-  it("hydrates persisted ACP transcripts once without replaying session/load as new messages", async () => {
-    const transport = new FakeAcpAgentTransport();
-    const client = new AcpAgentClient({
-      backendId: "acp:gemini",
-      store,
-      transport,
-      now: () => 2000,
-    });
-    store.upsertSession({
-      backendId: "acp:gemini",
-      sessionId: "session-1",
-      title: "ACP session",
-      cwd: "/repo",
-      createdAt: 1000,
-      updatedAt: 1000,
-      executionMode: "default",
-      status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "first",
-            turnId: "turn-1",
-          },
-        },
-        {
-          receivedAt: 1100,
-          update: {
-            kind: "agent_message_chunk",
-            content: "reply",
-          },
-        },
-      ],
-    });
-
-    await client.initialize();
-    const firstReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
-    const secondReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
-
-    expect(firstReplay.messages.map((message) => message.text)).toEqual([
-      "first",
-      "reply",
-    ]);
-    expect(secondReplay.messages.map((message) => message.text)).toEqual([
-      "first",
-      "reply",
-    ]);
-    expect(transport.requests.map((request) => request.method)).toEqual([
-      "initialize",
-    ]);
-  });
-
-  it("returns persisted session replay without blocking on agent session/load", async () => {
-    let resolveLoad: ((value: unknown) => void) | undefined;
+  it("loads ACP transcript replay from provider session/load without storing it in the DB", async () => {
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
       backendId: "acp:gemini",
       store,
       transport: {
         request: async (method, params) => {
+          const result = await transport.request(method, params);
           if (method === "session/load") {
-            return await new Promise((resolve) => {
-              resolveLoad = resolve;
+            transport.emitSessionUpdate("session-1", {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: "first" },
+            });
+            transport.emitSessionUpdate("session-1", {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "reply" },
             });
           }
-          return await transport.request(method, params);
+          return result;
         },
         notify: (method, params) => transport.notify(method, params),
         close: () => transport.close(),
@@ -743,23 +643,55 @@ describe("AcpAgentClient", () => {
       updatedAt: 1000,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "what is this?",
-            turnId: "turn-1",
-          },
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const firstReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
+    const secondReplay = await client.loadSession(store.getSession("acp:gemini", "session-1")!);
+
+    expect(firstReplay.messages.map((message) => message.text)).toEqual([
+      "first",
+      "reply",
+    ]);
+    expect(secondReplay.messages.map((message) => message.text)).toEqual([
+      "first",
+      "reply",
+    ]);
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+    expect(
+      readRawAcpSessionPayload("acp:gemini", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
+  });
+
+  it("returns empty replay when no provider session/load support is advertised", async () => {
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: false,
         },
-        {
-          receivedAt: 1100,
-          update: {
-            kind: "agent_message_chunk",
-            content: "cached answer",
-          },
-        },
-      ],
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:gemini",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
     });
 
     await client.initialize();
@@ -767,11 +699,7 @@ describe("AcpAgentClient", () => {
       store.getSession("acp:gemini", "session-1")!,
     );
 
-    expect(replay.messages.map((message) => message.text)).toEqual([
-      "what is this?",
-      "cached answer",
-    ]);
-    expect(resolveLoad).toBeUndefined();
+    expect(replay.messages).toEqual([]);
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
     ]);
@@ -842,16 +770,12 @@ describe("AcpAgentClient", () => {
       lastUserMessage: "keep going",
       threadStatus: "active",
     });
-    expect(persistedSession?.transcriptUpdates).toEqual([
-      {
-        receivedAt: 1000,
-        update: {
-          kind: "pwragent_user_prompt",
-          prompt: "keep going",
-          turnId: "pending:session-1:1000",
-        },
-      },
-    ]);
+    expect(persistedSession).toMatchObject({
+      hasConversationHistory: true,
+    });
+    expect(
+      readRawAcpSessionPayload("acp:codex-acp", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
       "session/new",
@@ -1191,25 +1115,14 @@ describe("AcpAgentClient", () => {
     expect(errors[0]?.error).toBeInstanceOf(Error);
     expect((errors[0]?.error as Error).message).toBe(quotaError);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
-    expect(store.getSession("acp:codex-acp", "session-1")?.transcriptUpdates)
-      .toEqual([
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "keep going",
-            turnId: "pending:session-1",
-          },
-        },
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_turn_failed",
-            turnId: "pending:session-1",
-            error: quotaError,
-          },
-        },
-      ]);
+    expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
+      hasConversationHistory: true,
+      lastError: quotaError,
+      status: "idle",
+    });
+    expect(
+      readRawAcpSessionPayload("acp:codex-acp", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
     const expectedEntries = [
       expect.objectContaining({
         type: "message",
@@ -1237,12 +1150,10 @@ describe("AcpAgentClient", () => {
       transport,
       now: () => 1000,
     });
-    expect(reloadedClient.readReplay("session-1").entries).toEqual(
-      expectedEntries,
-    );
+    expect(reloadedClient.readReplay("session-1").entries).toEqual([]);
   });
 
-  it("refreshes stored session metadata without ingesting session/load replay", async () => {
+  it("refreshes stored session metadata without ingesting returned session/load payloads", async () => {
     const transport = new FakeAcpAgentTransport();
     const loadRequests: Array<Record<string, unknown> | undefined> = [];
     const client = new AcpAgentClient({
@@ -1302,7 +1213,7 @@ describe("AcpAgentClient", () => {
     expect(transport.closeCount).toBe(1);
   });
 
-  it("persists ACP topic updates replayed during session/load refresh", async () => {
+  it("applies ACP updates replayed during provider session/load refresh", async () => {
     let notificationListener:
       | ((method: string, params: Record<string, unknown>) => void)
       | undefined;
@@ -1330,7 +1241,7 @@ describe("AcpAgentClient", () => {
               sessionId: "session-1",
               update: {
                 kind: "agent_message_chunk",
-                content: "Suppressed replay response",
+                content: "Loaded replay response",
               },
             });
             return {};
@@ -1369,10 +1280,16 @@ describe("AcpAgentClient", () => {
     });
     await client.refreshSession(store.getSession("acp:gemini", "session-1")!);
 
-    expect(replay.lastAssistantMessage).toBeUndefined();
+    expect(replay.lastAssistantMessage).toBe("Loaded replay response");
     expect(store.getSession("acp:gemini", "session-1")?.title).toBe(
       "Loaded Project Research",
     );
+    expect(store.getSession("acp:gemini", "session-1")).toMatchObject({
+      hasConversationHistory: true,
+    });
+    expect(
+      readRawAcpSessionPayload("acp:gemini", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
     expect(titleUpdates).toEqual(["Loaded Project Research"]);
   });
 
@@ -1399,15 +1316,7 @@ describe("AcpAgentClient", () => {
       updatedAt: 950,
       executionMode: "default",
       status: "idle",
-      transcriptUpdates: [
-        {
-          receivedAt: 950,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Previous answer." },
-          },
-        },
-      ],
+      hasConversationHistory: true,
     });
     const ensurePromise = client.ensureSession(
       store.getSession("acp:gemini", "session-1")!,
@@ -1437,12 +1346,16 @@ describe("AcpAgentClient", () => {
       mcpServers: [],
       sessionId: "session-1",
     });
-    expect(updateEvents).toEqual([]);
-    expect(client.readReplay("session-1").lastAssistantMessage).toBe("Previous answer.");
+    expect(updateEvents).toEqual([
+      "agent_message_chunk",
+      "agent_message_chunk",
+    ]);
+    expect(client.readReplay("session-1").lastAssistantMessage).toBe(
+      "Replayed from load.Late replay from load.",
+    );
   });
 
-  it("batches and coalesces streaming transcript persistence", async () => {
-    vi.useFakeTimers();
+  it("does not write streaming transcript updates into ACP session metadata", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
       "session/prompt": promptResponse.promise,
@@ -1453,7 +1366,6 @@ describe("AcpAgentClient", () => {
       store,
       transport,
       now: () => 1000,
-      transcriptPersistenceFlushDelayMs: 1000,
     });
 
     await client.initialize();
@@ -1479,39 +1391,13 @@ describe("AcpAgentClient", () => {
     });
 
     expect(upsertSession.mock.calls.length).toBe(upsertCountAfterPrompt);
-    expect(store.getSession("acp:kimi", session.sessionId)?.transcriptUpdates)
-      .toEqual([
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "hello",
-            turnId: "turn-1",
-          },
-        },
-      ]);
-
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(upsertSession.mock.calls.length).toBe(upsertCountAfterPrompt + 1);
-    expect(store.getSession("acp:kimi", session.sessionId)?.transcriptUpdates)
-      .toEqual([
-        {
-          receivedAt: 1000,
-          update: {
-            kind: "pwragent_user_prompt",
-            prompt: "hello",
-            turnId: "turn-1",
-          },
-        },
-        {
-          receivedAt: 1000,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Hello" },
-          },
-        },
-      ]);
+    expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
+      hasConversationHistory: true,
+    });
+    expect(
+      readRawAcpSessionPayload("acp:kimi", session.sessionId)?.transcriptUpdates,
+    ).toBeUndefined();
+    expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe("Hello");
     expect(upsertCountAfterStart).toBeGreaterThan(0);
 
     promptResponse.resolve({ turnId: "turn-1" });
@@ -1519,7 +1405,7 @@ describe("AcpAgentClient", () => {
     await client.dispose();
   });
 
-  it("compacts adjacent text chunks when upserting stored sessions", () => {
+  it("strips legacy transcript updates when upserting stored sessions", () => {
     store.upsertSession({
       backendId: "acp:kimi",
       sessionId: "session-1",
@@ -1551,22 +1437,46 @@ describe("AcpAgentClient", () => {
           },
         },
       ],
+    } as Parameters<AcpSessionStore["upsertSession"]>[0] & {
+      transcriptUpdates: unknown[];
     });
 
-    expect(store.getSession("acp:kimi", "session-1")?.transcriptUpdates).toEqual([
-      {
-        receivedAt: 975,
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: "Thinking hard." },
+    expect(store.getSession("acp:kimi", "session-1")).not.toHaveProperty(
+      "transcriptUpdates",
+    );
+    expect(
+      readRawAcpSessionPayload("acp:kimi", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
+  });
+
+  it("derives conversation metadata while stripping legacy transcript updates", () => {
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "ACP session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      transcriptUpdates: [
+        {
+          receivedAt: 950,
+          update: {
+            kind: "pwragent_user_prompt",
+            prompt: "hello",
+          },
         },
-      },
-      {
-        receivedAt: 1000,
-        update: {
-          sessionUpdate: "turn_finished",
-        },
-      },
-    ]);
+      ],
+    } as Parameters<AcpSessionStore["upsertSession"]>[0] & {
+      transcriptUpdates: unknown[];
+    });
+
+    expect(store.getSession("acp:kimi", "session-1")).toMatchObject({
+      hasConversationHistory: true,
+    });
+    expect(
+      readRawAcpSessionPayload("acp:kimi", "session-1")?.transcriptUpdates,
+    ).toBeUndefined();
   });
 });
