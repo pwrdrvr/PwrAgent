@@ -24,6 +24,10 @@ import type {
   AcpSessionMetadata,
   AcpSessionStore,
 } from "./acp-session-store.js";
+import type {
+  AcpRolloutRecord,
+  AcpRolloutStoreAppendParams,
+} from "./acp-rollout-store.js";
 import type { JsonRpcId } from "../codex-app-server/json-rpc.js";
 
 export type AcpJsonRpcTransport = {
@@ -57,10 +61,19 @@ type AcpSessionStoreLike = Pick<
   "getSession" | "listSessions" | "upsertSession"
 >;
 
+type AcpRolloutStoreLike = {
+  appendUpdate(params: AcpRolloutStoreAppendParams): void;
+  readUpdates(params: {
+    backendId: AcpBackendId;
+    sessionId: string;
+  }): AcpRolloutRecord[];
+};
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
   initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
+  rolloutStore?: AcpRolloutStoreLike;
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
   now?: () => number;
@@ -239,6 +252,12 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
+    this.appendHistoryUpdate(params.sessionId, receivedAt, {
+      kind: "pwragent_user_prompt",
+      prompt: params.prompt,
+      ...(params.parts?.length ? { parts: params.parts } : {}),
+      turnId,
+    });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     let result: unknown;
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
@@ -258,6 +277,11 @@ export class AcpAgentClient {
       throw error;
     }
     this.finishTrackedTurn(params.sessionId);
+    const finishedAt = this.now();
+    this.appendHistoryUpdate(params.sessionId, finishedAt, {
+      kind: "turn_finished",
+      turnId,
+    });
     const record = asRecord(result);
     return {
       sessionId: params.sessionId,
@@ -273,6 +297,8 @@ export class AcpAgentClient {
     this.rememberSessionIds(metadata);
     if (this.supportsSessionLoad()) {
       await this.ensureSession(metadata);
+    } else {
+      this.hydrateSessionFromHistory(metadata);
     }
     return this.replayForSessionMetadata(metadata);
   }
@@ -315,6 +341,12 @@ export class AcpAgentClient {
       turnId,
       receivedAt,
     });
+    this.appendHistoryUpdate(params.sessionId, receivedAt, {
+      kind: "pwragent_user_prompt",
+      prompt: params.prompt,
+      ...(params.parts?.length ? { parts: params.parts } : {}),
+      turnId,
+    });
     this.markSessionHasConversationHistory(params.sessionId, receivedAt);
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
     const promptRequest = this.options.transport.request(
@@ -328,6 +360,12 @@ export class AcpAgentClient {
     void promptRequest
       .then(() => {
         const finished = this.finishTrackedTurn(params.sessionId);
+        const receivedAt = this.now();
+        this.appendHistoryUpdate(params.sessionId, receivedAt, {
+          kind: "turn_finished",
+          ...(finished.turnId ? { turnId: finished.turnId } : {}),
+          outputText: finished.assistantText,
+        });
         void this.notifySessionUpdate({
           sessionId: params.sessionId,
           replay: finished.replay,
@@ -503,6 +541,7 @@ export class AcpAgentClient {
     if (isConversationHistoryUpdate(update)) {
       this.markSessionHasConversationHistory(sessionId, receivedAt);
     }
+    this.appendHistoryUpdate(sessionId, receivedAt, update);
     if (readUpdateKind(update) === "agent_message_chunk" && activeTurn) {
       activeTurn.assistantText += readUpdateText(update) ?? "";
     }
@@ -601,6 +640,24 @@ export class AcpAgentClient {
       ...replay,
       threadStatus: acpSessionThreadStatus(metadata.status, replay.threadStatus),
     };
+  }
+
+  private hydrateSessionFromHistory(metadata: AcpSessionMetadata): void {
+    if (!this.options.rolloutStore) {
+      return;
+    }
+    const normalizer = new AcpSessionReplayNormalizer();
+    for (const record of this.options.rolloutStore.readUpdates({
+      backendId: this.options.backendId,
+      sessionId: metadata.sessionId,
+    })) {
+      normalizer.apply({
+        sessionId: metadata.sessionId,
+        receivedAt: record.receivedAt,
+        update: record.update,
+      });
+    }
+    this.normalizers.set(metadata.sessionId, normalizer);
   }
 
   private markSessionHasConversationHistory(
@@ -764,11 +821,29 @@ export class AcpAgentClient {
         updatedAt: Math.max(metadata.updatedAt, receivedAt),
       });
     }
+    this.appendHistoryUpdate(sessionId, receivedAt, {
+      kind: "pwragent_turn_failed",
+      turnId,
+      error: message,
+    });
     return this.normalizerFor(sessionId).recordTurnFailed({
       sessionId,
       turnId,
       error: message,
       receivedAt,
+    });
+  }
+
+  private appendHistoryUpdate(
+    sessionId: string,
+    receivedAt: number,
+    update: Record<string, unknown>,
+  ): void {
+    this.options.rolloutStore?.appendUpdate({
+      backendId: this.options.backendId,
+      sessionId,
+      receivedAt,
+      update,
     });
   }
 

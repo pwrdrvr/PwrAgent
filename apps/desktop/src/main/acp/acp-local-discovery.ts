@@ -122,6 +122,16 @@ async function discoverLocalKimi(options?: {
     installedAt: now,
     updatedAt: now,
     capabilities: acpAgentCapabilitiesForRegistryId("kimi"),
+    runtimeCapabilities: {
+      schemaVersion: 1,
+      status: "discovered",
+      discoveredAt: now,
+      checkedAt: now,
+      source: "local-probe",
+      agentCapabilities: {
+        loadSession: false,
+      },
+    },
     launchDescriptor: normalizeAcpLaunchDescriptor({
       backendId,
       registryId: "kimi",

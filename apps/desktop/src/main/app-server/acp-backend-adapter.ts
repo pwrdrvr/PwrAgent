@@ -35,6 +35,7 @@ import {
 } from "../acp/acp-client";
 import { discoverLocalAcpAgents } from "../acp/acp-local-discovery";
 import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import {
@@ -48,7 +49,15 @@ import {
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { getMainLogger } from "../log";
-import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import {
+  getAppStateDb,
+  getAppStateMode,
+  isAppStateInitialized,
+} from "../state/app-state";
+import {
+  resolveActiveProfilePath,
+  resolveBootstrapProfilePath,
+} from "../profile";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import {
@@ -98,6 +107,7 @@ export type AcpBackendAdapterOptions = {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   > | null;
+  acpRolloutStore?: Pick<AcpRolloutStore, "appendUpdate" | "readReplay" | "readUpdates"> | null;
   acpSessionStore?: AcpSessionStoreLike | null;
   captureStores: ProtocolCaptureStore[];
   createAcpClient?: AcpClientFactory;
@@ -232,6 +242,7 @@ export function buildAcpCapabilities(): BackendCapabilities {
 export function describeInstalledAcpBackend(
   agent: AcpInstalledAgentRecord,
 ): BackendSummary {
+  const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
   const available =
     agent.installStatus === "installed" &&
     (agent.authStatus === "not-required" || agent.authStatus === "authenticated");
@@ -261,11 +272,11 @@ export function describeInstalledAcpBackend(
       websiteUrl: agent.registryAgent?.websiteUrl,
       allowlistRuleId: agent.allowlistRuleId,
       license: agent.registryAgent?.license,
-      runtime: agent.runtimeCapabilities,
+      runtime: runtimeCapabilities,
     },
     methods: [
       "session/new",
-      ...(acpRuntimeSupportsSessionLoad(agent.runtimeCapabilities)
+      ...(acpRuntimeSupportsSessionLoad(runtimeCapabilities)
         ? ["session/load"]
         : []),
       "session/prompt",
@@ -273,9 +284,44 @@ export function describeInstalledAcpBackend(
     ],
     capabilities: buildAcpCapabilities(),
     executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
-    launchpadOptions: buildAcpLaunchpadOptions(agent.runtimeCapabilities),
+    launchpadOptions: buildAcpLaunchpadOptions(runtimeCapabilities),
     unavailableReason,
   };
+}
+
+function acpRuntimeCapabilitiesForAgent(
+  agent: AcpInstalledAgentRecord,
+): BackendAcpRuntimeCapabilities | undefined {
+  if (agent.registryId !== "kimi") {
+    return agent.runtimeCapabilities;
+  }
+  const now = Date.now();
+  return {
+    schemaVersion: 1,
+    status: "discovered",
+    checkedAt: agent.runtimeCapabilities?.checkedAt ?? agent.updatedAt ?? now,
+    source: agent.runtimeCapabilities?.source ?? "local-probe",
+    ...agent.runtimeCapabilities,
+    agentCapabilities: {
+      ...agent.runtimeCapabilities?.agentCapabilities,
+      loadSession: false,
+    },
+  };
+}
+
+function normalizeInstalledAcpAgent(
+  agent: AcpInstalledAgentRecord,
+): AcpInstalledAgentRecord {
+  const runtimeCapabilities = acpRuntimeCapabilitiesForAgent(agent);
+  return runtimeCapabilities === agent.runtimeCapabilities
+    ? agent
+    : { ...agent, runtimeCapabilities };
+}
+
+function resolveDefaultAcpRolloutRoot(): string {
+  return getAppStateMode() === "bootstrap"
+    ? resolveBootstrapProfilePath("state/acp-rollouts")
+    : resolveActiveProfilePath("state/acp-rollouts");
 }
 
 function buildAcpExecutionModes(
@@ -570,6 +616,10 @@ export class AcpBackendAdapter {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   >;
+  private readonly acpRolloutStore?: Pick<
+    AcpRolloutStore,
+    "appendUpdate" | "readReplay" | "readUpdates"
+  >;
   private readonly acpSessionStore?: AcpSessionStoreLike;
   private readonly captureStores: ProtocolCaptureStore[];
   private readonly createAcpClient: AcpClientFactory;
@@ -601,6 +651,13 @@ export class AcpBackendAdapter {
         : options.acpSessionStore ??
           (isAppStateInitialized()
             ? new AcpSessionStore(getAppStateDb())
+            : undefined);
+    this.acpRolloutStore =
+      options.acpRolloutStore === null
+        ? undefined
+        : options.acpRolloutStore ??
+          (isAppStateInitialized()
+            ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
             : undefined);
     this.discoverLocalAcpAgents =
       options.discoverLocalAcpAgents ?? discoverLocalAcpAgents;
@@ -634,7 +691,8 @@ export class AcpBackendAdapter {
   }
 
   getInstalledAgent(backendId: AcpBackendId): AcpInstalledAgentRecord | undefined {
-    return this.acpAgentStore?.getInstalledAgent(backendId);
+    const agent = this.acpAgentStore?.getInstalledAgent(backendId);
+    return agent ? normalizeInstalledAcpAgent(agent) : undefined;
   }
 
   sessionToThreadSummary(session: AcpSessionMetadata): AppServerThreadSummary {
@@ -683,6 +741,15 @@ export class AcpBackendAdapter {
           return acpSessionLoadFallbackReplay(session, error);
         }
       }
+      if (
+        session &&
+        replay.entries.length === 0 &&
+        !acpRuntimeSupportsSessionLoad(
+          this.getInstalledAgent(backend)?.runtimeCapabilities,
+        )
+      ) {
+        return this.readRolloutReplay(session);
+      }
       return replay;
     }
 
@@ -690,11 +757,12 @@ export class AcpBackendAdapter {
       return new AcpSessionReplayNormalizer().replay();
     }
 
-    if (!acpRuntimeSupportsSessionLoad(this.getInstalledAgent(backend)?.runtimeCapabilities)) {
-      return {
-        ...new AcpSessionReplayNormalizer().replay(),
-        threadStatus: acpSessionThreadStatus(session.status),
-      };
+    if (
+      !acpRuntimeSupportsSessionLoad(
+        this.getInstalledAgent(backend)?.runtimeCapabilities,
+      )
+    ) {
+      return this.readRolloutReplay(session);
     }
     const client = await this.getClient(backend);
     try {
@@ -738,6 +806,18 @@ export class AcpBackendAdapter {
     return await clientPromise;
   }
 
+  private readRolloutReplay(session: AcpSessionMetadata): AppServerThreadReplay {
+    const replay =
+      this.acpRolloutStore?.readReplay({
+        backendId: session.backendId,
+        sessionId: session.sessionId,
+      }) ?? new AcpSessionReplayNormalizer().replay();
+    return {
+      ...replay,
+      threadStatus: acpSessionThreadStatus(session.status),
+    };
+  }
+
   async resolveInstalledAgent(
     backend: AcpBackendId,
   ): Promise<AcpInstalledAgentRecord> {
@@ -765,15 +845,15 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
-    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? []).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
+    const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const installedBackendIds = new Set(
       installedAgents.map((agent) => agent.backendId),
     );
-    const discoveredAgents = (await this.readLocalAgentsOnce()).filter(
-      (agent) => !isBannedAcpRegistryId(agent.registryId),
-    );
+    const discoveredAgents = (await this.readLocalAgentsOnce())
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     for (const agent of discoveredAgents) {
       if (!installedBackendIds.has(agent.backendId)) {
         this.acpAgentStore?.upsertInstalledAgent(agent);
@@ -856,7 +936,8 @@ export class AcpBackendAdapter {
     return new AcpAgentClient({
       backendId: agent.backendId,
       agentDisplayName: agent.name,
-      initialRuntimeCapabilities: agent.runtimeCapabilities,
+      initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport:
         this.createAcpTransport?.(agent) ??

@@ -38,6 +38,21 @@ describe("describeInstalledAcpBackend", () => {
 
     expect(backend.methods).toContain("session/load");
   });
+
+  it("does not advertise session/load for Kimi even without stored capability data", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    });
+
+    expect(backend.methods).toEqual([
+      "session/new",
+      "session/prompt",
+      "session/cancel",
+    ]);
+  });
 });
 
 describe("AcpBackendAdapter", () => {
@@ -249,6 +264,93 @@ describe("AcpBackendAdapter", () => {
     expect(
       events.filter((event) => event.notification.method === "item/completed"),
     ).toHaveLength(1);
+
+    await adapter.close();
+  });
+
+  it("reads Kimi replay from local rollout history instead of session/load", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    };
+    const session: AcpSessionMetadata = {
+      backendId,
+      sessionId: "session-1",
+      title: "Kimi thread",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    };
+    const replay = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "Restored from rollout",
+          createdAt: 1001,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:1",
+          role: "assistant" as const,
+          text: "Restored from rollout",
+          createdAt: 1001,
+        },
+      ],
+      lastAssistantMessage: "Restored from rollout",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    };
+    const loadSession = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpRolloutStore: {
+        appendUpdate: vi.fn(),
+        readUpdates: vi.fn(() => []),
+        readReplay: vi.fn(() => replay),
+      },
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          loadSession,
+          readReplay: vi.fn(() => ({
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+            threadStatus: "idle",
+          })),
+        }) as never,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+      lastAssistantMessage: "Restored from rollout",
+    });
+    expect(loadSession).not.toHaveBeenCalled();
 
     await adapter.close();
   });

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentClient } from "../acp/acp-client";
+import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { StateDb } from "../state/state-db";
@@ -746,6 +747,72 @@ describe("AcpAgentClient", () => {
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
     ]);
+  });
+
+  it("restores ACP replay from local rollout history when session/load is unsupported", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    const firstTransport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: false,
+        },
+      },
+    });
+    const firstClient = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: firstTransport,
+      now: () => 1000,
+    });
+
+    await firstClient.initialize();
+    const session = await firstClient.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    firstClient.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "hello",
+      turnId: "turn-1",
+    });
+    firstTransport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "Kimi says hi." },
+    });
+
+    const secondTransport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: false,
+        },
+      },
+    });
+    const secondClient = new AcpAgentClient({
+      backendId: "acp:kimi",
+      rolloutStore,
+      store,
+      transport: secondTransport,
+      now: () => 2000,
+    });
+
+    await secondClient.initialize();
+    const replay = await secondClient.loadSession(
+      store.getSession("acp:kimi", session.sessionId)!,
+    );
+
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "hello",
+      "Kimi says hi.",
+    ]);
+    expect(secondTransport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+    ]);
+    expect(
+      readRawAcpSessionPayload("acp:kimi", session.sessionId)?.transcriptUpdates,
+    ).toBeUndefined();
   });
 
   it("does not call session/load when the ACP agent says loading is unsupported", async () => {

@@ -2749,6 +2749,72 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("uses the latest applied Kimi permission transition when session metadata is stale", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "acp:kimi:kimi-session-1": {
+          backend: "acp:kimi",
+          threadId: "kimi-session-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          permissionTransitionLog: [
+            {
+              id: "transition-1",
+              fromExecutionMode: "default",
+              toExecutionMode: "full-access",
+              status: "applied",
+              occurredAt: 2000,
+            },
+          ],
+        } as ThreadOverlayState,
+      },
+    });
+    const sendControlPrompt = vi.fn(async () => ({
+      text: "You only live once! All actions will be auto-approved.",
+    }));
+    const { acpBackendId, registry, sessions } = createKimiAcpRegistry({
+      overlayStore,
+      sendControlPrompt,
+      sessions: [
+        {
+          backendId: "acp:kimi" as AcpBackendId,
+          sessionId: "kimi-session-1",
+          title: "ACP session",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    await expect(
+      registry.listThreads({ backend: acpBackendId }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "kimi-session-1",
+        executionMode: "full-access",
+      }),
+    ]);
+
+    await expect(
+      registry.setThreadExecutionMode({
+        backend: acpBackendId,
+        threadId: "kimi-session-1",
+        executionMode: "full-access",
+      }),
+    ).resolves.toEqual({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "full-access",
+    });
+
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    expect(sessions[0]?.executionMode).toBe("default");
+
+    await registry.close();
+  });
+
   it("isolates queued execution modes by backend when thread ids collide", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/resume"] },

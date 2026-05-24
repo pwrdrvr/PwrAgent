@@ -36,8 +36,10 @@ user-message update.
 
 ## Future Shared Storage
 
-Before adding ACP-owned fallback history, extract the append-only JSONL rollout
-file implementation into a shared library usable by both Agent-Core and desktop
-ACP clients. The shared API should preserve the current rollout properties:
-append-only writes, provider continuity metadata, replay reconstruction, and
-path-specific errors for malformed rollout files.
+The initial ACP fallback may use a narrowly scoped desktop-local append-only
+JSONL store for providers that do not implement usable history loading. Before
+expanding that fallback beyond the first provider-specific need, extract the
+append-only JSONL rollout implementation into a shared library usable by both
+Agent-Core and desktop ACP clients. The shared API should preserve the current
+rollout properties: append-only writes, provider continuity metadata, replay
+reconstruction, and path-specific errors for malformed rollout files.

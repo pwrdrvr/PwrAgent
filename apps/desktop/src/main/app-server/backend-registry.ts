@@ -2704,6 +2704,9 @@ export class DesktopBackendRegistry {
           backend: backendId,
           threadId: thread.id,
         });
+        const executionMode =
+          this.latestAppliedExecutionModeFromOverlay(overlay) ??
+          thread.executionMode;
         const cwd = resolveThreadWorkspaceCwd(
           thread,
           overlay?.extraLinkedDirectories ?? [],
@@ -2713,6 +2716,7 @@ export class DesktopBackendRegistry {
           : [];
         return {
           ...thread,
+          executionMode,
           codexEnvironmentOptions,
         };
       }),
@@ -4548,6 +4552,14 @@ export class DesktopBackendRegistry {
       };
     }
 
+    if (params.executionMode === currentApplied) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: currentApplied,
+      };
+    }
+
     if (hasActiveTurn && params.executionMode !== currentApplied) {
       const queued = await this.queueThreadExecutionMode(params);
       return {
@@ -4612,11 +4624,25 @@ export class DesktopBackendRegistry {
       return overlay?.executionMode ?? "default";
     }
     if (this.usesKimiSlashExecutionModes(backend)) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend,
+        threadId,
+      });
       return (
+        this.latestAppliedExecutionModeFromOverlay(overlay) ??
         this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
       );
     }
     return "default";
+  }
+
+  private latestAppliedExecutionModeFromOverlay(
+    overlay: ThreadOverlayState | undefined,
+  ): ThreadExecutionMode | undefined {
+    return [...(overlay?.permissionTransitionLog ?? [])]
+      .reverse()
+      .find((transition) => transition.status === "applied")
+      ?.toExecutionMode;
   }
 
   async queueThreadExecutionMode(
