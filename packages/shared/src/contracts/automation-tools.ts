@@ -51,7 +51,6 @@ export type AutomationInspectionContext = {
 
 export type ListAutomationToolArgs = {
   includePaused?: boolean;
-  includeDeleted?: boolean;
   limit?: number;
 };
 

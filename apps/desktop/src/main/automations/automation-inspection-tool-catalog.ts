@@ -18,7 +18,6 @@ const TOOL_CATALOG: Record<
       type: "object",
       properties: {
         includePaused: { type: "boolean" },
-        includeDeleted: { type: "boolean" },
         limit: { type: "number", minimum: 1 },
       },
       additionalProperties: false,

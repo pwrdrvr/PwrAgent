@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DISABLE_AUTOMATIONS_ARG,
+  DISABLE_AUTOMATIONS_ENV,
   DISABLE_MESSAGING_ARG,
   DISABLE_MESSAGING_ENV,
+  resolveRuntimeAutomationsOverride,
   resolveRuntimeMessagingOverride,
 } from "../runtime-flags";
 
@@ -29,6 +32,32 @@ describe("runtime flags", () => {
     ).toEqual({
       disabled: true,
       reason: "PWRAGENT_DISABLE_MESSAGING is enabled",
+    });
+  });
+
+  it("disables automations when the command line flag is present", () => {
+    expect(
+      resolveRuntimeAutomationsOverride({
+        argv: ["electron", DISABLE_AUTOMATIONS_ARG],
+        env: {},
+      }),
+    ).toEqual({
+      disabled: true,
+      reason: "--disable-automations was provided at startup",
+    });
+  });
+
+  it("disables automations when the environment fallback is enabled", () => {
+    expect(
+      resolveRuntimeAutomationsOverride({
+        argv: ["electron"],
+        env: {
+          [DISABLE_AUTOMATIONS_ENV]: "1",
+        },
+      }),
+    ).toEqual({
+      disabled: true,
+      reason: "PWRAGENT_DISABLE_AUTOMATIONS is enabled",
     });
   });
 });

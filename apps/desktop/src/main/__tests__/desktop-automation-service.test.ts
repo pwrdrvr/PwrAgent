@@ -781,6 +781,67 @@ describe("DesktopAutomationService", () => {
     });
   });
 
+  it("denies automation inspection for ordinary work threads", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    const handler = vi.mocked(registry.setAutomationInspectionHandler).mock
+      .calls.at(-1)?.[0];
+    expect(handler).toBeDefined();
+
+    registry.getThreadAgentMetadata = vi.fn(async () => undefined);
+
+    await expect(
+      handler!({
+        operation: "list_automations",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "forbidden",
+        message: "Automation inspection is only available to Agent threads.",
+      },
+    });
+  });
+
+  it("keeps automation state inspectable but blocks runs when automations are disabled", async () => {
+    const service = new DesktopAutomationService({
+      registry,
+      runtime: {
+        disabled: true,
+        disabledReason: "PWRAGENT_DISABLE_AUTOMATIONS is enabled",
+      },
+      store,
+    });
+    service.start();
+
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check weather",
+      taskPrompt: "Check weather",
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+      },
+    });
+
+    expect(service.list({ backend: "codex", threadId: "thread-1" }).automations)
+      .toEqual([expect.objectContaining({ id: created.automation.id })]);
+    await expect(
+      service.runNow({ automationId: created.automation.id }),
+    ).rejects.toThrow(
+      "Automations are disabled for this app instance: PWRAGENT_DISABLE_AUTOMATIONS is enabled",
+    );
+    expect(registry.submitTurn).not.toHaveBeenCalled();
+    expect(registry.startAutomationHeadlessTurn).not.toHaveBeenCalled();
+  });
+
   it("cancels every queued automation turn when deleting an automation", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({

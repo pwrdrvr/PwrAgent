@@ -134,6 +134,7 @@ import {
   readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
+import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
@@ -1824,6 +1825,7 @@ export class DesktopBackendRegistry {
     createAcpClient?: AcpClientFactory;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
+    automationInspectionMcpCommand?: string;
     createScratchProjectDirectory?: () => Promise<string>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     threadTitleGenerationService?: ThreadTitleService | null;
@@ -1931,6 +1933,9 @@ export class DesktopBackendRegistry {
       emit: async (event) => await this.emit(event),
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
+      automationInspectionMcpCommand:
+        options?.automationInspectionMcpCommand ??
+        resolveAutomationInspectionMcpCommand(),
     });
     this.messagingStore = options?.messagingStore;
     this.messagingArchiveCleaner = options?.messagingArchiveCleaner;

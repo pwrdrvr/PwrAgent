@@ -81,7 +81,6 @@ export class AutomationInspectionBus {
       .listAutomationsForThread({
         backend: context.backend,
         threadId: context.threadId,
-        includeDeleted: args.includeDeleted === true,
       })
       .filter((automation) => args.includePaused !== false || automation.status !== "paused");
     return {
@@ -163,9 +162,7 @@ export class AutomationInspectionBus {
     if (!artifact) {
       throw new AutomationInspectionError("not_found", "Automation run artifact not found.");
     }
-    const automation = this.getScopedAutomation(run.automationId, context, {
-      includeDeleted: true,
-    });
+    const automation = this.getScopedAutomation(run.automationId, context);
     return {
       artifact: this.toArtifact({
         artifact,
@@ -220,9 +217,7 @@ export class AutomationInspectionBus {
     run: AutomationRunSummary,
     context: AutomationInspectionContext,
   ): boolean {
-    const automation = this.store.getAutomation(run.automationId, {
-      includeDeleted: true,
-    });
+    const automation = this.store.getAutomation(run.automationId);
     return Boolean(
       automation &&
         automation.backend === context.backend &&
@@ -241,9 +236,7 @@ export class AutomationInspectionBus {
   }
 
   private toRunSummary(run: AutomationRunSummary): AutomationInspectionRunSummary {
-    const automation = this.store.getAutomation(run.automationId, {
-      includeDeleted: true,
-    });
+    const automation = this.store.getAutomation(run.automationId);
     const artifact = this.store.getRunArtifact(run.id);
     return {
       ...run,
@@ -256,9 +249,7 @@ export class AutomationInspectionBus {
   }
 
   private toRunDetail(run: AutomationRunSummary): AutomationInspectionRunDetail {
-    const automation = this.store.getAutomation(run.automationId, {
-      includeDeleted: true,
-    });
+    const automation = this.store.getAutomation(run.automationId);
     return {
       ...this.toRunSummary(run),
       automation: automation ? this.toAutomationSummary(automation) : undefined,

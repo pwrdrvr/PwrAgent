@@ -192,6 +192,44 @@ describe("AutomationInspectionBus", () => {
       error: { code: "forbidden" },
     });
   });
+
+  it("does not expose deleted automations through agent inspection", () => {
+    const automation = createAutomation({ id: "automation:weather" });
+    const run = store.createRun({
+      id: "automation-run:weather-1",
+      automationId: automation.id,
+      trigger: "scheduled",
+      status: "completed",
+      now: 1_000,
+    });
+    expect(run).toBeDefined();
+    store.deleteAutomation(automation.id);
+
+    expect(
+      bus.inspect({
+        operation: "list_automations",
+        context: { backend: "codex", threadId: "agent-thread" },
+        args: {},
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: {
+        automations: [],
+      },
+    });
+    expect(
+      bus.inspect({
+        operation: "get_automation_run",
+        context: { backend: "codex", threadId: "agent-thread" },
+        args: {
+          runId: run!.id,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "forbidden" },
+    });
+  });
 });
 
 function createAutomation(params: {

@@ -3,6 +3,9 @@ import type {
   AppServerBackendKind,
   AppServerNotification,
   AutomationDetail,
+  AutomationInspectionFailure,
+  AutomationInspectionErrorCode,
+  AutomationInspectionResponse,
   AutomationIdRequest,
   AutomationMutationResponse,
   AutomationRunSummary,
@@ -25,6 +28,7 @@ import { validateAutomationScheduleDefinition } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
+import { resolveRuntimeAutomationsOverride } from "../runtime-flags.js";
 import { getAppAutomationStore } from "../state/app-state.js";
 import { AutomationInspectionBus } from "./automation-inspection-bus.js";
 import { computeNextAutomationRunAt } from "./automation-schedule.js";
@@ -51,8 +55,13 @@ export function getDesktopAutomationService(
   registry = getDesktopBackendRegistry(),
 ): DesktopAutomationService {
   if (!service) {
+    const runtimeOverride = resolveRuntimeAutomationsOverride();
     service = new DesktopAutomationService({
       registry,
+      runtime: {
+        disabled: runtimeOverride.disabled,
+        disabledReason: runtimeOverride.reason,
+      },
       store: getDesktopAutomationStore(),
     });
     service.start();
@@ -73,6 +82,10 @@ export class DesktopAutomationService {
   constructor(
     private readonly options: {
       registry: DesktopBackendRegistry;
+      runtime?: {
+        disabled?: boolean;
+        disabledReason?: string;
+      };
       store: AutomationStore;
     },
   ) {
@@ -82,7 +95,6 @@ export class DesktopAutomationService {
       gateRunner: new ShellAutomationGateRunner(),
     });
     this.inspectionBus = new AutomationInspectionBus(options.store);
-    this.reconcileStartupRuns();
   }
 
   start(): void {
@@ -91,7 +103,26 @@ export class DesktopAutomationService {
         this.handleRegistryEvent(event),
       );
     }
-    this.options.registry.setAutomationInspectionHandler?.((request) => {
+    this.options.registry.setAutomationInspectionHandler?.(async (request) => {
+      const agent = await this.options.registry.getThreadAgentMetadata({
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+      });
+      if (!agent) {
+        const response = automationInspectionFailure(
+          request.operation,
+          "forbidden",
+          "Automation inspection is only available to Agent threads.",
+        );
+        automationServiceLog.info("automation inspection request denied", {
+          backend: request.context.backend,
+          errorCode: "forbidden",
+          ok: response.ok,
+          operation: request.operation,
+          threadId: request.context.threadId,
+        });
+        return response;
+      }
       const response = this.inspectionBus.inspect(request);
       const payload = response.ok ? response.data : response.error;
       automationServiceLog.info("automation inspection request handled", {
@@ -104,6 +135,13 @@ export class DesktopAutomationService {
       });
       return response;
     });
+    if (this.options.runtime?.disabled) {
+      automationServiceLog.info("automation scheduler disabled for this app instance", {
+        reason: this.options.runtime.disabledReason,
+      });
+      return;
+    }
+    this.reconcileStartupRuns();
     this.scheduler.start();
   }
 
@@ -221,7 +259,7 @@ export class DesktopAutomationService {
       now,
     });
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -288,7 +326,7 @@ export class DesktopAutomationService {
       await this.notifyThreadAutomationsUpdated(current);
     }
     await this.notifyThreadAutomationsUpdated(updated);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(updated) };
   }
 
@@ -299,7 +337,7 @@ export class DesktopAutomationService {
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -311,7 +349,7 @@ export class DesktopAutomationService {
     });
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -329,11 +367,12 @@ export class DesktopAutomationService {
       );
     }
     await this.notifyThreadAutomationsUpdated(automation);
-    this.scheduler.start();
+    this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
   }
 
   async runNow(request: AutomationIdRequest): Promise<RunAutomationNowResponse> {
+    this.assertAutomationsEnabled();
     const result = await this.scheduler.runNow(request.automationId);
     const [run] = this.options.store.listRunsForAutomation(request.automationId, 1);
     if (!run) {
@@ -640,6 +679,21 @@ export class DesktopAutomationService {
     this.options.store.reconcileStartup({ now, nextRunAtByAutomationId });
   }
 
+  private startSchedulerIfEnabled(): void {
+    if (!this.options.runtime?.disabled) {
+      this.scheduler.start();
+    }
+  }
+
+  private assertAutomationsEnabled(): void {
+    if (!this.options.runtime?.disabled) return;
+    throw new Error(
+      this.options.runtime.disabledReason
+        ? `Automations are disabled for this app instance: ${this.options.runtime.disabledReason}`
+        : "Automations are disabled for this app instance.",
+    );
+  }
+
   private assertValidSchedule(schedule: CreateAutomationRequest["schedule"]): void {
     const validation = validateAutomationScheduleDefinition(schedule);
     if (!validation.ok) {
@@ -670,6 +724,21 @@ export class DesktopAutomationService {
       },
     });
   }
+}
+
+function automationInspectionFailure(
+  operation: AutomationInspectionResponse["operation"],
+  code: AutomationInspectionErrorCode,
+  message: string,
+): AutomationInspectionFailure {
+  return {
+    ok: false,
+    operation,
+    error: {
+      code,
+      message,
+    },
+  };
 }
 
 function toAutomationDetail(

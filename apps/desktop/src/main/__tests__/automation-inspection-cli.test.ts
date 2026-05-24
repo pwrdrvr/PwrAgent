@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTOMATION_INSPECTION_MCP_COMMAND_ENV,
   buildAutomationInspectionAcpMcpServers,
+  resolveAutomationInspectionMcpCommand,
   runAutomationInspectionCli,
 } from "../automations/automation-inspection-cli";
 
 describe("automation inspection CLI adapter", () => {
+  it("resolves the ACP MCP command from the runtime environment", () => {
+    expect(
+      resolveAutomationInspectionMcpCommand({
+        [AUTOMATION_INSPECTION_MCP_COMMAND_ENV]: "  /usr/local/bin/pwragent-mcp  ",
+      } as NodeJS.ProcessEnv),
+    ).toBe("/usr/local/bin/pwragent-mcp");
+    expect(resolveAutomationInspectionMcpCommand({} as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
   it("builds ACP MCP server config only when MCP and session context are available", () => {
     expect(
       buildAutomationInspectionAcpMcpServers({

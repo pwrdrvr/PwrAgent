@@ -9,6 +9,9 @@ import { AUTOMATION_INSPECTION_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { AutomationInspectionHandler } from "./automation-inspection-codex-tools.js";
 import { isAutomationInspectionMcpToolName } from "./automation-inspection-mcp.js";
 
+export const AUTOMATION_INSPECTION_MCP_COMMAND_ENV =
+  "PWRAGENT_AUTOMATION_INSPECTION_MCP_COMMAND";
+
 export type AcpMcpServerConfig = {
   name: string;
   command: string;
@@ -21,6 +24,12 @@ export type AutomationInspectionCliResult = {
   stdout: string;
   stderr: string;
 };
+
+export function resolveAutomationInspectionMcpCommand(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env[AUTOMATION_INSPECTION_MCP_COMMAND_ENV]?.trim() || undefined;
+}
 
 export function acpRuntimeSupportsAutomationInspectionMcp(
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
