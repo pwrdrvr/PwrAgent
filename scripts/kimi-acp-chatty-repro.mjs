@@ -19,6 +19,7 @@ const cwd = args.cwd ?? process.cwd();
 const firstPrompt = args.first ?? DEFAULT_FIRST_PROMPT;
 const secondPrompt = args.second ?? DEFAULT_SECOND_PROMPT;
 const timeoutMs = Number(args.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+const enableYolo = Boolean(args.yolo);
 
 let nextId = 1;
 let child;
@@ -40,6 +41,7 @@ main().catch((error) => {
 async function main() {
   console.log("Starting kimi acp");
   console.log(`cwd: ${cwd}`);
+  console.log(`yolo: ${enableYolo ? "enabled via /yolo prompt" : "disabled"}`);
   console.log(`first prompt: ${firstPrompt}`);
   console.log(`second prompt: ${secondPrompt}`);
 
@@ -106,6 +108,15 @@ async function main() {
     throw new Error(`session/new did not return a session id: ${JSON.stringify(session)}`);
   }
   console.log(`sessionId: ${sessionId}`);
+
+  if (enableYolo) {
+    console.log("Enabling YOLO mode with /yolo and waiting for completion...");
+    await request("session/prompt", {
+      sessionId,
+      prompt: textPrompt("/yolo"),
+    }, timeoutMs);
+    console.log("YOLO mode request completed.");
+  }
 
   console.log("Running first prompt and waiting for completion...");
   await request("session/prompt", {
@@ -336,10 +347,13 @@ Options:
   --first <prompt>      First prompt. Defaults to: ${DEFAULT_FIRST_PROMPT}
   --second <prompt>     Second prompt. Defaults to the bundle-size repro prompt.
   --timeout-ms <ms>     session/prompt timeout. Defaults to ${DEFAULT_TIMEOUT_MS}.
+  --yolo               Send /yolo before the repro prompts.
   --help               Show this help.
 
 Warning: the default prompts allow Kimi to inspect and edit files in --cwd.
-Run this in a disposable clone or worktree when collecting repro data.`);
+Run this in a disposable clone or worktree when collecting repro data.
+Use --yolo when you want Kimi to complete tool-heavy prompts without stopping
+for approval in Default mode.`);
 }
 
 function cleanup() {
