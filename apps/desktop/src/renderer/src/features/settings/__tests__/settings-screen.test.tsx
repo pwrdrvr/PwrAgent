@@ -568,6 +568,31 @@ describe("SettingsScreen", () => {
     );
   }, 15_000);
 
+  it("defaults live transcript event filtering off for stale snapshots", async () => {
+    const snapshot = createSnapshot() as any;
+    delete snapshot.experimental.liveTranscriptEventFiltering;
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="experimental"
+        settings={settings}
+      />,
+    );
+
+    const filteringSwitch = screen.getByRole("switch", {
+      name: "Enable live transcript event filtering",
+    });
+    expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(filteringSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { liveTranscriptEventFiltering: true },
+      });
+    });
+  });
+
   it("lists archived threads and restores one", async () => {
     const archivedThread: AppServerThreadSummary = {
       id: "thread-archived",

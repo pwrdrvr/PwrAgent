@@ -1108,10 +1108,12 @@ function flushPendingAssistantToOptimistic(
 function updateActivityEntry(
   entry: AppServerThreadActivityEntry,
   details: AppServerThreadActivityDetail[],
-  turn: AppServerThreadTurnMetadata | undefined
+  turn: AppServerThreadTurnMetadata | undefined,
+  options: { suppressNoop?: boolean } = {}
 ): AppServerThreadActivityEntry {
   const mergedDetails = mergeActivityDetails(entry.details, details);
   if (
+    options.suppressNoop &&
     activityDetailsEqual(entry.details, mergedDetails) &&
     turnMetadataEqual(entry.turn, entry.turn ?? turn)
   ) {
@@ -1155,6 +1157,7 @@ function activityDetailsEqual(
       leftDetail.id === rightDetail?.id &&
       leftDetail.kind === rightDetail.kind &&
       leftDetail.label === rightDetail.label &&
+      leftDetail.path === rightDetail.path &&
       leftDetail.status === rightDetail.status &&
       leftDetail.url === rightDetail.url &&
       leftDetail.fileDiff === rightDetail.fileDiff &&
@@ -1221,6 +1224,7 @@ function liveActivityNotificationSignature(params: {
       detail.id,
       detail.kind,
       detail.label,
+      detail.path ?? "",
       detail.status ?? "",
       detail.url ?? "",
       detail.command?.displayCommand ?? "",
@@ -1240,6 +1244,7 @@ function upsertLiveActivityEntry(
   params: {
     details: AppServerThreadActivityDetail[];
     now: number;
+    suppressDuplicateLiveActivityUpdates?: boolean;
     threadId: string;
     turn?: AppServerThreadTurnMetadata;
   }
@@ -1262,7 +1267,8 @@ function upsertLiveActivityEntry(
     const updated = updateActivityEntry(
       existing,
       params.details,
-      params.turn
+      params.turn,
+      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
     );
     if (updated === existing) {
       return flushed;
@@ -1286,7 +1292,8 @@ function upsertLiveActivityEntry(
     const updated = updateActivityEntry(
       lastOptimisticEntry as AppServerThreadActivityEntry,
       params.details,
-      params.turn
+      params.turn,
+      { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
     );
     if (updated === lastOptimisticEntry) {
       return flushed;
@@ -2212,9 +2219,10 @@ export function useThreadSessionState(params: {
       }
 
       const targetThreadKey = buildThreadIdentityKey(event.backend, notificationThreadId);
+      const isUnfocusedThread = targetThreadKey !== selectedThreadKeyRef.current;
       if (
         liveTranscriptEventFiltering &&
-        targetThreadKey !== selectedThreadKeyRef.current &&
+        isUnfocusedThread &&
         isThreadLocalTranscriptNotification(event.notification)
       ) {
         return;
@@ -2314,6 +2322,7 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details,
             now: nextLastTouchedAt,
+            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -2401,6 +2410,7 @@ export function useThreadSessionState(params: {
           return upsertLiveActivityEntry(current, {
             details: [detail],
             now: nextLastTouchedAt,
+            suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
             threadId: notificationThreadId,
             turn,
           });
@@ -2602,6 +2612,7 @@ export function useThreadSessionState(params: {
             return upsertLiveActivityEntry(current, {
               details,
               now: nextLastTouchedAt,
+              suppressDuplicateLiveActivityUpdates: liveTranscriptEventFiltering,
               threadId: notificationThreadId,
               turn,
             });
@@ -2615,6 +2626,21 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          if (liveTranscriptEventFiltering && isUnfocusedThread) {
+            return {
+              ...current,
+              activeTurnId: undefined,
+              activeTurnStartedAt: undefined,
+              error: undefined,
+              lastTouchedAt: nextLastTouchedAt,
+              pendingAssistantMessage: undefined,
+              pendingMcpInteraction: undefined,
+              pendingRequest: undefined,
+              pendingUserInput: undefined,
+              pendingStatusText: undefined,
+            };
+          }
+
           const completedTurnHasReview = hasReviewEntryForTurn(
             current.response,
             completedTurn?.id

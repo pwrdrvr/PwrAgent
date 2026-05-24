@@ -26,6 +26,11 @@ const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> =
   { label: "grok-3", value: "grok-3" },
 ];
 
+const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
+  value: false,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -35,7 +40,8 @@ export function ExperimentalSettings(props: {
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
-    props.snapshot.experimental.liveTranscriptEventFiltering;
+    props.snapshot.experimental.liveTranscriptEventFiltering ??
+    DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
     (option) => option.value === condensation.model.value,
   );
