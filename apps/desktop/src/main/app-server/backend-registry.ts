@@ -2204,7 +2204,11 @@ export class DesktopBackendRegistry {
     });
     const cwd =
       params.backend === "codex"
-        ? await this.resolveCodexThreadTurnCwd(params.agentThreadId, overlay)
+        ? await this.resolveThreadEnvironmentCwd(
+            params.backend,
+            params.agentThreadId,
+            overlay,
+          )
         : undefined;
     const input = prependAutomationRuntimeContext({
       approvalPolicy,
